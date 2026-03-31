@@ -77,7 +77,19 @@ jobs:
         run: |
           set -euo pipefail
           if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          "$PY" -m pip install --upgrade pip
+          # Use an isolated venv so `pip` never hits PEP 668 (Homebrew Python on macOS runners).
+          VENV="${RUNNER_TEMP:-/tmp}/ainl-bundle-venv"
+          rm -rf "$VENV"
+          "$PY" -m venv "$VENV"
+          case "${RUNNER_OS}" in
+            Windows)
+              export PATH="$VENV/Scripts:$PATH"
+              ;;
+            *)
+              export PATH="$VENV/bin:$PATH"
+              ;;
+          esac
+          python -m pip install --upgrade pip
           cargo run -p xtask -- bundle-ainl-wheel --version "${AINL_PYPI_VERSION}"
 
       - name: Import macOS signing certificate
