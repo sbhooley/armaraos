@@ -5,7 +5,7 @@ This directory is reserved for bundling AINL into the desktop app.
 ### What belongs here
 
 - **A pinned `ainativelang` wheel**, for example:
-  - `ainativelang-1.4.0-py3-none-any.whl`
+  - `ainativelang-1.3.1-py3-none-any.whl`
 
 Option A bundling uses an **internal virtualenv** under the app data directory and installs this wheel offline on first run.
 
@@ -14,7 +14,7 @@ Option A bundling uses an **internal virtualenv** under the app data directory a
 From the repo root:
 
 ```bash
-cargo run -p xtask -- bundle-ainl-wheel --version 1.4.0
+cargo run -p xtask -- bundle-ainl-wheel --version 1.3.1
 ```
 
 ### Why the wheel is not committed

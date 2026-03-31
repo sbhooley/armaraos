@@ -27,7 +27,7 @@ enum Cmd {
     /// This step is intended to run in the release pipeline before the Tauri bundle.
     BundleAinlWheel {
         /// AINL version to download from PyPI.
-        #[arg(long, default_value = "1.4.0")]
+        #[arg(long, default_value = "1.3.1")]
         version: String,
 
         /// If set, remove any existing `ainativelang-*-py3-none-any.whl` before downloading.
@@ -91,7 +91,7 @@ fn remove_existing_wheels(dir: &Path) -> Result<()> {
         let ent = ent?;
         let p = ent.path();
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.starts_with("ainativelang-") && name.ends_with("-py3-none-any.whl") {
+        if name.starts_with("ainativelang-") && name.ends_with(".whl") {
             std::fs::remove_file(&p).with_context(|| format!("Removing existing wheel {p:?}"))?;
         }
     }
@@ -152,7 +152,7 @@ fn bundle_ainl_wheel(version: &str, clean: bool, extra_index_url: Option<&str>) 
         let ent = ent?;
         let p = ent.path();
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        if name.starts_with("ainativelang-") && name.ends_with("-py3-none-any.whl") {
+        if name.starts_with("ainativelang-") && name.ends_with(".whl") {
             found = true;
             break;
         }
