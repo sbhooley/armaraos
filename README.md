@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/assets/openfang-logo.png" width="160" alt="ArmaraOS Logo" />
+  <img src="public/assets/armaraos-logo.png" width="160" alt="ArmaraOS Logo" />
 </p>
 
 <h1 align="center">ArmaraOS</h1>
@@ -88,19 +88,19 @@ All compiled into the binary. No downloading, no pip install, no Docker pull.
 
 ```bash
 # Activate the Researcher Hand — it starts working immediately
-openfang hand activate researcher
+armaraos hand activate researcher
 
 # Check its progress anytime
-openfang hand status researcher
+armaraos hand status researcher
 
 # Activate lead generation on a daily schedule
-openfang hand activate lead
+armaraos hand activate lead
 
 # Pause without losing state
-openfang hand pause lead
+armaraos hand pause lead
 
 # See all available Hands
-openfang hand list
+armaraos hand list
 ```
 
 **Build your own.** Define a `HAND.toml` with tools, settings, and a system prompt. Publish to FangHub.
@@ -315,12 +315,14 @@ node packages/whatsapp-gateway/index.js
 
 The gateway listens on port `3009` by default. Override with `WHATSAPP_GATEWAY_PORT`.
 
-**5. Start OpenFang:**
+**5. Start ArmaraOS:**
 
 ```bash
-openfang start
+armaraos start
 # Dashboard at http://localhost:4200
 ```
+
+> If you built from source and only have an `openfang` binary, `openfang start` is equivalent.
 
 **6. Scan the QR code:**
 
@@ -334,10 +336,10 @@ Once scanned, the status changes to `connected` and incoming messages are routed
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `WHATSAPP_WEB_GATEWAY_URL` | Gateway URL for OpenFang to connect to | _(empty = disabled)_ |
+| `WHATSAPP_WEB_GATEWAY_URL` | Gateway URL for ArmaraOS to connect to | _(empty = disabled)_ |
 | `WHATSAPP_GATEWAY_PORT` | Port the gateway listens on | `3009` |
-| `OPENFANG_URL` | OpenFang API URL the gateway reports to | `http://127.0.0.1:4200` |
-| `OPENFANG_DEFAULT_AGENT` | Agent that handles incoming messages | `assistant` |
+| `OPENFANG_URL` | ArmaraOS API URL the gateway reports to (legacy name) | `http://127.0.0.1:4200` |
+| `OPENFANG_DEFAULT_AGENT` | Agent that handles incoming messages (legacy name) | `assistant` |
 
 ### Gateway API Endpoints
 
@@ -372,22 +374,22 @@ Already running OpenClaw? One command:
 
 ```bash
 # Migrate everything — agents, memory, skills, configs
-openfang migrate --from openclaw
+armaraos migrate --from openclaw
 
 # Migrate from a specific path
-openfang migrate --from openclaw --path ~/.openclaw
+armaraos migrate --from openclaw --path ~/.openclaw
 
 # Dry run first to see what would change
-openfang migrate --from openclaw --dry-run
+armaraos migrate --from openclaw --dry-run
 ```
 
-The migration engine imports your agents, conversation history, skills, and configuration. OpenFang reads SKILL.md natively and is compatible with the ClawHub marketplace.
+The migration engine imports your agents, conversation history, skills, and configuration. ArmaraOS reads SKILL.md natively and is compatible with the ClawHub marketplace.
 
 ---
 
 ## OpenAI-Compatible API
 
-Drop-in replacement. Point your existing tools at OpenFang:
+Drop-in replacement. Point your existing tools at ArmaraOS:
 
 ```bash
 curl -X POST localhost:4200/v1/chat/completions \
@@ -474,7 +476,7 @@ We ship fast and fix fast. The goal is a rock-solid v1.0 by mid-2026.
 
 ## Security
 
-To report a security vulnerability, email **jaber@rightnowai.co**. We take all reports seriously and will respond within 48 hours.
+To report a security vulnerability, email **ainativelang@gmail.com**. We take all reports seriously and will respond within 48 hours.
 
 ---
 
@@ -486,29 +488,9 @@ MIT — use it however you want.
 
 ## Links
 
-- [GitHub](https://github.com/sbhooley/armaraos)
-- [Discord](https://discord.gg/sSJqgNnq6X)
-- [Twitter / X](https://x.com/openfangg)
-
----
-
-## Built by RightNow
-
-<p align="center">
-  <a href="https://www.rightnowai.co/">
-    <img src="public/assets/rightnow-logo.webp" width="60" alt="RightNow Logo" />
-  </a>
-</p>
-
-<p align="center">
-  OpenFang is built and maintained by <a href="https://x.com/Akashi203"><strong>Jaber</strong></a>, Founder of <a href="https://www.rightnowai.co/"><strong>RightNow</strong></a>.
-</p>
-
-<p align="center">
-  <a href="https://www.rightnowai.co/">Website</a> &bull;
-  <a href="https://x.com/Akashi203">Twitter / X</a> &bull;
-  <a href="https://www.buymeacoffee.com/openfang" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
-</p>
+- [ArmaraOS on GitHub](https://github.com/sbhooley/armaraos)
+- [AI Native Lang (AINL)](https://github.com/sbhooley/ainativelang)
+- [Twitter / X — @ainativelang](https://x.com/ainativelang)
 
 ---
 
