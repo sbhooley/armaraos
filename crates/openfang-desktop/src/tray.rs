@@ -1,4 +1,4 @@
-//! System tray setup for the OpenFang desktop app.
+//! System tray setup for the ArmaraOS desktop app.
 
 use openfang_kernel::config::openfang_home;
 use tauri::{
@@ -85,7 +85,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let sep3 = PredefinedMenuItem::separator(app)?;
 
-    let quit = MenuItem::with_id(app, "quit", "Quit OpenFang", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit ArmaraOS", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -111,7 +111,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let _tray = TrayIconBuilder::new()
         .icon(tray_icon)
         .menu(&menu)
-        .tooltip("OpenFang Agent OS")
+        .tooltip("ArmaraOS Agent OS")
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {

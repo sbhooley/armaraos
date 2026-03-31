@@ -6,6 +6,20 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tracing::info;
 
+/// Return AINL bootstrap status (Option A bundling).
+#[tauri::command]
+pub fn ainl_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let st = crate::ainl::ainl_status(&app)?;
+    serde_json::to_value(st).map_err(|e| e.to_string())
+}
+
+/// Ensure AINL is installed into the internal app-managed venv (Option A bundling).
+#[tauri::command]
+pub fn ensure_ainl_installed(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let st = crate::ainl::ensure_ainl_installed(&app)?;
+    serde_json::to_value(st).map_err(|e| e.to_string())
+}
+
 /// Get the port the embedded server is listening on.
 #[tauri::command]
 pub fn get_port(port: tauri::State<'_, PortState>) -> u16 {
@@ -154,7 +168,7 @@ pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     crate::updater::download_and_install_update(&app).await
 }
 
-/// Open the OpenFang config directory (`~/.openfang/`) in the OS file manager.
+/// Open the ArmaraOS config directory (`~/.armaraos/`, or legacy `~/.openfang/`) in the OS file manager.
 #[tauri::command]
 pub fn open_config_dir() -> Result<(), String> {
     let dir = openfang_home();
@@ -162,7 +176,7 @@ pub fn open_config_dir() -> Result<(), String> {
     open::that(&dir).map_err(|e| format!("Failed to open directory: {e}"))
 }
 
-/// Open the OpenFang logs directory (`~/.openfang/logs/`) in the OS file manager.
+/// Open the ArmaraOS logs directory (`~/.armaraos/logs/`, or legacy `~/.openfang/logs/`) in the OS file manager.
 #[tauri::command]
 pub fn open_logs_dir() -> Result<(), String> {
     let dir = openfang_home().join("logs");

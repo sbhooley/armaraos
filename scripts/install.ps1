@@ -1,20 +1,26 @@
-# OpenFang installer for Windows
-# Usage: iwr -useb https://openfang.sh/install.ps1 | iex
-#   or:  powershell -c "irm https://openfang.sh/install.ps1 | iex"
+# ArmaraOS installer for Windows
+# Usage: iwr -useb https://armaraos.sh/install.ps1 | iex
+#   or:  powershell -c "irm https://armaraos.sh/install.ps1 | iex"
 #
 # Flags (via environment variables):
-#   $env:OPENFANG_INSTALL_DIR = custom install directory
-#   $env:OPENFANG_VERSION     = specific version tag (e.g. "v0.1.0")
+#   $env:ARMARAOS_INSTALL_DIR = custom install directory
+#   $env:ARMARAOS_VERSION     = specific version tag (e.g. "v0.1.0")
+#
+# Legacy aliases (supported for compatibility):
+#   $env:OPENFANG_INSTALL_DIR, $env:OPENFANG_VERSION
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = "RightNow-AI/openfang"
-$DefaultInstallDir = Join-Path $env:USERPROFILE ".openfang\bin"
-$InstallDir = if ($env:OPENFANG_INSTALL_DIR) { $env:OPENFANG_INSTALL_DIR } else { $DefaultInstallDir }
+$Repo = "sbhooley/armaraos"
+$DefaultInstallDir = Join-Path $env:USERPROFILE ".armaraos\bin"
+$InstallDir =
+    if ($env:ARMARAOS_INSTALL_DIR) { $env:ARMARAOS_INSTALL_DIR }
+    elseif ($env:OPENFANG_INSTALL_DIR) { $env:OPENFANG_INSTALL_DIR }
+    else { $DefaultInstallDir }
 
 function Write-Banner {
     Write-Host ""
-    Write-Host "  OpenFang Installer" -ForegroundColor Cyan
+    Write-Host "  ArmaraOS Installer" -ForegroundColor Cyan
     Write-Host "  ==================" -ForegroundColor Cyan
     Write-Host ""
 }
@@ -60,6 +66,9 @@ function Get-Architecture {
 }
 
 function Get-LatestVersion {
+    if ($env:ARMARAOS_VERSION) {
+        return $env:ARMARAOS_VERSION
+    }
     if ($env:OPENFANG_VERSION) {
         return $env:OPENFANG_VERSION
     }
@@ -77,7 +86,7 @@ function Get-LatestVersion {
     }
 }
 
-function Install-OpenFang {
+function Install-ArmaraOS {
     Write-Banner
 
     $arch = Get-Architecture
@@ -87,7 +96,7 @@ function Install-OpenFang {
     $url = "https://github.com/$Repo/releases/download/$version/$archive"
     $checksumUrl = "$url.sha256"
 
-    Write-Host "  Installing OpenFang $version for $target..."
+    Write-Host "  Installing ArmaraOS (CLI) $version for $target..."
 
     # Create install directory
     if (-not (Test-Path $InstallDir)) {
@@ -153,6 +162,8 @@ function Install-OpenFang {
 
     # Install
     Copy-Item -Path $exePath -Destination (Join-Path $InstallDir "openfang.exe") -Force
+    # Convenience alias: provide armaraos.exe wrapper while keeping openfang.exe for compatibility.
+    Copy-Item -Path $exePath -Destination (Join-Path $InstallDir "armaraos.exe") -Force
 
     # Clean up temp
     Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
@@ -171,21 +182,55 @@ function Install-OpenFang {
         try {
             $versionOutput = & $installedExe --version 2>&1
             Write-Host ""
-            Write-Host "  OpenFang installed successfully! ($versionOutput)" -ForegroundColor Green
+            Write-Host "  ArmaraOS installed successfully! ($versionOutput)" -ForegroundColor Green
         }
         catch {
             Write-Host ""
-            Write-Host "  OpenFang binary installed to $installedExe" -ForegroundColor Green
+            Write-Host "  ArmaraOS binary installed to $installedExe (and armaraos.exe wrapper)" -ForegroundColor Green
         }
     }
 
+    # Required: install AINL + register MCP for ArmaraOS.
+    Write-Host ""
+    Write-Host "  Installing AINL: ainativelang[mcp]" -ForegroundColor Cyan
+
+    $py = $null
+    if (Get-Command python -ErrorAction SilentlyContinue) { $py = "python" }
+    elseif (Get-Command python3 -ErrorAction SilentlyContinue) { $py = "python3" }
+    else {
+        Write-Host "  Error: python is required to install AINL (ainativelang[mcp])." -ForegroundColor Red
+        exit 1
+    }
+
+    try {
+        & $py -m pip install --upgrade pip | Out-Null
+    } catch {}
+
+    & $py -m pip install --user "ainativelang[mcp]"
+
+    # Find user base bin and run ainl install-mcp.
+    $userBase = & $py -c "import site; print(site.USER_BASE)"
+    $ainl = Join-Path $userBase "Scripts\ainl.exe"
+    if (-not (Test-Path $ainl)) {
+        $ainl = (Get-Command ainl -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+    }
+    if (-not $ainl -or -not (Test-Path $ainl)) {
+        Write-Host "  Error: AINL installed but could not find 'ainl' executable." -ForegroundColor Red
+        Write-Host "  Hint: add Python user Scripts dir to PATH:" -ForegroundColor Yellow
+        Write-Host "    $userBase\Scripts" -ForegroundColor Yellow
+        exit 1
+    }
+
+    Write-Host "  Registering AINL MCP server for ArmaraOS..." -ForegroundColor Cyan
+    & $ainl install-mcp --host armaraos
+
     Write-Host ""
     Write-Host "  Get started:" -ForegroundColor Cyan
-    Write-Host "    openfang init"
+    Write-Host "    armaraos init   (or: openfang init)"
     Write-Host ""
     Write-Host "  The setup wizard will guide you through provider selection"
     Write-Host "  and configuration."
     Write-Host ""
 }
 
-Install-OpenFang
+Install-ArmaraOS

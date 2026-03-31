@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# OpenFang installer — works on Linux, macOS, WSL
-# Usage: curl -sSf https://openfang.sh | sh
+# ArmaraOS installer — works on Linux, macOS, WSL
+# Usage: curl -sSf https://armaraos.sh | sh   (if/when you host a vanity domain)
 #
 # Environment variables:
-#   OPENFANG_INSTALL_DIR  — custom install directory (default: ~/.openfang/bin)
-#   OPENFANG_VERSION      — install a specific version tag (default: latest)
+#   ARMARAOS_INSTALL_DIR  — custom install directory (default: ~/.armaraos/bin)
+#   ARMARAOS_VERSION      — install a specific version tag (default: latest)
+#
+# Legacy aliases (supported for compatibility):
+#   OPENFANG_INSTALL_DIR, OPENFANG_VERSION
 
 set -euo pipefail
 
-REPO="RightNow-AI/openfang"
-INSTALL_DIR="${OPENFANG_INSTALL_DIR:-$HOME/.openfang/bin}"
+REPO="sbhooley/armaraos"
+INSTALL_DIR="${ARMARAOS_INSTALL_DIR:-${OPENFANG_INSTALL_DIR:-$HOME/.armaraos/bin}}"
 
 detect_platform() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -25,7 +28,7 @@ detect_platform() {
         mingw*|msys*|cygwin*)
             echo ""
             echo "  For Windows, use PowerShell instead:"
-            echo "    irm https://openfang.sh/install.ps1 | iex"
+            echo "    irm https://armaraos.sh/install.ps1 | iex   (or use GitHub releases)"
             echo ""
             echo "  Or download the .msi installer from:"
             echo "    https://github.com/$REPO/releases/latest"
@@ -42,12 +45,15 @@ install() {
     detect_platform
 
     echo ""
-    echo "  OpenFang Installer"
+    echo "  ArmaraOS Installer"
     echo "  =================="
     echo ""
 
     # Get latest version
-    if [ -n "${OPENFANG_VERSION:-}" ]; then
+    if [ -n "${ARMARAOS_VERSION:-}" ]; then
+        VERSION="$ARMARAOS_VERSION"
+        echo "  Using specified version: $VERSION"
+    elif [ -n "${OPENFANG_VERSION:-}" ]; then
         VERSION="$OPENFANG_VERSION"
         echo "  Using specified version: $VERSION"
     else
@@ -65,7 +71,7 @@ install() {
     URL="https://github.com/$REPO/releases/download/$VERSION/openfang-$PLATFORM.tar.gz"
     CHECKSUM_URL="$URL.sha256"
 
-    echo "  Installing OpenFang $VERSION for $PLATFORM..."
+    echo "  Installing ArmaraOS (CLI) $VERSION for $PLATFORM..."
     mkdir -p "$INSTALL_DIR"
 
     # Download to temp
@@ -109,6 +115,16 @@ install() {
     # Extract
     tar xzf "$ARCHIVE" -C "$INSTALL_DIR"
     chmod +x "$INSTALL_DIR/openfang"
+
+    # Convenience alias: provide `armaraos` command while keeping `openfang` for compatibility.
+    # (The upstream binary is still named `openfang` in the release archives.)
+    cat > "$INSTALL_DIR/armaraos" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/openfang" "$@"
+EOF
+    chmod +x "$INSTALL_DIR/armaraos"
 
     # Ad-hoc codesign on macOS (prevents SIGKILL on Apple Silicon)
     # Must strip extended attributes (com.apple.quarantine) BEFORE signing,
@@ -178,15 +194,52 @@ install() {
     if "$INSTALL_DIR/openfang" --version >/dev/null 2>&1; then
         INSTALLED_VERSION=$("$INSTALL_DIR/openfang" --version 2>/dev/null || echo "$VERSION")
         echo ""
-        echo "  OpenFang installed successfully! ($INSTALLED_VERSION)"
+        echo "  ArmaraOS installed successfully! ($INSTALLED_VERSION)"
     else
         echo ""
-        echo "  OpenFang binary installed to $INSTALL_DIR/openfang"
+        echo "  ArmaraOS binary installed to $INSTALL_DIR/openfang (and wrapper $INSTALL_DIR/armaraos)"
     fi
+
+    # Required: install AINL and register MCP server into ~/.armaraos/config.toml.
+    echo ""
+    echo "  Installing AINL: ainativelang[mcp]"
+
+    PYTHON=""
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON="python"
+    else
+        echo "  Error: python is required to install AINL (ainativelang[mcp])"
+        exit 1
+    fi
+
+    # Use user-site by default (avoid requiring sudo). This writes `ainl` into USER_BASE/bin.
+    "$PYTHON" -m pip install --upgrade pip >/dev/null 2>&1 || true
+    "$PYTHON" -m pip install --user "ainativelang[mcp]"
+
+    USER_BASE="$("$PYTHON" -c 'import site; print(site.USER_BASE)')"
+    AINL_BIN="$USER_BASE/bin/ainl"
+    if [ ! -x "$AINL_BIN" ]; then
+        # Some environments (Homebrew Python) may place scripts in the framework bin.
+        AINL_BIN="$(command -v ainl 2>/dev/null || true)"
+    fi
+    if [ -z "${AINL_BIN:-}" ] || [ ! -x "${AINL_BIN:-/dev/null}" ]; then
+        echo "  Error: AINL installed but could not find executable 'ainl'."
+        echo "  Hint: ensure your Python user bin is on PATH:"
+        echo "    export PATH=\"$USER_BASE/bin:\$PATH\""
+        exit 1
+    fi
+
+    echo "  Registering AINL MCP server for ArmaraOS..."
+    "$AINL_BIN" install-mcp --host armaraos
 
     echo ""
     echo "  Get started:"
-    echo "    openfang init"
+    echo "    armaraos init   (or: openfang init)"
+    echo ""
+    echo "  AINL is installed. If you want `ainl` on PATH permanently, add:"
+    echo "    export PATH=\"$USER_BASE/bin:\$PATH\""
     echo ""
     echo "  The setup wizard will guide you through provider selection"
     echo "  and configuration."

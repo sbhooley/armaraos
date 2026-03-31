@@ -1,4 +1,4 @@
-//! Configuration loading from `~/.openfang/config.toml` with defaults.
+//! Configuration loading from `~/.armaraos/config.toml` (or legacy `~/.openfang/config.toml`) with defaults.
 //!
 //! Supports config includes: the `include` field specifies additional TOML files
 //! to load and deep-merge before the root config (root overrides includes).
@@ -244,21 +244,31 @@ pub fn deep_merge_toml(base: &mut toml::Value, overlay: &toml::Value) {
 
 /// Get the default config file path.
 ///
-/// Respects `OPENFANG_HOME` env var (e.g. `OPENFANG_HOME=/opt/openfang`).
+/// Respects `ARMARAOS_HOME` (preferred) and `OPENFANG_HOME` (legacy) env vars.
 pub fn default_config_path() -> PathBuf {
     openfang_home().join("config.toml")
 }
 
-/// Get the OpenFang home directory.
+/// Get the ArmaraOS home directory (legacy name preserved for compatibility).
 ///
-/// Priority: `OPENFANG_HOME` env var > `~/.openfang`.
+/// Priority:
+/// - `ARMARAOS_HOME` env var
+/// - `OPENFANG_HOME` env var (legacy)
+/// - `~/.armaraos` if it exists
+/// - otherwise `~/.openfang` (legacy default)
 pub fn openfang_home() -> PathBuf {
+    if let Ok(home) = std::env::var("ARMARAOS_HOME") {
+        return PathBuf::from(home);
+    }
     if let Ok(home) = std::env::var("OPENFANG_HOME") {
         return PathBuf::from(home);
     }
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".openfang")
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let arm = home.join(".armaraos");
+    if arm.is_dir() {
+        return arm;
+    }
+    home.join(".openfang")
 }
 
 #[cfg(test)]

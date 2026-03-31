@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="public/assets/openfang-logo.png" width="160" alt="OpenFang Logo" />
+  <img src="public/assets/openfang-logo.png" width="160" alt="ArmaraOS Logo" />
 </p>
 
-<h1 align="center">OpenFang</h1>
+<h1 align="center">ArmaraOS</h1>
 <h3 align="center">The Agent Operating System</h3>
 
 <p align="center">
@@ -11,40 +11,38 @@
 </p>
 
 <p align="center">
-  <a href="https://openfang.sh/docs">Documentation</a> &bull;
-  <a href="https://openfang.sh/docs/getting-started">Quick Start</a> &bull;
-  <a href="https://x.com/openfangg">Twitter / X</a>
+  <a href="https://github.com/sbhooley/armaraos">Repository</a> &bull;
+  <a href="docs/getting-started.md">Quick Start</a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
   <img src="https://img.shields.io/badge/version-0.3.30-green?style=flat-square" alt="v0.3.30" />
-  <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" alt="Tests" />
-  <img src="https://img.shields.io/badge/clippy-0%20warnings-brightgreen?style=flat-square" alt="Clippy" />
-  <a href="https://www.buymeacoffee.com/openfang" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee" /></a>
+  <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
 ---
 
-> **v0.3.30 — Security Hardening Release (March 2026)**
+> **ArmaraOS (March 2026)**
 >
-> OpenFang is feature-complete but still pre-1.0. You may encounter rough edges or breaking changes between minor versions. We ship fast and fix fast. Pin to a specific commit for production use until v1.0. [Report issues here.](https://github.com/RightNow-AI/openfang/issues)
+> ArmaraOS is a fork/rebrand of the upstream OpenFang project. Upstream license/attribution remains in place where applicable. You may encounter rough edges or breaking changes between minor versions. Pin to a specific commit for production use until v1.0.
 
 ---
 
-## What is OpenFang?
+## What is ArmaraOS?
 
-OpenFang is an **open-source Agent Operating System** — not a chatbot framework, not a Python wrapper around an LLM, not a "multi-agent orchestrator." It is a full operating system for autonomous agents, built from scratch in Rust.
+ArmaraOS is an **open-source Agent Operating System** — not a chatbot framework, not a Python wrapper around an LLM, not a "multi-agent orchestrator." It is a full operating system for autonomous agents, built from scratch in Rust.
 
-Traditional agent frameworks wait for you to type something. OpenFang runs **autonomous agents that work for you** — on schedules, 24/7, building knowledge graphs, monitoring targets, generating leads, managing your social media, and reporting results to your dashboard.
+Traditional agent frameworks wait for you to type something. ArmaraOS runs **autonomous agents that work for you** — on schedules, 24/7, building knowledge graphs, monitoring targets, generating leads, managing your social media, and reporting results to your dashboard.
 
 The entire system compiles to a **single ~32MB binary**. One install, one command, your agents are live.
 
 ```bash
-curl -fsSL https://openfang.sh/install | sh
-openfang init
-openfang start
+# From GitHub directly (recommended until you host a vanity domain):
+curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
+armaraos init
+armaraos start
 # Dashboard live at http://localhost:4200
 ```
 
@@ -52,9 +50,10 @@ openfang start
 <summary><strong>Windows</strong></summary>
 
 ```powershell
-irm https://openfang.sh/install.ps1 | iex
-openfang init
-openfang start
+# From GitHub directly (recommended until you host a vanity domain):
+irm https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.ps1 | iex
+armaraos init
+armaraos start
 ```
 
 </details>
@@ -351,7 +350,7 @@ Once scanned, the status changes to `connected` and incoming messages are routed
 
 ### Alternative: WhatsApp Cloud API
 
-For production workloads, use the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) with a Meta Business account. See the [Cloud API configuration docs](https://openfang.sh/docs/channels/whatsapp).
+For production workloads, use the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) with a Meta Business account.
 
 
 
@@ -408,34 +407,34 @@ curl -X POST localhost:4200/v1/chat/completions \
 
 ```bash
 # 1. Install (macOS/Linux)
-curl -fsSL https://openfang.sh/install | sh
+curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
 
 # 2. Initialize — walks you through provider setup
-openfang init
+armaraos init
 
 # 3. Start the daemon
-openfang start
+armaraos start
 
 # 4. Dashboard is live at http://localhost:4200
 
 # 5. Activate a Hand — it starts working for you
-openfang hand activate researcher
+armaraos hand activate researcher
 
 # 6. Chat with an agent
-openfang chat researcher
+armaraos chat researcher
 > "What are the emerging trends in AI agent frameworks?"
 
 # 7. Spawn a pre-built agent
-openfang agent spawn coder
+armaraos agent spawn coder
 ```
 
 <details>
 <summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
-irm https://openfang.sh/install.ps1 | iex
-openfang init
-openfang start
+irm https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.ps1 | iex
+armaraos init
+armaraos start
 ```
 
 </details>
@@ -462,11 +461,11 @@ cargo fmt --all -- --check
 
 ## Stability Notice
 
-OpenFang v0.3.30 is pre-1.0. The architecture is solid, the test suite is comprehensive, and the security model is comprehensive. That said:
+ArmaraOS is pre-1.0. The architecture is solid, the test suite is comprehensive, and the security model is comprehensive. That said:
 
 - **Breaking changes** may occur between minor versions until v1.0
 - **Some Hands** are more mature than others (Browser and Researcher are the most battle-tested)
-- **Edge cases** exist — if you find one, [open an issue](https://github.com/RightNow-AI/openfang/issues)
+- **Edge cases** exist — if you find one, open an issue in this repo
 - **Pin to a specific commit** for production deployments until v1.0
 
 We ship fast and fix fast. The goal is a rock-solid v1.0 by mid-2026.
@@ -487,9 +486,7 @@ MIT — use it however you want.
 
 ## Links
 
-- [Website & Documentation](https://openfang.sh)
-- [Quick Start Guide](https://openfang.sh/docs/getting-started)
-- [GitHub](https://github.com/RightNow-AI/openfang)
+- [GitHub](https://github.com/sbhooley/armaraos)
 - [Discord](https://discord.gg/sSJqgNnq6X)
 - [Twitter / X](https://x.com/openfangg)
 

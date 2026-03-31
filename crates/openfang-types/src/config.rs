@@ -1489,16 +1489,26 @@ impl std::fmt::Debug for KernelConfig {
     }
 }
 
-/// Resolve the OpenFang home directory.
+/// Resolve the ArmaraOS home directory (legacy name preserved for compatibility).
 ///
-/// Priority: `OPENFANG_HOME` env var > `~/.openfang`.
+/// Priority:
+/// - `ARMARAOS_HOME` env var
+/// - `OPENFANG_HOME` env var (legacy)
+/// - `~/.armaraos` if it exists
+/// - otherwise `~/.openfang` (legacy default)
 fn openfang_home_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("ARMARAOS_HOME") {
+        return PathBuf::from(home);
+    }
     if let Ok(home) = std::env::var("OPENFANG_HOME") {
         return PathBuf::from(home);
     }
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".openfang")
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let arm = home.join(".armaraos");
+    if arm.is_dir() {
+        return arm;
+    }
+    home.join(".openfang")
 }
 
 /// Default LLM model configuration.

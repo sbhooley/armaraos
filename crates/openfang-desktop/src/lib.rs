@@ -1,10 +1,11 @@
-//! OpenFang Desktop — Native Tauri 2.0 wrapper for the OpenFang Agent OS.
+//! ArmaraOS Desktop — Native Tauri 2.0 wrapper for the ArmaraOS Agent OS.
 //!
 //! Boots the kernel + embedded API server, then opens a native window pointing
 //! at the WebUI. Includes system tray, single-instance enforcement, native OS
 //! notifications, global shortcuts, auto-start, and update checking.
 
 mod commands;
+mod ainl;
 mod server;
 mod shortcuts;
 mod tray;
@@ -38,14 +39,14 @@ pub fn run() {
         )
         .init();
 
-    info!("Starting OpenFang Desktop...");
+    info!("Starting ArmaraOS Desktop...");
 
     // Boot kernel + embedded server (blocks until port is known)
-    let server_handle = server::start_server().expect("Failed to start OpenFang server");
+    let server_handle = server::start_server().expect("Failed to start ArmaraOS server");
     let port = server_handle.port;
     let kernel_for_notifications = server_handle.kernel.clone();
 
-    info!("OpenFang server running on port {port}");
+    info!("ArmaraOS server running on port {port}");
 
     let url = format!("http://127.0.0.1:{port}");
 
@@ -103,6 +104,8 @@ pub fn run() {
             commands::install_update,
             commands::open_config_dir,
             commands::open_logs_dir,
+            commands::ainl_status,
+            commands::ensure_ainl_installed,
         ])
         .setup(move |app| {
             // Create the main window pointing directly at the embedded HTTP server.
@@ -114,7 +117,7 @@ pub fn run() {
                 "main",
                 WebviewUrl::External(url.parse().expect("Invalid server URL")),
             )
-            .title("OpenFang")
+            .title("ArmaraOS")
             .inner_size(1280.0, 800.0)
             .min_inner_size(800.0, 600.0)
             .center()
@@ -124,6 +127,35 @@ pub fn run() {
             // Set up system tray (desktop only)
             #[cfg(desktop)]
             tray::setup_tray(app)?;
+
+            // Auto-bootstrap AINL (Option A) on startup.
+            // Non-blocking: runs in background so UI comes up immediately.
+            let app_handle_for_ainl = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::ainl::ensure_ainl_installed(&app_handle_for_ainl) {
+                    Ok(st) if st.ok => {
+                        info!("AINL bootstrap OK: {}", st.detail);
+                    }
+                    Ok(st) => {
+                        warn!("AINL bootstrap incomplete: {}", st.detail);
+                        let _ = app_handle_for_ainl
+                            .notification()
+                            .builder()
+                            .title("AINL setup incomplete")
+                            .body(st.detail)
+                            .show();
+                    }
+                    Err(e) => {
+                        warn!("AINL bootstrap failed: {e}");
+                        let _ = app_handle_for_ainl
+                            .notification()
+                            .builder()
+                            .title("AINL setup failed")
+                            .body(e)
+                            .show();
+                    }
+                }
+            });
 
             // Spawn background task to forward critical kernel events as native
             // OS notifications. Only truly critical events — crashes, hard quota
@@ -145,7 +177,7 @@ pub fn run() {
                                 ),
                                 EventPayload::System(SystemEvent::KernelStopping) => (
                                     "Kernel Stopping".to_string(),
-                                    "OpenFang kernel is shutting down".to_string(),
+                                    "ArmaraOS kernel is shutting down".to_string(),
                                 ),
                                 EventPayload::System(SystemEvent::QuotaEnforced {
                                     agent_id,
@@ -186,7 +218,7 @@ pub fn run() {
             #[cfg(desktop)]
             updater::spawn_startup_check(app.handle().clone());
 
-            info!("OpenFang Desktop window created");
+            info!("ArmaraOS Desktop window created");
             Ok(())
         })
         .on_window_event(|window, event| {

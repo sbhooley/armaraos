@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OpenFang",
+  "productName": "ArmaraOS",
   "version": "0.5.5",
-  "identifier": "ai.openfang.desktop",
+  "identifier": "ai.armaraos.desktop",
   "build": {},
   "app": {
     "windows": [],
@@ -14,7 +14,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDOTE5MDhCRDNGMTUyMEQKUldRTlV2SFRpNUNSdkZRZDcvektwZkN6bUsyM0NJZC9OeXhHRU5id1FnZWllQmNlZGRoSGRQOHkK",
       "endpoints": [
-        "https://github.com/RightNow-AI/openfang/releases/latest/download/latest.json"
+        "https://github.com/sbhooley/armaraos/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
@@ -24,6 +24,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "resources/**/*"
+    ],
     "icon": [
       "icons/icon.ico",
       "icons/icon.png",
@@ -33,7 +36,7 @@
     ],
     "category": "Productivity",
     "shortDescription": "Open-source Agent Operating System",
-    "longDescription": "OpenFang is an open-source Agent Operating System — run, orchestrate, and extend AI agents across every channel from your desktop.",
+    "longDescription": "ArmaraOS is an open-source Agent Operating System — run, orchestrate, and extend AI agents across every channel from your desktop.",
     "linux": {
       "deb": {
         "depends": []

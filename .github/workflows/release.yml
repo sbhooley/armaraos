@@ -70,6 +70,12 @@ jobs:
         with:
           key: desktop-${{ matrix.platform.rust_target }}
 
+      - name: Bundle AINL wheel into desktop resources
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          cargo run -p xtask -- bundle-ainl-wheel --version 1.4.0
+
       - name: Import macOS signing certificate
         if: runner.os == 'macOS'
         env:

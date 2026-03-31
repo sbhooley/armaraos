@@ -1,10 +1,10 @@
-# OpenFang Desktop App
+# ArmaraOS Desktop App
 
-The OpenFang Desktop App is a native desktop wrapper built with [Tauri 2.0](https://v2.tauri.app/) that packages the entire OpenFang Agent OS into a single, installable application. Instead of running a CLI daemon and opening a browser, users get a native window with system tray integration, OS notifications, and single-instance enforcement -- all powered by the same kernel and API server that the headless deployment uses.
+The ArmaraOS Desktop App is a native desktop wrapper built with [Tauri 2.0](https://v2.tauri.app/) that packages the ArmaraOS Agent OS into a single, installable application. Instead of running a CLI daemon and opening a browser, users get a native window with system tray integration, OS notifications, and single-instance enforcement -- all powered by the same kernel and API server that the headless deployment uses.
 
 **Crate:** `openfang-desktop`
-**Identifier:** `ai.openfang.desktop`
-**Product name:** OpenFang
+**Identifier:** `ai.armaraos.desktop`
+**Product name:** ArmaraOS
 
 ---
 

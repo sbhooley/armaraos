@@ -32,6 +32,9 @@ predictions_database.json
 prediction_report_*.md
 BUILD_LOG.md
 
+# Bundled AINL wheel (added by packaging pipeline)
+crates/openfang-desktop/resources/ainl/*.whl
+
 # OS
 .DS_Store
 ._*
