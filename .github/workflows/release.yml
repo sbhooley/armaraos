@@ -81,11 +81,15 @@ jobs:
           cargo run -p xtask -- bundle-ainl-wheel --version "${AINL_PYPI_VERSION}"
 
       - name: Import macOS signing certificate
-        if: runner.os == 'macOS' && secrets.MAC_CERT_BASE64 != ''
+        if: runner.os == 'macOS'
         env:
           MAC_CERT_BASE64: ${{ secrets.MAC_CERT_BASE64 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
+          if [ -z "${MAC_CERT_BASE64:-}" ]; then
+            echo "MAC_CERT_BASE64 not set; skipping Developer ID import (ad-hoc / unsigned build)."
+            exit 0
+          fi
           echo "$MAC_CERT_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
