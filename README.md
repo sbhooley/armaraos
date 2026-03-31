@@ -107,10 +107,10 @@ armaraos hand list
 
 ---
 
-## OpenFang vs The Landscape
+## ArmaraOS vs The Landscape
 
 <p align="center">
-  <img src="public/assets/openfang-vs-claws.png" width="600" alt="OpenFang vs OpenClaw vs ZeroClaw" />
+  <img src="public/assets/openfang-vs-claws.png" width="600" alt="ArmaraOS vs OpenClaw vs ZeroClaw" />
 </p>
 
 ### Benchmarks: Measured, Not Marketed
@@ -121,7 +121,7 @@ All data from official documentation and public repositories — February 2026.
 
 ```
 ZeroClaw   ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10 ms
-OpenFang   ██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  180 ms    ★
+ArmaraOS   ██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  180 ms    ★
 LangGraph  █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░  2.5 sec
 CrewAI     ████████████████████░░░░░░░░░░░░░░░░░░░░░░  3.0 sec
 AutoGen    ██████████████████████████░░░░░░░░░░░░░░░░░  4.0 sec
@@ -132,7 +132,7 @@ OpenClaw   ███████████████████████
 
 ```
 ZeroClaw   █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    5 MB
-OpenFang   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   40 MB    ★
+ArmaraOS   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   40 MB    ★
 LangGraph  ██████████████████░░░░░░░░░░░░░░░░░░░░░░░░░  180 MB
 CrewAI     ████████████████████░░░░░░░░░░░░░░░░░░░░░░░  200 MB
 AutoGen    █████████████████████████░░░░░░░░░░░░░░░░░░  250 MB
@@ -143,7 +143,7 @@ OpenClaw   ███████████████████████
 
 ```
 ZeroClaw   █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  8.8 MB
-OpenFang   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   32 MB    ★
+ArmaraOS   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   32 MB    ★
 CrewAI     ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  100 MB
 LangGraph  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  150 MB
 AutoGen    ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░  200 MB
@@ -153,7 +153,7 @@ OpenClaw   ███████████████████████
 #### Security Systems (higher is better)
 
 ```
-OpenFang   ████████████████████████████████████████████   16      ★
+ArmaraOS   ████████████████████████████████████████████   16      ★
 ZeroClaw   ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░    6
 OpenClaw   ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    3
 AutoGen    █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    2
@@ -164,7 +164,7 @@ CrewAI     ███░░░░░░░░░░░░░░░░░░░░
 #### Channel Adapters (higher is better)
 
 ```
-OpenFang   ████████████████████████████████████████████   40      ★
+ArmaraOS   ████████████████████████████████████████████   40      ★
 ZeroClaw   ███████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░   15
 OpenClaw   █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   13
 CrewAI     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0
@@ -176,7 +176,7 @@ LangGraph  ░░░░░░░░░░░░░░░░░░░░░░░
 
 ```
 ZeroClaw   ████████████████████████████████████████████   28
-OpenFang   ██████████████████████████████████████████░░   27      ★
+ArmaraOS   ██████████████████████████████████████████░░   27      ★
 LangGraph  ██████████████████████░░░░░░░░░░░░░░░░░░░░░   15
 CrewAI     ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10
 OpenClaw   ██████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   10
@@ -185,7 +185,7 @@ AutoGen    ███████████░░░░░░░░░░░░
 
 ### Feature-by-Feature Comparison
 
-| Feature | OpenFang | OpenClaw | ZeroClaw | CrewAI | AutoGen | LangGraph |
+| Feature | ArmaraOS | OpenClaw | ZeroClaw | CrewAI | AutoGen | LangGraph |
 |---------|----------|----------|----------|--------|---------|-----------|
 | **Language** | **Rust** | TypeScript | **Rust** | Python | Python | Python |
 | **Autonomous Hands** | **7 built-in** | None | None | None | None | None |
