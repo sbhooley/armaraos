@@ -99,7 +99,8 @@ jobs:
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
           if [ -z "${MAC_CERT_BASE64:-}" ]; then
-            echo "MAC_CERT_BASE64 not set; skipping Developer ID import (ad-hoc / unsigned build)."
+            echo "MAC_CERT_BASE64 not set; using ad-hoc codesign identity (-)."
+            echo "APPLE_SIGNING_IDENTITY=-" >> $GITHUB_ENV
             exit 0
           fi
           echo "$MAC_CERT_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
