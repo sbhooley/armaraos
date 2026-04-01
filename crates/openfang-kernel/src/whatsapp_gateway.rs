@@ -1,6 +1,6 @@
 //! WhatsApp Web gateway — embedded Node.js process management.
 //!
-//! Embeds the gateway JS at compile time, extracts it to `~/.openfang/whatsapp-gateway/`,
+//! Embeds the gateway JS at compile time, extracts it to `~/.armaraos/whatsapp-gateway/`,
 //! runs `npm install` if needed, and spawns `node index.js` as a managed child process
 //! that auto-restarts on crash.
 
@@ -266,6 +266,7 @@ pub async fn start_whatsapp_gateway(kernel: &Arc<super::kernel::OpenFangKernel>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::openfang_home;
 
     #[test]
     fn test_embedded_files_not_empty() {
@@ -292,12 +293,7 @@ mod tests {
     #[test]
     fn test_gateway_dir_under_openfang_home() {
         let dir = gateway_dir();
-        assert!(dir.ends_with("whatsapp-gateway"));
-        assert!(dir
-            .parent()
-            .unwrap()
-            .to_string_lossy()
-            .contains(".openfang"));
+        assert_eq!(dir, openfang_home().join("whatsapp-gateway"));
     }
 
     #[test]
