@@ -548,8 +548,9 @@ function app() {
           Alpine.store('ainl').bootstrapping = true;
         } catch (e) { /* ignore */ }
         var attempts = 0;
-        var maxAttempts = 80;
-        var delayMs = 2500;
+        // Pip + PyPI can exceed ~3 min on slow networks; keep polling up to ~8 min.
+        var maxAttempts = 120;
+        var delayMs = 4000;
         function tick() {
           attempts++;
           ArmaraosDesktopTauriInvoke('ainl_status')

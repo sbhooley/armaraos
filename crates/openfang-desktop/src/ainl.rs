@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use tauri::{AppHandle, Manager};
+use tracing::warn;
 
 /// Default spec for online install; override at runtime with `ARMARAOS_AINL_PYPI_SPEC`.
 const DEFAULT_AINL_PYPI_SPEC: &str = "ainativelang[mcp]>=1.3.0,<2";
@@ -124,13 +125,14 @@ fn find_bundled_portable_python(app: &AppHandle) -> Result<Option<PathBuf>, Stri
     let Some(triple) = portable_python_triple_dir() else {
         return Ok(None);
     };
-    let base = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("Failed to resolve resource_dir: {e}"))?
-        .join("resources")
-        .join("python")
-        .join(triple);
+    let root = match app.path().resource_dir() {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "resource_dir unavailable; skipping bundled portable Python");
+            return Ok(None);
+        }
+    };
+    let base = root.join("resources").join("python").join(triple);
     let unix = base.join("python").join("bin").join("python3");
     if unix.is_file() {
         return Ok(Some(unix));
@@ -205,6 +207,31 @@ fn collect_python_candidates(app: &AppHandle) -> Vec<(PathBuf, Vec<&'static str>
         let t = s.trim();
         if !t.is_empty() {
             v.push((PathBuf::from(t), vec![]));
+        }
+    }
+    // macOS .app bundles often get a minimal PATH (no Homebrew). Try common install locations
+    // before relying on `python3` resolving to the system stub (may be 3.9).
+    #[cfg(target_os = "macos")]
+    {
+        for p in [
+            "/opt/homebrew/bin/python3.13",
+            "/opt/homebrew/bin/python3.12",
+            "/opt/homebrew/bin/python3.11",
+            "/opt/homebrew/bin/python3.10",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/opt/python@3.12/bin/python3.12",
+            "/usr/local/opt/python@3.11/bin/python3.11",
+            "/usr/local/opt/python@3.10/bin/python3.10",
+            "/usr/local/bin/python3.13",
+            "/usr/local/bin/python3.12",
+            "/usr/local/bin/python3.11",
+            "/usr/local/bin/python3.10",
+            "/usr/local/bin/python3",
+        ] {
+            let pb = PathBuf::from(p);
+            if pb.is_file() {
+                v.push((pb, vec![]));
+            }
         }
     }
     #[cfg(windows)]
@@ -321,12 +348,13 @@ pub(crate) fn venv_bin(venv: &Path, name: &str) -> PathBuf {
 }
 
 fn find_bundled_wheel(app: &AppHandle) -> Result<Option<PathBuf>, String> {
-    let base = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("Failed to resolve resource_dir: {e}"))?
-        .join("resources")
-        .join("ainl");
+    let base = match app.path().resource_dir() {
+        Ok(r) => r.join("resources").join("ainl"),
+        Err(e) => {
+            warn!(error = %e, "resource_dir unavailable; skipping bundled AINL wheel");
+            return Ok(None);
+        }
+    };
 
     if !base.is_dir() {
         return Ok(None);
@@ -611,14 +639,22 @@ pub fn ainl_status(app: &AppHandle) -> Result<AinlStatus, String> {
 
     let (venv_python_version, venv_python_meets_ainl) = venv_python_meta(&venv);
 
+    let ready = venv.is_dir() && py.exists() && ainl_ok && ainl_mcp_ok;
+    let detail = if ready {
+        "AINL is installed in the app virtualenv.".to_string()
+    } else {
+        "Probe only — startup auto-install runs in the background, or use Bootstrap AINL. \
+         (If this stays empty, install Python 3.10+ or set ARMARAOS_PYTHON; GUI apps on macOS may not see Homebrew on PATH.)"
+            .to_string()
+    };
     let mut s = AinlStatus {
-        ok: venv.is_dir() && py.exists() && ainl_ok && ainl_mcp_ok,
+        ok: ready,
         venv_exists: venv.is_dir() && py.exists(),
         ainl_ok,
         ainl_mcp_ok,
         wheel_found: wheel.is_some(),
         wheel_path: wheel.map(|p| p.display().to_string()),
-        detail: "Status only (no install attempted)".to_string(),
+        detail,
         armaraos_host_ok: None,
         armaraos_host_detail: None,
         install_source: read_install_source(app),
