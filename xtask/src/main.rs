@@ -77,8 +77,6 @@ fn slugify_program_name(name: &str) -> Result<String> {
     for c in name.trim().chars() {
         let c = if c.is_ascii_alphanumeric() {
             c.to_ascii_lowercase()
-        } else if c.is_whitespace() || c == '_' || c == '-' {
-            '-'
         } else {
             '-'
         };
@@ -158,9 +156,9 @@ Starter AINL graph: [`{slug}.ainl`]({slug}.ainl).
     Ok(())
 }
 
-/// indygreg/python-build-standalone release tag + embedded CPython version string.
-const PBS_RELEASE: &str = "20241007";
-const PBS_PY_VERSION: &str = "3.12.7";
+/// astral-sh/python-build-standalone release tag + embedded CPython version string.
+const PBS_RELEASE: &str = "20260325";
+const PBS_PY_VERSION: &str = "3.12.13";
 
 fn bundle_portable_python(rust_target: &str) -> Result<()> {
     let triple = match rust_target.trim() {
@@ -178,7 +176,7 @@ fn bundle_portable_python(rust_target: &str) -> Result<()> {
     };
 
     let url = format!(
-        "https://github.com/indygreg/python-build-standalone/releases/download/{PBS_RELEASE}/cpython-{PBS_PY_VERSION}+{PBS_RELEASE}-{triple}-install_only.tar.gz"
+        "https://github.com/astral-sh/python-build-standalone/releases/download/{PBS_RELEASE}/cpython-{PBS_PY_VERSION}+{PBS_RELEASE}-{triple}-install_only.tar.gz"
     );
 
     let root = repo_root()?;

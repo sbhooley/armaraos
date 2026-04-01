@@ -5,11 +5,13 @@
 use openfang_kernel::OpenFangKernel;
 use openfang_types::config::KernelConfig;
 use openfang_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
+use serial_test::serial;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 #[tokio::test]
+#[serial]
 async fn cron_run_job_ainl_run_executes_stub_binary() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().to_path_buf();
@@ -83,6 +85,7 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
 }
 
 #[tokio::test]
+#[serial]
 async fn cron_run_job_ainl_run_passes_frame_json() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().to_path_buf();

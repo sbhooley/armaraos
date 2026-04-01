@@ -17,7 +17,7 @@ cargo xtask bundle-portable-python --target x86_64-apple-darwin
 cargo xtask bundle-portable-python --target x86_64-pc-windows-msvc
 ```
 
-The xtask downloads the matching **indygreg** `cpython-3.12.7+20241007-*-install_only.tar.gz`, extracts it, and lays out `python/bin/python3` (or `python.exe` on Windows).
+The xtask downloads the matching **astral-sh** `python-build-standalone` `cpython-3.12.13+20260325-*-install_only.tar.gz`, extracts it, and lays out `python/bin/python3` (or `python.exe` on Windows).
 
 ## CI / release
 
