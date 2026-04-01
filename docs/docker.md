@@ -1,12 +1,16 @@
 # Docker image
 
-The repository root `Dockerfile` builds a multi-arch image (see `.github/workflows/release.yml`) that runs the `openfang` daemon with Python, Node, and bundled agents. The runtime listens on port **4200** and uses **`OPENFANG_HOME=/data`** by default (mount a volume for persistent config).
+The repository root `Dockerfile` builds a multi-arch image (see `.github/workflows/release.yml`) that runs the `openfang` daemon with Python, Node, and bundled agents. The runtime uses **`OPENFANG_HOME=/data`** and, by default, **`OPENFANG_LISTEN=0.0.0.0:50051`** so the HTTP API is reachable from your host when you publish port **50051** (see below).
+
+## Listen address and port **50051**
+
+The kernel default `api_listen` is **`127.0.0.1:50051`**. Inside Docker, binding only to **127.0.0.1** means **nothing on your Mac/PC can connect** through `-p …:50051` (traffic arrives on the container’s non-loopback interface). The image sets **`OPENFANG_LISTEN=0.0.0.0:50051`**, which overrides `api_listen` at boot so the dashboard is reachable at **`http://localhost:50051/`** when you map the port. Override with **`-e OPENFANG_LISTEN=0.0.0.0:PORT`** if you use a different port.
 
 ## Quick start
 
 ```bash
 docker build -t armaraos:local .
-docker run --rm -p 4200:4200 -v armaraos-data:/data \
+docker run --rm -p 50051:50051 -v armaraos-data:/data \
   -e GROQ_API_KEY="your-key" \
   armaraos:local start
 ```
@@ -26,7 +30,9 @@ The Dockerfile uses [**cargo-chef**](https://github.com/LukeMathWalker/cargo-che
 1. **Planner** — `cargo chef prepare` writes a **recipe** from your manifests and lockfile.
 2. **Builder** — `cargo chef cook --release` compiles **dependencies** only. That layer is cached until `Cargo.lock` or crate manifests change.
 
-After that, `cargo build --release --bin openfang` rebuilds only workspace crates when source changes. Together with BuildKit cache (`cache-from` / `cache-to` in CI), this cuts repeated CI and local build time.
+After that, `cargo build --release -p openfang-cli --bin openfang` rebuilds only the CLI and its path dependencies. The cook step uses **`--package openfang-cli`** so the image does **not** compile the Tauri desktop crate (GTK/`gdk-sys`, which would require extra Debian packages). The **`programs/`** tree at the repo root must be copied into the build context: **`openfang-kernel/build.rs`** embeds those AINL files and will panic if the directory is missing.
+
+Together with BuildKit cache (`cache-from` / `cache-to` in CI), this cuts repeated CI and local build time.
 
 ## Release profile defaults (compile time vs. binary size)
 
@@ -53,6 +59,7 @@ The image entrypoint runs **`openfang start`**. If **`/data/config.toml`** is mi
 
 ## Troubleshooting
 
-- **Container exits immediately with "Daemon already running"** (or Docker Desktop shows the container stopped): `openfang start` normally checks whether something already answers on `127.0.0.1:4200`. With **`--network host`**, or in odd setups, that check can hit **another** ArmaraOS instance (often on the host). The CLI **skips** this probe when **`/.dockerenv`** is present (normal Docker). If you still see it (e.g. Podman), set **`OPENFANG_SKIP_DAEMON_CHECK=1`** on the container.
+- **Browser cannot open the dashboard / connection refused** with `-p 50051:50051`: ensure the process listens on **`0.0.0.0`**, not only **`127.0.0.1`** (the stock image sets **`OPENFANG_LISTEN=0.0.0.0:50051`**). Use **`http://localhost:50051/`** on the host (not the container-only URL printed as `127.0.0.1` in logs).
+- **Container exits immediately with "Daemon already running"** (or Docker Desktop shows the container stopped): `openfang start` probes for an existing daemon via HTTP. With **`--network host`**, that check can see **another** ArmaraOS on the host. The CLI **skips** this probe when **`/.dockerenv`** is present (normal Docker). If you still see it (e.g. Podman), set **`OPENFANG_SKIP_DAEMON_CHECK=1`** on the container.
 - **Link step killed (OOM)** in `docker build`: the release profile uses LTO; increase Docker Desktop memory or pass **`--build-arg LTO=false`** for a quicker, less memory-heavy link.
 - **Missing libssl at runtime**: ensure the final stage installs **`libssl3`** (already in the Dockerfile).

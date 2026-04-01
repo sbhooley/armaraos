@@ -71,11 +71,13 @@ docker pull ghcr.io/sbhooley/armaraos:latest
 
 docker run -d \
   --name openfang \
-  -p 4200:4200 \
+  -p 50051:50051 \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   -v openfang-data:/data \
   ghcr.io/sbhooley/armaraos:latest
 ```
+
+The image sets **`OPENFANG_LISTEN=0.0.0.0:50051`** so the API is reachable from the host (default **`api_listen`** is loopback-only and would not work with `-p`). Open **`http://localhost:50051/`** in your browser.
 
 Or use Docker Compose:
 

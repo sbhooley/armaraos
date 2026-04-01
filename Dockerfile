@@ -25,13 +25,16 @@ ARG LTO=thin
 ARG CODEGEN_UNITS=16
 ENV CARGO_PROFILE_RELEASE_LTO=${LTO} \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CODEGEN_UNITS}
-RUN cargo chef cook --release --recipe-path recipe.json
+# Only the CLI binary is shipped; cooking the whole workspace would pull GTK (openfang-desktop) and fail without libgdk.
+RUN cargo chef cook --release --recipe-path recipe.json --package openfang-cli
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY xtask ./xtask
 COPY agents ./agents
 COPY packages ./packages
-RUN cargo build --release --bin openfang
+# openfang-kernel build.rs embeds ../../programs (AINL bundles); omitting this panics.
+COPY programs ./programs
+RUN cargo build --release -p openfang-cli --bin openfang
 
 FROM rust:1-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,8 +49,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /build/target/release/openfang /usr/local/bin/
 COPY --from=builder /build/agents /opt/openfang/agents
-EXPOSE 4200
+# Default api_listen is 127.0.0.1 — that does NOT accept traffic from Docker port publishing. Kernel honors OPENFANG_LISTEN (see openfang-kernel).
+EXPOSE 50051
 VOLUME /data
 ENV OPENFANG_HOME=/data
+ENV OPENFANG_LISTEN=0.0.0.0:50051
 ENTRYPOINT ["openfang"]
 CMD ["start"]
