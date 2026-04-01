@@ -387,6 +387,18 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the embedded dashboard (127.0.0.1) to query AINL install status and retry bootstrap.",
+          "type": "string",
+          "const": "allow-ainl-bootstrap",
+          "markdownDescription": "Allows the embedded dashboard (127.0.0.1) to query AINL install status and retry bootstrap."
+        },
+        {
+          "description": "Allows the embedded dashboard to persist theme mode across restarts (random localhost port breaks localStorage).",
+          "type": "string",
+          "const": "allow-dashboard-ui-prefs",
+          "markdownDescription": "Allows the embedded dashboard to persist theme mode across restarts (random localhost port breaks localStorage)."
+        },
+        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",

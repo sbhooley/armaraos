@@ -4,6 +4,9 @@
 //! API server on a background thread with its own tokio runtime.
 
 use openfang_api::server::build_router;
+use openfang_kernel::config::{
+    apply_desktop_bundled_llm_defaults, default_config_path, load_config, openfang_home,
+};
 use openfang_kernel::OpenFangKernel;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,7 +42,7 @@ impl ServerHandle {
                 let _ = handle.join();
             }
             self.kernel.shutdown();
-            info!("OpenFang embedded server stopped");
+            info!("ArmaraOS embedded server stopped");
         }
     }
 }
@@ -70,7 +73,11 @@ pub fn start_server() -> Result<ServerHandle, Box<dyn std::error::Error>> {
     load_dotenv_files();
 
     // Boot kernel (sync — no tokio needed)
-    let kernel = OpenFangKernel::boot(None)?;
+    let mut config = load_config(None);
+    if !default_config_path().exists() {
+        apply_desktop_bundled_llm_defaults(&mut config);
+    }
+    let kernel = OpenFangKernel::boot_with_config(config)?;
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
 
@@ -127,7 +134,7 @@ async fn run_embedded_server(
     let listener = tokio::net::TcpListener::from_std(std_listener)
         .expect("Failed to convert std TcpListener to tokio");
 
-    info!("OpenFang embedded server listening on http://{listen_addr}");
+    info!("ArmaraOS embedded server listening on http://{listen_addr}");
 
     let server = axum::serve(
         listener,
@@ -152,27 +159,10 @@ async fn run_embedded_server(
 }
 
 /// Load ~/.armaraos/.env (or legacy ~/.openfang/.env) and secrets.env into the process environment.
+/// Runs after [`openfang_home`] so migration/create matches the kernel config path.
 /// System env vars take priority — existing vars are NOT overridden.
 fn load_dotenv_files() {
-    let home = if let Ok(h) = std::env::var("ARMARAOS_HOME") {
-        std::path::PathBuf::from(h)
-    } else if let Ok(h) = std::env::var("OPENFANG_HOME") {
-        std::path::PathBuf::from(h)
-    } else {
-        let user_home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
-        if user_home.is_empty() {
-            return;
-        }
-        let base = std::path::PathBuf::from(user_home);
-        let arm = base.join(".armaraos");
-        if arm.is_dir() {
-            arm
-        } else {
-            base.join(".openfang")
-        }
-    };
+    let home = openfang_home();
 
     for filename in &[".env", "secrets.env"] {
         let path = home.join(filename);

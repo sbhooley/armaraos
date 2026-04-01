@@ -12,7 +12,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Must match a version published on PyPI: https://pypi.org/project/ainativelang/
-  AINL_PYPI_VERSION: "1.3.1"
+  AINL_PYPI_VERSION: "1.4.0"
 
 jobs:
   # ── Tauri Desktop App (Windows + macOS + Linux) ───────────────────────────
@@ -92,6 +92,12 @@ jobs:
           python -m pip install --upgrade pip
           cargo run -p xtask -- bundle-ainl-wheel --version "${AINL_PYPI_VERSION}"
 
+      - name: Bundle portable Python (AINL venv without system Python)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -p xtask -- bundle-portable-python --target "${{ matrix.platform.rust_target }}"
+
       - name: Import macOS signing certificate
         if: runner.os == 'macOS'
         env:
@@ -160,6 +166,109 @@ jobs:
           includeUpdaterJson: true
           projectPath: crates/openfang-desktop
           args: ${{ matrix.platform.args }}
+
+  # ── Mirror Tauri updater to public website (ainativelang.com) ───────────────
+  # Rewrites latest.json URLs from GitHub release assets to /downloads/armaraos/
+  # Requires secret: AINLATIVELANGWEB_DEPLOY_TOKEN (fine-grained PAT, contents:write on ainativelangweb).
+  sync-desktop-updates-to-website:
+    name: Publish updater to ainativelang.com
+    needs: [desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deploy token
+        env:
+          TOK: ${{ secrets.AINLATIVELANGWEB_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "${TOK}" ]; then
+            echo "::error::Missing secret AINLATIVELANGWEB_DEPLOY_TOKEN — add a fine-grained PAT with contents:write on sbhooley/ainativelangweb. See docs/release-desktop.md."
+            exit 1
+          fi
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download latest.json from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/armaraos-release
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --dir /tmp/armaraos-release \
+            -p "latest.json"
+          test -f /tmp/armaraos-release/latest.json
+
+      - name: Download updater archives (only files referenced in latest.json)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < <(jq -r '[.. | objects | select(has("url")) | .url] | unique[] | split("/") | last | split("?") | .[0]' /tmp/armaraos-release/latest.json)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No url fields in latest.json"
+            exit 1
+          fi
+          args=()
+          for f in "${FILES[@]}"; do
+            args+=(-p "$f")
+          done
+          gh release download "${GITHUB_REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --dir /tmp/armaraos-release \
+            "${args[@]}"
+
+      - name: Rewrite latest.json and stage updater files
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/updater-web
+          BASE="https://ainativelang.com/downloads/armaraos"
+          jq --arg base "$BASE" '
+            def fname: split("/") | last | split("?") | .[0];
+            walk(
+              if type == "object" and has("url") then
+                .url = ($base + "/" + (.url | fname))
+              else . end
+            )
+          ' /tmp/armaraos-release/latest.json > /tmp/updater-web/latest.json
+          mapfile -t FILES < <(jq -r '[.. | objects | select(has("url")) | .url] | unique[] | split("/") | last | split("?") | .[0]' /tmp/armaraos-release/latest.json)
+          for f in "${FILES[@]}"; do
+            if [[ -f "/tmp/armaraos-release/$f" ]]; then
+              cp -v "/tmp/armaraos-release/$f" "/tmp/updater-web/$f"
+            else
+              echo "::error::Release asset missing: $f (referenced in latest.json)"
+              exit 1
+            fi
+          done
+
+      - uses: actions/checkout@v6
+        with:
+          repository: sbhooley/ainativelangweb
+          token: ${{ secrets.AINLATIVELANGWEB_DEPLOY_TOKEN }}
+          path: web
+
+      - name: Copy into public/downloads/armaraos (keep README.md)
+        run: |
+          set -euo pipefail
+          DEST="web/public/downloads/armaraos"
+          mkdir -p "$DEST"
+          find "$DEST" -mindepth 1 -maxdepth 1 ! -name 'README.md' -exec rm -rf {} +
+          cp -v /tmp/updater-web/* "$DEST/"
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          cd web
+          git config user.name "ArmaraOS release"
+          git config user.email "armaraos-releases@users.noreply.github.com"
+          git add public/downloads/armaraos/
+          if git diff --staged --quiet; then
+            echo "No file changes; skipping push."
+            exit 0
+          fi
+          git commit -m "chore: ArmaraOS desktop updater ${{ github.ref_name }}"
+          git push origin HEAD:main
 
   # ── CLI Binary (5 platforms) ──────────────────────────────────────────────
   cli:

@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AINL OOTB:** The kernel embeds the repo `programs/` tree at build time (`crates/openfang-kernel/build.rs`) and materializes it to `~/.armaraos/ainl-library/armaraos-programs/` on boot. Curated cron registers idempotently: a **default enabled** weekly job **`armaraos-ainl-health-weekly`** runs a core-only health graph with `ainl run --json`; additional catalog entries (upstream examples, learning-frame echo with frame JSON, skill-mint stub, automation HTTP template) can be toggled in the Scheduler. Opt-out env: **`ARMARAOS_DISABLE_CURATED_AINL_CRON=1`**, **`ARMARAOS_SKIP_EMBEDDED_AINL_PROGRAMS=1`**. Dashboard Scheduler and AINL Library pages explain `armaraos-programs/` vs mirrored `demo/` / `examples/` / `intelligence/`; **Register curated cron** shows both `registered` and `embedded_programs_written`. CI job **openfang-kernel + AINL programs** builds/tests the kernel and runs `ainl validate --strict` on all `programs/**/*.ainl`. Manual steps: [docs/ootb-ainl-smoke.md](docs/ootb-ainl-smoke.md).
+
 ### Changed
 
 - **BREAKING:** Dashboard password hashing switched from SHA256 to Argon2id. Existing `password_hash` values in `config.toml` must be regenerated with `openfang auth hash-password`. Only affects users with `[auth] enabled = true`.
+- **`GET /api/events/stream`** and **`GET /api/logs/stream`**: when `api_key` is set, requests from **non-loopback** addresses now require authentication (Bearer or `token` query), same as other protected routes. Loopback clients may still open the stream without credentials so the embedded dashboard works locally.
+
+### Added
+
+- **Tests:** SSE smoke for `GET /api/events/stream` (`api_integration_test`); auth matrix for kernel events stream (`sse_stream_auth`: loopback vs remote, Bearer token).
+- **Dashboard:** Overview shows an optional **Last kernel event** line from `kernelEvents.last`; Settings → AINL shows **Last checked** after PyPI/GitHub version checks (desktop).
+- **Docs:** README subsection on kernel SSE; `docs/dashboard-testing.md`; `docs/release-desktop.md`.
+- **Docs:** `docs/data-directory.md` (default `~/.armaraos/`, `ARMARAOS_HOME` / `OPENFANG_HOME`, migration from `~/.openfang`); README and user-facing guides updated so paths and env vars match runtime behavior; `MIGRATION.md` destinations use `~/.armaraos/`.
+- **Docs:** `docs/docker.md` — Docker image, OpenSSL, cargo-chef, build args, multi-arch notes.
 
 ### Fixed
 
 - Dashboard passwords were hashed with plain SHA256 (no salt), making them vulnerable to rainbow table and GPU-accelerated brute force attacks. Now uses Argon2id with random salts.
+- **Docker / CI:** GHCR image builds failed while building vendored OpenSSL from source (Perl/toolchain in `rust:slim`). The Dockerfile now sets **`OPENSSL_NO_VENDOR=1`**, installs **`libssl3`** at runtime, uses **`cargo-chef`** to cache dependency compilation, and defaults to **thin LTO** + **parallel codegen units** for faster builds without changing behavior.
 
 ## [0.1.0] - 2026-02-24
 

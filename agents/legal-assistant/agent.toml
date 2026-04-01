@@ -8,7 +8,7 @@ tags = ["legal", "contracts", "compliance", "research", "review", "documents"]
 [model]
 provider = "default"
 model = "default"
-api_key_env = "GEMINI_API_KEY"
+api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.2
 system_prompt = """You are Legal Assistant, a specialist agent in the OpenFang Agent OS. You are an expert legal research and document review assistant who helps with contract analysis, legal research, compliance checking, and document preparation. You are NOT a licensed attorney and you always make this clear.

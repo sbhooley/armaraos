@@ -1,10 +1,11 @@
 //! Route handlers for the OpenFang API.
 
 use crate::types::*;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{ConnectInfo, Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use openfang_channels::bridge::channel_command_specs;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
@@ -15,7 +16,8 @@ use openfang_kernel::OpenFangKernel;
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
@@ -44,6 +46,8 @@ pub struct AppState {
     /// Thread-safe mutable budget config. Updated via PUT /api/budget.
     /// Initialized from `kernel.config.budget` at startup.
     pub budget_config: Arc<tokio::sync::RwLock<openfang_types::config::BudgetConfig>>,
+    /// Timestamps (unix ms) of recent `POST /api/ainl/library/register-curated` calls per client IP.
+    pub ainl_register_hits: DashMap<std::net::IpAddr, Vec<u64>>,
 }
 
 /// POST /api/agents — Spawn a new agent.
@@ -407,6 +411,34 @@ pub async fn send_message(
             } else {
                 cleaned
             };
+
+            let skill_draft_path = if let Some(intent) =
+                openfang_kernel::skills_staging::learn_prefixed_intent(&req.message)
+            {
+                let frame = openfang_kernel::skills_staging::frame_from_agent_learn_turn(
+                    intent,
+                    &req.message,
+                    &response,
+                    &id,
+                    result.silent,
+                );
+                match openfang_kernel::skills_staging::write_skill_draft_markdown(
+                    &state.kernel.config.home_dir,
+                    &frame,
+                ) {
+                    Ok(p) => {
+                        tracing::info!(path = %p.display(), agent = %id, "skill draft from [learn] message");
+                        Some(p.display().to_string())
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, agent = %id, "skill draft write failed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             (
                 StatusCode::OK,
                 Json(serde_json::json!(MessageResponse {
@@ -415,6 +447,7 @@ pub async fn send_message(
                     output_tokens: result.total_usage.output_tokens,
                     iterations: result.iterations,
                     cost_usd: result.cost_usd,
+                    skill_draft_path,
                 })),
             )
         }
@@ -2830,7 +2863,7 @@ pub async fn test_channel(
 /// Send a real test message to a specific channel/chat on the given platform.
 async fn send_channel_test_message(channel_name: &str, target_id: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let test_msg = "OpenFang test message — your channel is connected!";
+    let test_msg = "ArmaraOS test message — your channel is connected!";
 
     match channel_name {
         "discord" => {
@@ -3455,7 +3488,7 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     ));
 
     // Version info
-    out.push_str("# HELP openfang_info OpenFang version and build info.\n");
+    out.push_str("# HELP openfang_info ArmaraOS version and build info.\n");
     out.push_str("# TYPE openfang_info gauge\n");
     out.push_str(&format!(
         "openfang_info{{version=\"{}\"}} 1\n",
@@ -5100,6 +5133,64 @@ pub async fn logs_stream(
         .into_response()
 }
 
+/// GET /api/events/stream — SSE stream of kernel [`openfang_types::event::Event`] values (JSON per message).
+///
+/// On connect, sends up to 100 recent events from the bus history (oldest first), then live events.
+/// Optional query: `token=` for clients that cannot set `Authorization` (same as [`logs_stream`]).
+/// Heartbeat every 15s.
+pub async fn kernel_events_stream(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    use axum::response::sse::{Event as SseWireEvent, KeepAlive, Sse};
+    use std::convert::Infallible;
+    use tokio::sync::broadcast::error::RecvError;
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<SseWireEvent, Infallible>>(256);
+
+    let mut historical = state.kernel.event_bus.history(100).await;
+    historical.reverse(); // chronological (oldest first)
+
+    let mut rx_bus = state.kernel.event_bus.subscribe_all();
+    tokio::spawn(async move {
+        for ev in historical {
+            if let Ok(json) = serde_json::to_string(&ev) {
+                if tx
+                    .send(Ok(SseWireEvent::default().data(json)))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+
+        loop {
+            match rx_bus.recv().await {
+                Ok(ev) => {
+                    if let Ok(json) = serde_json::to_string(&ev) {
+                        if tx
+                            .send(Ok(SseWireEvent::default().data(json)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => break,
+            }
+        }
+    });
+
+    let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(rx_stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(std::time::Duration::from_secs(15))
+                .text("ping"),
+        )
+        .into_response()
+}
+
 /// Classify an audit action string into a level (info, warn, error).
 fn classify_audit_level(action: &str) -> &'static str {
     let a = action.to_lowercase();
@@ -6392,7 +6483,7 @@ pub async fn a2a_agent_card(State(state): State<Arc<AppState>>) -> impl IntoResp
     } else {
         let card = serde_json::json!({
             "name": "openfang",
-            "description": "OpenFang Agent OS — no agents spawned yet",
+            "description": "ArmaraOS Agent OS — no agents spawned yet",
             "url": format!("{base_url}/a2a"),
             "version": "0.1.0",
             "capabilities": { "streaming": true },
@@ -10677,7 +10768,7 @@ pub async fn pairing_notify(
     let title = body
         .get("title")
         .and_then(|v| v.as_str())
-        .unwrap_or("OpenFang");
+        .unwrap_or("ArmaraOS");
     let message = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
     if message.is_empty() {
         return (
@@ -11489,6 +11580,241 @@ fn remove_toml_section(content: &str, section: &str) -> String {
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// AINL library (synced programs under ~/.armaraos/ainl-library)
+// ---------------------------------------------------------------------------
+
+fn ainl_library_query_hints_enabled(params: &HashMap<String, String>) -> bool {
+    params.get("hints").is_some_and(|s| {
+        let t = s.trim();
+        t == "1" || t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("yes")
+    })
+}
+
+fn ainl_library_query_max_hints(params: &HashMap<String, String>) -> usize {
+    params
+        .get("max_hints")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(500)
+        .clamp(1, 2000)
+}
+
+/// GET /api/ainl/library — List discovered `.ainl` / `.lang` files (grouped + flat).
+///
+/// Query: `hints=1` — include first `#` comment line per file (capped by `max_hints`, default 500).
+pub async fn get_ainl_library(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let home = &state.kernel.config.home_dir;
+    let root = home.join("ainl-library");
+    let root_display = root.display().to_string();
+    let sync_meta = openfang_kernel::ainl_library::read_ainl_library_sync_metadata(home);
+    let want_hints = ainl_library_query_hints_enabled(&params);
+    let max_hints = ainl_library_query_max_hints(&params);
+    match openfang_kernel::ainl_library::walk_ainl_files(&root) {
+        Ok(files) => {
+            let hints_truncated = want_hints && files.len() > max_hints;
+            let mut by_cat: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+            let programs: Vec<serde_json::Value> = files
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let absolute = p.display().to_string();
+                    let rel = p.strip_prefix(&root).unwrap_or(p.as_path());
+                    let rel_s = rel.to_string_lossy().replace('\\', "/");
+                    let name = p
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&rel_s)
+                        .to_string();
+                    let cat_key = rel_s
+                        .split('/')
+                        .next()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("other")
+                        .to_string();
+                    let hint = if want_hints && i < max_hints {
+                        openfang_kernel::ainl_library::ainl_source_first_hint(p)
+                    } else {
+                        None
+                    };
+                    let entry = if let Some(h) = hint {
+                        serde_json::json!({
+                            "path": rel_s,
+                            "absolute": absolute,
+                            "name": name,
+                            "category": cat_key,
+                            "hint": h,
+                        })
+                    } else {
+                        serde_json::json!({
+                            "path": rel_s,
+                            "absolute": absolute,
+                            "name": name,
+                            "category": cat_key,
+                        })
+                    };
+                    by_cat
+                        .entry(cat_key.clone())
+                        .or_default()
+                        .push(entry.clone());
+                    entry
+                })
+                .collect();
+
+            let priority = ["armaraos-programs", "demo", "examples", "intelligence"];
+            let mut categories: Vec<serde_json::Value> = Vec::new();
+            for key in priority {
+                if let Some(items) = by_cat.remove(key) {
+                    categories.push(serde_json::json!({
+                        "id": key,
+                        "label": match key {
+                            "armaraos-programs" => "ArmaraOS programs",
+                            "demo" => "Demo",
+                            "examples" => "Examples",
+                            "intelligence" => "Intelligence",
+                            _ => key,
+                        },
+                        "programs": items,
+                    }));
+                }
+            }
+            for (id, items) in by_cat {
+                categories.push(serde_json::json!({
+                    "id": id,
+                    "label": id,
+                    "programs": items,
+                }));
+            }
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "root": root_display,
+                    "total": programs.len(),
+                    "programs": programs,
+                    "categories": categories,
+                    "sync": sync_meta,
+                    "library_present": root.is_dir(),
+                    "hints_enabled": want_hints,
+                    "hints_truncated": hints_truncated,
+                    "max_hints_applied": want_hints.then_some(max_hints),
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// GET /api/ainl/library/curated — Static catalog used for optional cron registration.
+pub async fn get_ainl_library_curated() -> impl IntoResponse {
+    match serde_json::from_str::<serde_json::Value>(
+        openfang_kernel::ainl_library::CURATED_AINL_CRON_JSON,
+    ) {
+        Ok(v) => (StatusCode::OK, Json(v)),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("embedded catalog: {e}")})),
+        ),
+    }
+}
+
+/// POST /api/ainl/library/register-curated — Re-run idempotent curated cron registration.
+///
+/// Per-IP sliding window (5 calls / 60s) in addition to GCRA rate limiting.
+pub async fn post_ainl_register_curated(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    const WINDOW_MS: u64 = 60_000;
+    const MAX_PER_WINDOW: usize = 5;
+    let ip = addr.ip();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    match state.ainl_register_hits.entry(ip) {
+        Entry::Occupied(mut o) => {
+            let v = o.get_mut();
+            v.retain(|t| now.saturating_sub(*t) < WINDOW_MS);
+            if v.len() >= MAX_PER_WINDOW {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": "Too many register-curated requests from this IP; try again in about a minute."
+                    })),
+                );
+            }
+            v.push(now);
+        }
+        Entry::Vacant(v) => {
+            v.insert(vec![now]);
+        }
+    }
+
+    let embedded_written =
+        match openfang_kernel::embedded_ainl_programs::materialize_embedded_programs(
+            &state.kernel.config.home_dir,
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("AINL embedded programs materialize (register-curated): {e}");
+                0
+            }
+        };
+
+    match openfang_kernel::ainl_library::register_curated_ainl_cron_jobs(&state.kernel) {
+        Ok(n) => {
+            let _ = state.kernel.cron_scheduler.persist();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "registered": n,
+                    "embedded_programs_written": embedded_written,
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Learning / skill drafts
+// ---------------------------------------------------------------------------
+
+/// POST /api/learning/skill-draft — Write `~/.armaraos/skills/staging/draft-<run_id>-<unix>.md` from [`LearningFrameV1`].
+pub async fn post_learning_skill_draft(
+    State(state): State<Arc<AppState>>,
+    Json(frame): Json<openfang_types::learning_frame::LearningFrameV1>,
+) -> impl IntoResponse {
+    match openfang_kernel::skills_staging::write_skill_draft_markdown(
+        &state.kernel.config.home_dir,
+        &frame,
+    ) {
+        Ok(path) => {
+            let display = path.display().to_string();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "written",
+                    "path": display,
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
 }
 
 #[cfg(test)]

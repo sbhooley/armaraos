@@ -6,8 +6,10 @@
 //! - In-memory rate limiting (per IP)
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, Response, StatusCode};
 use axum::middleware::Next;
+use std::net::SocketAddr;
 use std::time::Instant;
 use tracing::info;
 
@@ -70,12 +72,12 @@ pub async fn auth(
     // Shutdown is loopback-only (CLI on same machine) — skip token auth
     let path = request.uri().path();
     if path == "/api/shutdown" {
-        let is_loopback = request
+        let is_loopback_shutdown = request
             .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .get::<ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0.ip().is_loopback())
             .unwrap_or(false); // SECURITY: default-deny — unknown origin is NOT loopback
-        if is_loopback {
+        if is_loopback_shutdown {
             return next.run(request).await;
         }
     }
@@ -86,7 +88,20 @@ pub async fn auth(
     // POST/PUT/DELETE to any endpoint ALWAYS requires auth to prevent
     // unauthenticated writes (cron job creation, skill install, etc.).
     let is_get = method == axum::http::Method::GET;
+    let is_loopback = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().is_loopback())
+        .unwrap_or(false);
+
+    // SSE: allow without credentials only from loopback (embedded dashboard). Remote clients
+    // must send the same Bearer / ?token= as other protected routes when api_key is set.
+    if is_get && (path == "/api/logs/stream" || path == "/api/events/stream") && is_loopback {
+        return next.run(request).await;
+    }
+
     let is_public = path == "/"
+        || path == "/assets/armaraos-logo.png"
         || path == "/logo.png"
         || path == "/favicon.ico"
         || (path == "/.well-known/agent.json" && is_get)
@@ -122,8 +137,9 @@ pub async fn auth(
         || (path == "/api/integrations/available" && is_get)
         || (path == "/api/integrations/health" && is_get)
         || (path == "/api/workflows" && is_get)
-        || path == "/api/logs/stream"  // SSE stream, read-only
+        // /api/logs/stream and /api/events/stream: loopback bypass above; remote needs auth
         || (path.starts_with("/api/cron/") && is_get)
+        || (path.starts_with("/api/ainl/library") && is_get)
         || path.starts_with("/api/providers/github-copilot/oauth/")
         || path == "/api/auth/login"
         || path == "/api/auth/logout"

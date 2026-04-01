@@ -161,14 +161,7 @@ const PROVIDERS: &[ProviderInfo] = &[
 
 /// Check if first-run setup is needed.
 pub fn needs_setup() -> bool {
-    let of_home = if let Ok(h) = std::env::var("OPENFANG_HOME") {
-        std::path::PathBuf::from(h)
-    } else {
-        match dirs::home_dir() {
-            Some(h) => h.join(".openfang"),
-            None => return true,
-        }
-    };
+    let of_home = openfang_kernel::config::openfang_home();
     !of_home.join("config.toml").exists()
 }
 
@@ -380,18 +373,7 @@ impl WizardState {
             }
         };
 
-        let openfang_dir = if let Ok(h) = std::env::var("OPENFANG_HOME") {
-            std::path::PathBuf::from(h)
-        } else {
-            match dirs::home_dir() {
-                Some(h) => h.join(".openfang"),
-                None => {
-                    self.status_msg = "Could not determine home directory".to_string();
-                    self.step = WizardStep::Done;
-                    return;
-                }
-            }
-        };
+        let openfang_dir = openfang_kernel::config::openfang_home();
         let _ = std::fs::create_dir_all(openfang_dir.join("agents"));
         let _ = std::fs::create_dir_all(openfang_dir.join("data"));
         crate::restrict_dir_permissions(&openfang_dir);

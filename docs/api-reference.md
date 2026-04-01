@@ -41,7 +41,7 @@ Authorization: Bearer <your-api-key>
 
 ### Setting the API Key
 
-Add to `~/.openfang/config.toml`:
+Add to `~/.armaraos/config.toml`:
 
 ```toml
 api_key = "your-secret-api-key"
@@ -579,12 +579,12 @@ List available agent templates from the agents directory.
     {
       "name": "hello-world",
       "description": "A friendly greeting agent",
-      "path": "/home/user/.openfang/agents/hello-world/agent.toml"
+      "path": "/home/user/.armaraos/agents/hello-world/agent.toml"
     },
     {
       "name": "coder",
       "description": "Expert coding assistant",
-      "path": "/home/user/.openfang/agents/coder/agent.toml"
+      "path": "/home/user/.armaraos/agents/coder/agent.toml"
     }
   ],
   "total": 30
@@ -667,7 +667,7 @@ Detailed kernel status including all agents.
 {
   "status": "running",
   "agent_count": 2,
-  "data_dir": "/home/user/.openfang/data",
+  "data_dir": "/home/user/.armaraos/data",
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
   "uptime_seconds": 3600,
@@ -768,7 +768,7 @@ Retrieve current kernel configuration (secrets are redacted).
 
 ```json
 {
-  "data_dir": "/home/user/.openfang/data",
+  "data_dir": "/home/user/.armaraos/data",
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
   "listen_addr": "127.0.0.1:4200",
@@ -1127,7 +1127,7 @@ Create a new skill from a template.
 {
   "status": "created",
   "skill": "my-skill",
-  "path": "/home/user/.openfang/skills/my-skill"
+  "path": "/home/user/.armaraos/skills/my-skill"
 }
 ```
 

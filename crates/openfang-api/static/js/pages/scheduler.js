@@ -1,4 +1,4 @@
-// OpenFang Scheduler Page — Cron job management + event triggers unified view
+// ArmaraOS Scheduler Page — Cron job management + event triggers unified view
 'use strict';
 
 function schedulerPage() {
@@ -26,12 +26,27 @@ function schedulerPage() {
       cron: '',
       agent_id: '',
       message: '',
-      enabled: true
+      enabled: true,
+      actionKind: 'agent_turn',
+      ainlPath: '',
+      ainlTimeout: '',
+      ainlJsonOutput: false,
+      wfId: '',
+      wfInput: '',
+      wfTimeout: ''
     },
     creating: false,
 
     // -- Run Now state --
     runningJobId: '',
+
+    // -- AINL library (synced ~/.armaraos/ainl-library) --
+    ainlLibLoading: false,
+    ainlLibError: '',
+    ainlLibTotal: null,
+    ainlLibRoot: '',
+    ainlCuratedLen: 0,
+    ainlRegLoading: false,
 
     // Cron presets
     cronPresets: [
@@ -59,6 +74,58 @@ function schedulerPage() {
         this.loadError = e.message || 'Could not load scheduler data.';
       }
       this.loading = false;
+      this.loadAinlLibrary();
+      this.applySchedulerPrefill();
+    },
+
+    /** From AINL Library or `#scheduler?ainl=relative/path.ainl` — pre-fill New Job as AINL run. */
+    applySchedulerPrefill() {
+      try {
+        var raw = sessionStorage.getItem('armaraos-scheduler-prefill');
+        if (!raw) return;
+        sessionStorage.removeItem('armaraos-scheduler-prefill');
+        var o = JSON.parse(raw);
+        this.tab = 'jobs';
+        this.showCreateForm = true;
+        this.newJob.actionKind = o.actionKind || 'ainl_run';
+        this.newJob.ainlPath = o.ainlPath || '';
+        if (o.cron) this.newJob.cron = o.cron;
+        if (o.json_output) this.newJob.ainlJsonOutput = !!o.json_output;
+        OpenFangToast.info('Scheduler: pre-filled AINL path — confirm schedule and create the job.');
+      } catch (e) { /* ignore */ }
+    },
+
+    async loadAinlLibrary() {
+      this.ainlLibLoading = true;
+      this.ainlLibError = '';
+      try {
+        var lib = await OpenFangAPI.get('/api/ainl/library');
+        this.ainlLibTotal = typeof lib.total === 'number' ? lib.total : 0;
+        this.ainlLibRoot = lib.root || '';
+        var cur = await OpenFangAPI.get('/api/ainl/library/curated');
+        this.ainlCuratedLen = Array.isArray(cur) ? cur.length : 0;
+      } catch(e) {
+        this.ainlLibError = e.message || 'unavailable';
+        this.ainlLibTotal = null;
+        this.ainlCuratedLen = 0;
+      }
+      this.ainlLibLoading = false;
+    },
+
+    async registerCuratedAinl() {
+      this.ainlRegLoading = true;
+      try {
+        var r = await OpenFangAPI.post('/api/ainl/library/register-curated', {});
+        var n = r.registered != null ? r.registered : 0;
+        var w = r.embedded_programs_written != null ? r.embedded_programs_written : 0;
+        OpenFangToast.success(
+          'Embedded ' + w + ' program file(s); registered ' + n + ' new curated job(s). Refresh if the list did not update.'
+        );
+        await this.loadJobs();
+      } catch(e) {
+        OpenFangToast.error('Register failed: ' + (e.message || e));
+      }
+      this.ainlRegLoading = false;
     },
 
     async loadJobs() {
@@ -72,12 +139,37 @@ function schedulerPage() {
           else if (j.schedule.kind === 'every') cron = 'every ' + j.schedule.every_secs + 's';
           else if (j.schedule.kind === 'at') cron = 'at ' + (j.schedule.at || '');
         }
+        var actionSummary = '';
+        var actionKindLabel = 'Other';
+        var actionKindClass = 'badge-dim';
+        if (j.action) {
+          var a = j.action;
+          if (a.kind === 'agent_turn') {
+            actionSummary = a.message || '';
+            actionKindLabel = 'Agent';
+            actionKindClass = 'badge-success';
+          } else if (a.kind === 'ainl_run') {
+            actionSummary = 'AINL: ' + (a.program_path || '') + (a.json_output ? ' (JSON)' : '');
+            actionKindLabel = 'AINL';
+            actionKindClass = 'badge-created';
+          } else if (a.kind === 'workflow_run') {
+            actionSummary = 'Workflow: ' + (a.workflow_id || '');
+            actionKindLabel = 'Workflow';
+            actionKindClass = 'badge-info';
+          } else if (a.kind === 'system_event') {
+            actionSummary = a.text || '';
+            actionKindLabel = 'Event';
+            actionKindClass = 'badge-dim';
+          }
+        }
         return {
           id: j.id,
           name: j.name,
           cron: cron,
           agent_id: j.agent_id,
-          message: j.action ? j.action.message || '' : '',
+          message: actionSummary,
+          actionKindLabel: actionKindLabel,
+          actionKindClass: actionKindClass,
           enabled: j.enabled,
           last_run: j.last_run,
           next_run: j.next_run,
@@ -142,6 +234,23 @@ function schedulerPage() {
 
     // ── Job CRUD ──
 
+    resetNewJobForm() {
+      this.newJob = {
+        name: '',
+        cron: '',
+        agent_id: '',
+        message: '',
+        enabled: true,
+        actionKind: 'agent_turn',
+        ainlPath: '',
+        ainlTimeout: '',
+        ainlJsonOutput: false,
+        wfId: '',
+        wfInput: '',
+        wfTimeout: ''
+      };
+    },
+
     async createJob() {
       if (!this.newJob.name.trim()) {
         OpenFangToast.warn('Please enter a job name');
@@ -151,20 +260,69 @@ function schedulerPage() {
         OpenFangToast.warn('Please enter a cron expression');
         return;
       }
+      var action;
+      if (this.newJob.actionKind === 'agent_turn') {
+        action = {
+          kind: 'agent_turn',
+          message: this.newJob.message || ('Scheduled task: ' + this.newJob.name),
+          model_override: null,
+          timeout_secs: null
+        };
+      } else if (this.newJob.actionKind === 'ainl_run') {
+        if (!this.newJob.ainlPath.trim()) {
+          OpenFangToast.warn('Enter path under ainl-library (e.g. examples/hello.ainl)');
+          return;
+        }
+        var to = this.newJob.ainlTimeout;
+        var ts = to !== '' && to !== null && !isNaN(parseInt(to, 10)) ? parseInt(to, 10) : null;
+        action = {
+          kind: 'ainl_run',
+          program_path: this.newJob.ainlPath.trim(),
+          cwd: null,
+          ainl_binary: null,
+          timeout_secs: ts,
+          json_output: !!this.newJob.ainlJsonOutput
+        };
+      } else if (this.newJob.actionKind === 'workflow_run') {
+        if (!this.newJob.wfId.trim()) {
+          OpenFangToast.warn('Enter workflow UUID or name');
+          return;
+        }
+        var wto = this.newJob.wfTimeout;
+        var wts = wto !== '' && wto !== null && !isNaN(parseInt(wto, 10)) ? parseInt(wto, 10) : null;
+        action = {
+          kind: 'workflow_run',
+          workflow_id: this.newJob.wfId.trim(),
+          input: this.newJob.wfInput.trim() ? this.newJob.wfInput : null,
+          timeout_secs: wts
+        };
+      } else {
+        OpenFangToast.warn('Invalid job type');
+        return;
+      }
+      var agentId = this.newJob.agent_id;
+      if (!agentId && this.availableAgents && this.availableAgents.length) {
+        agentId = this.availableAgents[0].id;
+      }
+      if (!agentId) {
+        OpenFangToast.warn('Select a target agent or spawn one under Agents first.');
+        return;
+      }
       this.creating = true;
       try {
         var jobName = this.newJob.name;
+        var deliveryKind = this.newJob.actionKind === 'agent_turn' ? 'last_channel' : 'none';
         var body = {
-          agent_id: this.newJob.agent_id,
+          agent_id: agentId,
           name: this.newJob.name,
           schedule: { kind: 'cron', expr: this.newJob.cron },
-          action: { kind: 'agent_turn', message: this.newJob.message || 'Scheduled task: ' + this.newJob.name },
-          delivery: { kind: 'last_channel' },
+          action: action,
+          delivery: { kind: deliveryKind },
           enabled: this.newJob.enabled
         };
         await OpenFangAPI.post('/api/cron/jobs', body);
         this.showCreateForm = false;
-        this.newJob = { name: '', cron: '', agent_id: '', message: '', enabled: true };
+        this.resetNewJobForm();
         OpenFangToast.success('Schedule "' + jobName + '" created');
         await this.loadJobs();
       } catch(e) {
@@ -266,6 +424,12 @@ function schedulerPage() {
 
     get availableAgents() {
       return Alpine.store('app').agents || [];
+    },
+
+    get ainlLibRootShort() {
+      var r = this.ainlLibRoot || '';
+      if (r.length > 48) return '…' + r.slice(-48);
+      return r || '(ainl-library)';
     },
 
     agentName(agentId) {

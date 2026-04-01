@@ -133,7 +133,7 @@ impl SetupWizard {
         // safety guidelines, etc. at execution time.
         let tool_hints = Self::tool_hints_for(&caps.tools);
         let system_prompt = format!(
-            "You are {name}, an AI agent running inside the OpenFang Agent OS.\n\
+            "You are {name}, an AI agent running inside the ArmaraOS Agent OS.\n\
              \n\
              YOUR TASK: {task}\n\
              \n\

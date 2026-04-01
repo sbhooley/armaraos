@@ -1,4 +1,4 @@
-//! Telegram Bot API adapter for the OpenFang channel bridge.
+//! Telegram Bot API adapter for the ArmaraOS channel bridge.
 //!
 //! Uses long-polling via `getUpdates` with exponential backoff on failures.
 //! No external Telegram crate — just `reqwest` for full control over error handling.
@@ -1233,7 +1233,7 @@ mod tests {
                 "from": { "id": 123, "first_name": "X" },
                 "chat": { "id": 123, "type": "private" },
                 "date": 1700000000,
-                "text": "/agents@myopenfangbot",
+                "text": "/agents@myarmaraosbot",
                 "entities": [{ "type": "bot_command", "offset": 0, "length": 17 }]
             }
         });

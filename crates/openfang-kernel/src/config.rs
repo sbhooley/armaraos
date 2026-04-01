@@ -3,7 +3,9 @@
 //! Supports config includes: the `include` field specifies additional TOML files
 //! to load and deep-merge before the root config (root overrides includes).
 
-use openfang_types::config::KernelConfig;
+use openfang_types::config::{
+    DefaultModelConfig, FallbackProviderConfig, KernelConfig, DEFAULT_OPENROUTER_MODEL_ID,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -251,24 +253,35 @@ pub fn default_config_path() -> PathBuf {
 
 /// Get the ArmaraOS home directory (legacy name preserved for compatibility).
 ///
-/// Priority:
-/// - `ARMARAOS_HOME` env var
-/// - `OPENFANG_HOME` env var (legacy)
-/// - `~/.armaraos` if it exists
-/// - otherwise `~/.openfang` (legacy default)
+/// Delegates to [`openfang_types::config::openfang_home_dir`] (creates `~/.armaraos` or migrates
+/// from `~/.openfang` when appropriate).
 pub fn openfang_home() -> PathBuf {
-    if let Ok(home) = std::env::var("ARMARAOS_HOME") {
-        return PathBuf::from(home);
-    }
-    if let Ok(home) = std::env::var("OPENFANG_HOME") {
-        return PathBuf::from(home);
-    }
-    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
-    let arm = home.join(".armaraos");
-    if arm.is_dir() {
-        return arm;
-    }
-    home.join(".openfang")
+    openfang_types::config::openfang_home_dir()
+}
+
+/// Primary OpenRouter model for fresh ArmaraOS **desktop** installs (no `config.toml` yet).
+pub const DESKTOP_DEFAULT_OPENROUTER_MODEL: &str = DEFAULT_OPENROUTER_MODEL_ID;
+/// Fallback OpenRouter model when the primary fails (same `OPENROUTER_API_KEY`).
+pub const DESKTOP_FALLBACK_OPENROUTER_MODEL: &str = "nvidia/nemotron-3-super-120b-a12b:free";
+
+/// Apply bundled OpenRouter defaults for the ArmaraOS desktop app when the user has no
+/// `config.toml` yet. The desktop shell calls this before [`crate::OpenFangKernel::boot_with_config`].
+///
+/// Sets `[default_model]` to OpenRouter + [`DESKTOP_DEFAULT_OPENROUTER_MODEL`] and adds
+/// one `[[fallback_providers]]` entry for [`DESKTOP_FALLBACK_OPENROUTER_MODEL`].
+pub fn apply_desktop_bundled_llm_defaults(config: &mut KernelConfig) {
+    config.default_model = DefaultModelConfig {
+        provider: "openrouter".to_string(),
+        model: DEFAULT_OPENROUTER_MODEL_ID.to_string(),
+        api_key_env: "OPENROUTER_API_KEY".to_string(),
+        base_url: None,
+    };
+    config.fallback_providers = vec![FallbackProviderConfig {
+        provider: "openrouter".to_string(),
+        model: DESKTOP_FALLBACK_OPENROUTER_MODEL.to_string(),
+        api_key_env: String::new(),
+        base_url: None,
+    }];
 }
 
 #[cfg(test)]

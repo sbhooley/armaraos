@@ -1,4 +1,4 @@
-//! Discord Gateway adapter for the OpenFang channel bridge.
+//! Discord Gateway adapter for the ArmaraOS channel bridge.
 //!
 //! Uses Discord Gateway WebSocket (v10) for receiving messages and the REST API
 //! for sending responses. No external Discord crate — just `tokio-tungstenite` + `reqwest`.
@@ -276,8 +276,8 @@ impl ChannelAdapter for DiscordAdapter {
                                         "intents": intents,
                                         "properties": {
                                             "os": "linux",
-                                            "browser": "openfang",
-                                            "device": "openfang"
+                                            "browser": "armaraos",
+                                            "device": "armaraos"
                                         }
                                     }
                                 })
@@ -589,7 +589,7 @@ mod tests {
             "content": "My own message",
             "author": {
                 "id": "bot123",
-                "username": "openfang",
+                "username": "armaraos",
                 "discriminator": "0"
             },
             "timestamp": "2024-01-01T00:00:00+00:00"
@@ -652,7 +652,7 @@ mod tests {
             "content": "My own message",
             "author": {
                 "id": "bot123",
-                "username": "openfang",
+                "username": "armaraos",
                 "discriminator": "0",
                 "bot": true
             },
@@ -829,7 +829,7 @@ mod tests {
             "channel_id": "ch1",
             "guild_id": "guild1",
             "content": "Hey <@bot123> help me",
-            "mentions": [{"id": "bot123", "username": "openfang"}],
+            "mentions": [{"id": "bot123", "username": "armaraos"}],
             "author": {
                 "id": "user1",
                 "username": "alice",

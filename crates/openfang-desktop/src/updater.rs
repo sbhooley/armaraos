@@ -2,6 +2,8 @@
 
 use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
+
+use crate::notification_icon::apply_notification_icon;
 use tauri_plugin_updater::UpdaterExt;
 use tracing::{info, warn};
 
@@ -29,12 +31,14 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
                 let version = info.version.as_deref().unwrap_or("unknown");
                 info!("Update available: v{version}, installing silently...");
                 // Notify user first, then install
-                let _ = app_handle
-                    .notification()
-                    .builder()
-                    .title("ArmaraOS Updating...")
-                    .body(format!("Installing v{version}. App will restart shortly."))
-                    .show();
+                let _ = apply_notification_icon(
+                    app_handle
+                        .notification()
+                        .builder()
+                        .title("ArmaraOS Updating...")
+                        .body(format!("Installing v{version}. App will restart shortly.")),
+                )
+                .show();
                 // Small delay so notification is visible
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 if let Err(e) = download_and_install_update(&app_handle).await {

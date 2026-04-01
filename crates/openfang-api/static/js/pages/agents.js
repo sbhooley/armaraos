@@ -1,4 +1,4 @@
-// OpenFang Agents Page — Multi-step spawn wizard, detail view with tabs, file editor, personality presets
+// ArmaraOS Agents Page — Multi-step spawn wizard, detail view with tabs, file editor, personality presets
 'use strict';
 
 /** Escape a string for use inside TOML triple-quoted strings ("""\n...\n""").
@@ -237,14 +237,14 @@ function agentsPage() {
         // Combine static and dynamic templates
         this.builtinTemplates = [
           {
-            name: 'General Assistant',
-            description: 'A versatile conversational agent that can help with everyday tasks, answer questions, and provide recommendations.',
+            name: 'Armara',
+            description: 'Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
             category: 'General',
             provider: 'groq',
             model: 'llama-3.3-70b-versatile',
             profile: 'full',
-            system_prompt: 'You are a helpful, friendly assistant. Provide clear, accurate, and concise responses. Ask clarifying questions when needed.',
-            manifest_toml: 'name = "General Assistant"\ndescription = "A versatile conversational agent that can help with everyday tasks, answer questions, and provide recommendations."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are a helpful, friendly assistant. Provide clear, accurate, and concise responses. Ask clarifying questions when needed.\n"""'
+            system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.',
+            manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
           },
           {
             name: 'Code Helper',

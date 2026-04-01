@@ -8,7 +8,7 @@ tags = ["coding", "implementation", "rust", "python"]
 [model]
 provider = "default"
 model = "default"
-api_key_env = "GEMINI_API_KEY"
+api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.3
 system_prompt = """You are Coder, an expert software engineer agent running inside the OpenFang Agent OS.
@@ -28,7 +28,9 @@ QUALITY STANDARDS:
 
 RESEARCH:
 - When you encounter an unfamiliar API, error message, or library, use web_search or web_fetch to look it up.
-- Check official documentation before guessing at API usage."""
+- Check official documentation before guessing at API usage.
+
+AINL: For ArmaraOS automation and integrations, default to **AI Native Language** (`.ainl` graphs) when the task is orchestration or adapter-bound rather than low-level Rust. Materialized examples live under `~/.armaraos/ainl-library/armaraos-programs/`; use `ainl validate --strict` before committing graphs. See `docs/ootb-ainl.md` in the ArmaraOS repo."""
 
 [[fallback_models]]
 provider = "default"

@@ -6,10 +6,10 @@
 //! Client → Server: `{"type":"message","content":"..."}`
 //! Server → Client: `{"type":"typing","state":"start|tool|stop"}`
 //! Server → Client: `{"type":"text_delta","content":"..."}`
-//! Server → Client: `{"type":"response","content":"...","input_tokens":N,"output_tokens":N,"iterations":N}`
+//! Server → Client: `{"type":"response","content":"...","input_tokens":N,"output_tokens":N,"iterations":N,"skill_draft_path":?}`
 //! Server → Client: `{"type":"error","content":"..."}`
 //! Server → Client: `{"type":"agents_updated","agents":[...]}`
-//! Server → Client: `{"type":"silent_complete"}` (agent chose NO_REPLY)
+//! Server → Client: `{"type":"silent_complete",...,"skill_draft_path":?}` (agent chose NO_REPLY; optional skill draft from `[learn]`)
 //! Server → Client: `{"type":"canvas","canvas_id":"...","html":"...","title":"..."}`
 
 use crate::routes::AppState;
@@ -31,6 +31,42 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+/// When the user message has the `[learn]` prefix, write a skill draft (same as HTTP `POST .../message`).
+fn skill_draft_path_for_learn_message(
+    home: &std::path::Path,
+    user_message: &str,
+    assistant_response: &str,
+    agent_id: &str,
+    silent: bool,
+) -> Option<String> {
+    let intent = openfang_kernel::skills_staging::learn_prefixed_intent(user_message)?;
+    let frame = openfang_kernel::skills_staging::frame_from_agent_learn_turn(
+        intent,
+        user_message,
+        assistant_response,
+        agent_id,
+        silent,
+    );
+    match openfang_kernel::skills_staging::write_skill_draft_markdown(home, &frame) {
+        Ok(p) => {
+            info!(
+                path = %p.display(),
+                agent = %agent_id,
+                "skill draft from [learn] message (ws)"
+            );
+            Some(p.display().to_string())
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                agent = %agent_id,
+                "skill draft write failed (ws)"
+            );
+            None
+        }
+    }
+}
 
 /// Per-IP WebSocket connection tracker.
 /// Max 5 concurrent WS connections per IP address.
@@ -675,6 +711,10 @@ async fn handle_text_message(
                     // Send the response immediately from stream data
                     match stream_result {
                         Ok((accumulated_text, stream_usage, is_silent)) => {
+                            let user_message = content.clone();
+                            let agent_id_str = agent_id.to_string();
+                            let home = state.kernel.config.home_dir.as_path();
+
                             // Send typing lifecycle: stop
                             let _ = send_json(
                                 sender,
@@ -688,22 +728,29 @@ async fn handle_text_message(
                             let usage = stream_usage.unwrap_or_default();
 
                             if is_silent {
-                                let _ = send_json(
-                                    sender,
-                                    &serde_json::json!({
-                                        "type": "silent_complete",
-                                        "input_tokens": usage.input_tokens,
-                                        "output_tokens": usage.output_tokens,
-                                    }),
-                                )
-                                .await;
+                                let skill_path = skill_draft_path_for_learn_message(
+                                    home,
+                                    &user_message,
+                                    "",
+                                    &agent_id_str,
+                                    true,
+                                );
+                                let mut silent_payload = serde_json::json!({
+                                    "type": "silent_complete",
+                                    "input_tokens": usage.input_tokens,
+                                    "output_tokens": usage.output_tokens,
+                                });
+                                if let Some(p) = skill_path {
+                                    silent_payload["skill_draft_path"] = serde_json::json!(p);
+                                }
+                                let _ = send_json(sender, &silent_payload).await;
                                 return;
                             }
 
                             // Strip <think>...</think> blocks
                             let cleaned = strip_think_tags(&accumulated_text);
 
-                            let content = if cleaned.trim().is_empty() {
+                            let response_text = if cleaned.trim().is_empty() {
                                 format!(
                                     "[The agent completed processing but returned no text response. ({} in / {} out)]",
                                     usage.input_tokens, usage.output_tokens,
@@ -711,6 +758,14 @@ async fn handle_text_message(
                             } else {
                                 cleaned
                             };
+
+                            let skill_path = skill_draft_path_for_learn_message(
+                                home,
+                                &user_message,
+                                &response_text,
+                                &agent_id_str,
+                                false,
+                            );
 
                             // Estimate context pressure
                             let ctx_pct =
@@ -725,19 +780,19 @@ async fn handle_text_message(
                                 "low"
                             };
 
-                            let _ = send_json(
-                                sender,
-                                &serde_json::json!({
-                                    "type": "response",
-                                    "content": content,
-                                    "input_tokens": usage.input_tokens,
-                                    "output_tokens": usage.output_tokens,
-                                    "iterations": 0, // Not available from stream; handle updates later if needed
-                                    "cost_usd": null,
-                                    "context_pressure": pressure,
-                                }),
-                            )
-                            .await;
+                            let mut response_payload = serde_json::json!({
+                                "type": "response",
+                                "content": response_text,
+                                "input_tokens": usage.input_tokens,
+                                "output_tokens": usage.output_tokens,
+                                "iterations": 0, // Not available from stream; handle updates later if needed
+                                "cost_usd": null,
+                                "context_pressure": pressure,
+                            });
+                            if let Some(p) = skill_path {
+                                response_payload["skill_draft_path"] = serde_json::json!(p);
+                            }
+                            let _ = send_json(sender, &response_payload).await;
                         }
                         Err(e) => {
                             warn!("Stream task panicked: {e}");

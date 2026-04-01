@@ -83,7 +83,7 @@ Invoke-RestMethod -Uri $url -Method POST -Headers @{Authorization = "Bearer $tok
 
 ## Configuration
 
-### ~/.openfang/config.toml
+### ~/.armaraos/config.toml
 
 ```toml
 [default_model]

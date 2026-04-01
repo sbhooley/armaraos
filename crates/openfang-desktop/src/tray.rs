@@ -10,6 +10,8 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_notification::NotificationExt;
 use tracing::{info, warn};
 
+use crate::notification_icon::apply_notification_icon;
+
 /// Format seconds into a human-readable uptime string.
 fn format_uptime(secs: u64) -> String {
     if secs < 60 {
@@ -154,7 +156,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                                 .builder()
                                 .title("Installing Update...")
                                 .body(format!(
-                                    "Downloading OpenFang v{version}. App will restart shortly."
+                                    "Downloading ArmaraOS v{version}. App will restart shortly."
                                 ))
                                 .show();
                             // Perform install
@@ -162,31 +164,37 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                                 crate::updater::download_and_install_update(&app_handle).await
                             {
                                 warn!("Manual update install failed: {e}");
-                                let _ = app_handle
-                                    .notification()
-                                    .builder()
-                                    .title("Update Failed")
-                                    .body(format!("Could not install update: {e}"))
-                                    .show();
+                                let _ = apply_notification_icon(
+                                    app_handle
+                                        .notification()
+                                        .builder()
+                                        .title("Update Failed")
+                                        .body(format!("Could not install update: {e}")),
+                                )
+                                .show();
                             }
                             // If we reach here, install failed (success causes restart)
                         }
                         Ok(_) => {
-                            let _ = app_handle
-                                .notification()
-                                .builder()
-                                .title("Up to Date")
-                                .body("You're running the latest version of OpenFang.")
-                                .show();
+                            let _ = apply_notification_icon(
+                                app_handle
+                                    .notification()
+                                    .builder()
+                                    .title("Up to Date")
+                                    .body("You're running the latest version of ArmaraOS."),
+                            )
+                            .show();
                         }
                         Err(e) => {
                             warn!("Tray update check failed: {e}");
-                            let _ = app_handle
-                                .notification()
-                                .builder()
-                                .title("Update Check Failed")
-                                .body("Could not check for updates. Try again later.")
-                                .show();
+                            let _ = apply_notification_icon(
+                                app_handle
+                                    .notification()
+                                    .builder()
+                                    .title("Update Check Failed")
+                                    .body("Could not check for updates. Try again later."),
+                            )
+                            .show();
                         }
                     }
                 });

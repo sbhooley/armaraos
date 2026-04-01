@@ -106,7 +106,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize OpenFang (create ~/.openfang/ and default config).
+    /// Initialize OpenFang (create `~/.armaraos/` and default config; migrates from `~/.openfang` if present).
     Init {
         /// Quick mode: no prompts, just write config + .env (for CI/scripts).
         #[arg(long)]
@@ -462,12 +462,12 @@ enum ConfigCommands {
         /// Dotted key path to remove (e.g. "api.cors_origin").
         key: String,
     },
-    /// Save an API key to ~/.openfang/.env (prompts interactively).
+    /// Save an API key to `~/.armaraos/.env` (prompts interactively).
     SetKey {
         /// Provider name (groq, anthropic, openai, gemini, deepseek, etc.).
         provider: String,
     },
-    /// Remove an API key from ~/.openfang/.env.
+    /// Remove an API key from `~/.armaraos/.env`.
     DeleteKey {
         /// Provider name.
         provider: String,
@@ -808,14 +808,7 @@ enum SystemCommands {
 }
 
 fn config_log_level() -> String {
-    let config_path = if let Ok(home) = std::env::var("OPENFANG_HOME") {
-        std::path::PathBuf::from(home).join("config.toml")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(".openfang")
-            .join("config.toml")
-    };
+    let config_path = openfang_kernel::config::default_config_path();
     if let Ok(content) = std::fs::read_to_string(config_path) {
         for line in content.lines() {
             let trimmed = line.trim();
@@ -842,14 +835,9 @@ fn init_tracing_stderr() {
         .init();
 }
 
-/// Get the OpenFang home directory, respecting OPENFANG_HOME env var.
+/// ArmaraOS data directory (same resolution as the kernel: migrate/create `~/.armaraos` when needed).
 fn cli_openfang_home() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("OPENFANG_HOME") {
-        return std::path::PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".openfang")
+    openfang_kernel::config::openfang_home()
 }
 
 /// Redirect tracing to a log file so it doesn't corrupt the ratatui TUI.
@@ -895,7 +883,7 @@ fn write_stdout_safe(msg: &str) {
 }
 
 fn main() {
-    // Load ~/.openfang/.env into process environment (system env takes priority).
+    // Load `~/.armaraos/.env` into process environment (system env takes priority).
     dotenv::load_dotenv();
 
     let cli = Cli::parse();
@@ -1132,6 +1120,25 @@ pub(crate) fn restrict_dir_permissions(path: &std::path::Path) {
 #[cfg(not(unix))]
 pub(crate) fn restrict_dir_permissions(_path: &std::path::Path) {}
 
+/// Whether `openfang start` should probe for an already-running daemon.
+///
+/// In Linux containers (`/.dockerenv`), or when using Docker **`--network host`**, the probe
+/// targets `127.0.0.1:4200` and can succeed against **another** process (e.g. ArmaraOS on the
+/// host), causing a false "Daemon already running" and immediate exit. Skip the probe in
+/// containers; use `OPENFANG_SKIP_DAEMON_CHECK=1` for edge cases (e.g. Podman without `/.dockerenv`).
+fn should_probe_existing_daemon() -> bool {
+    if std::path::Path::new("/.dockerenv").exists() {
+        return false;
+    }
+    if let Ok(v) = std::env::var("OPENFANG_SKIP_DAEMON_CHECK") {
+        let v = v.trim();
+        if v == "1" || v.eq_ignore_ascii_case("true") {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn find_daemon() -> Option<String> {
     let home_dir = cli_openfang_home();
     let info = read_daemon_info(&home_dir)?;
@@ -1186,7 +1193,7 @@ pub(crate) fn daemon_json(
             if status.is_server_error() {
                 ui::error_with_fix(
                     &format!("Daemon returned error ({})", status),
-                    "Check daemon logs: ~/.openfang/tui.log",
+                    "Check daemon logs: ~/.armaraos/tui.log",
                 );
             }
             body
@@ -1494,12 +1501,14 @@ decay_rate = 0.05
 }
 
 fn cmd_start(config: Option<PathBuf>, yolo: bool) {
-    if let Some(base) = find_daemon() {
-        ui::error_with_fix(
-            &format!("Daemon already running at {base}"),
-            "Use `openfang status` to check it, or stop it first",
-        );
-        std::process::exit(1);
+    if should_probe_existing_daemon() {
+        if let Some(base) = find_daemon() {
+            ui::error_with_fix(
+                &format!("Daemon already running at {base}"),
+                "Use `openfang status` to check it, or stop it first",
+            );
+            std::process::exit(1);
+        }
     }
 
     ui::banner();
@@ -1562,7 +1571,7 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool) {
     });
 }
 
-/// Read the api_key from ~/.openfang/config.toml (if any).
+/// Read the api_key from `~/.armaraos/config.toml` (if any).
 ///
 /// Returns `None` when the key is missing, empty, or whitespace-only —
 /// meaning the daemon is running in public (unauthenticated) mode.
@@ -3942,7 +3951,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
 
             // Save token to .env
             match dotenv::save_env_key("TELEGRAM_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
+                Ok(()) => ui::success("Token saved to ~/.armaraos/.env"),
                 Err(_) => println!("    export TELEGRAM_BOT_TOKEN={token}"),
             }
 
@@ -3972,7 +3981,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
             maybe_write_channel_config("discord", config_block);
 
             match dotenv::save_env_key("DISCORD_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
+                Ok(()) => ui::success("Token saved to ~/.armaraos/.env"),
                 Err(_) => println!("    export DISCORD_BOT_TOKEN={token}"),
             }
 
@@ -4000,13 +4009,13 @@ fn cmd_channel_setup(channel: Option<&str>) {
 
             if !app_token.is_empty() {
                 match dotenv::save_env_key("SLACK_APP_TOKEN", &app_token) {
-                    Ok(()) => ui::success("App token saved to ~/.openfang/.env"),
+                    Ok(()) => ui::success("App token saved to ~/.armaraos/.env"),
                     Err(_) => println!("    export SLACK_APP_TOKEN={app_token}"),
                 }
             }
             if !bot_token.is_empty() {
                 match dotenv::save_env_key("SLACK_BOT_TOKEN", &bot_token) {
-                    Ok(()) => ui::success("Bot token saved to ~/.openfang/.env"),
+                    Ok(()) => ui::success("Bot token saved to ~/.armaraos/.env"),
                     Err(_) => println!("    export SLACK_BOT_TOKEN={bot_token}"),
                 }
             }
@@ -4040,7 +4049,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
             ] {
                 if !val.is_empty() {
                     match dotenv::save_env_key(key, val) {
-                        Ok(()) => ui::success(&format!("{key} saved to ~/.openfang/.env")),
+                        Ok(()) => ui::success(&format!("{key} saved to ~/.armaraos/.env")),
                         Err(_) => println!("    export {key}={val}"),
                     }
                 }
@@ -4072,7 +4081,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
 
             if !password.is_empty() {
                 match dotenv::save_env_key("EMAIL_PASSWORD", &password) {
-                    Ok(()) => ui::success("Password saved to ~/.openfang/.env"),
+                    Ok(()) => ui::success("Password saved to ~/.armaraos/.env"),
                     Err(_) => println!("    export EMAIL_PASSWORD=your_app_password"),
                 }
             } else {
@@ -4106,7 +4115,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
 
             if !phone.is_empty() {
                 match dotenv::save_env_key("SIGNAL_PHONE", &phone) {
-                    Ok(()) => ui::success("Phone saved to ~/.openfang/.env"),
+                    Ok(()) => ui::success("Phone saved to ~/.armaraos/.env"),
                     Err(_) => println!("    export SIGNAL_PHONE={phone}"),
                 }
             }
@@ -4141,7 +4150,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
             let _ = dotenv::save_env_key("MATRIX_HOMESERVER", &homeserver);
             if !token.is_empty() {
                 match dotenv::save_env_key("MATRIX_ACCESS_TOKEN", &token) {
-                    Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
+                    Ok(()) => ui::success("Token saved to ~/.armaraos/.env"),
                     Err(_) => println!("    export MATRIX_ACCESS_TOKEN={token}"),
                 }
             }
@@ -4241,7 +4250,7 @@ fn cmd_channel_toggle(channel: &str, enable: bool) {
         }
     } else {
         println!("Note: Channel {channel} will be {action} when the daemon starts.");
-        println!("Edit ~/.openfang/config.toml to persist this change.");
+        println!("Edit ~/.armaraos/config.toml to persist this change.");
     }
 }
 
@@ -4966,7 +4975,7 @@ fn cmd_config_set_key(provider: &str) {
     // Always save to dotenv as fallback
     match dotenv::save_env_key(&env_var, &key) {
         Ok(()) => {
-            ui::success(&format!("Saved {env_var} to ~/.openfang/.env"));
+            ui::success(&format!("Saved {env_var} to ~/.armaraos/.env"));
             // Test the key
             print!("  Testing key... ");
             io::stdout().flush().unwrap();
@@ -4999,7 +5008,7 @@ fn cmd_config_delete_key(provider: &str) {
     }
 
     match dotenv::remove_env_key(&env_var) {
-        Ok(()) => ui::success(&format!("Removed {env_var} from ~/.openfang/.env")),
+        Ok(()) => ui::success(&format!("Removed {env_var} from ~/.armaraos/.env")),
         Err(e) => {
             ui::error(&format!("Failed to remove key: {e}"));
             std::process::exit(1);
@@ -5060,15 +5069,7 @@ fn cmd_quick_chat(config: Option<PathBuf>, agent: Option<String>) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn openfang_home() -> PathBuf {
-    if let Ok(home) = std::env::var("OPENFANG_HOME") {
-        return PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| {
-            eprintln!("Error: Could not determine home directory");
-            std::process::exit(1);
-        })
-        .join(".openfang")
+    openfang_kernel::config::openfang_home()
 }
 
 fn prompt_input(prompt: &str) -> String {
@@ -6578,7 +6579,7 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
         }
     }
 
-    // Step 6: Remove ~/.openfang/ data
+    // Step 6: Remove ArmaraOS data directory (~/.armaraos or legacy ~/.openfang)
     if openfang_dir.exists() {
         if keep_config {
             remove_dir_except_config(&openfang_dir);
@@ -6734,7 +6735,10 @@ fn clean_path_entries(home: &std::path::Path, openfang_dir: &str) {
                         .split(';')
                         .filter(|entry| {
                             let e = entry.trim().to_lowercase();
-                            !e.is_empty() && !e.contains("openfang") && !e.contains(&dir_lower)
+                            !e.is_empty()
+                                && !e.contains("openfang")
+                                && !e.contains("armaraos")
+                                && !e.contains(&dir_lower)
                         })
                         .collect();
                     if filtered.len() < current.split(';').count() {
@@ -6756,13 +6760,15 @@ fn clean_path_entries(home: &std::path::Path, openfang_dir: &str) {
     }
 }
 
-/// Returns true if a shell config line is an openfang PATH export.
-/// Must match BOTH an openfang reference AND a PATH-setting pattern.
+/// Returns true if a shell config line adds the ArmaraOS/OpenFang bin directory to PATH.
+/// Must match a known data-dir marker (`openfang`, `armaraos`, or the resolved `bin` path) AND a PATH-setting pattern.
 #[cfg(any(not(windows), test))]
 fn is_openfang_path_line(line: &str, openfang_dir: &str) -> bool {
     let lower = line.to_lowercase();
-    let has_openfang = lower.contains("openfang") || lower.contains(&openfang_dir.to_lowercase());
-    if !has_openfang {
+    let dir_lower = openfang_dir.to_lowercase();
+    let has_marker =
+        lower.contains("openfang") || lower.contains("armaraos") || lower.contains(&dir_lower);
+    if !has_marker {
         return false;
     }
     // Match common PATH-setting patterns
@@ -6773,7 +6779,7 @@ fn is_openfang_path_line(line: &str, openfang_dir: &str) -> bool {
         || lower.contains("fish_add_path")
 }
 
-/// Remove everything in ~/.openfang/ except config files.
+/// Remove everything in the ArmaraOS home directory except config files.
 fn remove_dir_except_config(openfang_dir: &std::path::Path) {
     let keep = ["config.toml", ".env", "secrets.env"];
     let Ok(entries) = std::fs::read_dir(openfang_dir) else {
@@ -6972,38 +6978,53 @@ args = ["-y", "@modelcontextprotocol/server-github"]
     #[test]
     fn test_uninstall_path_line_filter() {
         use super::is_openfang_path_line;
-        let dir = "/home/user/.openfang/bin";
+        let dir_legacy = "/home/user/.openfang/bin";
+        let dir_arm = "/home/user/.armaraos/bin";
 
-        // Should match: openfang PATH exports
+        // Legacy ~/.openfang/bin PATH exports
         assert!(is_openfang_path_line(
             r#"export PATH="$HOME/.openfang/bin:$PATH""#,
-            dir
+            dir_legacy
         ));
         assert!(is_openfang_path_line(
             r#"export PATH="/home/user/.openfang/bin:$PATH""#,
-            dir
+            dir_legacy
         ));
         assert!(is_openfang_path_line(
             "set -gx PATH $HOME/.openfang/bin $PATH",
-            dir
+            dir_legacy
         ));
         assert!(is_openfang_path_line(
             "fish_add_path $HOME/.openfang/bin",
-            dir
+            dir_legacy
+        ));
+
+        // Current ~/.armaraos/bin PATH exports
+        assert!(is_openfang_path_line(
+            r#"export PATH="$HOME/.armaraos/bin:$PATH""#,
+            dir_arm
+        ));
+        assert!(is_openfang_path_line(
+            r#"export PATH="/home/user/.armaraos/bin:$PATH""#,
+            dir_arm
+        ));
+        assert!(is_openfang_path_line(
+            "fish_add_path $HOME/.armaraos/bin",
+            dir_arm
         ));
 
         // Should NOT match: unrelated PATH exports
         assert!(!is_openfang_path_line(
             r#"export PATH="$HOME/.cargo/bin:$PATH""#,
-            dir
+            dir_arm
         ));
         assert!(!is_openfang_path_line(
             r#"export PATH="/usr/local/bin:$PATH""#,
-            dir
+            dir_arm
         ));
 
-        // Should NOT match: openfang lines that aren't PATH-related
-        assert!(!is_openfang_path_line("# openfang config", dir));
-        assert!(!is_openfang_path_line("alias of=openfang", dir));
+        // Should NOT match: product name in comment/alias (not PATH-related)
+        assert!(!is_openfang_path_line("# openfang config", dir_legacy));
+        assert!(!is_openfang_path_line("alias of=openfang", dir_legacy));
     }
 }

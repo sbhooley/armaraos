@@ -1,0 +1,11 @@
+[[permission]]
+identifier = "allow-ainl-bootstrap"
+description = "Allows the embedded dashboard (127.0.0.1) to query AINL install status and retry bootstrap."
+commands.allow = [
+  "ainl_status",
+  "ensure_ainl_installed",
+  "ensure_armaraos_ainl_host",
+  "ainl_check_versions",
+  "upgrade_ainl_pip",
+  "ainl_try_library_file",
+]

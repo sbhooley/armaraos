@@ -2,6 +2,10 @@
 
 use crate::{KernelState, PortState};
 use openfang_kernel::config::openfang_home;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tracing::info;
@@ -17,6 +21,27 @@ pub fn ainl_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub fn ensure_ainl_installed(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let st = crate::ainl::ensure_ainl_installed(&app)?;
+    serde_json::to_value(st).map_err(|e| e.to_string())
+}
+
+/// Register bundled `ainl-mcp` + `~/.armaraos/bin/ainl-run` like `ainl install armaraos` (no PyPI step).
+#[tauri::command]
+pub fn ensure_armaraos_ainl_host(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let st = crate::ainl::ensure_armaraos_ainl_host(&app)?;
+    serde_json::to_value(st).map_err(|e| e.to_string())
+}
+
+/// PyPI + GitHub `main` SHA comparison for the internal `ainativelang` install.
+#[tauri::command]
+pub fn ainl_check_versions(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let info = crate::ainl_version::ainl_version_info(&app);
+    serde_json::to_value(info).map_err(|e| e.to_string())
+}
+
+/// `pip install --upgrade` for the configured AINL spec, then refresh host + library sync.
+#[tauri::command]
+pub fn upgrade_ainl_pip(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let st = crate::ainl::upgrade_ainl_pip(&app)?;
     serde_json::to_value(st).map_err(|e| e.to_string())
 }
 
@@ -182,4 +207,174 @@ pub fn open_logs_dir() -> Result<(), String> {
     let dir = openfang_home().join("logs");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create logs dir: {e}"))?;
     open::that(&dir).map_err(|e| format!("Failed to open directory: {e}"))
+}
+
+/// Open `~/.armaraos/ainl-library/` (mirrored AINL demo/examples/intelligence from upstream).
+#[tauri::command]
+pub fn open_ainl_library_dir() -> Result<(), String> {
+    let dir = openfang_home().join("ainl-library");
+    if !dir.is_dir() {
+        return Err(
+            "AINL library folder not found yet. Run AINL bootstrap with network access once."
+                .to_string(),
+        );
+    }
+    open::that(&dir).map_err(|e| format!("Failed to open directory: {e}"))
+}
+
+const AINL_TRY_TIMEOUT_TOKEN: &str = "__armaraos_ainl_timeout__";
+
+fn run_ainl_subprocess_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn ainl: {e}"))?;
+    let mut stdout_h = child.stdout.take().unwrap();
+    let mut stderr_h = child.stderr.take().unwrap();
+    let t1 = thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout_h.read_to_string(&mut s);
+        s
+    });
+    let t2 = thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr_h.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let o = t1.join().unwrap_or_default();
+                let e = t2.join().unwrap_or_default();
+                return Ok(std::process::Output {
+                    status,
+                    stdout: o.into_bytes(),
+                    stderr: e.into_bytes(),
+                });
+            }
+            Ok(None) => {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = t1.join();
+                    let _ = t2.join();
+                    return Err(AINL_TRY_TIMEOUT_TOKEN.to_string());
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("wait: {e}")),
+        }
+    }
+}
+
+/// Run `ainl validate --strict` or `ainl run` on a file under `~/.armaraos/ainl-library/` (path must resolve inside the mirror).
+///
+/// `timeout_secs` optional; defaults 120 (validate) / 300 (run), clamped 5–600. On timeout returns JSON with `timed_out: true` and `suggested_command`.
+#[tauri::command]
+pub fn ainl_try_library_file(
+    app: tauri::AppHandle,
+    relative_path: String,
+    mode: Option<String>,
+    timeout_secs: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let home = openfang_home();
+    let abs = openfang_kernel::ainl_library::resolve_program_under_ainl_library(
+        &home,
+        relative_path.trim(),
+    )?;
+    let venv = crate::ainl::venv_dir(&app)?;
+    let ainl = crate::ainl::venv_bin(&venv, "ainl");
+    if !ainl.exists() {
+        return Err(
+            "AINL CLI is missing from the app virtualenv. Open Settings → AINL and run Bootstrap."
+                .to_string(),
+        );
+    }
+    let cwd = home.join("ainl-library");
+    let mode = mode.as_deref().unwrap_or("validate").trim().to_lowercase();
+    let default_secs = if mode == "run" { 300u64 } else { 120u64 };
+    let timeout_secs = timeout_secs.unwrap_or(default_secs).clamp(5, 600);
+    let timeout = Duration::from_secs(timeout_secs);
+
+    let mut cmd = Command::new(&ainl);
+    cmd.current_dir(&cwd);
+    cmd.env("PATH", crate::ainl::subprocess_path_with_venv_bin(&venv));
+    match mode.as_str() {
+        "run" => {
+            cmd.arg("run");
+            cmd.arg(&abs);
+        }
+        _ => {
+            cmd.args(["validate", "--strict"]);
+            cmd.arg(&abs);
+        }
+    }
+
+    let suggested_command = format!(
+        "cd \"{}\" && \"{}\" {} \"{}\"",
+        cwd.display(),
+        ainl.display(),
+        if mode == "run" {
+            "run"
+        } else {
+            "validate --strict"
+        },
+        abs.display()
+    );
+
+    match run_ainl_subprocess_with_timeout(cmd, timeout) {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            Ok(serde_json::json!({
+                "ok": out.status.success(),
+                "exit_code": out.status.code(),
+                "mode": mode,
+                "path": relative_path.trim(),
+                "stdout": stdout,
+                "stderr": stderr,
+                "timed_out": false,
+                "timeout_secs": timeout_secs,
+                "suggested_command": suggested_command,
+            }))
+        }
+        Err(e) if e == AINL_TRY_TIMEOUT_TOKEN => Ok(serde_json::json!({
+            "ok": false,
+            "timed_out": true,
+            "timeout_secs": timeout_secs,
+            "mode": mode,
+            "path": relative_path.trim(),
+            "stdout": "",
+            "stderr": "",
+            "suggested_command": suggested_command,
+        })),
+        Err(e) => Err(e),
+    }
+}
+
+/// Persist dashboard theme mode (`light` | `dark` | `system`) for the next app launch.
+#[tauri::command]
+pub fn set_dashboard_theme_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
+    crate::ui_prefs::save_theme_mode(&app, &mode)
+}
+
+/// Open a whitelisted HTTPS URL in the system default browser (Tauri webview `target=_blank` is unreliable).
+#[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    if url.len() > 2048 {
+        return Err("Invalid URL".to_string());
+    }
+    let ok = url == "https://ainativelang.com"
+        || url.starts_with("https://ainativelang.com/")
+        || url.starts_with("https://www.python.org/")
+        || url.starts_with("https://python.org/");
+    if !ok {
+        return Err("Invalid URL".to_string());
+    }
+    open::that(&url).map_err(|e| e.to_string())
 }

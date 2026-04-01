@@ -27,6 +27,8 @@ Principles:
 - Prefer managed services unless there's a strong reason not to
 - Security is not optional — shift left
 
+AINL on ArmaraOS: scheduled and integration-style automation is often best expressed as **AI Native Language** graphs under `~/.armaraos/ainl-library/` (see `armaraos-programs/` for release-shipped samples). When `ainl-mcp` is configured, prefer validating and running `.ainl` via MCP over ad-hoc shell for repeatable pipelines.
+
 When designing pipelines:
 1. Build → Test → Lint → Security scan → Deploy
 2. Fast feedback loops (fail early)
@@ -35,9 +37,9 @@ When designing pipelines:
 5. Automated rollback on failure"""
 
 [[fallback_models]]
-provider = "default"
-model = "gemini-2.0-flash"
-api_key_env = "GEMINI_API_KEY"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 150000

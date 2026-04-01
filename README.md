@@ -12,7 +12,8 @@
 
 <p align="center">
   <a href="https://github.com/sbhooley/armaraos">Repository</a> &bull;
-  <a href="docs/getting-started.md">Quick Start</a>
+  <a href="docs/getting-started.md">Quick Start</a> &bull;
+  <a href="docs/docker.md">Docker</a>
 </p>
 
 <p align="center">
@@ -38,6 +39,8 @@ Traditional agent frameworks wait for you to type something. ArmaraOS runs **aut
 
 The entire system compiles to a **single ~32MB binary**. One install, one command, your agents are live.
 
+**Implementation language (programs & apps):** [**AI Native Language (AINL)**](docs/ainl-first-language.md) is the **default, first-class** language for new automation, workflows, extensions, and apps in this ecosystem. Use another modern language (Rust, Python, TypeScript, …) only when **explicitly** requested or when constraints require it; the kernel and core services remain Rust. See the linked doc for the full policy.
+
 ```bash
 # From GitHub directly (recommended until you host a vanity domain):
 curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
@@ -57,6 +60,30 @@ armaraos start
 ```
 
 </details>
+
+**Config and local data** default to **`~/.armaraos/`** (overrides: **`ARMARAOS_HOME`**, legacy **`OPENFANG_HOME`**; older **`~/.openfang/`** is migrated automatically when possible). Details: [`docs/data-directory.md`](docs/data-directory.md).
+
+---
+
+## AINL program library & cron
+
+The desktop app syncs upstream **`demo/`**, **`examples/`**, and **`intelligence/`** from [`sbhooley/ainativelang`](https://github.com/sbhooley/ainativelang) into **`~/.armaraos/ainl-library/`** (alongside config under `~/.armaraos/`). The kernel **embeds** the repo `programs/` tree and materializes it to **`ainl-library/armaraos-programs/`** on boot (safe, no collision with upstream). Scheduled jobs can run **AINL** programs via the real cron store (`/api/cron/jobs`), not the legacy KV schedules API.
+
+| Topic | Details |
+|-------|---------|
+| **Binary** | `ainl` on `PATH`, or **`ARMARAOS_AINL_BIN`** set to the full path of the CLI. If the OS reports “not found”, install AINL or set that env var. |
+| **Structured output** | Cron actions of kind `ainl_run` support **`json_output: true`**, which runs `ainl run --json …` and pretty-prints JSON for delivery/webhooks. |
+| **HTTP API** | `GET /api/ainl/library` — scan `.ainl` / `.lang` files; `GET /api/ainl/library/curated` — embedded curated catalog; `POST /api/ainl/library/register-curated` — idempotent registration (rate-limited). |
+| **Dashboard** | **Scheduler** page lists job **type** (Agent / AINL / Workflow / Event) and can create agent-turn, AINL, or workflow cron jobs. |
+| **Curated templates** | On boot, missing catalog entries are registered idempotently. A **safe** weekly health job (`core` only) is **enabled** by default; opt-in jobs and upstream examples are **disabled** until you enable them. |
+
+See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/ootb-ainl.md`](docs/ootb-ainl.md), manual smoke [`docs/ootb-ainl-smoke.md`](docs/ootb-ainl-smoke.md).
+
+### Dashboard: kernel SSE (live events)
+
+The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for the kernel event bus. Each message updates `Alpine.store('kernelEvents').last` and dispatches a window event **`armaraos-kernel-event`**. The **Overview** page listens for lifecycle/system events and **debounces** a silent data refresh (~400ms) so stats stay current after spawns, crashes, quota events, etc., without a full reload.
+
+**Auth:** If `api_key` is set in config, clients on **loopback** (127.0.0.1 / ::1) may connect to the stream without a token (embedded UI). **Non-loopback** clients must use the same authentication as the rest of the API (`Authorization: Bearer` with the configured key, or a `token` query parameter). See [`docs/dashboard-testing.md`](docs/dashboard-testing.md) for manual checks; [`docs/release-desktop.md`](docs/release-desktop.md) for desktop smoke (Tauri + SSE badge).
 
 ---
 
@@ -247,6 +274,15 @@ openfang-desktop     Tauri 2.0 native app (system tray, notifications, global sh
 openfang-migrate     OpenClaw, LangChain, AutoGPT migration engine
 xtask                Build automation
 ```
+
+### Desktop app and AINL
+
+The Tauri desktop shell can bootstrap an internal Python venv, install **AINL** from a **bundled wheel** (`crates/openfang-desktop/resources/ainl/`) or **PyPI** (see `ARMARAOS_AINL_PYPI_SPEC`), and register **`ainl-mcp`** in **`~/.armaraos/config.toml`** in line with `ainl install armaraos`. **Settings → AINL** (visible only in the desktop app) shows live status and retry actions.
+
+- **Bundle resources for release or local smoke:** `cargo xtask bundle-ainl-wheel` and `cargo xtask bundle-portable-python --target <rust-triple>` (see `crates/openfang-desktop/resources/python/README.md`). CI bundles and verifies Linux resources; the release workflow bundles per matrix target.
+- **Overrides:** `ARMARAOS_PYTHON`, `ARMARAOS_AINL_PYPI_SPEC`, and standard pip env vars such as `PIP_INDEX_URL` for private indexes.
+
+Short manual checklist: [docs/DESKTOP_AINL_SMOKE.md](docs/DESKTOP_AINL_SMOKE.md).
 
 ---
 

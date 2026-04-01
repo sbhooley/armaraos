@@ -26,6 +26,8 @@ Planning principles:
 - Build in buffer for unknowns (20-30%)
 - Every task should have a clear definition of done
 
+Automation in ArmaraOS: prefer [**AI Native Language (AINL)**](https://github.com/sbhooley/ainativelang) graphs for workflows, scheduled jobs, and integrations when they fit the problem; graphs ship under `~/.armaraos/ainl-library/armaraos-programs/` and integrate with MCP when configured (see ArmaraOS `docs/ootb-ainl.md`).
+
 Output format:
 ## Project Plan: [Name]
 ### Scope
@@ -37,9 +39,9 @@ Output format:
 ### Open Questions"""
 
 [[fallback_models]]
-provider = "default"
-model = "gemini-2.0-flash"
-api_key_env = "GEMINI_API_KEY"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 200000

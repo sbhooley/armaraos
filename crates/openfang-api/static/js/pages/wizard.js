@@ -1,4 +1,4 @@
-// OpenFang Setup Wizard — First-run guided setup (Provider + Agent + Channel)
+// ArmaraOS Setup Wizard — First-run guided setup (Provider + Agent + Channel)
 'use strict';
 
 /** Escape a string for use inside TOML triple-quoted strings ("""\n...\n"""). */
@@ -31,14 +31,14 @@ function wizardPage() {
     templates: [
       {
         id: 'assistant',
-        name: 'General Assistant',
-        description: 'A versatile helper for everyday tasks, answering questions, and providing recommendations.',
+        name: 'Armara',
+        description: 'Your personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
         icon: 'GA',
         category: 'General',
         provider: 'deepseek',
         model: 'deepseek-chat',
         profile: 'balanced',
-        system_prompt: 'You are a helpful, friendly assistant. Provide clear, accurate, and concise responses. Ask clarifying questions when needed.'
+        system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.'
       },
       {
         id: 'coder',
@@ -57,8 +57,8 @@ function wizardPage() {
         description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
         icon: 'RS',
         category: 'Research',
-        provider: 'gemini',
-        model: 'gemini-2.5-flash',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'balanced',
         system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.'
       },
@@ -79,8 +79,8 @@ function wizardPage() {
         description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
         icon: 'DA',
         category: 'Development',
-        provider: 'gemini',
-        model: 'gemini-2.5-flash',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'precise',
         system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.'
       },
@@ -503,7 +503,7 @@ function wizardPage() {
         gemini: 'gemini-2.5-flash',
         groq: 'llama-3.3-70b-versatile',
         deepseek: 'deepseek-chat',
-        openrouter: 'openrouter/google/gemini-2.5-flash',
+        openrouter: 'stepfun/step-3.5-flash:free',
         mistral: 'mistral-large-latest',
         together: 'meta-llama/Llama-3-70b-chat-hf',
         fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',

@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-dashboard-ui-prefs"
+description = "Allows the embedded dashboard to persist theme mode across restarts (random localhost port breaks localStorage)."
+commands.allow = [
+  "set_dashboard_theme_mode",
+  "open_external_url",
+  "open_ainl_library_dir",
+]

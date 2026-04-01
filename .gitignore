@@ -32,8 +32,13 @@ predictions_database.json
 prediction_report_*.md
 BUILD_LOG.md
 
+# Accidental copy of programs/ under kernel (build uses repo-root programs/)
+crates/openfang-kernel/embedded_programs_bundle/
+
 # Bundled AINL wheel (added by packaging pipeline)
 crates/openfang-desktop/resources/ainl/*.whl
+# Portable Python trees from `xtask bundle-portable-python` (release CI); keep resources/python/README.md
+crates/openfang-desktop/resources/python/*/
 
 # OS
 .DS_Store

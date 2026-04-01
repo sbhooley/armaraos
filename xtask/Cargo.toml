@@ -8,3 +8,6 @@ description = "Build automation for the OpenFang workspace"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+ureq = { version = "2.12", default-features = false, features = ["tls"] }

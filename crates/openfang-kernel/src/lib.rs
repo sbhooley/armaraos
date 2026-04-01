@@ -3,6 +3,7 @@
 //! The kernel manages agent lifecycles, memory, permissions, scheduling,
 //! and inter-agent communication.
 
+pub mod ainl_library;
 pub mod approval;
 pub mod auth;
 pub mod auto_reply;
@@ -11,6 +12,7 @@ pub mod capabilities;
 pub mod config;
 pub mod config_reload;
 pub mod cron;
+pub mod embedded_ainl_programs;
 pub mod error;
 pub mod event_bus;
 pub mod heartbeat;
@@ -19,6 +21,7 @@ pub mod metering;
 pub mod pairing;
 pub mod registry;
 pub mod scheduler;
+pub mod skills_staging;
 pub mod supervisor;
 pub mod triggers;
 pub mod whatsapp_gateway;

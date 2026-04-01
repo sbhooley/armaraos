@@ -52,6 +52,7 @@ pub async fn build_router(
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(kernel.config.budget.clone())),
+        ainl_register_hits: dashmap::DashMap::new(),
     });
 
     // CORS: allow localhost origins by default. If API key is set, the API
@@ -130,6 +131,10 @@ pub async fn build_router(
 
     let app = Router::new()
         .route("/", axum::routing::get(webchat::webchat_page))
+        .route(
+            "/assets/armaraos-logo.png",
+            axum::routing::get(webchat::armaraos_logo_png),
+        )
         .route("/logo.png", axum::routing::get(webchat::logo_png))
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
@@ -441,6 +446,11 @@ pub async fn build_router(
         )
         // Live log streaming (SSE)
         .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
+        // Kernel event bus (SSE)
+        .route(
+            "/api/events/stream",
+            axum::routing::get(routes::kernel_events_stream),
+        )
         // Peer/Network endpoints
         .route("/api/peers", axum::routing::get(routes::list_peers))
         .route(
@@ -603,6 +613,22 @@ pub async fn build_router(
         .route(
             "/api/cron/jobs/{id}/run",
             axum::routing::post(routes::run_cron_job),
+        )
+        .route(
+            "/api/ainl/library",
+            axum::routing::get(routes::get_ainl_library),
+        )
+        .route(
+            "/api/ainl/library/curated",
+            axum::routing::get(routes::get_ainl_library_curated),
+        )
+        .route(
+            "/api/ainl/library/register-curated",
+            axum::routing::post(routes::post_ainl_register_curated),
+        )
+        .route(
+            "/api/learning/skill-draft",
+            axum::routing::post(routes::post_learning_skill_draft),
         )
         // Webhook trigger endpoints (external event injection)
         .route("/hooks/wake", axum::routing::post(routes::webhook_wake))

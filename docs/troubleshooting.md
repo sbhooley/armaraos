@@ -2,6 +2,8 @@
 
 Common issues, diagnostics, and answers to frequently asked questions about OpenFang.
 
+Paths use the default data directory **`~/.armaraos/`** (see [data-directory.md](data-directory.md) for `ARMARAOS_HOME`, `OPENFANG_HOME`, and migration from `~/.openfang`).
+
 ## Table of Contents
 
 - [Quick Diagnostics](#quick-diagnostics)
@@ -106,7 +108,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 openfang init
 ```
 
-This creates `~/.openfang/config.toml` with sensible defaults.
+This creates `~/.armaraos/config.toml` with sensible defaults.
 
 ### "Missing API key" warnings on start
 
@@ -396,7 +398,7 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 **Checklist**:
 1. Only one instance can run at a time (single-instance enforcement)
 2. Check if the daemon is already running on the same ports
-3. Try deleting `~/.openfang/daemon.json` and restarting
+3. Try deleting `~/.armaraos/daemon.json` and restarting
 
 ### White/blank screen in app
 
@@ -428,7 +430,7 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 **Normal startup**: <200ms for the kernel, ~1-2s with channel adapters.
 
 If slower:
-- Check database size (`~/.openfang/data/openfang.db`)
+- Check database size (`~/.armaraos/data/openfang.db`)
 - Reduce the number of enabled channels
 - Check network connectivity (MCP server connections happen at boot)
 
@@ -445,7 +447,7 @@ If slower:
 
 ### How do I switch the default LLM provider?
 
-Edit `~/.openfang/config.toml`:
+Edit `~/.armaraos/config.toml`:
 ```toml
 [default_model]
 provider = "groq"
@@ -459,7 +461,7 @@ Yes. Each agent can use a different provider via its manifest `[model]` section.
 
 ### How do I add a new channel?
 
-1. Add the channel config to `~/.openfang/config.toml` under `[channels]`
+1. Add the channel config to `~/.armaraos/config.toml` under `[channels]`
 2. Set the required environment variables (tokens, secrets)
 3. Restart the daemon
 
@@ -479,20 +481,21 @@ Yes. Agents can use the `agent_send`, `agent_spawn`, `agent_find`, and `agent_li
 
 ### Is my data sent to the cloud?
 
-Only LLM API calls go to the provider's servers. All agent data, memory, sessions, and configuration are stored locally in SQLite (`~/.openfang/data/openfang.db`). The OFP wire protocol uses HMAC-SHA256 mutual authentication for P2P communication.
+Only LLM API calls go to the provider's servers. All agent data, memory, sessions, and configuration are stored locally in SQLite (`~/.armaraos/data/openfang.db`). The OFP wire protocol uses HMAC-SHA256 mutual authentication for P2P communication.
 
 ### How do I back up my data?
 
 Back up these files:
-- `~/.openfang/config.toml` (configuration)
-- `~/.openfang/data/openfang.db` (all agent data, memory, sessions)
-- `~/.openfang/skills/` (installed skills)
+- `~/.armaraos/config.toml` (configuration)
+- `~/.armaraos/data/openfang.db` (all agent data, memory, sessions)
+- `~/.armaraos/skills/` (installed skills)
 
 ### How do I reset everything?
 
 ```bash
-rm -rf ~/.openfang
-openfang init  # Start fresh
+rm -rf ~/.armaraos
+# If an old tree was never migrated, also: rm -rf ~/.openfang
+armaraos init  # Start fresh
 ```
 
 ### Can I run OpenFang without an internet connection?
@@ -583,7 +586,7 @@ docker run -d --name openfang \
 
 ### How do I protect the dashboard with a password?
 
-OpenFang has built-in dashboard authentication. Enable it in `~/.openfang/config.toml`:
+OpenFang has built-in dashboard authentication. Enable it in `~/.armaraos/config.toml`:
 
 ```toml
 [auth]
@@ -604,7 +607,7 @@ For public-facing deployments, you should also place a reverse proxy (Caddy, ngi
 
 ### How do I configure the embedding model for memory?
 
-In `~/.openfang/config.toml`:
+In `~/.armaraos/config.toml`:
 ```toml
 [memory]
 embedding_provider = "openai"     # or "ollama", "gemini"
@@ -653,7 +656,7 @@ Not yet — each channel type currently supports one bot. Multi-bot routing is t
 
 ### Claude Code integration shows errors
 
-Add to `~/.openfang/config.toml`:
+Add to `~/.armaraos/config.toml`:
 ```toml
 [claude_code]
 skip_permissions = true

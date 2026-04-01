@@ -1,0 +1,8 @@
+# learning_frame_echo — validates core `in:` keys match learning frame v1
+# Spec: docs/learning-frame-v1.md
+# Validate: ainl validate programs/learning-frame-echo/learning_frame_echo.ainl --strict
+
+learning_frame_echo:
+  in: frame_version op run_id intent outcome episode tier
+
+  out run_id

@@ -82,6 +82,16 @@ cargo test -p openfang-runtime
 cargo test -p openfang-memory
 ```
 
+### Embedded AINL programs (`programs/`)
+
+The kernel embeds the `programs/` tree at build time (`crates/openfang-kernel/build.rs` → `include_bytes!` in `OUT_DIR`). When you add or change `.ainl` files:
+
+1. Run `ainl validate <file> --strict` (AINL 1.3+ on Python 3.10+).
+2. Bump `EMBEDDED_PROGRAMS_REVISION` in `crates/openfang-kernel/src/embedded_ainl_programs.rs` when operators should notice a materialized-tree change.
+3. Run `cargo test -p openfang-kernel`.
+
+CI (`.github/workflows/ci.yml`, job **openfang-kernel + AINL programs**) runs `cargo build -p openfang-kernel`, `cargo test -p openfang-kernel`, and validates every `programs/**/*.ainl`.
+
 ### Check for Clippy Warnings
 
 ```bash
@@ -150,8 +160,12 @@ OpenFang is organized as a Cargo workspace with 14 crates:
 
 - **`KernelHandle` trait**: Defined in `openfang-runtime`, implemented on `OpenFangKernel` in `openfang-kernel`. This avoids circular crate dependencies while enabling inter-agent tools.
 - **Shared memory**: A fixed UUID (`AgentId(Uuid::from_bytes([0..0, 0x01]))`) provides a cross-agent KV namespace.
-- **Daemon detection**: The CLI checks `~/.openfang/daemon.json` and pings the health endpoint. If a daemon is running, commands use HTTP; otherwise, they boot an in-process kernel.
+- **Daemon detection**: The CLI checks `daemon.json` under the resolved data home (default `~/.armaraos/`, see `docs/data-directory.md`) and pings the health endpoint. If a daemon is running, commands use HTTP; otherwise, they boot an in-process kernel.
 - **Capability-based security**: Every agent operation is checked against the agent's granted capabilities before execution.
+
+### Default language for programs and apps
+
+**AI Native Language (AINL)** is the default, first-class language for new automation, workflows, extensions, and apps unless a maintainer or user **explicitly** asks for another language. The kernel and core crates remain **Rust**. Full policy: [docs/ainl-first-language.md](docs/ainl-first-language.md).
 
 ---
 

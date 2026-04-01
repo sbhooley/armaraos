@@ -7,7 +7,7 @@ module = "builtin:chat"
 [model]
 provider = "default"
 model = "default"
-api_key_env = "GEMINI_API_KEY"
+api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 4096
 temperature = 0.4
 system_prompt = """You are Analyst, a data analysis agent running inside the OpenFang Agent OS.

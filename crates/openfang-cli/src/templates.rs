@@ -14,7 +14,7 @@ pub struct AgentTemplate {
 
 /// Discover template directories. Checks:
 /// 1. The repo `agents/` dir (for dev builds)
-/// 2. `~/.openfang/agents/` (installed templates)
+/// 2. `~/.armaraos/agents/` (installed templates; same resolution as the kernel)
 /// 3. `OPENFANG_AGENTS_DIR` env var
 pub fn discover_template_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -35,14 +35,8 @@ pub fn discover_template_dirs() -> Vec<PathBuf> {
         }
     }
 
-    // Installed templates (respects OPENFANG_HOME)
-    let of_home = if let Ok(h) = std::env::var("OPENFANG_HOME") {
-        PathBuf::from(h)
-    } else if let Some(home) = dirs::home_dir() {
-        home.join(".openfang")
-    } else {
-        std::env::temp_dir().join(".openfang")
-    };
+    // Installed templates (ARMARAOS_HOME / OPENFANG_HOME / ~/.armaraos / legacy ~/.openfang)
+    let of_home = openfang_kernel::config::openfang_home();
     {
         let agents = of_home.join("agents");
         if agents.is_dir() && !dirs.contains(&agents) {

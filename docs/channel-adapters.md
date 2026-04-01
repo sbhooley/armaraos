@@ -115,7 +115,7 @@ All adapters share a common foundation: graceful shutdown via `watch::channel`, 
 
 ## Channel Configuration
 
-All channel configurations live in `~/.openfang/config.toml` under the `[channels]` section. Each channel is a subsection:
+All channel configurations live in `~/.armaraos/config.toml` under the `[channels]` section. Each channel is a subsection:
 
 ```toml
 [channels.telegram]

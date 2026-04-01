@@ -3,6 +3,14 @@
   "identifier": "default",
   "description": "Default permissions for the ArmaraOS desktop app",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*",
+      "http://localhost:*",
+      "https://127.0.0.1:*",
+      "https://localhost:*"
+    ]
+  },
   "permissions": [
     "core:default",
     "notification:default",
@@ -12,6 +20,8 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
     "autostart:default",
-    "updater:default"
+    "updater:default",
+    "allow-ainl-bootstrap",
+    "allow-dashboard-ui-prefs"
   ]
 }

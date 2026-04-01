@@ -1,6 +1,8 @@
-# Migrating to OpenFang
+# Migrating to OpenFang / ArmaraOS
 
 This guide covers migrating from OpenClaw (and other frameworks) to OpenFang. The migration engine handles config conversion, agent import, memory transfer, channel re-configuration, and skill scanning.
+
+**Data directory:** New installs use **`~/.armaraos/`** as the default home (see [docs/data-directory.md](docs/data-directory.md)). **`ARMARAOS_HOME`** / **`OPENFANG_HOME`** override it. Destinations in this document use **`~/.armaraos/`**; if you still have only **`~/.armaraos/`**, the CLI migrates it automatically when possible, or you can treat paths below as equivalent under your configured home.
 
 ## Table of Contents
 
@@ -22,7 +24,7 @@ Run a single command to migrate your entire OpenClaw workspace:
 openfang migrate --from openclaw
 ```
 
-This auto-detects your OpenClaw workspace at `~/.openclaw/` and imports everything into `~/.openfang/`.
+This auto-detects your OpenClaw workspace at `~/.openclaw/` and imports everything into `~/.armaraos/`.
 
 ### Options
 
@@ -36,7 +38,7 @@ openfang migrate --from openclaw --dry-run
 
 ### Migration Report
 
-After a successful migration, a `migration_report.md` file is saved to `~/.openfang/` with a summary of everything that was imported, skipped, or needs manual attention.
+After a successful migration, a `migration_report.md` file is saved to `~/.armaraos/` with a summary of everything that was imported, skipped, or needs manual attention.
 
 ### Other Frameworks
 
@@ -51,19 +53,19 @@ openfang migrate --from autogpt     # Coming soon
 
 ## What Gets Migrated
 
-| Item | Source (OpenClaw) | Destination (OpenFang) | Status |
+| Item | Source (OpenClaw) | Destination (ArmaraOS home) | Status |
 |------|-------------------|------------------------|--------|
-| **Config** | `~/.openclaw/config.yaml` | `~/.openfang/config.toml` | Fully automated |
-| **Agents** | `~/.openclaw/agents/*/agent.yaml` | `~/.openfang/agents/*/agent.toml` | Fully automated |
-| **Memory** | `~/.openclaw/agents/*/MEMORY.md` | `~/.openfang/agents/*/imported_memory.md` | Fully automated |
-| **Channels** | `~/.openclaw/messaging/*.yaml` | `~/.openfang/channels_import.toml` | Automated (manual merge) |
+| **Config** | `~/.openclaw/config.yaml` | `~/.armaraos/config.toml` | Fully automated |
+| **Agents** | `~/.openclaw/agents/*/agent.yaml` | `~/.armaraos/agents/*/agent.toml` | Fully automated |
+| **Memory** | `~/.openclaw/agents/*/MEMORY.md` | `~/.armaraos/agents/*/imported_memory.md` | Fully automated |
+| **Channels** | `~/.openclaw/messaging/*.yaml` | `~/.armaraos/channels_import.toml` | Automated (manual merge) |
 | **Skills** | `~/.openclaw/skills/` | Scanned and reported | Manual reinstall |
 | **Sessions** | `~/.openclaw/agents/*/sessions/` | Not migrated | Fresh start recommended |
 | **Workspace files** | `~/.openclaw/agents/*/workspace/` | Not migrated | Copy manually if needed |
 
 ### Channel Import Note
 
-Channel configurations (Telegram, Discord, Slack) are exported to a `channels_import.toml` file. You must manually merge the `[channels]` section into your `~/.openfang/config.toml`.
+Channel configurations (Telegram, Discord, Slack) are exported to a `channels_import.toml` file. You must manually merge the `[channels]` section into your `~/.armaraos/config.toml`.
 
 ### Skills Note
 
@@ -87,7 +89,7 @@ If you prefer migrating by hand (or need to handle edge cases), follow these ste
 openfang init
 ```
 
-This creates `~/.openfang/` with a default `config.toml`.
+This creates `~/.armaraos/` with a default `config.toml`.
 
 ### 2. Convert Your Config
 
@@ -103,7 +105,7 @@ memory:
   decay_rate: 0.05
 ```
 
-**OpenFang** (`~/.openfang/config.toml`):
+**OpenFang** (`~/.armaraos/config.toml`):
 ```toml
 [default_model]
 provider = "anthropic"
@@ -136,7 +138,7 @@ tags:
   - dev
 ```
 
-**OpenFang** (`~/.openfang/agents/coder/agent.toml`):
+**OpenFang** (`~/.armaraos/agents/coder/agent.toml`):
 ```toml
 name = "coder"
 version = "0.1.0"
@@ -166,7 +168,7 @@ allowed_users:
   - "123456789"
 ```
 
-**OpenFang** (add to `~/.openfang/config.toml`):
+**OpenFang** (add to `~/.armaraos/config.toml`):
 ```toml
 [channels.telegram]
 bot_token_env = "TELEGRAM_BOT_TOKEN"
@@ -179,7 +181,7 @@ allowed_users = ["123456789"]
 Copy any `MEMORY.md` files from OpenClaw agents to OpenFang agent directories:
 
 ```bash
-cp ~/.openclaw/agents/coder/MEMORY.md ~/.openfang/agents/coder/imported_memory.md
+cp ~/.openclaw/agents/coder/MEMORY.md ~/.armaraos/agents/coder/imported_memory.md
 ```
 
 The kernel will ingest these on first boot.
@@ -191,7 +193,7 @@ The kernel will ingest these on first boot.
 | Aspect | OpenClaw | OpenFang |
 |--------|----------|----------|
 | Format | YAML | TOML |
-| Config location | `~/.openclaw/config.yaml` | `~/.openfang/config.toml` |
+| Config location | `~/.openclaw/config.yaml` | `~/.armaraos/config.toml` |
 | Agent definition | `agent.yaml` | `agent.toml` |
 | Channel config | Separate files per channel | Unified in `config.toml` |
 | Tool permissions | Implicit (tool list) | Capability-based (tools, memory, network, shell) |
@@ -349,8 +351,8 @@ The installer auto-detects OpenClaw format and converts the skill manifest.
 After migration, channels are exported to `channels_import.toml`. You must merge them into your `config.toml` manually:
 
 ```bash
-cat ~/.openfang/channels_import.toml
-# Copy the [channels.*] sections into ~/.openfang/config.toml
+cat ~/.armaraos/channels_import.toml
+# Copy the [channels.*] sections into ~/.armaraos/config.toml
 ```
 
 Then restart the daemon:

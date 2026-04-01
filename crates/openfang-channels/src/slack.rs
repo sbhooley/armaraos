@@ -1,4 +1,4 @@
-//! Slack Socket Mode adapter for the OpenFang channel bridge.
+//! Slack Socket Mode adapter for the ArmaraOS channel bridge.
 //!
 //! Uses Slack Socket Mode WebSocket (app token) for receiving events and the
 //! Web API (bot token) for sending responses. No external Slack crate.

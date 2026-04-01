@@ -52,7 +52,7 @@ async function startConnection() {
     auth: state,
     logger,
     printQRInTerminal: true,
-    browser: ['OpenFang', 'Desktop', '1.0.0'],
+    browser: ['ArmaraOS', 'Desktop', '1.0.0'],
   });
 
   // Save credentials whenever they update
@@ -223,7 +223,7 @@ function forwardToOpenFang(text, phone, pushName, metadata) {
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('OpenFang API timeout'));
+      reject(new Error('ArmaraOS API timeout'));
     });
     req.write(payload);
     req.end();
@@ -358,7 +358,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[gateway] WhatsApp Web gateway listening on http://127.0.0.1:${PORT}`);
-  console.log(`[gateway] OpenFang URL: ${OPENFANG_URL}`);
+  console.log(`[gateway] ArmaraOS API URL: ${OPENFANG_URL}`);
   console.log(`[gateway] Default agent: ${DEFAULT_AGENT}`);
 
   // Auto-connect if credentials already exist from a previous session

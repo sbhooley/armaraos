@@ -59,6 +59,9 @@ pub struct MessageResponse {
     pub iterations: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Path when a skill draft was written (e.g. `[learn]` prefix on `POST .../message`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_draft_path: Option<String>,
 }
 
 /// Request to install a skill from the marketplace.

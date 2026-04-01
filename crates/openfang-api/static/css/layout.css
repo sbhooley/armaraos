@@ -1,4 +1,4 @@
-/* OpenFang Layout — Grid + Sidebar + Responsive */
+/* ArmaraOS Layout — Grid + Sidebar + Responsive */
 
 .app-layout {
   display: flex;
@@ -105,6 +105,7 @@
 }
 .conn-badge.ws { background: var(--success); color: #000; }
 .conn-badge.http { background: var(--warning); color: #000; }
+.conn-badge.sse { background: var(--accent, #6366f1); color: #fff; }
 
 /* Navigation */
 .sidebar-nav {
@@ -329,3 +330,30 @@
 .app-layout.focus-mode .sidebar-overlay { display: none; }
 .app-layout.focus-mode .main-content { max-width: 100%; margin-left: 0; }
 .app-layout.focus-mode .mobile-menu-btn { display: none !important; }
+
+/* Attribution — bottom-right (below sidebar z-index, above main content) */
+.app-powered-by {
+  position: fixed;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  font-size: 11px;
+  line-height: 1.2;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.app-powered-by a {
+  color: #dc2626;
+  text-decoration: none;
+  pointer-events: auto;
+  cursor: pointer;
+  font-weight: 500;
+}
+.app-powered-by a:hover {
+  color: #b91c1c;
+  text-decoration: underline;
+}
+.app-powered-by a:focus-visible {
+  outline: 2px solid #dc2626;
+  outline-offset: 2px;
+}

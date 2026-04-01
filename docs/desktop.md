@@ -93,7 +93,7 @@ The system tray (defined in `src/tray.rs`) provides quick access without bringin
 | **Status: Running (uptime)** | Disabled (info only) — shows uptime in human-readable format |
 | **Launch at Login** | Checkbox — toggles OS-level auto-start via `tauri-plugin-autostart` |
 | **Check for Updates...** | Checks for updates, downloads, installs, and restarts if available. Shows notifications for progress/success/failure |
-| **Open Config Directory** | Opens `~/.openfang/` in the OS file manager |
+| **Open Config Directory** | Opens `~/.armaraos/` in the OS file manager |
 | **Quit OpenFang** | Logs the quit event and calls `app.exit(0)` |
 
 The tray tooltip reads **"OpenFang Agent OS"**.
@@ -188,11 +188,11 @@ const count: number = await invoke("get_agent_count");
 
 ### `import_agent_toml`
 
-Opens a native file picker for `.toml` files. Validates the selected file as an `AgentManifest`, copies it to `~/.openfang/agents/{name}/agent.toml`, and spawns the agent. Returns the agent name on success.
+Opens a native file picker for `.toml` files. Validates the selected file as an `AgentManifest`, copies it to `~/.armaraos/agents/{name}/agent.toml`, and spawns the agent. Returns the agent name on success.
 
 ### `import_skill_file`
 
-Opens a native file picker for skill files (`.md`, `.toml`, `.py`, `.js`, `.wasm`). Copies the file to `~/.openfang/skills/` and triggers a hot-reload of the skill registry.
+Opens a native file picker for skill files (`.md`, `.toml`, `.py`, `.js`, `.wasm`). Copies the file to `~/.armaraos/skills/` and triggers a hot-reload of the skill registry.
 
 ### `get_autostart` / `set_autostart`
 
@@ -216,7 +216,7 @@ await invoke("install_update"); // App restarts if update succeeds
 
 ### `open_config_dir` / `open_logs_dir`
 
-Opens `~/.openfang/` or `~/.openfang/logs/` in the OS file manager.
+Opens `~/.armaraos/` or `~/.armaraos/logs/` in the OS file manager.
 
 ---
 

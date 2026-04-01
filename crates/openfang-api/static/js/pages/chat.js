@@ -1,4 +1,4 @@
-// OpenFang Chat Page — Agent chat with markdown + streaming
+// ArmaraOS Chat Page — Agent chat with markdown + streaming
 'use strict';
 
 function chatPage() {
@@ -492,7 +492,7 @@ function chatPage() {
         this.messages.push({
           id: ++localMsgId,
           role: 'system',
-          text: '**Welcome to OpenFang Chat!**\n\n' +
+          text: '**Welcome to ArmaraOS chat**\n\n' +
             '- Type `/` to see available commands\n' +
             '- `/help` shows all commands\n' +
             '- `/think on` enables extended reasoning\n' +
@@ -822,6 +822,7 @@ function chatPage() {
           if (data.cost_usd != null) meta += ' | $' + data.cost_usd.toFixed(4);
           if (data.iterations) meta += ' | ' + data.iterations + ' iter';
           if (data.fallback_model) meta += ' | fallback: ' + data.fallback_model;
+          if (data.skill_draft_path) meta += ' | skill draft: ' + data.skill_draft_path;
           // Use server response if non-empty, otherwise preserve accumulated streamed text
           var finalText = (data.content && data.content.trim()) ? data.content : streamedText;
           // Strip raw function-call JSON that some models leak as text
@@ -848,6 +849,9 @@ function chatPage() {
           this.sending = false;
           this.tokenCount = 0;
           // No message bubble added — the agent was silent
+          if (data.skill_draft_path) {
+            OpenFangToast.success('Skill draft saved: ' + data.skill_draft_path);
+          }
           var selfSilent = this;
           this.$nextTick(function() { selfSilent._processQueue(); });
           break;
@@ -1020,6 +1024,7 @@ function chatPage() {
         var httpMeta = (res.input_tokens || 0) + ' in / ' + (res.output_tokens || 0) + ' out';
         if (res.cost_usd != null) httpMeta += ' | $' + res.cost_usd.toFixed(4);
         if (res.iterations) httpMeta += ' | ' + res.iterations + ' iter';
+        if (res.skill_draft_path) httpMeta += ' | skill draft: ' + res.skill_draft_path;
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: [], ts: Date.now() });
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });

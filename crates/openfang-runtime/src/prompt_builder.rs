@@ -212,7 +212,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 fn build_identity_section(ctx: &PromptContext) -> String {
     if ctx.base_system_prompt.is_empty() {
         format!(
-            "You are {}, an AI agent running inside the OpenFang Agent OS.\n{}",
+            "You are {}, an AI agent running inside the ArmaraOS Agent OS.\n{}",
             ctx.agent_name, ctx.agent_description
         )
     } else {
@@ -387,11 +387,16 @@ fn build_user_section(user_name: Option<&str>) -> String {
             )
         }
         None => "## User Profile\n\
-             You don't know the user's name yet. On your FIRST reply in this conversation, \
-             warmly introduce yourself by your agent name and ask what they'd like to be called. \
-             Once they tell you, immediately use the `memory_store` tool with \
-             key \"user_name\" and their name as the value so you remember it for future sessions. \
-             Keep the introduction brief — don't let it overshadow their actual request."
+             You don't know the user's name yet.\n\
+             Your **only** public name to users is **Armara**. Never call yourself \"General Assistant\", \"AI assistant\", \
+             \"virtual assistant\", or any other generic label — always **Armara**.\n\
+             On your FIRST reply in this conversation, introduce yourself as **Armara**. \
+             When the user's first message is a greeting, /start, hi/hello, or similarly empty of a concrete task, \
+             use exactly this wording (only adjust line breaks for the channel):\n\n\
+             Hello! I'm Armara, your personal assistant powered by AI Native Language. I'm here to help with everyday tasks, answer questions, search the web, build things, and more! To get started may I know your name and one thing you'd like help with today?\n\n\
+             If their first message already contains a specific question or task, answer it helpfully and weave in a one-sentence version of the same introduction (name Armara, powered by AI Native Language, happy to help) before or after your answer — do not ignore their request.\n\
+             Once they tell you their name, immediately use the `memory_store` tool with \
+             key \"user_name\" and their name as the value so you remember it for future sessions."
             .to_string(),
     }
 }
@@ -887,6 +892,8 @@ mod tests {
         let ctx = basic_ctx();
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("don't know the user's name"));
+        assert!(prompt.contains("General Assistant"));
+        assert!(prompt.contains("Armara"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// OpenFang API Client — Fetch wrapper, WebSocket manager, auth injection, toast notifications
+// ArmaraOS API Client — Fetch wrapper, WebSocket manager, auth injection, toast notifications
 'use strict';
 
 // ── Toast Notification System ──
@@ -307,6 +307,14 @@ var OpenFangAPI = (function() {
 
   function getToken() { return _authToken; }
 
+  /** Full URL for EventSource (SSE). EventSource cannot send Authorization; append token when needed. */
+  function sseUrl(path) {
+    var url = BASE + path;
+    var sep = path.indexOf('?') >= 0 ? '&' : '?';
+    if (_authToken) url += sep + 'token=' + encodeURIComponent(_authToken);
+    return url;
+  }
+
   function upload(agentId, file) {
     var hdrs = {};
     if (_authToken) hdrs['Authorization'] = 'Bearer ' + _authToken;
@@ -326,6 +334,7 @@ var OpenFangAPI = (function() {
   return {
     setAuthToken: setAuthToken,
     getToken: getToken,
+    sseUrl: sseUrl,
     get: get,
     post: post,
     put: put,

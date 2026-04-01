@@ -1,4 +1,4 @@
-// OpenFang Settings Page — Provider Hub, Model Catalog, Config, Tools + Security, Network, Migration tabs
+// ArmaraOS Settings Page — Provider Hub, Model Catalog, Config, Tools + Security, Network, Migration tabs
 'use strict';
 
 function settingsPage() {
@@ -33,6 +33,15 @@ function settingsPage() {
     addingCustomProvider: false,
     loading: true,
     loadError: '',
+
+    // -- Desktop (Tauri) AINL status (synced via Alpine.store('ainl').desktop) --
+    ainlDesktopLoading: false,
+    ainlDesktopError: '',
+    ainlVersionInfo: null,
+    ainlVersionLoading: false,
+    ainlUpgradeLoading: false,
+    /** ISO timestamp of last PyPI/GitHub version check (desktop AINL tab). */
+    ainlVersionCheckedAt: null,
 
     // -- Dynamic config state --
     configSchema: null,
@@ -163,6 +172,13 @@ function settingsPage() {
 
     // -- Settings load --
     async loadSettings() {
+      try {
+        var stTab = sessionStorage.getItem('armaraos-settings-tab');
+        if (stTab) {
+          this.tab = stTab;
+          sessionStorage.removeItem('armaraos-settings-tab');
+        }
+      } catch (e) { /* ignore */ }
       this.loading = true;
       this.loadError = '';
       try {
@@ -344,6 +360,147 @@ function settingsPage() {
       return Object.keys(seen).sort();
     },
 
+    get isDesktopShell() {
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      return !!(core && typeof core.invoke === 'function');
+    },
+
+    get ainlDesktop() {
+      try {
+        return Alpine.store('ainl').desktop;
+      } catch (e) {
+        return null;
+      }
+    },
+
+    _setAinlDesktopStore(st) {
+      try {
+        Alpine.store('ainl').desktop = st;
+        Alpine.store('ainl').bootstrapping = !(st && st.ok);
+      } catch (e) { /* ignore */ }
+    },
+
+    async loadAinlDesktop(quiet) {
+      if (!this.isDesktopShell) return;
+      if (!quiet) {
+        this.ainlDesktopLoading = true;
+        this.ainlDesktopError = '';
+      }
+      try {
+        var st = await ArmaraosDesktopTauriInvoke('ainl_status');
+        this._setAinlDesktopStore(st);
+      } catch (e) {
+        if (!quiet) {
+          this.ainlDesktopError = e.message || String(e);
+          this._setAinlDesktopStore(null);
+        }
+      }
+      if (!quiet) this.ainlDesktopLoading = false;
+    },
+
+    async loadAinlVersions() {
+      if (!this.isDesktopShell) return;
+      this.ainlVersionLoading = true;
+      try {
+        var info = await ArmaraosDesktopTauriInvoke('ainl_check_versions');
+        this.ainlVersionInfo = info;
+      } catch (e) {
+        this.ainlVersionInfo = { pypi_error: e.message || String(e) };
+      }
+      this.ainlVersionCheckedAt = new Date().toISOString();
+      this.ainlVersionLoading = false;
+    },
+
+    formatAinlVersionCheckedAt() {
+      if (!this.ainlVersionCheckedAt) return '';
+      try {
+        return new Date(this.ainlVersionCheckedAt).toLocaleString();
+      } catch (e) {
+        return '';
+      }
+    },
+
+    async upgradeAinlFromPip() {
+      if (!this.isDesktopShell) return;
+      if (!confirm('Upgrade AINL in the app virtualenv from PyPI? This may take a minute.')) return;
+      this.ainlUpgradeLoading = true;
+      try {
+        var st = await ArmaraosDesktopTauriInvoke('upgrade_ainl_pip');
+        this._setAinlDesktopStore(st);
+        await this.loadAinlVersions();
+        if (st && st.ok) {
+          OpenFangToast.success(st.detail || 'AINL upgraded');
+        } else if (st) {
+          OpenFangToast.warn(st.detail || 'Upgrade finished with warnings');
+        }
+      } catch (e) {
+        OpenFangToast.error(e.message || String(e));
+      }
+      this.ainlUpgradeLoading = false;
+    },
+
+    async retryAinlBootstrap() {
+      if (!this.isDesktopShell) return;
+      this.ainlDesktopLoading = true;
+      this.ainlDesktopError = '';
+      try {
+        var st = await ArmaraosDesktopTauriInvoke('ensure_ainl_installed');
+        this._setAinlDesktopStore(st);
+        if (st && st.ok) {
+          OpenFangToast.success(st.detail || 'AINL is ready');
+        } else if (st) {
+          OpenFangToast.warn(st.detail || 'AINL bootstrap incomplete');
+        } else {
+          OpenFangToast.error('AINL bootstrap returned no data');
+        }
+      } catch (e) {
+        this.ainlDesktopError = e.message || String(e);
+        OpenFangToast.error(this.ainlDesktopError);
+      }
+      this.ainlDesktopLoading = false;
+    },
+
+    async retryAinlHostOnly() {
+      if (!this.isDesktopShell) return;
+      this.ainlDesktopLoading = true;
+      this.ainlDesktopError = '';
+      try {
+        var st = await ArmaraosDesktopTauriInvoke('ensure_armaraos_ainl_host');
+        await this.loadAinlDesktop();
+        if (st && st.ok) {
+          OpenFangToast.success(st.detail || 'Host integration updated');
+        } else if (st) {
+          OpenFangToast.warn(st.detail || 'Host integration issue');
+        }
+      } catch (e) {
+        this.ainlDesktopError = e.message || String(e);
+        OpenFangToast.error(this.ainlDesktopError);
+      }
+      this.ainlDesktopLoading = false;
+    },
+
+    async openAinlLibraryFolder() {
+      if (!this.isDesktopShell) return;
+      try {
+        await ArmaraosDesktopTauriInvoke('open_ainl_library_dir');
+      } catch (e) {
+        OpenFangToast.error(e.message || String(e));
+      }
+    },
+
+    /** Opens python.org/downloads in the system browser (whitelisted in Tauri). */
+    async openPythonDownloadsPage() {
+      if (!this.isDesktopShell) return;
+      try {
+        await ArmaraosDesktopTauriInvoke('open_external_url', {
+          url: 'https://www.python.org/downloads/',
+        });
+      } catch (e) {
+        window.open('https://www.python.org/downloads/', '_blank', 'noopener,noreferrer');
+      }
+    },
+
     providerAuthClass(p) {
       if (p.auth_status === 'configured') return 'auth-configured';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'auth-not-set';
@@ -403,7 +560,7 @@ function settingsPage() {
       try {
         var resp = await OpenFangAPI.post('/api/providers/' + encodeURIComponent(provider.id) + '/key', { key: key.trim() });
         if (resp && resp.switched_default) {
-          OpenFangToast.warning(resp.message || 'Default provider was switched to ' + provider.display_name);
+          OpenFangToast.warn(resp.message || 'Default provider was switched to ' + provider.display_name);
         } else {
           OpenFangToast.success('API key saved for ' + provider.display_name);
         }
@@ -505,7 +662,7 @@ function settingsPage() {
         if (result.reachable) {
           OpenFangToast.success(provider.display_name + ' URL saved &mdash; reachable (' + (result.latency_ms || '?') + 'ms)');
         } else {
-          OpenFangToast.warning(provider.display_name + ' URL saved but not reachable');
+          OpenFangToast.warn(provider.display_name + ' URL saved but not reachable');
         }
         await this.loadProviders();
       } catch(e) {

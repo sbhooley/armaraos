@@ -1,7 +1,7 @@
 {
   "name": "@openfang/whatsapp-gateway",
   "version": "0.1.0",
-  "description": "WhatsApp Web gateway for OpenFang — QR code login, bidirectional messaging via Baileys",
+  "description": "WhatsApp Web gateway for ArmaraOS — QR code login, bidirectional messaging via Baileys",
   "bin": {
     "openfang-whatsapp-gateway": "./index.js"
   },

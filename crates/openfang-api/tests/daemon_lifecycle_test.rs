@@ -116,6 +116,7 @@ async fn test_full_daemon_lifecycle() {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        ainl_register_hits: dashmap::DashMap::new(),
     });
 
     let app = Router::new()
@@ -242,6 +243,7 @@ async fn test_server_immediate_responsiveness() {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        ainl_register_hits: dashmap::DashMap::new(),
     });
 
     let app = Router::new()

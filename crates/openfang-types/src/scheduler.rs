@@ -131,6 +131,29 @@ pub enum CronAction {
         /// Timeout in seconds (10..=3600, default: 120).
         timeout_secs: Option<u64>,
     },
+    /// Run an AINL program via the `ainl` CLI (`ainl run <path>`).
+    ///
+    /// `program_path` must resolve under the user's `ainl-library` directory (see ArmaraOS desktop sync).
+    AinlRun {
+        /// Absolute path to `.ainl` or `.lang`, or path under `ainl-library`.
+        program_path: String,
+        /// Working directory for the subprocess (defaults to `ainl-library` root when unset).
+        #[serde(default)]
+        cwd: Option<String>,
+        /// `ainl` binary override (default: `ARMARAOS_AINL_BIN` or `ainl` on `PATH`).
+        #[serde(default)]
+        ainl_binary: Option<String>,
+        /// Timeout in seconds (10..=3600, default: 300).
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+        /// When true, runs `ainl run --json` and prefers structured JSON in delivery payloads.
+        #[serde(default)]
+        json_output: bool,
+        /// Optional initial runtime frame passed as `ainl run --frame-json` (learning graphs use
+        /// [`crate::learning_frame::LearningFrameV1`] JSON). Serialized size capped in validation.
+        #[serde(default)]
+        frame: Option<serde_json::Value>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +356,39 @@ impl CronJob {
                     // Workflows can run longer than agent turns (max 3600s = 1h)
                     if *t > 3600 {
                         return Err(format!("timeout_secs too large ({t}, max 3600)"));
+                    }
+                }
+            }
+            CronAction::AinlRun {
+                program_path,
+                timeout_secs,
+                frame,
+                ..
+            } => {
+                if program_path.is_empty() {
+                    return Err("ainl program_path must not be empty".into());
+                }
+                if program_path.len() > 4096 {
+                    return Err("ainl program_path too long".into());
+                }
+                if let Some(t) = timeout_secs {
+                    if *t < MIN_TIMEOUT_SECS {
+                        return Err(format!(
+                            "timeout_secs too small ({t}, min {MIN_TIMEOUT_SECS})"
+                        ));
+                    }
+                    if *t > 3600 {
+                        return Err(format!("timeout_secs too large ({t}, max 3600)"));
+                    }
+                }
+                if let Some(f) = frame {
+                    if !f.is_object() {
+                        return Err("ainl frame must be a JSON object when set".into());
+                    }
+                    let n = serde_json::to_string(f).map_err(|e| e.to_string())?.len();
+                    const MAX: usize = 256 * 1024;
+                    if n > MAX {
+                        return Err(format!("ainl frame JSON too large ({n} bytes, max {MAX})"));
                     }
                 }
             }
@@ -999,6 +1055,32 @@ mod tests {
             assert_eq!(workflow_id, "my-wf");
         } else {
             panic!("expected WorkflowRun variant");
+        }
+    }
+
+    #[test]
+    fn serde_ainl_run_tag() {
+        let action = CronAction::AinlRun {
+            program_path: "examples/hello.ainl".into(),
+            cwd: None,
+            ainl_binary: None,
+            timeout_secs: Some(60),
+            json_output: true,
+            frame: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"kind\":\"ainl_run\""));
+        let back: CronAction = serde_json::from_str(&json).unwrap();
+        if let CronAction::AinlRun {
+            program_path,
+            json_output,
+            ..
+        } = back
+        {
+            assert_eq!(program_path, "examples/hello.ainl");
+            assert!(json_output);
+        } else {
+            panic!("expected AinlRun variant");
         }
     }
 }

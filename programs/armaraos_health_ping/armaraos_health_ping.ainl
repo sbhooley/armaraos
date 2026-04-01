@@ -1,0 +1,7 @@
+# ArmaraOS OOTB health check: pure core ops only (no network, no filesystem adapters).
+# Materialized to ~/.armaraos/ainl-library/armaraos-programs/armaraos_health_ping/
+# Validate: ainl validate programs/armaraos_health_ping/armaraos_health_ping.ainl --strict
+
+armaraos_health_ping:
+  ok = core.ADD 1 0
+  out ok

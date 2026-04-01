@@ -1,0 +1,7 @@
+# Template: HTTP GET (replace URL with your API). Curated cron stays disabled by default.
+# Requires outbound HTTPS when executed.
+# Validate: ainl validate programs/armaraos_automation_stub/armaraos_automation_stub.ainl --strict
+
+armaraos_automation_stub:
+  page = http.GET "https://example.com/"
+  out page

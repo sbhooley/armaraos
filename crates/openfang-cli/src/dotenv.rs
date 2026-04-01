@@ -1,6 +1,6 @@
-//! Minimal `.env` file loader/saver for `~/.armaraos/.env` (or legacy `~/.openfang/.env`).
+//! Hand-rolled `.env` loader/saver under the ArmaraOS data directory (`~/.armaraos` by default;
+//! see [`openfang_kernel::config::openfang_home`]).
 //!
-//! No external crate needed — hand-rolled for simplicity.
 //! Format: `KEY=VALUE` lines, `#` comments, optional quotes.
 
 use std::collections::BTreeMap;
@@ -11,12 +11,12 @@ fn dotenv_openfang_home() -> Option<PathBuf> {
     Some(openfang_kernel::config::openfang_home())
 }
 
-/// Return the path to `~/.armaraos/.env` (or legacy `~/.openfang/.env`).
+/// Path to `.env` in the ArmaraOS home directory.
 pub fn env_file_path() -> Option<PathBuf> {
     dotenv_openfang_home().map(|h| h.join(".env"))
 }
 
-/// Load `~/.armaraos/.env` (or legacy `~/.openfang/.env`) and `secrets.env` into `std::env`.
+/// Load `.env` and `secrets.env` from the ArmaraOS home directory into `std::env`.
 ///
 /// System env vars take priority — existing vars are NOT overridden.
 /// `secrets.env` is loaded second so `.env` values take priority over secrets
@@ -28,7 +28,7 @@ pub fn load_dotenv() {
     load_env_file(secrets_env_path());
 }
 
-/// Return the path to `~/.armaraos/secrets.env` (or legacy `~/.openfang/secrets.env`).
+/// Path to `secrets.env` in the ArmaraOS home directory.
 pub fn secrets_env_path() -> Option<PathBuf> {
     dotenv_openfang_home().map(|h| h.join("secrets.env"))
 }
@@ -58,7 +58,7 @@ fn load_env_file(path: Option<PathBuf>) {
     }
 }
 
-/// Upsert a key in `~/.armaraos/.env` (or legacy `~/.openfang/.env`).
+/// Upsert a key in the ArmaraOS home `.env` file.
 ///
 /// Creates the file if missing. Sets 0600 permissions on Unix.
 /// Also sets the key in the current process environment.
@@ -80,7 +80,7 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove a key from `~/.armaraos/.env` (or legacy `~/.openfang/.env`).
+/// Remove a key from the ArmaraOS home `.env` file.
 ///
 /// Also removes it from the current process environment.
 pub fn remove_env_key(key: &str) -> Result<(), String> {
@@ -95,7 +95,7 @@ pub fn remove_env_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// List key names (without values) from `~/.armaraos/.env` (or legacy `~/.openfang/.env`).
+/// List key names (without values) from the ArmaraOS home `.env` file.
 #[allow(dead_code)]
 pub fn list_env_keys() -> Vec<String> {
     let path = match env_file_path() {

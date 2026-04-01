@@ -342,7 +342,7 @@ These are features where OpenFang can leapfrog OpenClaw.
 **Problem (was):** Changing `config.toml` requires daemon restart. OpenClaw reloads live.
 
 **What to do:**
-1. Watch `~/.openfang/config.toml` for changes (notify crate)
+1. Watch `~/.armaraos/config.toml` for changes (notify crate)
 2. On change: re-parse, diff, apply only changed sections
 3. Log what was reloaded
 4. UI notification: "Config reloaded"

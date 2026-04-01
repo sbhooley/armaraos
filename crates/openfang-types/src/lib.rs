@@ -10,6 +10,7 @@ pub mod comms;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod learning_frame;
 pub mod manifest_signing;
 pub mod media;
 pub mod memory;

@@ -31,8 +31,10 @@ Complete reference for `config.toml`, covering every configurable field in the O
 OpenFang reads its configuration from a single TOML file:
 
 ```
-~/.openfang/config.toml
+~/.armaraos/config.toml
 ```
+
+Default location shown above; **`ARMARAOS_HOME`** / **`OPENFANG_HOME`** override the data root. Older installs may still use **`~/.openfang/`** until migrated—see [`data-directory.md`](data-directory.md).
 
 On Windows, `~` resolves to `C:\Users\<username>`. If the home directory cannot be determined, the system temp directory is used as a fallback.
 
@@ -50,7 +52,7 @@ On Windows, `~` resolves to `C:\Users\<username>`. If the home directory cannot 
 The simplest working configuration only needs an LLM provider API key set as an environment variable. With no config file at all, OpenFang boots with Anthropic as the default provider:
 
 ```toml
-# ~/.openfang/config.toml
+# ~/.armaraos/config.toml
 # Minimal: just override the model if you want something other than defaults.
 # Set ANTHROPIC_API_KEY in your environment.
 
@@ -80,8 +82,8 @@ api_key_env = ""
 # ============================================================
 
 # --- Top-level fields ---
-home_dir = "~/.openfang"             # OpenFang home directory
-data_dir = "~/.openfang/data"        # SQLite databases and data files
+home_dir = "~/.armaraos"             # ArmaraOS home directory
+data_dir = "~/.armaraos/data"        # SQLite databases and data files
 log_level = "info"                   # trace | debug | info | warn | error
 api_listen = "127.0.0.1:50051"      # HTTP/WS API bind address
 network_enabled = false              # Enable OFP peer-to-peer network
@@ -111,7 +113,7 @@ api_key_env = "GROQ_API_KEY"
 
 # --- Memory ---
 [memory]
-# sqlite_path = "~/.openfang/data/openfang.db"  # Auto-resolved if omitted
+# sqlite_path = "~/.armaraos/data/openfang.db"  # Auto-resolved if omitted
 embedding_model = "all-MiniLM-L6-v2"
 consolidation_threshold = 10000
 decay_rate = 0.1
@@ -224,8 +226,8 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `home_dir` | path | `~/.openfang` | OpenFang home directory. Stores config, agents, skills. |
-| `data_dir` | path | `~/.openfang/data` | Directory for SQLite databases and persistent data. |
+| `home_dir` | path | `~/.armaraos` | OpenFang home directory. Stores config, agents, skills. |
+| `data_dir` | path | `~/.armaraos/data` | Directory for SQLite databases and persistent data. |
 | `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 | `api_listen` | string | `"127.0.0.1:50051"` | Bind address for the HTTP/WebSocket/SSE API server. |
 | `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |

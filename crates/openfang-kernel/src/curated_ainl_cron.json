@@ -1,0 +1,68 @@
+[
+  {
+    "name": "armaraos-ainl-health-weekly",
+    "relative_path": "armaraos-programs/armaraos_health_ping/armaraos_health_ping.ainl",
+    "cron_expr": "0 9 * * 7",
+    "timeout_secs": 90,
+    "enabled": true,
+    "json_output": true
+  },
+  {
+    "name": "armaraos-learning-frame-echo-quarterly",
+    "relative_path": "armaraos-programs/learning-frame-echo/learning_frame_echo.ainl",
+    "cron_expr": "0 12 1 */3 *",
+    "timeout_secs": 120,
+    "enabled": true,
+    "json_output": true,
+    "frame": {
+      "frame_version": "1",
+      "op": "skill_mint",
+      "run_id": "curated-cron-learning-frame-echo",
+      "intent": "Quarterly learning-frame echo smoke",
+      "outcome": "ok",
+      "episode": "Scheduled validation run for learning frame handling.",
+      "tier": "unattended"
+    }
+  },
+  {
+    "name": "armaraos-skill-mint-stub-monthly",
+    "relative_path": "armaraos-programs/skill-mint-stub/skill_mint_stub.ainl",
+    "cron_expr": "0 10 2 * *",
+    "timeout_secs": 120,
+    "enabled": false,
+    "json_output": true,
+    "frame": {
+      "frame_version": "1",
+      "op": "skill_mint",
+      "run_id": "curated-cron-skill-mint-stub",
+      "intent": "Monthly skill_mint stub template run",
+      "outcome": "ok",
+      "episode": "Stub graph run; host still owns full SKILL Meta for interactive flows.",
+      "tier": "unattended"
+    }
+  },
+  {
+    "name": "armaraos-automation-stub-weekly",
+    "relative_path": "armaraos-programs/armaraos_automation_stub/armaraos_automation_stub.ainl",
+    "cron_expr": "0 11 * * 7",
+    "timeout_secs": 90,
+    "enabled": false,
+    "json_output": true
+  },
+  {
+    "name": "ainl-upstream-hello-weekly",
+    "relative_path": "examples/compact/hello_compact.ainl",
+    "cron_expr": "0 9 * * 7",
+    "timeout_secs": 120,
+    "enabled": false,
+    "json_output": false
+  },
+  {
+    "name": "ainl-upstream-examples-hello-monthly",
+    "relative_path": "examples/hello.ainl",
+    "cron_expr": "0 0 1 * *",
+    "timeout_secs": 180,
+    "enabled": false,
+    "json_output": true
+  }
+]

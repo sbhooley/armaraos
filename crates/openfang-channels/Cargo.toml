@@ -3,7 +3,7 @@ name = "openfang-channels"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Channel Bridge Layer — pluggable messaging integrations for OpenFang"
+description = "Channel Bridge Layer — pluggable messaging integrations for ArmaraOS"
 
 [dependencies]
 openfang-types = { path = "../openfang-types" }

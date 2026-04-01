@@ -1,4 +1,37 @@
 <body x-data="app" :data-theme="theme">
+<script>
+(function () {
+  try {
+    var mode = null;
+    var q = new URLSearchParams(window.location.search || '');
+    var fromUrl = q.get('armaraos_theme');
+    if (fromUrl === 'light' || fromUrl === 'dark' || fromUrl === 'system') {
+      mode = fromUrl;
+      try {
+        localStorage.setItem('armaraos-theme-mode', fromUrl);
+        localStorage.setItem('openfang-theme-mode', fromUrl);
+      } catch (e0) {}
+      try {
+        if (window.history && window.history.replaceState) {
+          var u = new URL(window.location.href);
+          u.searchParams.delete('armaraos_theme');
+          var tail = u.pathname + u.search + (u.hash || '');
+          window.history.replaceState({}, '', tail);
+        }
+      } catch (e1) {}
+    }
+    if (!mode) {
+      mode = localStorage.getItem('armaraos-theme-mode') || localStorage.getItem('openfang-theme-mode') || 'dark';
+    }
+    var t = mode === 'system'
+      ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+      : mode;
+    document.body.setAttribute('data-theme', t);
+  } catch (e) {
+    document.body.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
 
 <!-- Auth Prompt (API Key or Username/Password) -->
 <div x-show="$store.app.showAuthPrompt" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" x-data="{ apiKeyInput: '', loginUser: '', loginPass: '' }">
@@ -18,7 +51,7 @@
       <div>
         <h3 style="margin:0 0 0.5rem;font-size:1.1rem">API Key Required</h3>
         <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 0.5rem">This instance requires an API key. Enter the key from your <code>config.toml</code>.</p>
-        <p style="color:var(--text-dim,#666);font-size:0.75rem;margin:0 0 1rem">Add <code style="color:var(--accent-light,#a78bfa);background:var(--bg,#111);padding:1px 4px;border-radius:2px">api_key = "your-key"</code> at the <strong>top</strong> of <code>~/.openfang/config.toml</code> (not under any [section]).</p>
+        <p style="color:var(--text-dim,#666);font-size:0.75rem;margin:0 0 1rem">Add <code style="color:var(--accent-light,#a78bfa);background:var(--bg,#111);padding:1px 4px;border-radius:2px">api_key = "your-key"</code> at the <strong>top</strong> of <code>~/.armaraos/config.toml</code> (legacy <code>~/.openfang/config.toml</code> also supported; not under any [section]).</p>
         <input type="password" x-model="apiKeyInput" placeholder="Enter API key..." @keydown.enter="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
         <button @click="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">Unlock Dashboard</button>
       </div>
@@ -32,9 +65,9 @@
     <div class="sidebar-header">
       <div class="sidebar-header-text">
         <div class="sidebar-logo">
-          <img src="/logo.png" alt="OpenFang" width="28" height="28">
+          <img src="/logo.png" alt="ArmaraOS" width="28" height="28">
           <div>
-            <h1>OPENFANG</h1>
+            <h1>ARMARAOS</h1>
             <div class="version" x-text="'v' + version"></div>
           </div>
         </div>
@@ -53,6 +86,7 @@
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState === 'reconnecting'" class="conn-reconnecting">Reconnecting...</span>
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState !== 'reconnecting'" x-text="'disconnected' + ($store.app.lastError ? ' — ' + $store.app.lastError : '')">disconnected</span>
       <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" x-text="wsConnected ? 'WS' : 'HTTP'" x-show="connected"></span>
+      <span class="conn-badge sidebar-label sse" title="Kernel events (live)" x-show="connected && $store.kernelEvents && $store.kernelEvents.connected" x-text="'SSE'"></span>
     </div>
 
     <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
@@ -117,6 +151,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
               <span class="nav-label">Comms</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'network' }" @click="navigate('network')" :aria-current="page === 'network' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
+              <span class="nav-label">Network</span>
+            </a>
           </div>
         </template>
       </div>
@@ -160,6 +198,10 @@
             <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg></span>
               <span class="nav-label">Hands</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'ainl-library' }" @click="navigate('ainl-library')" :aria-current="page === 'ainl-library' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h8"/></svg></span>
+              <span class="nav-label">AINL Library</span>
             </a>
           </div>
         </template>
@@ -217,6 +259,10 @@
             </button>
           </div>
         </div>
+        <p class="text-xs text-dim" x-show="!loading && !loadError && $store.kernelEvents && $store.kernelEvents.last" style="margin:-6px 0 14px;line-height:1.5">
+          <span class="text-dim">Last kernel event:</span>
+          <span x-text="formatLastKernelEvent($store.kernelEvents.last)"></span>
+        </p>
         <div class="page-body">
           <!-- Loading skeleton state -->
           <div x-show="loading" style="animation:fadeIn 0.2s">
@@ -268,7 +314,7 @@
           </div>
           <!-- Onboarding banner -->
           <div class="onboarding-banner" x-show="!loading && !loadError && $store.app.showOnboarding && checklistDismissed">
-            <h3>Welcome to OpenFang</h3>
+            <h3>Welcome to ArmaraOS</h3>
             <p style="font-size:12px;color:var(--text-dim)">Get started quickly with the guided Setup Wizard, or configure manually:</p>
             <div class="flex gap-2">
               <button class="btn btn-primary" @click="location.hash='wizard'">Launch Setup Wizard</button>
@@ -624,7 +670,10 @@
                   <template x-for="(msg, $index) in filteredMessages" :key="msg.id">
                     <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '')">
                       <div class="message-avatar" x-show="msg.role === 'agent'">
-                        <img src="/logo.png" alt="OpenFang">
+                        <img src="/assets/armaraos-logo.png" alt="ArmaraOS">
+                      </div>
+                      <div class="message-avatar" x-show="msg.role === 'user'">
+                        <img src="/assets/armaraos-logo.png" alt="You">
                       </div>
                       <div class="message-body">
                         <!-- Copy button on hover -->
@@ -755,7 +804,7 @@
                   <span class="recording-dot"></span>
                   <span class="text-xs" style="color:var(--danger)" x-text="formatRecordingTime()"></span>
                 </div>
-                <textarea id="msg-input" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message OpenFang... (/ for commands)'"
+                <textarea id="msg-input" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message Armara... (/ for commands)'"
                           @keydown.enter.prevent="if(!$event.isComposing && $event.keyCode !== 229 && !$event.shiftKey){if(showModelPicker && filteredModelPicker.length){pickModel(filteredModelPicker[modelPickerIdx].id)}else if(showSlashMenu && filteredSlashCommands.length){executeSlashCommand(filteredSlashCommands[slashIdx].cmd)}else{sendMessage()}}"
                           @keydown.escape="showSlashMenu = false; showModelPicker = false"
                           @keydown.arrow-up.prevent="if(showModelPicker){modelPickerIdx = Math.max(0, modelPickerIdx - 1)}else if(showSlashMenu){slashIdx = Math.max(0, slashIdx - 1)}"
@@ -1681,7 +1730,7 @@
         <div class="page-header">
           <h2>Scheduler</h2>
           <div class="flex gap-2">
-            <button class="btn btn-primary btn-sm" x-show="tab === 'jobs'" @click="showCreateForm = true">+ New Job</button>
+            <button class="btn btn-primary btn-sm" x-show="tab === 'jobs'" @click="resetNewJobForm(); showCreateForm = true">+ New Job</button>
           </div>
         </div>
         <div class="tabs" role="tablist">
@@ -1713,7 +1762,38 @@
                   Create cron-based scheduled jobs that send messages to agents on a recurring schedule.
                   Use cron expressions like <code style="color:var(--accent)">*/5 * * * *</code> (every 5 min) or
                   <code style="color:var(--accent)">0 9 * * 1-5</code> (weekdays at 9am). You can also run any job
-                  manually with the "Run Now" button.
+                  manually with the "Run Now" button. Advanced jobs can run workflows or
+                  <span class="text-dim">AINL</span> programs from your synced library (see below).
+                </div>
+              </div>
+
+              <div class="card mb-4" style="border-left:3px solid #3d7a5a">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div style="min-width:200px">
+                    <div class="font-bold" style="font-size:13px;margin-bottom:4px">AINL program library</div>
+                    <div class="text-xs text-dim mb-2" style="line-height:1.5">
+                      <strong>armaraos-programs/</strong> is shipped with the kernel (see docs/ootb-ainl.md). Upstream <code>demo/</code>, <code>examples/</code>, <code>intelligence/</code> are mirrored separately. Default OOTB job: <strong>armaraos-ainl-health-weekly</strong> (core-only ping). Enable <strong>armaraos-learning-frame-echo-quarterly</strong> in the table below when you want a learning-frame smoke run.
+                    </div>
+                    <div class="text-sm text-dim" style="line-height:1.5">
+                      <span x-show="ainlLibLoading">Scanning synced programs…</span>
+                      <span x-show="!ainlLibLoading && ainlLibError" x-text="'Library: ' + ainlLibError"></span>
+                      <span x-show="!ainlLibLoading && !ainlLibError && ainlLibTotal !== null">
+                        <strong style="color:var(--text)" x-text="ainlLibTotal"></strong>
+                        <span x-text="' .ainl / .lang file' + (ainlLibTotal === 1 ? '' : 's')"></span>
+                        under <code class="text-xs" style="color:var(--accent)" :title="ainlLibRoot" x-text="ainlLibRootShort"></code>
+                        <span x-show="ainlCuratedLen > 0" class="text-dim"> · <span x-text="ainlCuratedLen"></span> curated cron template(s)</span>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="flex flex-wrap gap-2 items-center">
+                    <a class="btn btn-ghost btn-sm" href="/api/ainl/library" target="_blank" rel="noopener noreferrer">View library JSON</a>
+                    <a class="btn btn-ghost btn-sm" href="/api/ainl/library/curated" target="_blank" rel="noopener noreferrer">Curated catalog</a>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="registerCuratedAinl()" :disabled="ainlRegLoading || ainlLibLoading" title="Idempotent: adds missing curated jobs from the embedded catalog">
+                      <span x-show="!ainlRegLoading">Register curated cron</span>
+                      <span x-show="ainlRegLoading">…</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="loadAinlLibrary()" :disabled="ainlLibLoading">Refresh</button>
+                  </div>
                 </div>
               </div>
 
@@ -1723,6 +1803,7 @@
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Type</th>
                       <th>Schedule</th>
                       <th>Agent</th>
                       <th>Status</th>
@@ -1738,6 +1819,7 @@
                           <span class="font-bold" x-text="job.name || job.description || '(unnamed)'"></span>
                           <div class="text-xs text-dim" x-show="job.message" x-text="(job.message || '').substring(0, 60) + ((job.message || '').length > 60 ? '...' : '')" :title="job.message"></div>
                         </td>
+                        <td><span class="badge" :class="job.actionKindClass || 'badge-dim'" style="font-size:10px" x-text="job.actionKindLabel || '—'"></span></td>
                         <td>
                           <code style="font-size:11px;color:var(--accent)" x-text="job.cron"></code>
                           <div class="text-xs text-dim" x-text="describeCron(job.cron)"></div>
@@ -1768,7 +1850,7 @@
               <div class="empty-state" x-show="!jobs.length">
                 <h4>No scheduled jobs</h4>
                 <p class="hint">Create a cron job to run agents on a recurring schedule. Jobs are stored persistently and survive restarts.</p>
-                <button class="btn btn-primary mt-4" @click="showCreateForm = true">+ Create Scheduled Job</button>
+                <button class="btn btn-primary mt-4" @click="resetNewJobForm(); showCreateForm = true">+ Create Scheduled Job</button>
               </div>
             </div>
 
@@ -1805,7 +1887,7 @@
                   <div class="form-group">
                     <label>Target Agent</label>
                     <select class="form-select" x-model="newJob.agent_id">
-                      <option value="">Any available agent</option>
+                      <option value="">Default (first agent)</option>
                       <template x-for="a in availableAgents" :key="a.id">
                         <option :value="a.id" x-text="a.name + ' (' + (a.model_provider || 'unknown') + ':' + (a.model_name || 'unknown') + ')'"></option>
                       </template>
@@ -1814,9 +1896,42 @@
                   </div>
 
                   <div class="form-group">
+                    <label>Job type</label>
+                    <select class="form-select" x-model="newJob.actionKind">
+                      <option value="agent_turn">Agent message (prompt)</option>
+                      <option value="ainl_run">AINL program (ainl-library)</option>
+                      <option value="workflow_run">Workflow</option>
+                    </select>
+                    <div class="text-xs text-dim mt-1" x-show="newJob.actionKind === 'agent_turn'">Sends a user message to the agent when the schedule fires.</div>
+                    <div class="text-xs text-dim mt-1" x-show="newJob.actionKind === 'ainl_run'">Runs <code>ainl run</code> under <code>~/.armaraos/ainl-library</code>; path is relative to that root (e.g. <code>armaraos-programs/armaraos_health_ping/armaraos_health_ping.ainl</code> or <code>examples/compact/hello_compact.ainl</code> after upstream sync).</div>
+                    <div class="text-xs text-dim mt-1" x-show="newJob.actionKind === 'workflow_run'">Runs a workflow by UUID or name from the Workflows page.</div>
+                  </div>
+
+                  <div class="form-group" x-show="newJob.actionKind === 'agent_turn'">
                     <label>Message to Send</label>
                     <textarea class="form-textarea" x-model="newJob.message" placeholder="Generate and email the daily status report..." rows="3"></textarea>
                     <div class="text-xs text-dim mt-1">The message sent to the agent each time this job runs.</div>
+                  </div>
+
+                  <div class="form-group" x-show="newJob.actionKind === 'ainl_run'">
+                    <label>Program path</label>
+                    <input class="form-input" x-model="newJob.ainlPath" placeholder="examples/hello.ainl" style="font-family:monospace">
+                    <div class="text-xs text-dim mt-1">Relative to ainl-library, e.g. <code>armaraos-programs/armaraos_health_ping/armaraos_health_ping.ainl</code> or <code>examples/compact/hello_compact.ainl</code></div>
+                    <label class="mt-2 block">Timeout (seconds, optional)</label>
+                    <input class="form-input" type="number" min="10" max="3600" x-model="newJob.ainlTimeout" placeholder="300">
+                    <label class="flex items-center gap-2 mt-2">
+                      <input type="checkbox" x-model="newJob.ainlJsonOutput">
+                      <span class="text-sm">Use <code>ainl run --json</code> (structured output for webhooks)</span>
+                    </label>
+                  </div>
+
+                  <div class="form-group" x-show="newJob.actionKind === 'workflow_run'">
+                    <label>Workflow ID or name</label>
+                    <input class="form-input" x-model="newJob.wfId" placeholder="uuid or name">
+                    <label class="mt-2 block">Initial input (optional)</label>
+                    <textarea class="form-textarea" x-model="newJob.wfInput" rows="2" placeholder=""></textarea>
+                    <label class="mt-2 block">Timeout (seconds, optional)</label>
+                    <input class="form-input" type="number" min="10" max="3600" x-model="newJob.wfTimeout" placeholder="120">
                   </div>
 
                   <div class="form-group">
@@ -2192,7 +2307,7 @@
         <div class="page-body" x-init="loadSkills()">
           <div class="info-card">
             <h4>Skills &amp; Ecosystem</h4>
-            <p>Skills extend your agents with new capabilities. OpenFang supports the <strong>OpenClaw/ClawHub</strong> ecosystem (3,000+ community skills) plus local skills.</p>
+            <p>Skills extend your agents with new capabilities. ArmaraOS supports the <strong>OpenClaw/ClawHub</strong> ecosystem (3,000+ community skills) plus local skills.</p>
             <ul>
               <li><strong>Prompt-only</strong> &mdash; inject context and instructions into the agent's system prompt (most ClawHub skills)</li>
               <li><strong>Python / Node.js</strong> &mdash; executable tools that agents can call during conversations</li>
@@ -2357,7 +2472,7 @@
           <div x-show="tab === 'mcp'">
             <div class="info-card">
               <h4>MCP Servers (Model Context Protocol)</h4>
-              <p>MCP servers provide external tools to your agents &mdash; GitHub, filesystem, databases, APIs, and more. OpenFang is compatible with all OpenClaw MCP servers.</p>
+              <p>MCP servers provide external tools to your agents &mdash; GitHub, filesystem, databases, APIs, and more. ArmaraOS is compatible with all OpenClaw MCP servers.</p>
               <p class="mt-2" style="font-size:0.8rem;color:var(--text-dim)">Configure MCP servers in your <code>config.toml</code> under <code>[mcp_servers]</code>.</p>
             </div>
             <div x-show="mcpLoading" class="loading-state"><div class="spinner"></div><span>Loading MCP servers...</span></div>
@@ -2420,7 +2535,7 @@ timeout_secs = 30
 type = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
-                <p class="hint mt-2" style="font-size:0.75rem">OpenFang supports all OpenClaw-compatible MCP servers.</p>
+                <p class="hint mt-2" style="font-size:0.75rem">ArmaraOS supports all OpenClaw-compatible MCP servers.</p>
               </div>
             </div>
           </div>
@@ -3216,13 +3331,14 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'budget' }" @click="tab = 'budget'">Budget</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'">System</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'migration' }" @click="tab = 'migration'">Migration</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'ainl' }" @click="tab = 'ainl'; loadAinlDesktop(); loadAinlVersions()" x-show="isDesktopShell">AINL</div>
           </div>
 
           <!-- Providers tab -->
           <div x-show="tab === 'providers'">
             <div class="info-card">
               <h4>LLM Providers</h4>
-              <p>OpenFang supports 12 LLM providers out of the box. Configure API keys to unlock models from each provider. Set environment variables and restart, or use the form below to save keys directly.</p>
+              <p>ArmaraOS supports 12 LLM providers out of the box. Configure API keys to unlock models from each provider. Set environment variables and restart, or use the form below to save keys directly.</p>
             </div>
             <div class="card-grid">
               <template x-for="p in providers" :key="p.id">
@@ -3441,7 +3557,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div x-show="tab === 'config'">
             <div class="info-card">
               <h4>Runtime Configuration</h4>
-              <p>View and edit the active configuration. Changes are applied immediately. For advanced edits, modify <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">config.toml</code> in your OpenFang data directory.</p>
+              <p>View and edit the active configuration. Changes are applied immediately. For advanced edits, modify <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">config.toml</code> in your ArmaraOS data directory.</p>
             </div>
 
             <!-- Dynamic config form (when schema is available) -->
@@ -3512,7 +3628,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="security-hero-shield"><svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
               <div>
                 <div class="security-hero-title">Defense in Depth</div>
-                <div class="security-hero-desc">OpenFang implements 15 layered security features across the entire stack &mdash; from network ingress to agent sandboxing to cryptographic audit trails. Core protections cannot be disabled.</div>
+                <div class="security-hero-desc">ArmaraOS implements 15 layered security features across the entire stack &mdash; from network ingress to agent sandboxing to cryptographic audit trails. Core protections cannot be disabled.</div>
               </div>
             </div>
 
@@ -3629,7 +3745,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="info-card" style="display:flex;justify-content:space-between;align-items:center">
               <div>
                 <h4>Peer Networking (OFP)</h4>
-                <p>Link multiple OpenFang instances into a mesh via the OFP wire protocol.</p>
+                <p>Link multiple ArmaraOS instances into a mesh via the OFP wire protocol.</p>
               </div>
               <span class="badge" :class="netStatus && netStatus.enabled ? 'badge-success' : 'badge-muted'" x-text="netStatus && netStatus.enabled ? 'Enabled' : 'Disabled'" style="font-size:12px;padding:4px 10px"></span>
             </div>
@@ -3673,7 +3789,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <!-- A2A External Agents -->
             <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
               <h4 style="margin-bottom:8px">A2A External Agents</h4>
-              <p class="text-xs text-dim mb-2">Discovered agents on other OpenFang/A2A-compatible instances that this node can communicate with.</p>
+              <p class="text-xs text-dim mb-2">Discovered agents on other ArmaraOS/A2A-compatible instances that this node can communicate with.</p>
               <div class="flex gap-2 mb-3">
                 <input class="form-input" style="flex:1" placeholder="https://remote-agent.example.com" x-model="a2aDiscoverUrl">
                 <button class="btn btn-primary btn-sm" @click="discoverA2a()" :disabled="a2aDiscovering">
@@ -3846,7 +3962,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="card mb-4" style="border-left:3px solid var(--accent)" x-show="migStep === 'intro'">
               <div class="font-bold" style="font-size:14px;margin-bottom:6px">Migrate from OpenClaw</div>
               <div class="text-sm text-dim" style="line-height:1.7">
-                Seamlessly transfer your agents, memory, workspace files, and channel configurations from OpenClaw to OpenFang.
+                Seamlessly transfer your agents, memory, workspace files, and channel configurations from OpenClaw to ArmaraOS.
               </div>
               <ul class="text-sm text-dim" style="margin:8px 0 0 16px;line-height:1.8">
                 <li>Converts agent.yaml to agent.toml with proper capabilities</li>
@@ -3870,8 +3986,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <input class="form-input" type="text" x-model="sourcePath" placeholder="~/.openclaw" style="font-family:monospace;font-size:12px">
               </div>
               <div class="form-group mt-2">
-                <label>OpenFang Target Directory</label>
-                <input class="form-input" type="text" x-model="targetPath" placeholder="~/.openfang (default)" style="font-family:monospace;font-size:12px">
+                <label>ArmaraOS Target Directory</label>
+                <input class="form-input" type="text" x-model="targetPath" placeholder="~/.armaraos (default)" style="font-family:monospace;font-size:12px">
               </div>
               <div class="flex gap-2 mt-4">
                 <button class="btn btn-primary" @click="scanPath()" :disabled="!sourcePath || scanning">
@@ -3929,6 +4045,71 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="flex gap-2 mt-4">
                 <button class="btn btn-primary" @click="migStep = 'manual'">Enter Path Manually</button>
                 <button class="btn btn-ghost" @click="migStep = 'intro'">Back</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- AINL tab (Tauri desktop shell only) -->
+          <div x-show="tab === 'ainl' && isDesktopShell">
+            <div class="card mb-4" style="border-left:3px solid var(--accent)">
+              <div class="font-bold" style="font-size:14px;margin-bottom:6px">AINL (desktop bootstrap)</div>
+              <p class="text-sm text-dim" style="line-height:1.7;margin-bottom:12px">
+                On launch, the desktop app <strong>automatically</strong> creates the internal venv and installs AINL (you do not need to open this tab). Release builds can ship <strong>portable Python</strong> under <code style="font-size:11px">resources/python/</code> so most users never install Python. If setup fails, your Mac or PC may only have an <strong>older</strong> Python (for example 3.9): AINL needs <strong>3.10 or newer</strong>. Use <strong>Get Python</strong> below for a one-click link to the official installer, then restart the app. Dev builds use Python 3.10+ from PATH or <code style="font-size:11px">ARMARAOS_PYTHON</code>. It writes <code style="font-size:11px">~/.armaraos/config.toml</code> <code style="font-size:11px">ainl-mcp</code> like <code style="font-size:11px">ainl install armaraos</code>. PyPI <code style="font-size:11px">ainativelang</code> 1.3+ require <strong>Python 3.10+</strong> in the venv; if setup fails, use <strong>Bootstrap AINL</strong> or set <code style="font-size:11px">ARMARAOS_PYTHON</code>. Set <code style="font-size:11px">ARMARAOS_AINL_AUTO_BOOTSTRAP=0</code> to skip automatic install on startup. After AINL is ready, it also pulls <code style="font-size:11px">demo/</code>, <code style="font-size:11px">examples/</code>, and <code style="font-size:11px">intelligence/</code> from <a href="https://github.com/sbhooley/ainativelang" target="_blank" rel="noopener noreferrer">sbhooley/ainativelang</a> (mirrored to <code style="font-size:11px">~/.armaraos/ainl-library/</code>). Set <code style="font-size:11px">ARMARAOS_AINL_LIBRARY_SYNC=0</code> to disable. First-time PyPI installs need network access; air-gapped builds should bundle the wheel under <code style="font-size:11px">resources/ainl/</code> or point pip at an internal index (<code style="font-size:11px">PIP_INDEX_URL</code>).
+              </p>
+              <div x-show="ainlDesktopLoading" class="text-sm text-dim">Checking AINL…</div>
+              <div x-show="!ainlDesktopLoading && $store.ainl && $store.ainl.bootstrapping && (!ainlDesktop || !ainlDesktop.ok)" class="text-sm text-dim mb-2">Installing or updating AINL in the background (runs automatically when the app starts).</div>
+              <div x-show="ainlDesktopError && !ainlDesktopLoading" class="text-sm" style="color:var(--error)" x-text="ainlDesktopError"></div>
+
+              <div class="mt-4 p-3 rounded-lg" style="background:var(--bg-elevated,#1a1a24);border:1px solid var(--border,#333)" x-show="isDesktopShell">
+                <div class="text-sm font-medium mb-2">PyPI &amp; GitHub</div>
+                <div x-show="ainlVersionLoading" class="text-sm text-dim">Checking versions…</div>
+                <template x-if="ainlVersionInfo && !ainlVersionLoading">
+                  <div class="text-sm space-y-1">
+                    <div><span class="text-dim">Installed (pip):</span> <span x-text="ainlVersionInfo.installed_version || '—'"></span></div>
+                    <div><span class="text-dim">Latest on PyPI:</span> <span x-text="ainlVersionInfo.pypi_latest_version || '—'"></span></div>
+                    <div x-show="ainlVersionInfo.upgrade_available"><span class="badge" style="background:var(--warning-bg,#422);color:var(--warning,#fa0)">Update available</span></div>
+                    <div><span class="text-dim">GitHub main:</span> <code style="font-size:11px" x-text="ainlVersionInfo.github_main_sha || '—'"></code></div>
+                    <div x-show="ainlVersionInfo.pypi_error" class="text-xs" style="color:var(--error)" x-text="'PyPI: ' + ainlVersionInfo.pypi_error"></div>
+                    <div x-show="ainlVersionInfo.github_error" class="text-xs" style="color:var(--error)" x-text="'GitHub: ' + ainlVersionInfo.github_error"></div>
+                  </div>
+                </template>
+                <div x-show="ainlVersionCheckedAt" class="text-xs text-dim mt-2" x-text="'Last checked: ' + formatAinlVersionCheckedAt()"></div>
+                <div class="flex flex-wrap gap-2 mt-3">
+                  <button type="button" class="btn btn-ghost btn-sm" @click="loadAinlVersions()" :disabled="ainlVersionLoading || ainlUpgradeLoading">Check versions</button>
+                  <button type="button" class="btn btn-primary btn-sm" @click="upgradeAinlFromPip()" :disabled="ainlUpgradeLoading || ainlVersionLoading || !ainlDesktop || !ainlDesktop.venv_exists">Upgrade from PyPI</button>
+                </div>
+              </div>
+
+              <template x-if="ainlDesktop && !ainlDesktopLoading">
+                <div class="text-sm" style="line-height:1.8">
+                  <div><span class="text-dim">Ready:</span> <span x-text="ainlDesktop.ok ? 'yes' : 'no'"></span></div>
+                  <div><span class="text-dim">Venv + Python:</span> <span x-text="ainlDesktop.venv_exists ? 'yes' : 'no'"></span></div>
+                  <div x-show="ainlDesktop.venv_python_version"><span class="text-dim">Venv Python:</span> <span x-text="ainlDesktop.venv_python_version"></span> <span class="badge" style="background:var(--warning-bg,#422);color:var(--warning,#fa0)" x-show="ainlDesktop.venv_python_version && !ainlDesktop.venv_python_meets_ainl">needs 3.10+</span></div>
+                  <div><span class="text-dim">ainl CLI:</span> <span x-text="ainlDesktop.ainl_ok ? 'ok' : 'missing'"></span></div>
+                  <div><span class="text-dim">ainl-mcp:</span> <span x-text="ainlDesktop.ainl_mcp_ok ? 'ok' : 'missing'"></span></div>
+                  <div><span class="text-dim">Portable Python bundled:</span> <span x-text="ainlDesktop.portable_python_bundled ? 'yes' : 'no'"></span></div>
+                  <div><span class="text-dim">Bundled wheel present:</span> <span x-text="ainlDesktop.wheel_found ? 'yes' : 'no'"></span></div>
+                  <div x-show="ainlDesktop.wheel_path"><span class="text-dim">Wheel path:</span> <code style="font-size:11px" x-text="ainlDesktop.wheel_path"></code></div>
+                  <div x-show="ainlDesktop.install_source"><span class="text-dim">Install source:</span> <span x-text="ainlDesktop.install_source"></span></div>
+                  <div x-show="ainlDesktop.armaraos_host_ok !== undefined && ainlDesktop.armaraos_host_ok !== null"><span class="text-dim">Host integration:</span> <span x-text="ainlDesktop.armaraos_host_ok ? 'ok' : 'issue'"></span></div>
+                  <div class="text-dim mt-2" style="font-size:12px" x-show="ainlDesktop.armaraos_host_detail" x-text="ainlDesktop.armaraos_host_detail"></div>
+                  <div class="text-dim mt-2" style="font-size:12px" x-show="ainlDesktop.detail" x-text="ainlDesktop.detail"></div>
+                  <div x-show="ainlDesktop.library_sync_ok !== undefined && ainlDesktop.library_sync_ok !== null" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+                    <div class="font-bold" style="font-size:12px;margin-bottom:4px">Upstream AINL library</div>
+                    <div><span class="text-dim">Synced:</span> <span x-text="ainlDesktop.library_sync_ok ? 'yes' : 'no'"></span></div>
+                    <div x-show="ainlDesktop.upstream_commit"><span class="text-dim">Commit:</span> <code style="font-size:11px" x-text="ainlDesktop.upstream_commit"></code></div>
+                    <div x-show="ainlDesktop.library_mirror"><span class="text-dim">Mirror:</span> <code style="font-size:11px;word-break:break-all" x-text="ainlDesktop.library_mirror"></code></div>
+                    <div class="text-dim mt-1" style="font-size:11px" x-show="ainlDesktop.library_sync_detail" x-text="ainlDesktop.library_sync_detail"></div>
+                  </div>
+                </div>
+              </template>
+              <div class="flex gap-2 mt-4 flex-wrap">
+                <button type="button" class="btn btn-ghost btn-sm" @click="openPythonDownloadsPage()" :disabled="ainlDesktopLoading">Get Python (3.10+)</button>
+                <button class="btn btn-primary btn-sm" @click="loadAinlDesktop()" :disabled="ainlDesktopLoading">Refresh status</button>
+                <button class="btn btn-ghost btn-sm" @click="retryAinlBootstrap()" :disabled="ainlDesktopLoading">Bootstrap AINL</button>
+                <button class="btn btn-ghost btn-sm" @click="retryAinlHostOnly()" :disabled="ainlDesktopLoading">Update host config only</button>
+                <button class="btn btn-ghost btn-sm" @click="openAinlLibraryFolder()" :disabled="ainlDesktopLoading">Open ~/ainl-library</button>
+                <button type="button" class="btn btn-primary btn-sm" @click="location.hash='ainl-library'">Browse AINL Library</button>
               </div>
             </div>
           </div>
@@ -4603,6 +4784,115 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       </div>
     </template>
 
+    <!-- Page: Network (mesh + traffic) -->
+    <template x-if="page === 'network'">
+      <div x-data="networkPage" x-init="loadData()" @page-leave.window="cleanup()">
+        <div class="page-header">
+          <h2>Network</h2>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-dim" x-show="netStatus && netStatus.enabled">OFP mesh active</span>
+            <span class="text-xs text-dim" x-show="netStatus && !netStatus.enabled">OFP mesh off (configure <code class="text-dim">[network]</code>)</span>
+            <button class="btn btn-ghost btn-sm" @click="loadData()" title="Refresh">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading network view...</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+          </div>
+          <div x-show="!loading && !loadError">
+            <div class="network-analyzer-card card mb-4">
+              <div class="card-header flex justify-between items-center flex-wrap gap-2">
+                <div>
+                  <span>Mesh topology</span>
+                  <span class="badge badge-dim" style="margin-left:8px;font-weight:400" x-text="(peers.length || 0) + ' OFP · ' + (a2aAgents.length || 0) + ' A2A · ' + (channelNodes.length || 0) + ' channels'"></span>
+                </div>
+                <div class="flex gap-3 text-xs text-dim" style="font-size:11px">
+                  <span><span class="network-legend-swatch" style="background:var(--accent)"></span> This node</span>
+                  <span><span class="network-legend-swatch" style="background:var(--success)"></span> OFP peer</span>
+                  <span><span class="network-legend-swatch" style="background:#60a5fa"></span> A2A</span>
+                  <span><span class="network-legend-swatch" style="background:#2dd4bf"></span> Channel</span>
+                </div>
+              </div>
+              <div class="network-analyzer-svg-wrap">
+                <svg class="network-analyzer-svg" viewBox="0 0 500 316" preserveAspectRatio="xMidYMid meet" aria-label="Network mesh">
+                  <defs>
+                    <filter id="network-glow" x="-50%" y="-50%" width="200%" height="200%">
+                      <feGaussianBlur stdDeviation="2" result="blur"/>
+                      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                    </filter>
+                  </defs>
+                  <!-- Use <g x-for>, not <template x-for>: HTML <template> inside <svg> is not valid SVG and Alpine may not render loops. -->
+                  <g x-for="e in graphLayout.edges" :key="e.id">
+                    <line class="network-edge-line" :class="{ 'network-edge-active': e.active }" :x1="e.x1" :y1="e.y1" :x2="e.x2" :y2="e.y2" stroke-linecap="round"/>
+                  </g>
+                  <g x-for="n in graphLayout.nodes" :key="n.id">
+                    <circle
+                      :cx="n.x" :cy="n.y" :r="n.r"
+                      :class="{
+                        'network-node-local': n.kind === 'local',
+                        'network-node-peer-on': n.kind === 'peer' && n.connected,
+                        'network-node-peer-off': n.kind === 'peer' && !n.connected,
+                        'network-node-a2a': n.kind === 'a2a',
+                        'network-node-channel': n.kind === 'channel'
+                      }"
+                      :filter="n.kind === 'local' ? 'url(#network-glow)' : 'none'"
+                    />
+                    <text class="network-svg-label" :x="n.x" :y="n.y + n.r + 12" text-anchor="middle" x-text="n.label"></text>
+                    <text class="network-svg-sublabel" :x="n.x" :y="n.y + n.r + 26" text-anchor="middle" x-text="n.sub || ''"></text>
+                  </g>
+                </svg>
+              </div>
+              <div class="network-analyzer-foot text-xs text-dim" x-show="graphLayout.overflow.peers + graphLayout.overflow.a2a + graphLayout.overflow.channels > 0">
+                <span x-show="graphLayout.overflow.peers > 0" x-text="'+' + graphLayout.overflow.peers + ' more peer(s)'"></span>
+                <span x-show="graphLayout.overflow.a2a > 0" x-text="' +' + graphLayout.overflow.a2a + ' A2A'"></span>
+                <span x-show="graphLayout.overflow.channels > 0" x-text="' +' + graphLayout.overflow.channels + ' channel(s)'"></span>
+                <span class="ml-2">— full list in Settings → Network</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header flex justify-between items-center flex-wrap gap-2">
+                <div>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                  Agent traffic
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <select class="form-select" style="width:auto;min-width:140px;font-size:12px" x-model="trafficFilter">
+                    <option value="all">All events</option>
+                    <option value="messages">Messages only</option>
+                    <option value="tasks">Tasks</option>
+                    <option value="lifecycle">Spawn / terminate</option>
+                  </select>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 6px;animation:pulse-ring 2s infinite">LIVE</span>
+                  <span class="text-xs text-dim" x-text="filteredEventsList.length + ' shown'"></span>
+                </div>
+              </div>
+              <p class="text-xs text-dim" style="padding:0 12px 8px;margin:0">Live stream of messages, tasks, and lifecycle events for your agents (same feed as Comms).</p>
+              <div class="network-traffic-feed">
+                <template x-if="filteredEventsList.length === 0">
+                  <div class="text-dim" style="text-align:center;padding:28px">No traffic yet — interact with an agent or connect a channel.</div>
+                </template>
+                <template x-for="ev in filteredEventsList" :key="ev.id">
+                  <div class="comms-event-row network-traffic-row">
+                    <span class="comms-event-time text-xs text-dim" x-text="timeAgo(ev.timestamp)"></span>
+                    <span :class="eventBadgeClass(ev.kind)" style="font-size:10px;padding:1px 6px;min-width:72px;text-align:center" x-text="eventLabel(ev.kind)"></span>
+                    <span style="font-weight:600;font-size:12px" x-text="ev.source_name"></span>
+                    <span class="text-dim" x-show="ev.target_name" x-text="'→ ' + ev.target_name"></span>
+                    <span class="comms-event-detail text-dim text-xs" x-text="ev.detail" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Page: Setup Wizard -->
     <template x-if="page === 'wizard'">
       <div x-data="wizardPage">
@@ -4638,10 +4928,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <!-- Step 1: Welcome -->
           <div class="wizard-step" x-show="step === 1">
             <div class="wizard-card" style="text-align:center;max-width:600px;margin:0 auto">
-              <img src="/logo.png" alt="OpenFang" style="width:80px;height:80px;margin:0 auto 20px;display:block;opacity:0.85">
-              <h3 style="font-size:22px;font-weight:700;margin-bottom:12px;color:var(--accent)">Welcome to OpenFang</h3>
+              <img src="/logo.png" alt="ArmaraOS" style="width:80px;height:80px;margin:0 auto 20px;display:block;opacity:0.85">
+              <h3 style="font-size:22px;font-weight:700;margin-bottom:12px;color:var(--accent)">Welcome to ArmaraOS</h3>
               <p style="font-size:13px;color:var(--text-dim);line-height:1.8;max-width:480px;margin:0 auto 24px">
-                OpenFang is an open-source Agent Operating System. It lets you run AI agents that can chat, use tools, access memory, and connect to messaging channels &mdash; all from a single dashboard.
+                ArmaraOS is an open-source Agent Operating System. It lets you run AI agents that can chat, use tools, access memory, and connect to messaging channels &mdash; all from a single dashboard.
               </p>
               <div class="card" style="text-align:left;margin-bottom:20px">
                 <div class="card-header">This wizard will help you:</div>
@@ -4677,7 +4967,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Connect an LLM Provider</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">
-                OpenFang needs at least one LLM provider to power your agents. Select a provider and enter your API key.
+                ArmaraOS needs at least one LLM provider to power your agents. Select a provider and enter your API key.
               </p>
 
               <div class="info-card" x-show="hasConfiguredProvider" style="border-left-color:var(--success)">
@@ -4937,7 +5227,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="wizard-card" style="text-align:center;max-width:560px;margin:0 auto">
               <div style="font-size:56px;margin-bottom:12px;color:var(--success)">&#10003;</div>
               <h3 style="font-size:20px;font-weight:700;margin-bottom:8px;color:var(--accent)">You're All Set!</h3>
-              <p style="font-size:13px;color:var(--text-dim);line-height:1.8;margin-bottom:24px">OpenFang is configured and ready to go. Here is a summary of what was set up:</p>
+              <p style="font-size:13px;color:var(--text-dim);line-height:1.8;margin-bottom:24px">ArmaraOS is configured and ready to go. Here is a summary of what was set up:</p>
 
               <div class="card" style="text-align:left;margin-bottom:20px">
                 <div class="detail-grid">
@@ -4984,6 +5274,124 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
           </div>
 
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ─── AINL Library ─── -->
+    <template x-if="page === 'ainl-library'">
+      <div x-data="ainlLibraryPage" x-init="loadLibrary()">
+        <div class="page-header">
+          <h2>AINL Library</h2>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button type="button" class="btn btn-ghost btn-sm" @click="loadLibrary()" :disabled="loading">Refresh</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="openFolder()">Open folder</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading library…</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="loadLibrary()">Retry</button>
+          </div>
+          <div x-show="!loading && !loadError">
+            <div class="card mb-4" style="border-left:3px solid var(--accent)">
+              <div class="font-bold" style="font-size:14px;margin-bottom:6px">Synced library</div>
+              <p class="text-sm text-dim" style="line-height:1.7;margin:0">
+                <strong>armaraos-programs/</strong> — first-party graphs materialized from the ArmaraOS build (health ping, learning-frame samples, stubs). Separate from the public-repo mirror:
+                <code style="font-size:11px">demo/</code>, <code style="font-size:11px">examples/</code>, <code style="font-size:11px">intelligence/</code> under <code style="font-size:11px" x-text="root || '~/.armaraos/ainl-library'"></code>.
+                Use <strong>Copy command</strong> for your terminal, or <strong>Try validate</strong> (desktop) to run the bundled <code style="font-size:11px">ainl</code> CLI.
+              </p>
+              <div class="text-sm mt-3 space-y-1" x-show="sync">
+                <div x-show="sync && sync.commit_sha"><span class="text-dim">Upstream commit:</span> <code style="font-size:11px" x-text="sync.commit_sha"></code></div>
+                <div x-show="sync && sync.branch"><span class="text-dim">Branch:</span> <span x-text="sync.branch"></span></div>
+                <div x-show="sync && sync.synced_at_unix"><span class="text-dim">Synced:</span> <span x-text="formatSyncTime(sync.synced_at_unix)"></span></div>
+              </div>
+              <div class="text-sm mt-3" x-show="!libraryPresent || total === 0">
+                <span class="badge badge-warn" x-show="!libraryPresent">Library folder not found</span>
+                <span class="text-dim ml-2" x-show="!libraryPresent || total === 0">Run desktop bootstrap once (needs network) or open</span>
+                <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()" x-show="isDesktopShell">Settings → AINL</button>
+              </div>
+              <div class="text-xs text-dim mt-2" x-show="ainlDesktop && ainlDesktop.library_sync_ok === false">
+                <span x-text="ainlDesktop.library_sync_detail || 'Upstream library sync did not complete.'"></span>
+                <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()">Fix in Settings → AINL</button>
+              </div>
+            </div>
+
+            <div class="card mb-4" x-show="curated && curated.length">
+              <div class="card-header">Suggested samples</div>
+              <p class="text-xs text-dim mb-2">Curated catalog paths for cron / scheduler. The default enabled job is the weekly core-only health ping; others (e.g. learning-frame echo) are registered paused—enable in <a href="#scheduler" style="color:var(--accent)">Scheduler</a> when ready.</p>
+              <div class="text-sm space-y-2">
+                <template x-for="c in curated" :key="c.name">
+                  <div class="flex flex-wrap items-center justify-between gap-2 p-2 rounded" style="background:var(--bg-elevated,#1a1a24);border:1px solid var(--border,#333)">
+                    <div>
+                      <div class="font-medium" x-text="c.name"></div>
+                      <code class="text-xs text-dim" x-text="c.relative_path"></code>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand({ path: c.relative_path, absolute: buildAbsolute(c.relative_path) })">Copy</button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(c.relative_path)" title="Open Scheduler with this path">Use in Scheduler</button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="copySchedulerDeepLink(c.relative_path)" title="Copy link that opens Scheduler with this path">Copy scheduler link</button>
+                      <button type="button" class="btn btn-primary btn-sm" @click="trySample({ path: c.relative_path }, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Try validate</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="mb-4 flex flex-wrap items-center gap-3">
+              <input type="search" class="input" style="max-width:420px" placeholder="Filter by path, filename, or hint…" x-model="search">
+              <label class="text-sm text-dim flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" x-model="loadHints" @change="loadLibrary()">
+                Load comment hints (first <code class="text-xs">#</code> line; capped server-side)
+              </label>
+            </div>
+            <div class="text-xs text-dim mb-2" x-show="loadHints && hintsTruncated">Hints truncated — only the first <span x-text="maxHintsApplied"></span> files include a hint (see <code class="text-xs">max_hints</code> API).</div>
+
+            <div class="text-sm text-dim mb-2" x-text="total + ' programs'"></div>
+
+            <template x-for="cat in filteredCategories()" :key="cat.id">
+              <div class="card mb-4">
+                <div class="card-header" x-text="cat.label + ' (' + (cat.programs ? cat.programs.length : 0) + ')'"></div>
+                <div class="table-wrap mt-2">
+                  <table>
+                    <thead><tr><th>File</th><th>Path</th><th x-show="loadHints">Hint</th><th style="min-width:300px">Actions</th></tr></thead>
+                    <tbody>
+                      <template x-for="p in cat.programs" :key="p.path">
+                        <tr>
+                          <td class="font-mono text-xs" x-text="p.name"></td>
+                          <td class="font-mono text-xs text-dim" style="word-break:break-all" x-text="p.path"></td>
+                          <td class="text-xs text-dim" style="max-width:220px" x-show="loadHints" x-text="p.hint || '—'"></td>
+                          <td>
+                            <div class="flex flex-wrap gap-1">
+                              <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand(p)">Copy</button>
+                              <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(p.path)">Scheduler</button>
+                              <button type="button" class="btn btn-primary btn-sm" @click="trySample(p, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Try validate</button>
+                              <button type="button" class="btn btn-ghost btn-sm" @click="trySample(p, 'run')" :disabled="tryBusy" x-show="isDesktopShell" title="Runs ainl run (may execute adapters)">Try run</button>
+                            </div>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div x-show="outputModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeOutputModal()">
+          <div class="card" style="max-width:640px;width:92%;max-height:80vh;overflow:auto" @click.stop>
+            <div class="flex justify-between items-start mb-2">
+              <div class="font-bold" style="font-size:14px" x-text="outputModal ? outputModal.title : ''"></div>
+              <button type="button" class="btn btn-ghost btn-sm" @click="closeOutputModal()">Close</button>
+            </div>
+            <pre class="text-xs font-mono" style="white-space:pre-wrap;word-break:break-word;margin:0;line-height:1.5;color:var(--text-dim)" x-text="outputModal ? outputModal.body : ''"></pre>
+            <div class="flex flex-wrap gap-2 mt-3" x-show="outputModal && outputModal.suggestedCommand">
+              <button type="button" class="btn btn-primary btn-sm" @click="copyText(outputModal.suggestedCommand)">Copy terminal command</button>
+            </div>
           </div>
         </div>
       </div>
@@ -5055,6 +5463,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     </template>
 
   </main>
+
+  <div class="app-powered-by" role="contentinfo" aria-label="Powered by AI Native Lang">
+    <a href="https://ainativelang.com/" target="_blank" rel="noopener noreferrer" title="Open ainativelang.com in your browser" @click="openAinlAttributionUrl($event)">powered by AINativeLang.com</a>
+  </div>
 </div>
 
 <!-- Toast notification container -->

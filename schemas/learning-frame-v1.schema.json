@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://armaraos.dev/schemas/learning-frame-v1.schema.json",
+  "title": "ArmaraOS learning frame v1",
+  "description": "JSON object passed as AINL `frame` for learning / skill graphs (flat keys).",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "frame_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Bump when breaking frame shape."
+    },
+    "op": {
+      "type": "string",
+      "enum": ["capture", "consolidate", "skill_mint", "promote", "evolve"]
+    },
+    "run_id": { "type": "string", "minLength": 1 },
+    "intent": { "type": "string", "minLength": 1 },
+    "outcome": { "type": "string", "enum": ["ok", "fail", "partial"] },
+    "episode": {
+      "type": "string",
+      "description": "Host-redacted summary; keep large traces in refs."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hand_id": { "type": "string" },
+        "agent_id": { "type": "string" },
+        "channel": { "type": "string" }
+      }
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["unattended", "assisted", "user"],
+      "default": "assisted",
+      "description": "Optional in JSON; defaults to assisted (matches Rust serde default)."
+    },
+    "user_note": { "type": ["string", "null"] },
+    "refs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace_uri": { "type": "string" },
+        "bundle_path": { "type": "string" },
+        "prior_skill_id": { "type": "string" }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "uri"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "type": "string" },
+          "uri": { "type": "string" },
+          "label": { "type": "string" }
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "locale": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "extra": {}
+  },
+  "required": ["frame_version", "op", "run_id", "intent", "outcome", "episode"]
+}

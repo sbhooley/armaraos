@@ -1,5 +1,23 @@
-// OpenFang App — Alpine.js init, hash router, global store
+// ArmaraOS App — Alpine.js init, hash router, global store
 'use strict';
+
+/** Persisted dashboard theme: light | system | dark. Default: dark. Syncs legacy openfang-theme-mode. */
+function getStoredThemeMode() {
+  try {
+    return localStorage.getItem('armaraos-theme-mode')
+      || localStorage.getItem('openfang-theme-mode')
+      || 'dark';
+  } catch (e) {
+    return 'dark';
+  }
+}
+
+function effectiveThemeFromMode(mode) {
+  if (mode === 'system') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return mode;
+}
 
 // Marked.js configuration
 if (typeof marked !== 'undefined') {
@@ -11,6 +29,24 @@ if (typeof marked !== 'undefined') {
         try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
       }
       return code;
+    }
+  });
+}
+
+/** Tauri 2 desktop shell only: invoke Rust commands when `withGlobalTauri` is enabled. */
+function ArmaraosDesktopTauriInvoke(cmd, args) {
+  args = args || {};
+  return new Promise(function(resolve, reject) {
+    try {
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      if (!core || typeof core.invoke !== 'function') {
+        resolve(null);
+        return;
+      }
+      core.invoke(cmd, args).then(resolve).catch(reject);
+    } catch (err) {
+      reject(err);
     }
   });
 }
@@ -125,6 +161,13 @@ document.addEventListener('alpine:init', function() {
   var savedKey = localStorage.getItem('openfang-api-key');
   if (savedKey) OpenFangAPI.setAuthToken(savedKey);
 
+  Alpine.store('ainl', {
+    /** Desktop (Tauri) AINL install status; updated by background poll + Settings actions */
+    desktop: null,
+    /** True until first successful ainl_status reports ok (or user is not on desktop shell) */
+    bootstrapping: false,
+  });
+
   Alpine.store('app', {
     agents: [],
     connected: false,
@@ -184,7 +227,7 @@ document.addEventListener('alpine:init', function() {
       } catch(e) {
         this.connected = false;
         this.lastError = e.message || 'Unknown error';
-        console.warn('[OpenFang] Status check failed:', e.message);
+        console.warn('[ArmaraOS] Status check failed:', e.message);
       }
     },
 
@@ -281,17 +324,96 @@ document.addEventListener('alpine:init', function() {
       localStorage.removeItem('openfang-api-key');
     }
   });
+
+  Alpine.store('kernelEvents', {
+    connected: false,
+    error: '',
+    received: 0,
+    items: [],
+    last: null,
+  });
+
+  /** Subscribe to GET /api/events/stream (kernel bus). Started from app().init. */
+  window.ArmaraosKernelSse = (function() {
+    var _es = null;
+    function isTauriShell() {
+      var w = typeof window !== 'undefined' ? window : null;
+      return !!(w && w.__TAURI__ && w.__TAURI__.core);
+    }
+    function maybeToast(ev) {
+      if (typeof OpenFangToast === 'undefined' || !ev || !ev.payload) return;
+      if (isTauriShell()) return;
+      var p = ev.payload;
+      if (p.type === 'Lifecycle' && p.data && p.data.event === 'Crashed') {
+        var err = (p.data.error || '').slice(0, 220);
+        OpenFangToast.error('Agent crashed: ' + err, 8000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'KernelStopping') {
+        OpenFangToast.warn('Kernel stopping…', 5000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'QuotaEnforced') {
+        OpenFangToast.warn('Quota enforced for an agent', 6000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'HealthCheckFailed') {
+        OpenFangToast.warn('Agent health check failed', 6000);
+      }
+    }
+    return {
+      start: function() {
+        if (_es) {
+          try { _es.close(); } catch (e) { /* ignore */ }
+          _es = null;
+        }
+        var ke;
+        try {
+          ke = Alpine.store('kernelEvents');
+        } catch (e) {
+          return;
+        }
+        try {
+          _es = new EventSource(OpenFangAPI.sseUrl('/api/events/stream'));
+        } catch (err) {
+          ke.error = 'EventSource unavailable';
+          return;
+        }
+        _es.onopen = function() {
+          ke.connected = true;
+          ke.error = '';
+        };
+        _es.onerror = function() {
+          ke.connected = false;
+          ke.error = 'disconnected';
+        };
+        _es.onmessage = function(event) {
+          if (!event.data) return;
+          try {
+            var j = JSON.parse(event.data);
+            ke.received++;
+            ke.last = j;
+            if (ke.items.length > 80) ke.items.shift();
+            ke.items.push({ id: j.id, ts: j.timestamp, payload: j.payload });
+            maybeToast(j);
+            window.dispatchEvent(new CustomEvent('armaraos-kernel-event', { detail: j }));
+          } catch (e) { /* ignore parse errors */ }
+        };
+      },
+      stop: function() {
+        if (_es) {
+          try { _es.close(); } catch (e) { /* ignore */ }
+          _es = null;
+        }
+        try {
+          Alpine.store('kernelEvents').connected = false;
+        } catch (e) { /* ignore */ }
+      },
+    };
+  })();
 });
 
 // Main app component
 function app() {
   return {
     page: 'agents',
-    themeMode: localStorage.getItem('openfang-theme-mode') || 'system',
+    themeMode: getStoredThemeMode(),
     theme: (() => {
-      var mode = localStorage.getItem('openfang-theme-mode') || 'system';
-      if (mode === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      return mode;
+      return effectiveThemeFromMode(getStoredThemeMode());
     })(),
     sidebarCollapsed: localStorage.getItem('openfang-sidebar') === 'collapsed',
     mobileMenuOpen: false,
@@ -313,7 +435,7 @@ function app() {
       });
 
       // Hash routing
-      var validPages = ['overview','agents','sessions','approvals','comms','workflows','scheduler','channels','skills','hands','analytics','logs','runtime','settings','wizard'];
+      var validPages = ['overview','agents','sessions','approvals','comms','network','workflows','scheduler','channels','skills','hands','ainl-library','analytics','logs','runtime','settings','wizard'];
       var pageRedirects = {
         'chat': 'agents',
         'templates': 'agents',
@@ -329,12 +451,49 @@ function app() {
         'approval': 'approvals'
       };
       function handleHash() {
-        var hash = window.location.hash.replace('#', '') || 'agents';
-        if (pageRedirects[hash]) {
-          hash = pageRedirects[hash];
-          window.location.hash = hash;
+        var raw = window.location.hash.replace(/^#/, '') || 'agents';
+        var pagePart = raw;
+        var query = '';
+        var qIdx = raw.indexOf('?');
+        if (qIdx >= 0) {
+          pagePart = raw.slice(0, qIdx);
+          query = raw.slice(qIdx + 1);
         }
-        if (validPages.indexOf(hash) >= 0) self.page = hash;
+        if (pageRedirects[pagePart]) {
+          pagePart = pageRedirects[pagePart];
+          window.location.hash = pagePart + (query ? '?' + query : '');
+          return;
+        }
+        if (validPages.indexOf(pagePart) >= 0) {
+          if (query && pagePart === 'scheduler') {
+            try {
+              var params = new URLSearchParams(query);
+              var ainl = params.get('ainl');
+              if (ainl) {
+                var payload = {
+                  actionKind: 'ainl_run',
+                  ainlPath: decodeURIComponent(ainl),
+                  cron: params.get('cron') || '0 9 * * *'
+                };
+                if (params.get('json') === '1' || params.get('json') === 'true') {
+                  payload.json_output = true;
+                }
+                sessionStorage.setItem('armaraos-scheduler-prefill', JSON.stringify(payload));
+              }
+            } catch (e1) { /* ignore */ }
+            try {
+              if (window.history && window.history.replaceState) {
+                var u = new URL(window.location.href);
+                u.hash = 'scheduler';
+                window.history.replaceState({}, '', u.pathname + u.search + u.hash);
+              }
+            } catch (e2) { /* ignore */ }
+          }
+          if (self.page !== pagePart) {
+            window.dispatchEvent(new CustomEvent('page-leave'));
+          }
+          self.page = pagePart;
+        }
       }
       window.addEventListener('hashchange', handleHash);
       handleHash();
@@ -376,9 +535,56 @@ function app() {
         self.pollStatus();
         Alpine.store('app').refreshApprovals();
       }, 5000);
+
+      if (typeof window.ArmaraosKernelSse !== 'undefined' && window.ArmaraosKernelSse.start) {
+        window.ArmaraosKernelSse.start();
+      }
+
+      // Desktop: poll AINL status while Rust boots the venv + pip (startup ensure_ainl_installed).
+      (function armaraosDesktopAinlPoll() {
+        var w = typeof window !== 'undefined' ? window : null;
+        if (!w || !w.__TAURI__ || !w.__TAURI__.core) return;
+        try {
+          Alpine.store('ainl').bootstrapping = true;
+        } catch (e) { /* ignore */ }
+        var attempts = 0;
+        var maxAttempts = 80;
+        var delayMs = 2500;
+        function tick() {
+          attempts++;
+          ArmaraosDesktopTauriInvoke('ainl_status')
+            .then(function (st) {
+              try {
+                Alpine.store('ainl').desktop = st;
+                var done = st && st.ok;
+                Alpine.store('ainl').bootstrapping = !done;
+                if (done) return;
+              } catch (e) { /* ignore */ }
+              if (attempts < maxAttempts) {
+                setTimeout(tick, delayMs);
+              } else {
+                try {
+                  Alpine.store('ainl').bootstrapping = false;
+                } catch (e2) { /* ignore */ }
+              }
+            })
+            .catch(function () {
+              if (attempts < maxAttempts) setTimeout(tick, delayMs);
+              else {
+                try {
+                  Alpine.store('ainl').bootstrapping = false;
+                } catch (e2) { /* ignore */ }
+              }
+            });
+        }
+        tick();
+      })();
     },
 
     navigate(p) {
+      if (this.page !== p) {
+        window.dispatchEvent(new CustomEvent('page-leave'));
+      }
       this.page = p;
       window.location.hash = p;
       this.mobileMenuOpen = false;
@@ -386,12 +592,12 @@ function app() {
 
     setTheme(mode) {
       this.themeMode = mode;
-      localStorage.setItem('openfang-theme-mode', mode);
-      if (mode === 'system') {
-        this.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      } else {
-        this.theme = mode;
-      }
+      try {
+        localStorage.setItem('armaraos-theme-mode', mode);
+        localStorage.setItem('openfang-theme-mode', mode);
+      } catch (e) { /* private mode */ }
+      this.theme = effectiveThemeFromMode(mode);
+      ArmaraosDesktopTauriInvoke('set_dashboard_theme_mode', { mode: mode }).catch(function() {});
     },
 
     toggleTheme() {
@@ -403,6 +609,20 @@ function app() {
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed;
       localStorage.setItem('openfang-sidebar', this.sidebarCollapsed ? 'collapsed' : 'expanded');
+    },
+
+    /** Opens the AINL marketing site; uses Tauri when embedded in desktop so the system browser opens. */
+    openAinlAttributionUrl(ev) {
+      var url = 'https://ainativelang.com/';
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      if (core && typeof core.invoke === 'function') {
+        if (ev) ev.preventDefault();
+        core.invoke('open_external_url', { url: url }).catch(function() {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        });
+        return;
+      }
     },
 
     async pollStatus() {

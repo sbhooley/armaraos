@@ -1,0 +1,9 @@
+{
+  "frame_version": "1",
+  "op": "skill_mint",
+  "run_id": "test-1",
+  "intent": "demo",
+  "outcome": "ok",
+  "episode": "short summary",
+  "tier": "assisted"
+}

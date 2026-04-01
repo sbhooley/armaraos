@@ -24,7 +24,7 @@ A skill consists of:
 1. A **manifest** (`skill.toml` or `SKILL.md`) that declares metadata, runtime type, provided tools, and requirements.
 2. An **entry point** (Python script, WASM module, Node.js module, or prompt-only Markdown) that implements the tool logic.
 
-Skills are installed to `~/.openfang/skills/` and made available to agents through the skill registry. OpenFang ships with **60 bundled skills** that are compiled into the binary and available immediately.
+Skills are installed to `~/.armaraos/skills/` and made available to agents through the skill registry. OpenFang ships with **60 bundled skills** that are compiled into the binary and available immediately.
 
 ### Supported Runtimes
 
@@ -377,7 +377,7 @@ capabilities = ["NetConnect(*)", "ShellExec(python3)"]
 openfang skill install /path/to/my-skill
 ```
 
-This reads the `skill.toml`, validates the manifest, and copies the skill to `~/.openfang/skills/my-skill/`.
+This reads the `skill.toml`, validates the manifest, and copies the skill to `~/.armaraos/skills/my-skill/`.
 
 ### From FangHub
 
@@ -502,7 +502,7 @@ This interactive command prompts for:
 It generates:
 
 ```
-~/.openfang/skills/my-skill/
+~/.armaraos/skills/my-skill/
   skill.toml        # Pre-filled manifest
   src/
     main.py         # Starter entry point (for Python)

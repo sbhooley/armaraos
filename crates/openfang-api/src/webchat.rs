@@ -27,8 +27,22 @@ const ETAG: &str = concat!("\"openfang-", env!("CARGO_PKG_VERSION"), "\"");
 /// Embedded logo PNG for single-binary deployment.
 const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
 
+/// ArmaraOS mascot / wordmark (chat avatars, branding).
+const ARMARAOS_LOGO_PNG: &[u8] = include_bytes!("../static/assets/armaraos-logo.png");
+
 /// Embedded favicon ICO for browser tabs.
 const FAVICON_ICO: &[u8] = include_bytes!("../static/favicon.ico");
+
+/// GET /assets/armaraos-logo.png — ArmaraOS mascot + wordmark for chat UI.
+pub async fn armaraos_logo_png() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+        ],
+        ARMARAOS_LOGO_PNG,
+    )
+}
 
 /// GET /logo.png — Serve the OpenFang logo.
 pub async fn logo_png() -> impl IntoResponse {
@@ -164,6 +178,8 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/skills.js"),
     "\n",
+    include_str!("../static/js/pages/ainl-library.js"),
+    "\n",
     include_str!("../static/js/pages/hands.js"),
     "\n",
     include_str!("../static/js/pages/scheduler.js"),
@@ -181,6 +197,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/pages/approvals.js"),
     "\n",
     include_str!("../static/js/pages/comms.js"),
+    "\n",
+    include_str!("../static/js/pages/network.js"),
     "\n",
     include_str!("../static/js/pages/runtime.js"),
     "\n</script>\n",

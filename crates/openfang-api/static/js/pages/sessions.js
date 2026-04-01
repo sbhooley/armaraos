@@ -1,4 +1,4 @@
-// OpenFang Sessions Page — Session listing + Memory tab
+// ArmaraOS Sessions Page — Session listing + Memory tab
 'use strict';
 
 function sessionsPage() {

@@ -1,5 +1,23 @@
-// OpenFang Overview Dashboard — Landing page with system stats + provider status
+// ArmaraOS Overview Dashboard — Landing page with system stats + provider status
 'use strict';
+
+/** True when `armaraos-kernel-event` should trigger an overview refresh (agent/system signals). */
+function overviewShouldRefreshOnKernelEvent(ev) {
+  if (!ev || !ev.detail) return false;
+  var p = ev.detail.payload;
+  if (!p) return false;
+  if (p.type === 'Lifecycle') {
+    var e = p.data && p.data.event;
+    return e === 'Spawned' || e === 'Terminated' || e === 'Crashed' || e === 'Started' ||
+      e === 'Suspended' || e === 'Resumed';
+  }
+  if (p.type === 'System') {
+    var se = p.data && p.data.event;
+    return se === 'KernelStarted' || se === 'KernelStopping' || se === 'QuotaEnforced' ||
+      se === 'HealthCheckFailed' || se === 'QuotaWarning';
+  }
+  return false;
+}
 
 function overviewPage() {
   return {
@@ -15,6 +33,8 @@ function overviewPage() {
     loadError: '',
     refreshTimer: null,
     lastRefresh: null,
+    _kernelEventHandler: null,
+    _kernelDebounce: null,
 
     async loadOverview() {
       this.loading = true;
@@ -59,12 +79,44 @@ function overviewPage() {
     startAutoRefresh() {
       this.stopAutoRefresh();
       this.refreshTimer = setInterval(() => this.silentRefresh(), 30000);
+      this.bindKernelEventRefresh();
     },
 
     stopAutoRefresh() {
       if (this.refreshTimer) {
         clearInterval(this.refreshTimer);
         this.refreshTimer = null;
+      }
+      this.unbindKernelEventRefresh();
+    },
+
+    /** Debounced refresh when kernel SSE emits lifecycle/system events (same tab). */
+    bindKernelEventRefresh() {
+      var self = this;
+      if (this._kernelEventHandler) return;
+      this._kernelEventHandler = function(ev) {
+        if (!overviewShouldRefreshOnKernelEvent(ev)) return;
+        if (self._kernelDebounce) clearTimeout(self._kernelDebounce);
+        self._kernelDebounce = setTimeout(function() {
+          self._kernelDebounce = null;
+          self.silentRefresh();
+          try {
+            var app = Alpine.store('app');
+            if (app && typeof app.refreshAgents === 'function') app.refreshAgents();
+          } catch (e) { /* ignore */ }
+        }, 400);
+      };
+      window.addEventListener('armaraos-kernel-event', this._kernelEventHandler);
+    },
+
+    unbindKernelEventRefresh() {
+      if (this._kernelEventHandler) {
+        window.removeEventListener('armaraos-kernel-event', this._kernelEventHandler);
+        this._kernelEventHandler = null;
+      }
+      if (this._kernelDebounce) {
+        clearTimeout(this._kernelDebounce);
+        this._kernelDebounce = null;
       }
     },
 
@@ -219,6 +271,22 @@ function overviewPage() {
       if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
       if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
       return String(n);
+    },
+
+    /** One-line summary of the latest SSE kernel event (from Alpine.store('kernelEvents').last). */
+    formatLastKernelEvent(j) {
+      if (!j || !j.payload) return '';
+      var p = j.payload;
+      var ts = '';
+      if (j.timestamp) ts = this.timeAgo(j.timestamp) + ' — ';
+      if (p.type === 'Lifecycle' && p.data && p.data.event) {
+        return ts + 'Lifecycle · ' + p.data.event;
+      }
+      if (p.type === 'System' && p.data && p.data.event) {
+        return ts + 'System · ' + p.data.event;
+      }
+      if (p.type) return ts + String(p.type);
+      return ts + 'kernel event';
     },
 
     formatCost(n) {

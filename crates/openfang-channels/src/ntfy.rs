@@ -329,7 +329,7 @@ impl ChannelAdapter for NtfyAdapter {
             ChannelContent::Text(t) => t,
             _ => "(Unsupported content type)".to_string(),
         };
-        self.publish(&text, Some("OpenFang")).await
+        self.publish(&text, Some("ArmaraOS")).await
     }
 
     async fn send_typing(&self, _user: &ChannelUser) -> Result<(), Box<dyn std::error::Error>> {

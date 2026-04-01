@@ -1,4 +1,4 @@
-//! IRC channel adapter for the OpenFang channel bridge.
+//! IRC channel adapter for the ArmaraOS channel bridge.
 //!
 //! Uses raw TCP via `tokio::net::TcpStream` with `tokio::io` buffered I/O for
 //! plaintext IRC connections. Implements the core IRC protocol: NICK, USER, JOIN,
@@ -275,7 +275,7 @@ impl ChannelAdapter for IrcAdapter {
                     registration.push_str(&format!("PASS {}\r\n", pass.as_str()));
                 }
                 registration.push_str(&format!("NICK {nick}\r\n"));
-                registration.push_str(&format!("USER {nick} 0 * :OpenFang Bot\r\n"));
+                registration.push_str(&format!("USER {nick} 0 * :ArmaraOS Bot\r\n"));
 
                 if let Err(e) = writer.write_all(registration.as_bytes()).await {
                     warn!("IRC registration send failed: {e}");
@@ -393,7 +393,7 @@ impl ChannelAdapter for IrcAdapter {
                         _ = shutdown_rx.changed() => {
                             if *shutdown_rx.borrow() {
                                 info!("IRC adapter shutting down");
-                                let _ = writer.write_all(b"QUIT :OpenFang shutting down\r\n").await;
+                                let _ = writer.write_all(b"QUIT :ArmaraOS shutting down\r\n").await;
                                 return;
                             }
                         }

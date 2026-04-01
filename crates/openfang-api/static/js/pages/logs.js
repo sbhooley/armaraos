@@ -1,4 +1,4 @@
-// OpenFang Logs Page — Real-time log viewer (SSE streaming + polling fallback) + Audit Trail tab
+// ArmaraOS Logs Page — Real-time log viewer (SSE streaming + polling fallback) + Audit Trail tab
 'use strict';
 
 function logsPage() {
@@ -31,10 +31,7 @@ function logsPage() {
       var self = this;
       if (this._eventSource) { this._eventSource.close(); this._eventSource = null; }
 
-      var url = '/api/logs/stream';
-      var sep = '?';
-      var token = OpenFangAPI.getToken();
-      if (token) { url += sep + 'token=' + encodeURIComponent(token); sep = '&'; }
+      var url = OpenFangAPI.sseUrl('/api/logs/stream');
 
       try {
         this._eventSource = new EventSource(url);

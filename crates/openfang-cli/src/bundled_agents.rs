@@ -118,7 +118,7 @@ pub fn bundled_agents() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Install bundled agent templates to `~/.openfang/agents/`.
+/// Install bundled agent templates to `~/.armaraos/agents/` (ArmaraOS home; same resolution as the kernel).
 /// Skips any template that already exists on disk (user customization preserved).
 pub fn install_bundled_agents(agents_dir: &std::path::Path) {
     for (name, content) in bundled_agents() {

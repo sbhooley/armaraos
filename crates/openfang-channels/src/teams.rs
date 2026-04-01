@@ -1,4 +1,4 @@
-//! Microsoft Teams channel adapter for the OpenFang channel bridge.
+//! Microsoft Teams channel adapter for the ArmaraOS channel bridge.
 //!
 //! Uses Bot Framework v3 REST API for sending messages and a lightweight axum
 //! HTTP webhook server for receiving inbound activities. OAuth2 client credentials
@@ -473,7 +473,7 @@ mod tests {
             "text": "Bot reply",
             "from": {
                 "id": "app-id-123",
-                "name": "OpenFang Bot"
+                "name": "ArmaraOS Bot"
             },
             "conversation": {
                 "id": "conv-789"

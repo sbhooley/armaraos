@@ -1,4 +1,4 @@
-//! Channel bridge wiring — connects the OpenFang kernel to channel adapters.
+//! Channel bridge wiring — connects the ArmaraOS kernel to channel adapters.
 //!
 //! Implements `ChannelBridgeHandle` on `OpenFangKernel` and provides the
 //! `start_channel_bridge()` entry point called by the daemon.
@@ -160,14 +160,14 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         let mins = (secs % 3600) / 60;
         if hours > 0 {
             format!(
-                "OpenFang status: {}h {}m uptime, {} agent(s)",
+                "ArmaraOS status: {}h {}m uptime, {} agent(s)",
                 hours,
                 mins,
                 agents.len()
             )
         } else {
             format!(
-                "OpenFang status: {}m uptime, {} agent(s)",
+                "ArmaraOS status: {}m uptime, {} agent(s)",
                 mins,
                 agents.len()
             )
@@ -579,33 +579,13 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                 match matched.len() {
                     0 => format!("No job found matching '{prefix}'."),
                     1 => {
-                        let j = matched[0];
-                        let message = match &j.action {
-                            openfang_types::scheduler::CronAction::AgentTurn {
-                                message, ..
-                            } => message.clone(),
-                            openfang_types::scheduler::CronAction::SystemEvent { text } => {
-                                text.clone()
-                            }
-                            openfang_types::scheduler::CronAction::WorkflowRun {
-                                workflow_id,
-                                input,
-                                ..
-                            } => {
-                                format!(
-                                    "Run workflow {workflow_id}{}",
-                                    input
-                                        .as_deref()
-                                        .map(|i| format!(" with input: {i}"))
-                                        .unwrap_or_default()
-                                )
-                            }
-                        };
-                        match self.kernel.send_message(j.agent_id, &message).await {
-                            Ok(result) => {
+                        let j = matched[0].clone();
+                        let k = Arc::clone(&self.kernel);
+                        match k.cron_run_job(&j).await {
+                            Ok(output) => {
                                 let id_str = j.id.0.to_string();
                                 let id_short = safe_truncate_str(&id_str, 8);
-                                format!("Job [{id_short}] ran:\n{}", result.response)
+                                format!("Job [{id_short}] ran:\n{output}")
                             }
                             Err(e) => format!("Failed to run job: {e}"),
                         }

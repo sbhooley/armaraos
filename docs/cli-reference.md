@@ -2,6 +2,10 @@
 
 Complete command-line reference for `openfang`, the CLI tool for the OpenFang Agent OS.
 
+## Data directory
+
+Paths below use the default ArmaraOS home **`~/.armaraos/`**. Override with **`ARMARAOS_HOME`** or **`OPENFANG_HOME`**. An existing **`~/.openfang/`** directory is renamed to **`~/.armaraos/`** on first run when possible. See [`data-directory.md`](data-directory.md).
+
 ## Overview
 
 The `openfang` binary is the primary interface for managing the OpenFang Agent OS. It supports two modes of operation:
@@ -44,7 +48,7 @@ These options apply to all commands.
 
 | Option | Description |
 |---|---|
-| `--config <PATH>` | Path to a custom config file. Overrides the default `~/.openfang/config.toml`. |
+| `--config <PATH>` | Path to a custom config file. Overrides the default `~/.armaraos/config.toml`. |
 | `--help` | Print help information for any command or subcommand. |
 | `--version` | Print the version of the `openfang` binary. |
 
@@ -68,7 +72,7 @@ Launch the interactive TUI dashboard.
 openfang [--config <PATH>]
 ```
 
-The TUI provides a full-screen terminal interface with panels for agents, chat, workflows, channels, skills, settings, and more. Tracing output is redirected to `~/.openfang/tui.log` to avoid corrupting the terminal display.
+The TUI provides a full-screen terminal interface with panels for agents, chat, workflows, channels, skills, settings, and more. Tracing output is redirected to `~/.armaraos/tui.log` to avoid corrupting the terminal display.
 
 Press `Ctrl+C` to exit. A second `Ctrl+C` force-exits the process.
 
@@ -76,7 +80,7 @@ Press `Ctrl+C` to exit. A second `Ctrl+C` force-exits the process.
 
 ### openfang init
 
-Initialize the OpenFang workspace. Creates `~/.openfang/` with subdirectories (`data/`, `agents/`) and a default `config.toml`.
+Initialize the OpenFang workspace. Creates `~/.armaraos/` with subdirectories (`data/`, `agents/`) and a default `config.toml`.
 
 ```
 openfang init [--quick]
@@ -120,7 +124,7 @@ openfang start [--config <PATH>]
 - Checks if a daemon is already running; exits with an error if so.
 - Boots the OpenFang kernel (loads config, initializes SQLite database, loads agents, connects MCP servers, starts background tasks).
 - Starts the HTTP API server on the address specified in `config.toml` (default: `127.0.0.1:4200`).
-- Writes `daemon.json` to `~/.openfang/` so other CLI commands can discover the running daemon.
+- Writes `daemon.json` to `~/.armaraos/` so other CLI commands can discover the running daemon.
 - Blocks until interrupted with `Ctrl+C`.
 
 **Output:**
@@ -201,7 +205,7 @@ openfang doctor [--json] [--repair]
 
 **Checks performed:**
 
-1. **OpenFang directory** -- `~/.openfang/` exists
+1. **OpenFang directory** -- `~/.armaraos/` exists
 2. **.env file** -- exists and has correct permissions (0600 on Unix)
 3. **Config TOML syntax** -- `config.toml` parses without errors
 4. **Daemon status** -- whether a daemon is running
@@ -209,7 +213,7 @@ openfang doctor [--json] [--repair]
 6. **Stale daemon.json** -- leftover `daemon.json` from a crashed daemon
 7. **Database file** -- SQLite magic bytes validation
 8. **Disk space** -- warns if less than 100MB available (Unix only)
-9. **Agent manifests** -- validates all `.toml` files in `~/.openfang/agents/`
+9. **Agent manifests** -- validates all `.toml` files in `~/.armaraos/agents/`
 10. **LLM provider keys** -- checks env vars for 10 providers (Groq, OpenRouter, Anthropic, OpenAI, DeepSeek, Gemini, Google, Together, Mistral, Fireworks), performs live validation (401/403 detection)
 11. **Channel tokens** -- format validation for Telegram, Discord, Slack tokens
 12. **Config consistency** -- checks that `api_key_env` references in config match actual environment variables
@@ -299,7 +303,7 @@ openfang agent new [<TEMPLATE>]
 
 **Behavior:**
 
-- Templates are discovered from: the repo `agents/` directory (dev builds), `~/.openfang/agents/` (installed), and `OPENFANG_AGENTS_DIR` (env override).
+- Templates are discovered from: the repo `agents/` directory (dev builds), `~/.armaraos/agents/` (installed), and `OPENFANG_AGENTS_DIR` (env override).
 - Each template is a directory containing an `agent.toml` manifest.
 - In daemon mode: sends `POST /api/agents` with the manifest. Agent is persistent.
 - In standalone mode: boots an in-process kernel. Agent is ephemeral.
@@ -575,7 +579,7 @@ openfang skill list
 
 **Output columns:** NAME, VERSION, TOOLS, DESCRIPTION.
 
-Loads skills from `~/.openfang/skills/` plus bundled skills compiled into the binary.
+Loads skills from `~/.armaraos/skills/` plus bundled skills compiled into the binary.
 
 ---
 
@@ -672,7 +676,7 @@ Prompts for:
 - Description
 - Runtime (`python`, `node`, or `wasm`; defaults to `python`)
 
-Creates a directory under `~/.openfang/skills/<name>/` with:
+Creates a directory under `~/.armaraos/skills/<name>/` with:
 - `skill.toml` -- manifest file
 - `src/main.py` (or `src/index.js`) -- entry point with boilerplate
 
@@ -724,7 +728,7 @@ openfang channel setup [<CHANNEL>]
 Each wizard:
 1. Displays step-by-step instructions for obtaining credentials.
 2. Prompts for tokens/credentials.
-3. Saves tokens to `~/.openfang/.env` with owner-only permissions.
+3. Saves tokens to `~/.armaraos/.env` with owner-only permissions.
 4. Appends the channel configuration block to `config.toml` (prompts for confirmation).
 5. Warns to restart the daemon if one is running.
 
@@ -812,7 +816,7 @@ Display the current configuration file.
 openfang config show
 ```
 
-Prints the contents of `~/.openfang/config.toml` with the file path as a header comment.
+Prints the contents of `~/.armaraos/config.toml` with the file path as a header comment.
 
 ---
 
@@ -886,7 +890,7 @@ openfang config set api_listen "0.0.0.0:4200"
 
 ### openfang config set-key
 
-Save an LLM provider API key to `~/.openfang/.env`.
+Save an LLM provider API key to `~/.armaraos/.env`.
 
 ```
 openfang config set-key <PROVIDER>
@@ -901,7 +905,7 @@ openfang config set-key <PROVIDER>
 **Behavior:**
 
 - Prompts interactively for the API key.
-- Saves to `~/.openfang/.env` as `<PROVIDER_NAME>_API_KEY=<value>`.
+- Saves to `~/.armaraos/.env` as `<PROVIDER_NAME>_API_KEY=<value>`.
 - Runs a live validation test against the provider's API.
 - File permissions are restricted to owner-only on Unix.
 
@@ -910,7 +914,7 @@ openfang config set-key <PROVIDER>
 ```bash
 openfang config set-key groq
 # Paste your groq API key: gsk_...
-# [ok] Saved GROQ_API_KEY to ~/.openfang/.env
+# [ok] Saved GROQ_API_KEY to ~/.armaraos/.env
 # Testing key... OK
 ```
 
@@ -918,7 +922,7 @@ openfang config set-key groq
 
 ### openfang config delete-key
 
-Remove an API key from `~/.openfang/.env`.
+Remove an API key from `~/.armaraos/.env`.
 
 ```
 openfang config delete-key <PROVIDER>
@@ -954,7 +958,7 @@ openfang config test-key <PROVIDER>
 
 **Behavior:**
 
-- Reads the API key from the environment (loaded from `~/.openfang/.env`).
+- Reads the API key from the environment (loaded from `~/.armaraos/.env`).
 - Hits the provider's models/health endpoint.
 - Reports `OK` (key accepted) or `FAILED (401/403)` (key rejected).
 - Exits with code 1 on failure.
@@ -1027,7 +1031,7 @@ openfang migrate --from <FRAMEWORK> [--source-dir <PATH>] [--dry-run]
 **Behavior:**
 
 - Converts agent configurations, YAML manifests, and settings from the source framework into OpenFang format.
-- Saves imported data to `~/.openfang/`.
+- Saves imported data to `~/.armaraos/`.
 - Writes a `migration_report.md` summarizing what was imported.
 
 **Example:**
@@ -1099,7 +1103,7 @@ Add to your MCP client configuration:
 
 The CLI uses a two-step mechanism to detect a running daemon:
 
-1. **Read `daemon.json`:** On startup, the daemon writes `~/.openfang/daemon.json` containing the listen address (e.g. `127.0.0.1:4200`). The CLI reads this file to learn where the daemon is.
+1. **Read `daemon.json`:** On startup, the daemon writes `~/.armaraos/daemon.json` containing the listen address (e.g. `127.0.0.1:4200`). The CLI reads this file to learn where the daemon is.
 
 2. **Health check:** The CLI sends `GET http://<listen_addr>/api/health` with a 2-second timeout. If the health check succeeds, the daemon is considered running and the CLI uses HTTP to communicate with it.
 
@@ -1120,7 +1124,7 @@ openfang doctor --repair  # Cleans up stale daemon.json from crashes
 
 ## Environment File
 
-OpenFang loads `~/.openfang/.env` into the process environment on every CLI invocation. System environment variables take priority over `.env` values.
+OpenFang loads `~/.armaraos/.env` into the process environment on every CLI invocation. System environment variables take priority over `.env` values.
 
 The `.env` file stores API keys and secrets:
 

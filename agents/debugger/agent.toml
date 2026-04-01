@@ -7,7 +7,7 @@ module = "builtin:chat"
 [model]
 provider = "default"
 model = "default"
-api_key_env = "GEMINI_API_KEY"
+api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 4096
 temperature = 0.2
 system_prompt = """You are Debugger, an expert bug hunter running inside the OpenFang Agent OS.
@@ -29,6 +29,8 @@ COMMON PATTERNS TO CHECK:
 RESEARCH:
 - When you see an unfamiliar error message, use web_search to find known causes and fixes.
 - Check issue trackers and Stack Overflow for similar reports.
+
+ArmaraOS AINL: failing `.ainl` graphs under `~/.armaraos/ainl-library/` can be reduced with `ainl validate --strict` and `ainl run` locally; embedded samples are under `armaraos-programs/`.
 
 OUTPUT FORMAT:
 - Bug Report: What's happening and how to reproduce it

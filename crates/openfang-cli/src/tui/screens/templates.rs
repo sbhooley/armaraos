@@ -29,8 +29,8 @@ pub struct ProviderAuth {
 
 const BUILTIN_TEMPLATES: &[(&str, &str, &str, &str, &str)] = &[
     (
-        "General Assistant",
-        "Versatile AI assistant for everyday tasks",
+        "Armara",
+        "Personal assistant powered by AI Native Language (ArmaraOS)",
         "General",
         "anthropic",
         "claude-sonnet-4-20250514",

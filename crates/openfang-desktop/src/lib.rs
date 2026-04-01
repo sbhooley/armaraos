@@ -4,11 +4,17 @@
 //! at the WebUI. Includes system tray, single-instance enforcement, native OS
 //! notifications, global shortcuts, auto-start, and update checking.
 
-mod commands;
 mod ainl;
+mod ainl_upstream;
+mod ainl_version;
+#[cfg(desktop)]
+mod app_menu;
+mod commands;
+mod notification_icon;
 mod server;
 mod shortcuts;
 mod tray;
+mod ui_prefs;
 mod updater;
 
 use openfang_kernel::OpenFangKernel;
@@ -18,6 +24,8 @@ use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 use tracing::{info, warn};
+
+use crate::notification_icon::apply_notification_icon;
 
 /// Managed state: the port the embedded server listens on.
 pub struct PortState(pub u16);
@@ -48,12 +56,23 @@ pub fn run() {
 
     info!("ArmaraOS server running on port {port}");
 
-    let url = format!("http://127.0.0.1:{port}");
-
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .menu(crate::app_menu::build)
+            .on_menu_event(|_app, event| {
+                if event.id() == "help_ainl_website" {
+                    let _ = open::that("https://ainativelang.com/");
+                } else if event.id() == "help_ainl_x" {
+                    let _ = open::that("https://x.com/ainativelang");
+                }
+            });
+    }
 
     // Desktop-only plugins
     #[cfg(desktop)]
@@ -106,12 +125,21 @@ pub fn run() {
             commands::open_logs_dir,
             commands::ainl_status,
             commands::ensure_ainl_installed,
+            commands::ensure_armaraos_ainl_host,
+            commands::ainl_check_versions,
+            commands::upgrade_ainl_pip,
+            commands::set_dashboard_theme_mode,
+            commands::open_external_url,
+            commands::open_ainl_library_dir,
+            commands::ainl_try_library_file,
         ])
         .setup(move |app| {
             // Create the main window pointing directly at the embedded HTTP server.
             // We do NOT define windows in tauri.conf.json because Tauri would try to
             // load index.html from embedded assets (which don't exist), causing a race
             // condition where AssetNotFound overwrites the navigated page.
+            let theme_mode = crate::ui_prefs::load_theme_mode(app.handle());
+            let url = format!("http://127.0.0.1:{port}/?armaraos_theme={theme_mode}");
             let _window = WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -128,34 +156,52 @@ pub fn run() {
             #[cfg(desktop)]
             tray::setup_tray(app)?;
 
-            // Auto-bootstrap AINL (Option A) on startup.
-            // Non-blocking: runs in background so UI comes up immediately.
-            let app_handle_for_ainl = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                match crate::ainl::ensure_ainl_installed(&app_handle_for_ainl) {
-                    Ok(st) if st.ok => {
-                        info!("AINL bootstrap OK: {}", st.detail);
-                    }
-                    Ok(st) => {
-                        warn!("AINL bootstrap incomplete: {}", st.detail);
-                        let _ = app_handle_for_ainl
-                            .notification()
-                            .builder()
-                            .title("AINL setup incomplete")
-                            .body(st.detail)
+            // Auto-bootstrap AINL on startup: venv + pip/wheel + MCP host + library sync.
+            // Runs on a dedicated OS thread (blocking I/O + subprocess) so the async runtime is not wedged.
+            // Set ARMARAOS_AINL_AUTO_BOOTSTRAP=0 to skip (e.g. CI or air-gapped debugging).
+            let skip_ainl = std::env::var("ARMARAOS_AINL_AUTO_BOOTSTRAP")
+                .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+                .unwrap_or(false);
+            if !skip_ainl {
+                let app_handle_for_ainl = app.handle().clone();
+                std::thread::spawn(move || {
+                    match crate::ainl::ensure_ainl_installed(&app_handle_for_ainl) {
+                        Ok(st) if st.ok => {
+                            info!("AINL bootstrap OK: {}", st.detail);
+                            if st.armaraos_host_ok == Some(false) {
+                                warn!(
+                                    "ArmaraOS AINL host integration failed: {:?}",
+                                    st.armaraos_host_detail
+                                );
+                            }
+                        }
+                        Ok(st) => {
+                            warn!("AINL bootstrap incomplete: {}", st.detail);
+                            let _ = apply_notification_icon(
+                                app_handle_for_ainl
+                                    .notification()
+                                    .builder()
+                                    .title("AINL setup incomplete")
+                                    .body(st.detail),
+                            )
                             .show();
-                    }
-                    Err(e) => {
-                        warn!("AINL bootstrap failed: {e}");
-                        let _ = app_handle_for_ainl
-                            .notification()
-                            .builder()
-                            .title("AINL setup failed")
-                            .body(e)
+                        }
+                        Err(e) => {
+                            warn!("AINL bootstrap failed: {e}");
+                            let _ = apply_notification_icon(
+                                app_handle_for_ainl
+                                    .notification()
+                                    .builder()
+                                    .title("AINL setup failed")
+                                    .body(e),
+                            )
                             .show();
+                        }
                     }
-                }
-            });
+                });
+            } else {
+                info!("Skipping AINL auto-bootstrap (ARMARAOS_AINL_AUTO_BOOTSTRAP=0)");
+            }
 
             // Spawn background task to forward critical kernel events as native
             // OS notifications. Only truly critical events — crashes, hard quota
@@ -193,12 +239,14 @@ pub fn run() {
                                 _ => continue,
                             };
 
-                            if let Err(e) = app_handle
-                                .notification()
-                                .builder()
-                                .title(&title)
-                                .body(&body)
-                                .show()
+                            if let Err(e) = apply_notification_icon(
+                                app_handle
+                                    .notification()
+                                    .builder()
+                                    .title(&title)
+                                    .body(&body),
+                            )
+                            .show()
                             {
                                 warn!("Failed to send desktop notification: {e}");
                             }
@@ -217,6 +265,10 @@ pub fn run() {
             // Spawn startup update check (desktop only, after event forwarding is set up)
             #[cfg(desktop)]
             updater::spawn_startup_check(app.handle().clone());
+
+            // PyPI vs venv check: notify when ainativelang has a newer release (desktop only)
+            #[cfg(desktop)]
+            crate::ainl_version::spawn_ainl_pypi_notify_check(app.handle().clone());
 
             info!("ArmaraOS Desktop window created");
             Ok(())

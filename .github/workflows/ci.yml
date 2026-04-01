@@ -83,6 +83,30 @@ jobs:
             patchelf
       - run: cargo clippy --workspace -- -D warnings
 
+  desktop-ainl-resources:
+    name: Desktop AINL bundle (wheel + portable Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-ainl-resources
+      - name: Bundle wheel + Linux x86_64 portable Python
+        run: |
+          set -euo pipefail
+          VENV="${RUNNER_TEMP}/ainl-bundle-venv"
+          rm -rf "$VENV"
+          python3 -m venv "$VENV"
+          export PATH="$VENV/bin:$PATH"
+          python -m pip install --upgrade pip
+          cargo run -p xtask -- bundle-ainl-wheel --version 1.4.0
+          cargo run -p xtask -- bundle-portable-python --target x86_64-unknown-linux-gnu
+      - name: Verify artifacts exist
+        run: |
+          test -n "$(find crates/openfang-desktop/resources/ainl -name 'ainativelang-*-py3-none-any.whl' 2>/dev/null | head -1)"
+          test -f crates/openfang-desktop/resources/python/x86_64-unknown-linux-gnu/python/bin/python3
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
@@ -92,6 +116,30 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+
+  openfang-kernel-programs:
+    name: openfang-kernel + AINL programs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: openfang-kernel-programs
+      - name: Build and test openfang-kernel (build.rs embeds programs/)
+        run: |
+          cargo build -p openfang-kernel
+          cargo test -p openfang-kernel
+      - name: Validate programs/**/*.ainl (PyPI ainativelang)
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/ainl-ci
+          /tmp/ainl-ci/bin/pip install -q "ainativelang>=1.3,<2"
+          export PATH="/tmp/ainl-ci/bin:$PATH"
+          find programs -name '*.ainl' -type f | while read -r f; do
+            echo "validate $f"
+            ainl validate "$f" --strict
+          done
 
   audit:
     name: Security Audit

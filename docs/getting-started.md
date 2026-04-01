@@ -2,6 +2,8 @@
 
 This guide walks you through installing OpenFang, configuring your first LLM provider, spawning an agent, and chatting with it.
 
+Config and state default to **`~/.armaraos/`** (see [data-directory.md](data-directory.md) for env overrides and legacy **`~/.openfang`** migration).
+
 ## Table of Contents
 
 - [Installation](#installation)
@@ -34,7 +36,7 @@ The desktop app includes the full OpenFang system with a native window, system t
 curl -sSf https://openfang.sh | sh
 ```
 
-This downloads the latest CLI binary and installs it to `~/.openfang/bin/`.
+This downloads the latest CLI binary and installs it to `~/.armaraos/bin/`.
 
 ### Option 3: PowerShell Installer (Windows)
 
@@ -62,15 +64,17 @@ cargo install --path crates/openfang-cli
 
 ### Option 5: Docker
 
+Prebuilt images: `ghcr.io/sbhooley/armaraos` (see releases). Build details, `OPENSSL_NO_VENDOR`, and faster local builds: [`docs/docker.md`](docker.md).
+
 ```bash
-docker pull ghcr.io/RightNow-AI/openfang:latest
+docker pull ghcr.io/sbhooley/armaraos:latest
 
 docker run -d \
   --name openfang \
   -p 4200:4200 \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   -v openfang-data:/data \
-  ghcr.io/RightNow-AI/openfang:latest
+  ghcr.io/sbhooley/armaraos:latest
 ```
 
 Or use Docker Compose:
@@ -94,7 +98,7 @@ openfang --version
 
 ### Initialize
 
-Run the init command to create the `~/.openfang/` directory and a default config file:
+Run the init command to create the `~/.armaraos/` directory and a default config file:
 
 ```bash
 openfang init
@@ -103,7 +107,7 @@ openfang init
 This creates:
 
 ```
-~/.openfang/
+~/.armaraos/
   config.toml    # Main configuration
   data/          # Database and runtime data
   agents/        # Agent manifests (optional)
@@ -128,7 +132,7 @@ Add the export to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to persist 
 
 ### Edit the Config
 
-The default config uses Anthropic. To change the provider, edit `~/.openfang/config.toml`:
+The default config uses Anthropic. To change the provider, edit `~/.armaraos/config.toml`:
 
 ```toml
 [default_model]
@@ -341,7 +345,7 @@ Now that you have OpenFang running:
 ### Useful Commands Reference
 
 ```bash
-openfang init                          # Initialize ~/.openfang/
+openfang init                          # Initialize ~/.armaraos/
 openfang start                         # Start the daemon
 openfang status                        # Check daemon status
 openfang doctor                        # Run diagnostic checks

@@ -1,0 +1,12 @@
+# skill_mint_stub — deterministic draft body (title + episode); host adds full Meta via Rust API
+# Full template: openfang_kernel::skills_staging::render_skill_draft_markdown
+# Spec: docs/learning-frame-v1.md
+# Validate: ainl validate programs/skill-mint-stub/skill_mint_stub.ainl --strict
+
+skill_mint_stub:
+  in: frame_version op run_id intent outcome episode tier
+
+  title = core.concat "# " intent
+  prefix = core.concat title "\n\n## Episode\n\n"
+  merged = core.concat prefix episode
+  out merged

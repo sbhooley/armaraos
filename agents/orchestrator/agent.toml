@@ -22,6 +22,8 @@ AVAILABLE TOOLS:
 - memory_store: Save results and state to shared memory
 - memory_recall: Retrieve shared data from memory
 
+When the host exposes **ainl-mcp**, specialists can validate and run **AINL** graphs from `~/.armaraos/ainl-library/` (including `armaraos-programs/`). Prefer AINL for multi-adapter automation unless a task is purely conversational delegation.
+
 SPECIALIST AGENTS (spawn or message these):
 - coder: Writes and reviews code
 - researcher: Gathers information

@@ -679,7 +679,7 @@ impl Default for ExtensionsConfig {
 pub struct VaultConfig {
     /// Whether the vault is enabled (auto-detected if vault.enc exists).
     pub enabled: bool,
-    /// Custom vault file path (default: ~/.openfang/vault.enc).
+    /// Custom vault file path (default: `~/.armaraos/vault.enc`).
     pub path: Option<PathBuf>,
 }
 
@@ -991,9 +991,9 @@ impl Default for ThinkingConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KernelConfig {
-    /// OpenFang home directory (default: ~/.openfang).
+    /// ArmaraOS home directory (default: `~/.armaraos`).
     pub home_dir: PathBuf,
-    /// Data directory for databases (default: ~/.openfang/data).
+    /// Data directory for databases (default: `~/.armaraos/data`).
     pub data_dir: PathBuf,
     /// Log level (trace, debug, info, warn, error).
     pub log_level: String,
@@ -1048,7 +1048,7 @@ pub struct KernelConfig {
     /// Credential vault configuration.
     #[serde(default)]
     pub vault: VaultConfig,
-    /// Root directory for agent workspaces. Default: `~/.openfang/workspaces`
+    /// Root directory for agent workspaces. Default: `~/.armaraos/workspaces`
     #[serde(default)]
     pub workspaces_dir: Option<PathBuf>,
     /// Media understanding configuration.
@@ -1124,7 +1124,7 @@ pub struct KernelConfig {
     #[serde(default)]
     pub auth: AuthConfig,
     /// Directory for auto-loading workflow JSON files on startup.
-    /// Defaults to `~/.openfang/workflows`. Set to empty string to disable.
+    /// Defaults to `~/.armaraos/workflows`. Set to empty string to disable.
     #[serde(default)]
     pub workflows_dir: Option<PathBuf>,
     /// Heartbeat monitor settings.
@@ -1489,20 +1489,74 @@ impl std::fmt::Debug for KernelConfig {
     }
 }
 
+/// Result of [`ensure_armaraos_data_home`] when no explicit home env vars are set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArmaraosHomeSetup {
+    /// `ARMARAOS_HOME` or `OPENFANG_HOME` is set — no automatic change under the real home directory.
+    SkippedEnv,
+    /// `~/.armaraos` exists.
+    AlreadyPresent,
+    /// Created empty `~/.armaraos`.
+    Created,
+    /// Renamed `~/.openfang` → `~/.armaraos`.
+    MigratedFromOpenfang,
+}
+
+/// Creates `~/.armaraos`, or renames `~/.openfang` → `~/.armaraos` when the new path is missing.
+///
+/// Skips filesystem changes when `ARMARAOS_HOME` or `OPENFANG_HOME` is set.
+pub fn ensure_armaraos_data_home() -> std::io::Result<ArmaraosHomeSetup> {
+    if std::env::var("ARMARAOS_HOME").is_ok() || std::env::var("OPENFANG_HOME").is_ok() {
+        return Ok(ArmaraosHomeSetup::SkippedEnv);
+    }
+    let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let arm = home.join(".armaraos");
+    let leg = home.join(".openfang");
+    if arm.is_dir() {
+        return Ok(ArmaraosHomeSetup::AlreadyPresent);
+    }
+    if leg.is_dir() {
+        return match std::fs::rename(&leg, &arm) {
+            Ok(()) => {
+                tracing::info!(
+                    target: "openfang_types::config",
+                    "Migrated ~/.openfang → ~/.armaraos"
+                );
+                Ok(ArmaraosHomeSetup::MigratedFromOpenfang)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "openfang_types::config",
+                    error = %e,
+                    "Could not rename ~/.openfang to ~/.armaraos; using legacy ~/.openfang"
+                );
+                Err(e)
+            }
+        };
+    }
+    std::fs::create_dir_all(&arm)?;
+    tracing::info!(
+        target: "openfang_types::config",
+        "Created ~/.armaraos data directory"
+    );
+    Ok(ArmaraosHomeSetup::Created)
+}
+
 /// Resolve the ArmaraOS home directory (legacy name preserved for compatibility).
 ///
 /// Priority:
 /// - `ARMARAOS_HOME` env var
 /// - `OPENFANG_HOME` env var (legacy)
-/// - `~/.armaraos` if it exists
+/// - `~/.armaraos` after [`ensure_armaraos_data_home`] (creates or migrates from `~/.openfang`)
 /// - otherwise `~/.openfang` (legacy default)
-fn openfang_home_dir() -> PathBuf {
+pub fn openfang_home_dir() -> PathBuf {
     if let Ok(home) = std::env::var("ARMARAOS_HOME") {
         return PathBuf::from(home);
     }
     if let Ok(home) = std::env::var("OPENFANG_HOME") {
         return PathBuf::from(home);
     }
+    let _ = ensure_armaraos_data_home();
     let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
     let arm = home.join(".armaraos");
     if arm.is_dir() {
@@ -1510,6 +1564,10 @@ fn openfang_home_dir() -> PathBuf {
     }
     home.join(".openfang")
 }
+
+/// Default OpenRouter model id for fresh installs (no `openrouter/` prefix; drivers add the provider).
+/// Kept in sync with desktop `apply_desktop_bundled_llm_defaults` and the model catalog.
+pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "stepfun/step-3.5-flash:free";
 
 /// Default LLM model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1528,9 +1586,9 @@ pub struct DefaultModelConfig {
 impl Default for DefaultModelConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
-            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            provider: "openrouter".to_string(),
+            model: DEFAULT_OPENROUTER_MODEL_ID.to_string(),
+            api_key_env: "OPENROUTER_API_KEY".to_string(),
             base_url: None,
         }
     }

@@ -881,12 +881,12 @@ impl OpenFangKernel {
                 // Auto-detect embedding provider by checking API key env vars in
                 // priority order.  First match wins.
                 const API_KEY_PROVIDERS: &[(&str, &str)] = &[
-                    ("OPENAI_API_KEY",    "openai"),
-                    ("GROQ_API_KEY",      "groq"),
-                    ("MISTRAL_API_KEY",   "mistral"),
-                    ("TOGETHER_API_KEY",  "together"),
+                    ("OPENAI_API_KEY", "openai"),
+                    ("GROQ_API_KEY", "groq"),
+                    ("MISTRAL_API_KEY", "mistral"),
+                    ("TOGETHER_API_KEY", "together"),
                     ("FIREWORKS_API_KEY", "fireworks"),
-                    ("COHERE_API_KEY",    "cohere"),
+                    ("COHERE_API_KEY", "cohere"),
                 ];
 
                 let detected_from_key = API_KEY_PROVIDERS
@@ -1127,8 +1127,7 @@ impl OpenFangKernel {
                                                 != entry.manifest.tool_allowlist
                                             || disk_manifest.tool_blocklist
                                                 != entry.manifest.tool_blocklist
-                                            || disk_manifest.skills
-                                                != entry.manifest.skills
+                                            || disk_manifest.skills != entry.manifest.skills
                                             || disk_manifest.mcp_servers
                                                 != entry.manifest.mcp_servers;
                                         if changed {
@@ -1282,6 +1281,29 @@ impl OpenFangKernel {
                 ) {
                     warn!(agent = %entry.name, "{warning}");
                 }
+            }
+        }
+
+        match crate::embedded_ainl_programs::materialize_embedded_programs(&kernel.config.home_dir)
+        {
+            Ok(n) if n > 0 => {
+                tracing::info!(written = n, "AINL embedded programs refreshed on disk");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("Embedded AINL programs materialization failed: {e}");
+            }
+        }
+
+        match crate::ainl_library::register_curated_ainl_cron_jobs(&kernel) {
+            Ok(n) => {
+                if n > 0 {
+                    let _ = kernel.cron_scheduler.persist();
+                    info!(count = n, "Registered curated AINL cron jobs");
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Curated AINL cron registration skipped: {e}");
             }
         }
 
@@ -5588,6 +5610,140 @@ impl OpenFangKernel {
                     }
                 }
             }
+            CronAction::AinlRun {
+                program_path,
+                cwd,
+                ainl_binary,
+                timeout_secs,
+                json_output,
+                frame,
+            } => {
+                use std::io::ErrorKind;
+                use std::process::Stdio;
+
+                struct AinlFrameTempFile(Option<std::path::PathBuf>);
+                impl Drop for AinlFrameTempFile {
+                    fn drop(&mut self) {
+                        if let Some(p) = self.0.take() {
+                            let _ = std::fs::remove_file(p);
+                        }
+                    }
+                }
+
+                let mut timeout_s = timeout_secs.unwrap_or(300);
+                timeout_s = timeout_s.clamp(10, 3600);
+                let timeout = std::time::Duration::from_secs(timeout_s);
+                let delivery = job.delivery.clone();
+                let home = &self.config.home_dir;
+
+                let prog = match crate::ainl_library::resolve_program_under_ainl_library(
+                    home,
+                    program_path.as_str(),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.cron_scheduler.record_failure(job_id, &e);
+                        return Err(e);
+                    }
+                };
+                let cwd_resolved =
+                    match crate::ainl_library::resolve_cwd_under_ainl_library(home, cwd) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            self.cron_scheduler.record_failure(job_id, &e);
+                            return Err(e);
+                        }
+                    };
+                let bin = crate::ainl_library::resolve_ainl_binary(ainl_binary);
+
+                let mut cmd = tokio::process::Command::new(&bin);
+                cmd.arg("run");
+                if *json_output {
+                    cmd.arg("--json");
+                }
+                let _frame_tmp = if let Some(v) = frame {
+                    let path = std::env::temp_dir()
+                        .join(format!("armaraos-ainl-frame-{}.json", uuid::Uuid::new_v4()));
+                    let bytes = serde_json::to_vec(v).map_err(|e| {
+                        let msg = format!("ainl frame JSON: {e}");
+                        self.cron_scheduler.record_failure(job_id, &msg);
+                        msg
+                    })?;
+                    if let Err(e) = std::fs::write(&path, &bytes) {
+                        let msg = format!("ainl frame temp file: {e}");
+                        self.cron_scheduler.record_failure(job_id, &msg);
+                        return Err(msg);
+                    }
+                    cmd.arg("--frame-json");
+                    cmd.arg(format!("@{}", path.display()));
+                    AinlFrameTempFile(Some(path))
+                } else {
+                    AinlFrameTempFile(None)
+                };
+                cmd.arg(&prog);
+                cmd.current_dir(&cwd_resolved);
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+                cmd.kill_on_drop(true);
+
+                match tokio::time::timeout(timeout, cmd.output()).await {
+                    Ok(Ok(output)) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let combined = if *json_output {
+                            let trimmed = stdout.trim();
+                            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                                Ok(v) => serde_json::to_string_pretty(&v)
+                                    .unwrap_or_else(|_| trimmed.to_string()),
+                                Err(_) => {
+                                    if stderr.trim().is_empty() {
+                                        stdout.to_string()
+                                    } else {
+                                        format!("{stdout}\n--- stderr ---\n{stderr}")
+                                    }
+                                }
+                            }
+                        } else if stderr.trim().is_empty() {
+                            stdout.to_string()
+                        } else {
+                            format!("{stdout}\n--- stderr ---\n{stderr}")
+                        };
+                        let status = output.status;
+                        if !status.success() {
+                            let err_msg = format!("ainl exited with {status}: {}", combined.trim());
+                            self.cron_scheduler.record_failure(job_id, &err_msg);
+                            return Err(err_msg);
+                        }
+                        match cron_deliver_response(self, agent_id, combined.trim(), &delivery)
+                            .await
+                        {
+                            Ok(()) => {
+                                self.cron_scheduler.record_success(job_id);
+                                Ok(combined)
+                            }
+                            Err(e) => {
+                                self.cron_scheduler.record_failure(job_id, &e);
+                                Err(e)
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        let mut err_msg = format!("failed to spawn ainl ({bin}): {e}");
+                        if e.kind() == ErrorKind::NotFound {
+                            err_msg.push_str(
+                                " — Install AINL or set ARMARAOS_AINL_BIN to the full path to the `ainl` executable.",
+                            );
+                        }
+                        self.cron_scheduler.record_failure(job_id, &err_msg);
+                        Err(err_msg)
+                    }
+                    Err(_) => {
+                        let err_msg = format!("ainl run timed out after {timeout_s}s");
+                        self.cron_scheduler.record_failure(job_id, &err_msg);
+                        Err(err_msg)
+                    }
+                }
+            }
         }
     }
 }
@@ -6110,6 +6266,7 @@ impl KernelHandle for OpenFangKernel {
             CronDelivery::None
         };
         let one_shot = job_json["one_shot"].as_bool().unwrap_or(false);
+        let enabled = job_json["enabled"].as_bool().unwrap_or(true);
 
         let aid = openfang_types::agent::AgentId(
             uuid::Uuid::parse_str(agent_id).map_err(|e| format!("Invalid agent ID: {e}"))?,
@@ -6122,7 +6279,7 @@ impl KernelHandle for OpenFangKernel {
             schedule,
             action,
             delivery,
-            enabled: true,
+            enabled,
             created_at: chrono::Utc::now(),
             next_run: None,
             last_run: None,

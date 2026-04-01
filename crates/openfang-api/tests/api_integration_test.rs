@@ -13,6 +13,7 @@ use openfang_api::routes::{self, AppState};
 use openfang_api::ws;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
@@ -79,6 +80,7 @@ async fn start_test_server_with_provider(
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        ainl_register_hits: dashmap::DashMap::new(),
     });
 
     let app = Router::new()
@@ -121,6 +123,14 @@ async fn start_test_server_with_provider(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
+        .route(
+            "/api/ainl/library/register-curated",
+            axum::routing::post(routes::post_ainl_register_curated),
+        )
+        .route(
+            "/api/events/stream",
+            axum::routing::get(routes::kernel_events_stream),
+        )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
@@ -133,7 +143,12 @@ async fn start_test_server_with_provider(
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     TestServer {
@@ -674,6 +689,76 @@ memory_write = ["self.*"]
     assert_eq!(agents.len(), 1);
 }
 
+/// POST /api/ainl/library/register-curated returns `registered` and `embedded_programs_written`.
+#[tokio::test]
+async fn test_register_curated_response_includes_embedded_counts() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/ainl/library/register-curated", server.base_url);
+    let resp = client.post(&url).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.get("registered").is_some(),
+        "missing registered: {body}"
+    );
+    assert!(
+        body.get("embedded_programs_written").is_some(),
+        "missing embedded_programs_written: {body}"
+    );
+}
+
+/// POST /api/ainl/library/register-curated allows 5 calls per IP per 60s; the 6th returns 429.
+#[tokio::test]
+async fn test_register_curated_rate_limit_6th_returns_429() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/ainl/library/register-curated", server.base_url);
+
+    for i in 1..=5 {
+        let resp = client.post(&url).send().await.unwrap();
+        assert_ne!(
+            resp.status(),
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "request {i} should not be rate-limited"
+        );
+    }
+
+    let resp = client.post(&url).send().await.unwrap();
+    assert_eq!(resp.status(), 429);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let err = body["error"].as_str().expect("error field");
+    assert!(
+        err.contains("Too many register-curated"),
+        "unexpected body: {body}"
+    );
+}
+
+/// GET /api/events/stream returns `text/event-stream` and at least one `data:` SSE line (loopback).
+#[tokio::test]
+async fn test_kernel_events_stream_sse_smoke() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/events/stream", server.base_url);
+    let mut resp = client.get(url).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("text/event-stream"),
+        "expected text/event-stream, got {ct}"
+    );
+    let chunk = resp.chunk().await.unwrap().expect("first chunk");
+    let s = String::from_utf8_lossy(&chunk);
+    assert!(
+        s.contains("data:") || s.contains("ping"),
+        "expected SSE data or comment, got: {s:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Auth integration tests
 // ---------------------------------------------------------------------------
@@ -709,6 +794,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        ainl_register_hits: dashmap::DashMap::new(),
     });
 
     let api_key = state.kernel.config.api_key.trim().to_string();

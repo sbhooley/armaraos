@@ -1,4 +1,4 @@
-//! Channel bridge — connects channel adapters to the OpenFang kernel.
+//! Channel bridge — connects channel adapters to the ArmaraOS kernel.
 //!
 //! Defines `ChannelBridgeHandle` (implemented by openfang-api on the kernel) and
 //! `BridgeManager` which owns running adapters and dispatches messages.
@@ -69,7 +69,7 @@ fn is_channel_command(name: &str) -> bool {
 
 fn format_channel_help() -> String {
     let sections = ["General", "Session", "Info", "Automation", "Monitoring"];
-    let mut msg = String::from("OpenFang Bot Commands:");
+    let mut msg = String::from("ArmaraOS Bot Commands:");
 
     for section in sections {
         let commands: Vec<&ChatCommandSpec> = channel_command_specs()
@@ -1491,7 +1491,7 @@ async fn handle_command(
     match name {
         "start" => {
             let agents = handle.list_agents().await.unwrap_or_default();
-            let mut msg = "Welcome to OpenFang! I connect you to AI agents.\n\nAvailable agents:\n"
+            let mut msg = "Welcome to ArmaraOS! I connect you to AI agents.\n\nAvailable agents:\n"
                 .to_string();
             if agents.is_empty() {
                 msg.push_str("  (none running)\n");

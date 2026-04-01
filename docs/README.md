@@ -17,6 +17,7 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
 | [Architecture](architecture.md) | 12-crate structure, kernel boot, agent lifecycle, memory substrate |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
@@ -35,6 +36,7 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
 | [API Reference](api-reference.md) | All 76 REST/WS/SSE endpoints with request/response examples |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
 
@@ -42,7 +44,11 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
 | [Production Checklist](production-checklist.md) | Every step before tagging v0.1.0 -- signing keys, secrets, verification |
+| [Desktop release smoke](release-desktop.md) | Tauri build, updater, AINL tab, SSE badge, API tests |
+| [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |
+| [Dashboard testing](dashboard-testing.md) | Kernel SSE smoke, Overview refresh, future Playwright notes |
 
 ## Additional Resources
 
@@ -61,9 +67,11 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 
 ```bash
 export GROQ_API_KEY="your-key"
-openfang init && openfang start
+armaraos init && armaraos start
 # Open http://127.0.0.1:4200
 ```
+
+(The upstream binary name `openfang` is still supported in many builds; paths below use the ArmaraOS default.)
 
 ### Key Numbers
 
@@ -81,15 +89,17 @@ openfang init && openfang start
 | Security systems | 16 |
 | Tests | 967 |
 
-### Important Paths
+### Important paths
+
+See **[data-directory.md](data-directory.md)** for overrides and migration from `~/.openfang`.
 
 | Path | Description |
 |------|-------------|
-| `~/.openfang/config.toml` | Main configuration file |
-| `~/.openfang/data/openfang.db` | SQLite database |
-| `~/.openfang/skills/` | Installed skills |
-| `~/.openfang/daemon.json` | Daemon PID and port info |
-| `agents/` | Agent template manifests |
+| `~/.armaraos/config.toml` | Main configuration file |
+| `~/.armaraos/data/openfang.db` | SQLite database |
+| `~/.armaraos/skills/` | Installed skills |
+| `~/.armaraos/daemon.json` | Daemon PID and port info |
+| `agents/` | Agent template manifests (repo / dev) |
 
 ### Key Environment Variables
 
@@ -101,5 +111,7 @@ openfang init && openfang start
 | `GROQ_API_KEY` | Groq (fast Llama/Mixtral) |
 | `DEEPSEEK_API_KEY` | DeepSeek |
 | `XAI_API_KEY` | xAI (Grok) |
+| `ARMARAOS_HOME` | Override data directory (replaces `~/.armaraos`) |
+| `OPENFANG_HOME` | Legacy alias for `ARMARAOS_HOME` |
 
 Only one provider key is needed to get started. Groq offers a free tier.
