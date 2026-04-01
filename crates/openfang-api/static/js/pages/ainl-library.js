@@ -166,9 +166,9 @@ function ainlLibraryPage() {
       this.tryBusy = rel + ':' + mode;
       try {
         var res = await ArmaraosDesktopTauriInvoke('ainl_try_library_file', {
-          relative_path: rel,
+          relativePath: rel,
           mode: mode,
-          timeout_secs: mode === 'run' ? 300 : 120,
+          timeoutSecs: mode === 'run' ? 300 : 120,
         });
         if (!res) {
           OpenFangToast.error('Desktop command unavailable');
