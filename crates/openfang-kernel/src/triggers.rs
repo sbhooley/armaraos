@@ -449,6 +449,22 @@ fn describe_event(event: &Event) -> String {
                     "Health check failed: agent {agent_id}, unresponsive for {unresponsive_secs}s"
                 )
             }
+            SystemEvent::CronJobCompleted {
+                job_id,
+                job_name,
+                agent_id,
+                output_preview,
+            } => format!(
+                "Cron job completed: {job_name} ({job_id}) for agent {agent_id}: {output_preview}"
+            ),
+            SystemEvent::CronJobFailed {
+                job_id,
+                job_name,
+                agent_id,
+                error,
+            } => format!(
+                "Cron job failed: {job_name} ({job_id}) for agent {agent_id}: {error}"
+            ),
         },
         EventPayload::Custom(data) => {
             format!("Custom event ({} bytes)", data.len())

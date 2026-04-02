@@ -32,71 +32,71 @@ const BUILTIN_TEMPLATES: &[(&str, &str, &str, &str, &str)] = &[
         "Armara",
         "Personal assistant powered by AI Native Language (ArmaraOS)",
         "General",
-        "anthropic",
-        "claude-sonnet-4-20250514",
+        "default",
+        "default",
     ),
     (
         "Code Helper",
         "Programming assistant with code review and debugging",
         "Development",
-        "anthropic",
-        "claude-sonnet-4-20250514",
+        "default",
+        "default",
     ),
     (
         "Researcher",
         "Deep research and analysis with web search",
         "Research",
-        "anthropic",
-        "claude-sonnet-4-20250514",
+        "default",
+        "default",
     ),
     (
         "Writer",
         "Creative and technical writing assistant",
         "Writing",
-        "anthropic",
-        "claude-sonnet-4-20250514",
+        "default",
+        "default",
     ),
     (
         "Data Analyst",
         "Data analysis, visualization, and SQL queries",
         "Development",
-        "gemini",
-        "gemini-2.5-flash",
+        "default",
+        "default",
     ),
     (
         "DevOps Engineer",
         "Infrastructure, CI/CD, and deployment assistance",
         "Development",
-        "groq",
-        "llama-3.3-70b-versatile",
+        "default",
+        "default",
     ),
     (
         "Customer Support",
         "Professional customer service agent",
         "Business",
-        "groq",
-        "llama-3.3-70b-versatile",
+        "default",
+        "default",
     ),
     (
         "Tutor",
         "Patient educational assistant for learning any subject",
         "General",
-        "gemini",
-        "gemini-2.5-flash",
+        "default",
+        "default",
     ),
     (
         "API Designer",
         "REST/GraphQL API design and documentation",
         "Development",
-        "anthropic",
-        "claude-sonnet-4-20250514",
+        "default",
+        "default",
     ),
     (
         "Meeting Notes",
         "Meeting transcription, summary, and action items",
         "Business",
-        "groq",
-        "llama-3.3-70b-versatile",
+        "default",
+        "default",
     ),
 ];
 
@@ -182,6 +182,9 @@ impl TemplatesState {
     }
 
     fn provider_configured(&self, provider: &str) -> bool {
+        if provider == "default" {
+            return true;
+        }
         self.providers
             .iter()
             .any(|p| p.name == provider && p.configured)

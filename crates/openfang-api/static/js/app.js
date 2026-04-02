@@ -353,6 +353,14 @@ document.addEventListener('alpine:init', function() {
         OpenFangToast.warn('Quota enforced for an agent', 6000);
       } else if (p.type === 'System' && p.data && p.data.event === 'HealthCheckFailed') {
         OpenFangToast.warn('Agent health check failed', 6000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'CronJobCompleted') {
+        var name = p.data.job_name || 'Scheduled job';
+        var out = (p.data.output_preview || '').slice(0, 180);
+        OpenFangToast.info(name + ': ' + out, 7000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'CronJobFailed') {
+        var name2 = p.data.job_name || 'Scheduled job';
+        var err2 = (p.data.error || '').slice(0, 180);
+        OpenFangToast.error(name2 + ' failed: ' + err2, 8000);
       }
     }
     return {

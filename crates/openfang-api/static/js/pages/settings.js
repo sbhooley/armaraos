@@ -43,6 +43,10 @@ function settingsPage() {
     /** ISO timestamp of last PyPI/GitHub version check (desktop AINL tab). */
     ainlVersionCheckedAt: null,
 
+    // -- Desktop (Tauri) app updates --
+    updateChecking: false,
+    updateInfo: null,
+
     // -- Dynamic config state --
     configSchema: null,
     configValues: {},
@@ -364,6 +368,41 @@ function settingsPage() {
       var w = typeof window !== 'undefined' ? window : null;
       var core = w && w.__TAURI__ && w.__TAURI__.core;
       return !!(core && typeof core.invoke === 'function');
+    },
+
+    async checkForDesktopUpdates() {
+      if (!this.isDesktopShell) return;
+      this.updateChecking = true;
+      this.updateInfo = null;
+      try {
+        var info = await ArmaraosDesktopTauriInvoke('check_for_updates');
+        this.updateInfo = info;
+        if (!info) {
+          OpenFangToast.error('Update check returned no data');
+        } else if (info.available && info.installable) {
+          var v = (info.version || 'unknown');
+          if (!confirm('ArmaraOS v' + v + ' is available. Install now? The app will restart.')) {
+            this.updateChecking = false;
+            return;
+          }
+          OpenFangToast.info('Installing update…');
+          await ArmaraosDesktopTauriInvoke('install_update');
+        } else if (info.available && !info.installable) {
+          var v2 = (info.version || 'unknown');
+          var u = info.download_url || 'https://github.com/sbhooley/armaraos/releases';
+          OpenFangToast.info('Update available (v' + v2 + '). Opening download page…', 7000);
+          try {
+            await ArmaraosDesktopTauriInvoke('open_external_url', { url: u });
+          } catch (e) {
+            window.open(u, '_blank', 'noopener,noreferrer');
+          }
+        } else {
+          OpenFangToast.success('Up to date');
+        }
+      } catch (e) {
+        OpenFangToast.error(e.message || String(e));
+      }
+      this.updateChecking = false;
     },
 
     get ainlDesktop() {

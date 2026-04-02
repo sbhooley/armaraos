@@ -28,6 +28,16 @@ pub enum AuditAction {
     AuthAttempt,
     WireConnect,
     ConfigChange,
+    /// Scheduler/cron job executed.
+    CronJobRun,
+    /// Scheduler/cron job produced output.
+    CronJobOutput,
+    /// Scheduler/cron job failed.
+    CronJobFailure,
+    /// Desktop update check invoked.
+    UpdateCheck,
+    /// Desktop update install invoked.
+    UpdateInstall,
 }
 
 impl std::fmt::Display for AuditAction {
@@ -131,6 +141,11 @@ impl AuditLog {
                         "AuthAttempt" => AuditAction::AuthAttempt,
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
+                        "CronJobRun" => AuditAction::CronJobRun,
+                        "CronJobOutput" => AuditAction::CronJobOutput,
+                        "CronJobFailure" => AuditAction::CronJobFailure,
+                        "UpdateCheck" => AuditAction::UpdateCheck,
+                        "UpdateInstall" => AuditAction::UpdateInstall,
                         _ => AuditAction::ToolInvoke, // fallback
                     };
                     Ok(AuditEntry {

@@ -14,6 +14,7 @@ function ainlLibraryPage() {
     sync: null,
     search: '',
     loadHints: false,
+    strictValidation: true,
     hintsTruncated: false,
     maxHintsApplied: null,
     expanded: {},
@@ -143,7 +144,7 @@ function ainlLibraryPage() {
         OpenFangToast.warn('Path not available yet — refresh the library.');
         return;
       }
-      var line = 'ainl validate --strict "' + abs.replace(/"/g, '\\"') + '"';
+      var line = 'ainl validate ' + (this.strictValidation ? '--strict ' : '') + '"' + abs.replace(/"/g, '\\"') + '"';
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(line).then(function() {
           OpenFangToast.success('Copied command to clipboard');
@@ -169,6 +170,7 @@ function ainlLibraryPage() {
           relativePath: rel,
           mode: mode,
           timeoutSecs: mode === 'run' ? 300 : 120,
+          strict: this.strictValidation,
         });
         if (!res) {
           OpenFangToast.error('Desktop command unavailable');

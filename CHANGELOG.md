@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-02
+
+### Added
+
+- **Scheduler output visibility:** Scheduled cron jobs now emit user-visible entries in the Audit Log (Dashboard → Logs), and scheduled AINL outputs are appended into the associated agent’s chat session without invoking the LLM.
+- **Desktop update UX:** Desktop-only “Check for Updates” buttons were added to Runtime and Settings, and update activity is logged to the Audit Log. If the website updater feed is unreachable, ArmaraOS falls back to a public GitHub Releases check (download-page flow).
+- **AINL library usability:** Added a Strict validation toggle in AINL Library (runs `ainl validate` with or without `--strict`).
+
+### Changed
+
+- **Brand theming:** Default dashboard accent color is now red-forward (`#ef5350`) instead of orange-forward.
+- **AINL upstream sync:** Desktop upstream AINL library sync now defaults to a tag matching the installed `ainativelang` version to reduce validation failures from `main`/version skew (override via `ARMARAOS_AINL_LIBRARY_REF`).
+- **TUI templates:** Built-in templates now inherit the system default model/provider (`provider="default"`, `model="default"`) instead of hard-coded provider/model pairs.
+
+### Fixed
+
+- **LLM resilience:** When rate limited or overloaded after retries, agents automatically attempt OpenRouter free-model fallbacks (`stepfun/step-3.5-flash:free`, then `nvidia/nemotron-3-super-120b-a12b:free`) to keep the UX flowing.
+
 ## [0.6.0] - 2026-04-01
 
 ### Added

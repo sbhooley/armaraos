@@ -277,6 +277,28 @@ pub enum SystemEvent {
         /// How long the agent has been unresponsive.
         unresponsive_secs: u64,
     },
+    /// A scheduled cron job completed successfully.
+    CronJobCompleted {
+        /// Cron job id.
+        job_id: String,
+        /// Cron job name.
+        job_name: String,
+        /// Agent associated with this cron job.
+        agent_id: AgentId,
+        /// Short preview of the output (truncated).
+        output_preview: String,
+    },
+    /// A scheduled cron job failed.
+    CronJobFailed {
+        /// Cron job id.
+        job_id: String,
+        /// Cron job name.
+        job_name: String,
+        /// Agent associated with this cron job.
+        agent_id: AgentId,
+        /// Error message (truncated).
+        error: String,
+    },
 }
 
 /// A complete event in the OpenFang event system.

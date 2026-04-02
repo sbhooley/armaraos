@@ -5503,6 +5503,15 @@ impl OpenFangKernel {
         let agent_id = job.agent_id;
         let job_name = &job.name;
 
+        // Persist a user-visible record of cron job execution.
+        // This shows up in Dashboard → Logs (audit trail) and helps users see scheduled output.
+        self.audit_log.record(
+            agent_id.to_string(),
+            openfang_runtime::audit::AuditAction::CronJobRun,
+            format!("job={job_name}, id={job_id}"),
+            "started",
+        );
+
         match &job.action {
             CronAction::SystemEvent { text } => {
                 let payload_bytes = serde_json::to_vec(&serde_json::json!({
@@ -5518,6 +5527,12 @@ impl OpenFangKernel {
                 );
                 self.publish_event(event).await;
                 self.cron_scheduler.record_success(job_id);
+                self.audit_log.record(
+                    agent_id.to_string(),
+                    openfang_runtime::audit::AuditAction::CronJobOutput,
+                    format!("job={job_name}, id={job_id}"),
+                    "ok",
+                );
                 Ok("system event published".to_string())
             }
             CronAction::AgentTurn {
@@ -5541,10 +5556,22 @@ impl OpenFangKernel {
                         {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobOutput,
+                                    format!("job={job_name}, id={job_id}"),
+                                    "ok",
+                                );
                                 Ok(result.response)
                             }
                             Err(e) => {
                                 self.cron_scheduler.record_failure(job_id, &e);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobFailure,
+                                    format!("job={job_name}, id={job_id}"),
+                                    openfang_types::truncate_str(&e, 400),
+                                );
                                 Err(e)
                             }
                         }
@@ -5552,11 +5579,23 @@ impl OpenFangKernel {
                     Ok(Err(e)) => {
                         let err_msg = format!("{e}");
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
                         Err(err_msg)
                     }
                     Err(_) => {
                         let err_msg = format!("timed out after {timeout_s}s");
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
                         Err(err_msg)
                     }
                 }
@@ -5590,10 +5629,22 @@ impl OpenFangKernel {
                         match cron_deliver_response(self, agent_id, &output, &delivery).await {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobOutput,
+                                    format!("job={job_name}, id={job_id}"),
+                                    "ok",
+                                );
                                 Ok(output)
                             }
                             Err(e) => {
                                 self.cron_scheduler.record_failure(job_id, &e);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobFailure,
+                                    format!("job={job_name}, id={job_id}"),
+                                    openfang_types::truncate_str(&e, 400),
+                                );
                                 Err(e)
                             }
                         }
@@ -5601,11 +5652,23 @@ impl OpenFangKernel {
                     Ok(Err(e)) => {
                         let err_msg = format!("{e}");
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
                         Err(err_msg)
                     }
                     Err(_) => {
                         let err_msg = format!("workflow timed out after {timeout_s}s");
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
                         Err(err_msg)
                     }
                 }
@@ -5712,17 +5775,79 @@ impl OpenFangKernel {
                         if !status.success() {
                             let err_msg = format!("ainl exited with {status}: {}", combined.trim());
                             self.cron_scheduler.record_failure(job_id, &err_msg);
+                            self.audit_log.record(
+                                agent_id.to_string(),
+                                openfang_runtime::audit::AuditAction::CronJobFailure,
+                                format!("job={job_name}, id={job_id}, program={program_path}"),
+                                openfang_types::truncate_str(&err_msg, 400),
+                            );
+
+                            // Publish event for desktop notifications + UI toasts.
+                            let evt = Event::new(
+                                AgentId::new(),
+                                EventTarget::Broadcast,
+                                EventPayload::System(SystemEvent::CronJobFailed {
+                                    job_id: job_id.to_string(),
+                                    job_name: job_name.clone(),
+                                    agent_id,
+                                        error: openfang_types::truncate_str(&err_msg, 220)
+                                            .to_string(),
+                                }),
+                            );
+                            self.publish_event(evt).await;
                             return Err(err_msg);
                         }
+
+                        // Always append scheduler output into the agent session (inbox-style),
+                        // without triggering an LLM turn.
+                        append_cron_output_to_agent_session(self, agent_id, job_name, combined.trim());
+
                         match cron_deliver_response(self, agent_id, combined.trim(), &delivery)
                             .await
                         {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobOutput,
+                                    format!("job={job_name}, id={job_id}, program={program_path}"),
+                                    openfang_types::truncate_str(combined.trim(), 400),
+                                );
+
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobCompleted {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        output_preview: openfang_types::truncate_str(combined.trim(), 220)
+                                            .to_string(),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
                                 Ok(combined)
                             }
                             Err(e) => {
                                 self.cron_scheduler.record_failure(job_id, &e);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobFailure,
+                                    format!("job={job_name}, id={job_id}, program={program_path}"),
+                                    openfang_types::truncate_str(&e, 400),
+                                );
+
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobFailed {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        error: openfang_types::truncate_str(&e, 220).to_string(),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
                                 Err(e)
                             }
                         }
@@ -5735,16 +5860,90 @@ impl OpenFangKernel {
                             );
                         }
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}, program={program_path}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                            }),
+                        );
+                        self.publish_event(evt).await;
                         Err(err_msg)
                     }
                     Err(_) => {
                         let err_msg = format!("ainl run timed out after {timeout_s}s");
                         self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}, program={program_path}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                            }),
+                        );
+                        self.publish_event(evt).await;
                         Err(err_msg)
                     }
                 }
             }
         }
+    }
+}
+
+fn append_cron_output_to_agent_session(
+    kernel: &OpenFangKernel,
+    agent_id: AgentId,
+    job_name: &str,
+    output: &str,
+) {
+    use openfang_types::message::{Message, MessageContent, Role};
+
+    let entry = match kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => return,
+    };
+
+    let mut session = match kernel.memory.get_session(entry.session_id) {
+        Ok(Some(s)) => s,
+        _ => openfang_memory::session::Session {
+            id: entry.session_id,
+            agent_id,
+            messages: Vec::new(),
+            context_window_tokens: 0,
+            label: None,
+        },
+    };
+
+    let ts = chrono::Utc::now().to_rfc3339();
+    let body = format!(
+        "[Scheduler] {job_name} @ {ts}\n\n{}",
+        openfang_types::truncate_str(output, 20_000)
+    );
+
+    session.messages.push(Message {
+        role: Role::Assistant,
+        content: MessageContent::Text(body),
+    });
+
+    if let Err(e) = kernel.memory.save_session(&session) {
+        tracing::warn!(error = %e, "Failed to save session with cron output");
     }
 }
 

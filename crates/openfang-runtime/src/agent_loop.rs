@@ -1016,6 +1016,11 @@ async fn call_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
+                    // Final attempt hit a retryable throttling error — try OpenRouter free-model
+                    // fallbacks to keep UX flowing even when the primary provider is rate limited.
+                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
+                        return Ok(resp);
+                    }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
                         MAX_RETRIES
@@ -1034,6 +1039,9 @@ async fn call_with_retry(
                 if attempt == MAX_RETRIES {
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
+                    }
+                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
+                        return Ok(resp);
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -1152,6 +1160,46 @@ async fn call_with_retry(
     ))
 }
 
+async fn try_openrouter_free_fallbacks(
+    request: CompletionRequest,
+) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+    // Models requested by product default strategy.
+    const FB_MODELS: [&str; 2] = [
+        "stepfun/step-3.5-flash:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+    ];
+
+    let api_key = std::env::var("OPENROUTER_API_KEY").ok();
+    let cfg = DriverConfig {
+        provider: "openrouter".to_string(),
+        api_key,
+        base_url: None,
+        skip_permissions: true,
+    };
+    let driver = crate::drivers::create_driver(&cfg).map_err(|e| {
+        OpenFangError::LlmDriver(format!("OpenRouter fallback driver init failed: {e}"))
+    })?;
+
+    for (idx, model) in FB_MODELS.iter().enumerate() {
+        let mut req = request.clone();
+        req.model = model.to_string();
+        warn!(fallback_index = idx, model = %model, "Trying OpenRouter fallback model");
+        match driver.complete(req).await {
+            Ok(resp) => {
+                info!(fallback_index = idx, model = %model, "OpenRouter fallback succeeded");
+                return Ok(resp);
+            }
+            Err(e) => {
+                warn!(fallback_index = idx, model = %model, error = %e, "OpenRouter fallback failed");
+            }
+        }
+    }
+
+    Err(OpenFangError::LlmDriver(
+        "OpenRouter fallback models failed".to_string(),
+    ))
+}
+
 /// Call an LLM driver in streaming mode with automatic retry on rate-limit and overload errors.
 ///
 /// Uses the `llm_errors` classifier and `ProviderCooldown` circuit breaker.
@@ -1202,6 +1250,11 @@ async fn stream_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
+                    if let Ok(resp) =
+                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
+                    {
+                        return Ok(resp);
+                    }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
                         MAX_RETRIES
@@ -1220,6 +1273,11 @@ async fn stream_with_retry(
                 if attempt == MAX_RETRIES {
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
+                    }
+                    if let Ok(resp) =
+                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
+                    {
+                        return Ok(resp);
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -1329,6 +1387,59 @@ async fn stream_with_retry(
 
     Err(OpenFangError::LlmDriver(
         last_error.unwrap_or_else(|| "Unknown error".to_string()),
+    ))
+}
+
+async fn try_openrouter_free_fallbacks_stream(
+    request: CompletionRequest,
+    tx: mpsc::Sender<StreamEvent>,
+) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+    const FB_MODELS: [&str; 2] = [
+        "stepfun/step-3.5-flash:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+    ];
+
+    let api_key = std::env::var("OPENROUTER_API_KEY").ok();
+    let cfg = DriverConfig {
+        provider: "openrouter".to_string(),
+        api_key,
+        base_url: None,
+        skip_permissions: true,
+    };
+    let driver = crate::drivers::create_driver(&cfg).map_err(|e| {
+        OpenFangError::LlmDriver(format!("OpenRouter fallback driver init failed: {e}"))
+    })?;
+
+    for (idx, model) in FB_MODELS.iter().enumerate() {
+        let mut req = request.clone();
+        req.model = model.to_string();
+        warn!(
+            fallback_index = idx,
+            model = %model,
+            "Trying OpenRouter fallback model (stream)"
+        );
+        match driver.stream(req, tx.clone()).await {
+            Ok(resp) => {
+                info!(
+                    fallback_index = idx,
+                    model = %model,
+                    "OpenRouter fallback succeeded (stream)"
+                );
+                return Ok(resp);
+            }
+            Err(e) => {
+                warn!(
+                    fallback_index = idx,
+                    model = %model,
+                    error = %e,
+                    "OpenRouter fallback failed (stream)"
+                );
+            }
+        }
+    }
+
+    Err(OpenFangError::LlmDriver(
+        "OpenRouter fallback models failed".to_string(),
     ))
 }
 

@@ -33,12 +33,12 @@
   --text-dim: #6B6560;
   --text-muted: #9A958F;
 
-  /* Brand — red/orange blend (primary = orange-500, highlights = orange-400, depth = red scale) */
-  --accent: var(--color-orange-500);
-  --accent-light: var(--color-orange-400);
+  /* Brand — red-forward (primary = red-400) */
+  --accent: var(--color-red-400);
+  --accent-light: var(--color-red-300);
   --accent-dim: var(--color-red-600);
-  --accent-glow: rgba(229, 57, 53, 0.1);
-  --accent-subtle: rgba(244, 81, 30, 0.06);
+  --accent-glow: rgba(239, 83, 80, 0.12);
+  --accent-subtle: rgba(239, 83, 80, 0.07);
 
   /* Status colors */
   --success: #22C55E;
@@ -114,11 +114,11 @@
   --text-secondary: #C4C0BC;
   --text-dim: #8A8380;
   --text-muted: #5C5754;
-  --accent: var(--color-orange-500);
-  --accent-light: var(--color-orange-400);
-  --accent-dim: var(--color-red-400);
-  --accent-glow: rgba(255, 109, 64, 0.14);
-  --accent-subtle: rgba(244, 81, 30, 0.09);
+  --accent: var(--color-red-400);
+  --accent-light: var(--color-red-300);
+  --accent-dim: var(--color-red-500);
+  --accent-glow: rgba(239, 83, 80, 0.16);
+  --accent-subtle: rgba(239, 83, 80, 0.10);
   --success: #4ADE80;
   --success-dim: #22C55E;
   --success-subtle: rgba(74, 222, 128, 0.1);

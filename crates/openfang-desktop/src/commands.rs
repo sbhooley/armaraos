@@ -181,16 +181,72 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, Strin
 #[tauri::command]
 pub async fn check_for_updates(
     app: tauri::AppHandle,
+    kernel_state: tauri::State<'_, KernelState>,
 ) -> Result<crate::updater::UpdateInfo, String> {
-    crate::updater::check_for_update(&app).await
+    kernel_state.kernel.audit_log.record(
+        openfang_kernel::kernel::shared_memory_agent_id().to_string(),
+        openfang_runtime::audit::AuditAction::UpdateCheck,
+        "desktop_check_for_updates",
+        "started",
+    );
+    match crate::updater::check_for_update(&app).await {
+        Ok(info) => {
+            let outcome = if info.available {
+                format!(
+                    "available v{} (source={}, installable={})",
+                    info.version.clone().unwrap_or_else(|| "unknown".to_string()),
+                    info.source,
+                    info.installable
+                )
+            } else {
+                "up_to_date".to_string()
+            };
+            kernel_state.kernel.audit_log.record(
+                openfang_kernel::kernel::shared_memory_agent_id().to_string(),
+                openfang_runtime::audit::AuditAction::UpdateCheck,
+                "desktop_check_for_updates",
+                outcome,
+            );
+            Ok(info)
+        }
+        Err(e) => {
+            kernel_state.kernel.audit_log.record(
+                openfang_kernel::kernel::shared_memory_agent_id().to_string(),
+                openfang_runtime::audit::AuditAction::UpdateCheck,
+                "desktop_check_for_updates",
+                openfang_types::truncate_str(&e, 400),
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Download and install the latest update, then restart the app.
 /// Returns Ok(()) which triggers an app restart — the command will not return
 /// if the update succeeds (the app restarts). On error, returns Err(message).
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    crate::updater::download_and_install_update(&app).await
+pub async fn install_update(
+    app: tauri::AppHandle,
+    kernel_state: tauri::State<'_, KernelState>,
+) -> Result<(), String> {
+    kernel_state.kernel.audit_log.record(
+        openfang_kernel::kernel::shared_memory_agent_id().to_string(),
+        openfang_runtime::audit::AuditAction::UpdateInstall,
+        "desktop_install_update",
+        "started",
+    );
+    match crate::updater::download_and_install_update(&app).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            kernel_state.kernel.audit_log.record(
+                openfang_kernel::kernel::shared_memory_agent_id().to_string(),
+                openfang_runtime::audit::AuditAction::UpdateInstall,
+                "desktop_install_update",
+                openfang_types::truncate_str(&e, 400),
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Open the ArmaraOS config directory (`~/.armaraos/`, or legacy `~/.openfang/`) in the OS file manager.
@@ -281,6 +337,7 @@ pub fn ainl_try_library_file(
     relative_path: String,
     mode: Option<String>,
     timeout_secs: Option<u64>,
+    strict: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let home = openfang_home();
     let abs = openfang_kernel::ainl_library::resolve_program_under_ainl_library(
@@ -297,6 +354,7 @@ pub fn ainl_try_library_file(
     }
     let cwd = home.join("ainl-library");
     let mode = mode.as_deref().unwrap_or("validate").trim().to_lowercase();
+    let strict = strict.unwrap_or(true);
     let default_secs = if mode == "run" { 300u64 } else { 120u64 };
     let timeout_secs = timeout_secs.unwrap_or(default_secs).clamp(5, 600);
     let timeout = Duration::from_secs(timeout_secs);
@@ -310,7 +368,10 @@ pub fn ainl_try_library_file(
             cmd.arg(&abs);
         }
         _ => {
-            cmd.args(["validate", "--strict"]);
+            cmd.arg("validate");
+            if strict {
+                cmd.arg("--strict");
+            }
             cmd.arg(&abs);
         }
     }
@@ -322,7 +383,7 @@ pub fn ainl_try_library_file(
         if mode == "run" {
             "run"
         } else {
-            "validate --strict"
+            if strict { "validate --strict" } else { "validate" }
         },
         abs.display()
     );
@@ -335,6 +396,7 @@ pub fn ainl_try_library_file(
                 "ok": out.status.success(),
                 "exit_code": out.status.code(),
                 "mode": mode,
+                "strict": strict,
                 "path": relative_path.trim(),
                 "stdout": stdout,
                 "stderr": stderr,
@@ -348,6 +410,7 @@ pub fn ainl_try_library_file(
             "timed_out": true,
             "timeout_secs": timeout_secs,
             "mode": mode,
+            "strict": strict,
             "path": relative_path.trim(),
             "stdout": "",
             "stderr": "",
@@ -371,6 +434,8 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     }
     let ok = url == "https://ainativelang.com"
         || url.starts_with("https://ainativelang.com/")
+        || url == "https://github.com/sbhooley/armaraos/releases"
+        || url.starts_with("https://github.com/sbhooley/armaraos/releases/")
         || url.starts_with("https://www.python.org/")
         || url.starts_with("https://python.org/");
     if !ok {

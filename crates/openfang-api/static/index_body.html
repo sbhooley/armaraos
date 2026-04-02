@@ -3551,6 +3551,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="card-header">Default Model</div>
               <div class="card-meta" x-text="sysInfo.default_provider + ' : ' + sysInfo.default_model"></div>
             </div>
+            <div class="card mt-4" x-show="isDesktopShell">
+              <div class="card-header">Desktop Updates</div>
+              <div class="card-meta text-dim" style="margin-top:6px">
+                Check for updates from the desktop shell. If the website feed is unavailable, ArmaraOS will fall back to a GitHub releases check.
+              </div>
+              <div class="flex items-center gap-2" style="margin-top:10px">
+                <button class="btn btn-primary btn-sm" @click="checkForDesktopUpdates()" :disabled="updateChecking">
+                  <span x-show="!updateChecking">Check for Updates</span>
+                  <span x-show="updateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="'source: ' + updateInfo.source"></span>
+              </div>
+            </div>
           </div>
 
           <!-- Config tab -->
@@ -5347,6 +5360,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <input type="checkbox" x-model="loadHints" @change="loadLibrary()">
                 Load comment hints (first <code class="text-xs">#</code> line; capped server-side)
               </label>
+              <label class="text-sm text-dim flex items-center gap-2 cursor-pointer" x-show="isDesktopShell">
+                <input type="checkbox" x-model="strictValidation">
+                Strict validation (<code class="text-xs">--strict</code>)
+              </label>
             </div>
             <div class="text-xs text-dim mb-2" x-show="loadHints && hintsTruncated">Hints truncated — only the first <span x-text="maxHintsApplied"></span> files include a hint (see <code class="text-xs">max_hints</code> API).</div>
 
@@ -5433,6 +5450,18 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <tr><td style="font-weight:500">Home Directory</td><td x-text="homeDir"></td></tr>
                   <tr><td style="font-weight:500">Log Level</td><td x-text="logLevel"></td></tr>
                   <tr><td style="font-weight:500">Network</td><td x-text="networkEnabled ? 'Enabled' : 'Disabled'"></td></tr>
+                  <tr x-show="isDesktopShell">
+                    <td style="font-weight:500">Desktop Updates</td>
+                    <td>
+                      <div class="flex items-center gap-2">
+                        <button class="btn btn-primary btn-sm" @click="checkForDesktopUpdates()" :disabled="updateChecking">
+                          <span x-show="!updateChecking">Check for Updates</span>
+                          <span x-show="updateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                        </button>
+                        <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="'source: ' + updateInfo.source"></span>
+                      </div>
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>

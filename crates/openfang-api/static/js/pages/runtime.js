@@ -14,6 +14,18 @@ document.addEventListener('alpine:init', function() {
       logLevel: '-',
       networkEnabled: false,
       providers: [],
+      updateChecking: false,
+      updateInfo: null,
+
+      get isDesktopShell() {
+        try {
+          var w = typeof window !== 'undefined' ? window : null;
+          var core = w && w.__TAURI__ && w.__TAURI__.core;
+          return !!(core && typeof core.invoke === 'function');
+        } catch (e) {
+          return false;
+        }
+      },
 
       async loadData() {
         this.loading = true;
@@ -53,6 +65,44 @@ document.addEventListener('alpine:init', function() {
           console.error('Runtime load error:', e);
         }
         this.loading = false;
+      }
+      ,
+
+      async checkForDesktopUpdates() {
+        if (!this.isDesktopShell) {
+          OpenFangToast && OpenFangToast.warn('Desktop update checks require the desktop app.');
+          return;
+        }
+        this.updateChecking = true;
+        this.updateInfo = null;
+        try {
+          var info = await ArmaraosDesktopTauriInvoke('check_for_updates');
+          this.updateInfo = info;
+          if (!info) {
+            OpenFangToast && OpenFangToast.error('Update check returned no data');
+          } else if (info.available && info.installable) {
+            var v = (info.version || 'unknown');
+            var ok = confirm('ArmaraOS v' + v + ' is available. Install now? The app will restart.');
+            if (ok) {
+              OpenFangToast && OpenFangToast.info('Installing update…');
+              await ArmaraosDesktopTauriInvoke('install_update');
+            }
+          } else if (info.available && !info.installable) {
+            var v2 = (info.version || 'unknown');
+            var u = info.download_url || 'https://github.com/sbhooley/armaraos/releases';
+            OpenFangToast && OpenFangToast.info('Update available (v' + v2 + '). Opening download page…', 7000);
+            try {
+              await ArmaraosDesktopTauriInvoke('open_external_url', { url: u });
+            } catch (e) {
+              window.open(u, '_blank', 'noopener,noreferrer');
+            }
+          } else {
+            OpenFangToast && OpenFangToast.success('Up to date');
+          }
+        } catch (e) {
+          OpenFangToast && OpenFangToast.error(e.message || String(e));
+        }
+        this.updateChecking = false;
       }
     };
   });

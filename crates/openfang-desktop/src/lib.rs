@@ -235,6 +235,19 @@ pub fn run() {
                                         "Agent {agent_id} quota hit: ${spent:.4} / ${limit:.4}"
                                     ),
                                 ),
+                                EventPayload::System(SystemEvent::CronJobCompleted {
+                                    job_name,
+                                    output_preview,
+                                    ..
+                                }) => (
+                                    "Scheduled job finished".to_string(),
+                                    format!("{job_name}: {output_preview}"),
+                                ),
+                                EventPayload::System(SystemEvent::CronJobFailed {
+                                    job_name,
+                                    error,
+                                    ..
+                                }) => ("Scheduled job failed".to_string(), format!("{job_name}: {error}")),
                                 // Skip everything else (health checks, spawns, suspends, etc.)
                                 _ => continue,
                             };

@@ -22,10 +22,10 @@ use crate::ainl::AinlStatus;
 
 const UPSTREAM_MANIFEST: &str = "upstream_manifest.json";
 const GITHUB_REPO: &str = "sbhooley/ainativelang";
-const BRANCH: &str = "main";
-const TARBALL_URL: &str =
+const MAIN_BRANCH: &str = "main";
+const MAIN_TARBALL_URL: &str =
     "https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/heads/main";
-const COMMITS_API: &str = "https://api.github.com/repos/sbhooley/ainativelang/commits/main";
+const COMMITS_API_MAIN: &str = "https://api.github.com/repos/sbhooley/ainativelang/commits/main";
 
 /// Directories to pull from the upstream repo (first-class AINL programs).
 const UPSTREAM_DIRS: &[&str] = &["demo", "examples", "intelligence"];
@@ -93,7 +93,7 @@ fn github_user_agent() -> String {
 
 /// Public `main` commit SHA for `sbhooley/ainativelang` (e.g. version UI).
 pub fn fetch_main_commit_sha() -> Result<String, String> {
-    let resp = ureq::get(COMMITS_API)
+    let resp = ureq::get(COMMITS_API_MAIN)
         .set("User-Agent", &github_user_agent())
         .set("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(45))
@@ -126,8 +126,8 @@ fn read_manifest_commit(app: &AppHandle) -> Option<String> {
     Some(m.commit_sha)
 }
 
-fn download_tarball() -> Result<Vec<u8>, String> {
-    let resp = ureq::get(TARBALL_URL)
+fn download_tarball(url: &str) -> Result<Vec<u8>, String> {
+    let resp = ureq::get(url)
         .set("User-Agent", &github_user_agent())
         .timeout(Duration::from_secs(180))
         .call()
@@ -161,18 +161,65 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn desired_upstream_ref(app: &AppHandle) -> (String, String, String) {
+    // 1) Explicit override: exact ref name (e.g. "main" or "v1.4.0")
+    if let Ok(r) = std::env::var("ARMARAOS_AINL_LIBRARY_REF") {
+        let r = r.trim().to_string();
+        if !r.is_empty() && r != "main" {
+            let tag = if r.starts_with('v') { r.clone() } else { format!("v{r}") };
+            let url = format!(
+                "https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}"
+            );
+            return (tag.clone(), url, format!("tag:{tag}"));
+        }
+        return (
+            MAIN_BRANCH.to_string(),
+            MAIN_TARBALL_URL.to_string(),
+            "main".to_string(),
+        );
+    }
+
+    // 2) Default: pin the upstream mirror to the installed AINL version when known.
+    // This avoids syncing `ainativelang@main` examples that may not validate on the pinned PyPI/wheel version.
+    if let Some(ver) = crate::ainl_version::ainl_version_info(app).installed_version {
+        let v = ver.trim();
+        if !v.is_empty() {
+            let tag = format!("v{v}");
+            let url = format!(
+                "https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}"
+            );
+            return (tag.clone(), url, format!("tag:{tag}"));
+        }
+    }
+
+    (
+        MAIN_BRANCH.to_string(),
+        MAIN_TARBALL_URL.to_string(),
+        "main".to_string(),
+    )
+}
+
 fn sync_upstream_library(app: &AppHandle) -> Result<String, String> {
-    let want_sha = fetch_main_commit_sha()?;
+    let (ref_name, tarball_url, want_id) = desired_upstream_ref(app);
+
+    let want_commit = if ref_name == MAIN_BRANCH {
+        // Only hit the commits API when we're intentionally tracking main.
+        fetch_main_commit_sha()?
+    } else {
+        // Tag-pinned: avoid extra network calls; use tag identifier as our stable "commit".
+        want_id.clone()
+    };
+
     if let Some(have) = read_manifest_commit(app) {
-        if have == want_sha {
+        if have == want_commit {
             return Ok(format!(
                 "Upstream library already up to date ({})",
-                &want_sha[..8.min(want_sha.len())]
+                &want_commit[..8.min(want_commit.len())]
             ));
         }
     }
 
-    let bytes = download_tarball()?;
+    let bytes = download_tarball(&tarball_url)?;
 
     let tmp = std::env::temp_dir().join(format!(
         "armaraos-ainl-src-{}",
@@ -234,8 +281,8 @@ Some graphs assume a workspace layout (e.g. `memory/`); adapt paths or run from 
 Kernel budgeting and scheduling are independent — these are **reference and optional** automation graphs.
 "#,
         repo = GITHUB_REPO,
-        branch = BRANCH,
-        commit = want_sha
+        branch = ref_name,
+        commit = want_commit
     );
     fs::write(extract.join("README_ARMARAOS.md"), readme)
         .map_err(|e| format!("write README: {e}"))?;
@@ -254,8 +301,8 @@ Kernel budgeting and scheduling are independent — these are **reference and op
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let meta = serde_json::json!({
-        "commit_sha": want_sha,
-        "branch": BRANCH,
+        "commit_sha": want_commit,
+        "branch": ref_name,
         "repo": GITHUB_REPO,
         "synced_at_unix": synced_at_unix,
     });
@@ -267,8 +314,8 @@ Kernel budgeting and scheduling are independent — these are **reference and op
 
     let manifest = UpstreamManifest {
         repo: GITHUB_REPO.to_string(),
-        branch: BRANCH.to_string(),
-        commit_sha: want_sha.clone(),
+        branch: ref_name.to_string(),
+        commit_sha: want_commit.clone(),
         synced_at_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -288,6 +335,6 @@ Kernel budgeting and scheduling are independent — these are **reference and op
     );
     Ok(format!(
         "Pulled demo/, examples/, intelligence/ @ {} (mirrored to ~/.armaraos/ainl-library/)",
-        &want_sha[..8.min(want_sha.len())]
+        &want_commit[..8.min(want_commit.len())]
     ))
 }
