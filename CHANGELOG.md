@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop updater:** After the marketing-site Tauri feed reports “up to date”, the app now also compares the running version to **GitHub’s latest release** (same as the existing fallback when the feed errors), so users see an update notification and release link when ainativelang.com is stale.
+
+### Docs
+
+- **`docs/release-desktop.md`:** Table explaining when the “Publish updater to ainativelang.com” CI job is skipped, fails, or exits without a push.
+
 ## [0.6.2] - 2026-04-02
 
 ### Added

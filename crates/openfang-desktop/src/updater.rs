@@ -1,4 +1,9 @@
 //! Update checker for the ArmaraOS desktop app.
+//!
+//! Flow: try the Tauri updater against the marketing-site feed (`latest.json` / `beta.json`) first
+//! so signed in-app installs work when the mirror is current. If that feed errors (network, parse),
+//! or if it reports “no update” while the site may be stale, we compare against
+//! GitHub’s latest release API so users still see new releases and a download link.
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_notification::NotificationExt;
@@ -123,6 +128,18 @@ pub async fn download_and_install_update(app_handle: &tauri::AppHandle) -> Resul
     app_handle.restart()
 }
 
+fn no_update_from_website(feed: &str) -> UpdateInfo {
+    UpdateInfo {
+        available: false,
+        version: None,
+        body: None,
+        source: "website".to_string(),
+        download_url: None,
+        installable: false,
+        feed_url: feed.to_string(),
+    }
+}
+
 async fn do_check(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
     let channel = crate::ui_prefs::load_release_channel(app_handle);
     let feed = crate::ui_prefs::feed_url_for_channel(&channel);
@@ -137,15 +154,19 @@ async fn do_check(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
             installable: true,
             feed_url: feed.to_string(),
         }),
-        Ok(None) => Ok(UpdateInfo {
-            available: false,
-            version: None,
-            body: None,
-            source: "website".to_string(),
-            download_url: None,
-            installable: false,
-            feed_url: feed.to_string(),
-        }),
+        Ok(None) => {
+            // Website mirror may lag behind GitHub Releases; confirm against API.
+            match github_fallback_check(feed).await {
+                Ok(g) if g.available => Ok(g),
+                Ok(_) => Ok(no_update_from_website(feed)),
+                Err(e) => {
+                    warn!(
+                        "GitHub secondary update check failed (website reported up to date): {e}"
+                    );
+                    Ok(no_update_from_website(feed))
+                }
+            }
+        }
         Err(e) => match github_fallback_check(feed).await {
             Ok(info) => Ok(info),
             Err(_) => Err(e.to_string()),

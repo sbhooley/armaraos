@@ -32,6 +32,16 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 
 **One-time setup (armaraos repo secrets):** add **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with **Contents: Read and write** on repository **`sbhooley/ainativelangweb`** only. Without this secret, the sync job fails (desktop builds and GitHub Release still succeed).
 
+### Why “Publish updater to ainativelang.com” is skipped or red
+
+| Symptom | Cause |
+|--------|--------|
+| Job shows **Skipped** (grey) | The **`desktop`** job did not all succeed (`needs: [desktop]`). Any failed or cancelled Desktop matrix job skips the sync. Fix the failing platform build, then re-run the workflow or tag again. |
+| Job **fails** on “Check deploy token” | Missing **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — add the secret and re-run. |
+| “No file changes; skipping push” (green) | Rare: staged files matched what was already on `main` in ainativelangweb; nothing to commit. |
+
+The desktop app still checks **GitHub Releases** as a secondary source when the marketing feed is unreachable or reports “up to date” while a newer tag exists (see `crates/openfang-desktop/src/updater.rs`); in-app **silent install** still requires a valid signed `latest.json` (usually from the website or from a working release pipeline).
+
 If `ainativelangweb` uses a default branch other than `main`, adjust the `git push` branch in that workflow step.
 
 ## Post-release verification (CI + manual)

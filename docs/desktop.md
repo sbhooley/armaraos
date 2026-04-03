@@ -248,7 +248,7 @@ The app checks for updates 10 seconds after startup. If an update is available, 
 - `plugins.updater.endpoints` — URL to `latest.json` (hosted on GitHub Releases)
 - `plugins.updater.windows.installMode` — `"passive"` (install without full UI)
 
-**Website-hosted feeds:** Production builds also support updater JSON mirrored to the marketing site: stable **`https://ainativelang.com/downloads/armaraos/latest.json`**, beta channel **`.../beta.json`** (see `crates/openfang-desktop/src/ui_prefs.rs` — `STABLE_FEED_URL` / `BETA_FEED_URL`). CI copies manifests there on each tag; prerelease tags update `beta.json` without overwriting stable `latest.json` (see `docs/release-desktop.md`).
+**Website-hosted feeds:** Production builds also support updater JSON mirrored to the marketing site: stable **`https://ainativelang.com/downloads/armaraos/latest.json`**, beta channel **`.../beta.json`** (see `crates/openfang-desktop/src/ui_prefs.rs` — `STABLE_FEED_URL` / `BETA_FEED_URL`). CI copies manifests there on each tag; prerelease tags update `beta.json` without overwriting stable `latest.json` (see `docs/release-desktop.md`). The app checks that feed first for **signed** auto-install; it also compares your version to **GitHub’s latest release** when the feed says “up to date” (stale mirror) or when the feed request fails, so you still get a notification and release-page link even if ainativelang.com lags.
 
 **Signing:** Every release bundle is signed with `TAURI_SIGNING_PRIVATE_KEY` (GitHub Secret). The `tauri-action` generates `latest.json` containing download URLs and signatures for each platform.
 
