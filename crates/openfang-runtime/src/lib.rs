@@ -23,6 +23,7 @@ pub mod drivers;
 pub mod embedding;
 pub mod graceful_shutdown;
 pub mod hooks;
+pub mod host_ainl_snapshot;
 pub mod host_functions;
 pub mod image_gen;
 pub mod kernel_handle;

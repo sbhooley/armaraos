@@ -289,14 +289,27 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
 /// This keeps the system prompt stable across turns, enabling provider prompt caching
 /// (Anthropic cache_control, etc.). The canonical context changes every turn, so
 /// injecting it in the system prompt caused 82%+ cache misses.
+///
+/// Always prepends a cached **[Host AINL]** snapshot (`ainl --version`, `pip show ainativelang`)
+/// so agents see local toolchain versions without a web round-trip.
 pub fn build_canonical_context_message(ctx: &PromptContext) -> Option<String> {
+    let host = crate::host_ainl_snapshot::host_ainl_snapshot_cached();
+
     if ctx.is_subagent {
-        return None;
+        // Cross-session summary is omitted for subagents; still surface local AINL toolchain facts.
+        return Some(host);
     }
-    ctx.canonical_context
+
+    let session = ctx
+        .canonical_context
         .as_ref()
         .filter(|c| !c.is_empty())
-        .map(|c| format!("[Previous conversation context]\n{}", cap_str(c, 500)))
+        .map(|c| format!("[Previous conversation context]\n{}", cap_str(c, 500)));
+
+    match session {
+        Some(s) => Some(format!("{host}\n\n{s}")),
+        None => Some(host),
+    }
 }
 
 /// Build the memory section (Section 4).
@@ -925,20 +938,29 @@ mod tests {
         assert!(!prompt.contains("## Previous Conversation Context"));
         assert!(!prompt.contains("Rust async patterns"));
         // But should be available via build_canonical_context_message
-        let msg = build_canonical_context_message(&ctx);
-        assert!(msg.is_some());
-        assert!(msg.unwrap().contains("Rust async patterns"));
+        let msg = build_canonical_context_message(&ctx).expect("canonical msg");
+        assert!(msg.contains("[Host AINL"));
+        assert!(msg.contains("Rust async patterns"));
     }
 
     #[test]
-    fn test_canonical_context_omitted_for_subagent() {
+    fn test_canonical_context_host_snapshot_without_session() {
+        let ctx = basic_ctx();
+        assert!(ctx.canonical_context.is_none());
+        let msg = build_canonical_context_message(&ctx).expect("host snapshot");
+        assert!(msg.contains("[Host AINL"));
+    }
+
+    #[test]
+    fn test_canonical_context_subagent_gets_host_only() {
         let mut ctx = basic_ctx();
         ctx.is_subagent = true;
         ctx.canonical_context = Some("Previous context here.".to_string());
         let prompt = build_system_prompt(&ctx);
         assert!(!prompt.contains("Previous Conversation Context"));
-        // Should also be None from build_canonical_context_message
-        assert!(build_canonical_context_message(&ctx).is_none());
+        let msg = build_canonical_context_message(&ctx).expect("host snapshot for subagent");
+        assert!(msg.contains("[Host AINL"));
+        assert!(!msg.contains("Previous context here."));
     }
 
     #[test]
