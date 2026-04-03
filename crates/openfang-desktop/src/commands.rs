@@ -249,6 +249,56 @@ pub async fn install_update(
     }
 }
 
+/// POST to the embedded API to build a redacted diagnostics tarball (loopback auth bypass).
+pub async fn post_support_bundle(port: u16) -> Result<serde_json::Value, String> {
+    let url = format!("http://127.0.0.1:{port}/api/support/diagnostics");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let res = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let body = res.bytes().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!(
+            "Diagnostics failed ({}): {}",
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+    serde_json::from_slice(&body).map_err(|e| e.to_string())
+}
+
+/// Generate support bundle via local API (desktop shell menu + dashboard invoke).
+#[tauri::command]
+pub async fn generate_support_bundle(port: tauri::State<'_, PortState>) -> Result<serde_json::Value, String> {
+    post_support_bundle(port.0).await
+}
+
+/// Desktop updater prefs (channel, feed URLs, last check / last error).
+#[tauri::command]
+pub fn get_desktop_updater_prefs(app: tauri::AppHandle) -> serde_json::Value {
+    crate::ui_prefs::updater_prefs_snapshot(&app)
+}
+
+/// Set stable vs beta updater channel (writes `desktop_ui_prefs.json`).
+#[tauri::command]
+pub fn set_release_channel(app: tauri::AppHandle, channel: String) -> Result<(), String> {
+    crate::ui_prefs::save_release_channel(&app, &channel)
+}
+
+/// Persist last daemon vs-GitHub check (desktop shell).
+#[tauri::command]
+pub fn report_daemon_update_check(app: tauri::AppHandle, error: Option<String>) {
+    crate::ui_prefs::record_daemon_update_check(&app, error.as_deref());
+}
+
 /// Open the ArmaraOS config directory (`~/.armaraos/`, or legacy `~/.openfang/`) in the OS file manager.
 #[tauri::command]
 pub fn open_config_dir() -> Result<(), String> {

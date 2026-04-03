@@ -1,7 +1,8 @@
 //! Route handlers for the OpenFang API.
 
+use crate::middleware::RequestId;
 use crate::types::*;
-use axum::extract::{ConnectInfo, Multipart, Path, Query, State};
+use axum::extract::{ConnectInfo, Extension, Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -18,8 +19,12 @@ use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
+use walkdir::WalkDir;
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
 
 /// Shared application state.
 ///
@@ -50,11 +55,39 @@ pub struct AppState {
     pub ainl_register_hits: DashMap<std::net::IpAddr, Vec<u64>>,
 }
 
+#[inline]
+fn resolve_request_id(ext: Option<Extension<RequestId>>) -> RequestId {
+    ext.map(|e| e.0).unwrap_or_else(|| RequestId("unknown".to_string()))
+}
+
+/// Structured JSON error for dashboard clients (`error`, `detail`, `path`, `request_id`, optional `hint`).
+pub fn api_json_error(
+    status: StatusCode,
+    req_id: &RequestId,
+    path: &str,
+    error: &str,
+    detail: String,
+    hint: Option<&str>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut v = serde_json::json!({
+        "error": error,
+        "detail": detail,
+        "path": path,
+        "request_id": req_id.0,
+    });
+    if let Some(h) = hint {
+        v["hint"] = serde_json::json!(h);
+    }
+    (status, Json(v))
+}
+
 /// POST /api/agents — Spawn a new agent.
 pub async fn spawn_agent(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<SpawnRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
     // Resolve template name → manifest_toml if template is provided and manifest_toml is empty
     let manifest_toml = if req.manifest_toml.trim().is_empty() {
         if let Some(ref tmpl_name) = req.template {
@@ -64,9 +97,13 @@ pub async fn spawn_agent(
                 .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                 .collect::<String>();
             if safe_name.is_empty() || safe_name != *tmpl_name {
-                return (
+                return api_json_error(
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid template name"})),
+                    &rid,
+                    "/api/agents",
+                    "Invalid template name",
+                    "Template names may only contain letters, numbers, hyphens, and underscores.".to_string(),
+                    Some("Pick a template folder name under ~/.armaraos/agents/<name>/ without special characters."),
                 );
             }
             let tmpl_path = state
@@ -79,20 +116,26 @@ pub async fn spawn_agent(
             match std::fs::read_to_string(&tmpl_path) {
                 Ok(content) => content,
                 Err(_) => {
-                    return (
+                    return api_json_error(
                         StatusCode::NOT_FOUND,
-                        Json(
-                            serde_json::json!({"error": format!("Template '{}' not found", safe_name)}),
+                        &rid,
+                        "/api/agents",
+                        "Template not found",
+                        format!(
+                            "No agent.toml at ~/.armaraos/agents/{safe_name}/agent.toml (or ARMARAOS_HOME equivalent)."
                         ),
+                        Some("Copy an example into agents/ or pass manifest_toml in the request body."),
                     );
                 }
             }
         } else {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": "Either 'manifest_toml' or 'template' is required"}),
-                ),
+                &rid,
+                "/api/agents",
+                "Missing manifest",
+                "Either 'manifest_toml' or 'template' is required in the JSON body.".to_string(),
+                Some("Paste a manifest TOML or set template to a folder name under ~/.armaraos/agents/."),
             );
         }
     } else {
@@ -102,9 +145,13 @@ pub async fn spawn_agent(
     // SECURITY: Reject oversized manifests to prevent parser memory exhaustion.
     const MAX_MANIFEST_SIZE: usize = 1024 * 1024; // 1MB
     if manifest_toml.len() > MAX_MANIFEST_SIZE {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "Manifest too large (max 1MB)"})),
+            &rid,
+            "/api/agents",
+            "Manifest too large",
+            format!("Manifest exceeds maximum size ({MAX_MANIFEST_SIZE} bytes)."),
+            Some("Trim embedded assets or split into smaller manifests."),
         );
     }
 
@@ -115,11 +162,13 @@ pub async fn spawn_agent(
                 // Ensure the signed manifest matches the provided manifest_toml
                 if verified_toml.trim() != manifest_toml.trim() {
                     tracing::warn!("Signed manifest content does not match manifest_toml");
-                    return (
+                    return api_json_error(
                         StatusCode::BAD_REQUEST,
-                        Json(
-                            serde_json::json!({"error": "Signed manifest content does not match manifest_toml"}),
-                        ),
+                        &rid,
+                        "/api/agents",
+                        "Signed manifest mismatch",
+                        "Verified signed_manifest content does not match manifest_toml.".to_string(),
+                        Some("Ensure the TOML you sign is identical to manifest_toml."),
                     );
                 }
             }
@@ -131,9 +180,13 @@ pub async fn spawn_agent(
                     "manifest signature verification failed",
                     format!("error: {e}"),
                 );
-                return (
+                return api_json_error(
                     StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": "Manifest signature verification failed"})),
+                    &rid,
+                    "/api/agents",
+                    "Manifest signature verification failed",
+                    format!("Signature or public key could not validate this manifest: {e}"),
+                    Some("Regenerate the signed manifest or disable signing for development."),
                 );
             }
         }
@@ -143,9 +196,13 @@ pub async fn spawn_agent(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("Invalid manifest TOML: {e}");
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid manifest format"})),
+                &rid,
+                "/api/agents",
+                "Invalid manifest format",
+                format!("TOML parse error: {e}"),
+                Some("Validate agent.toml against the AgentManifest schema."),
             );
         }
     };
@@ -167,9 +224,13 @@ pub async fn spawn_agent(
         }
         Err(e) => {
             tracing::warn!("Spawn failed: {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Agent spawn failed"})),
+                &rid,
+                "/api/agents",
+                "Agent spawn failed",
+                format!("{e}"),
+                Some("Check kernel logs, provider configuration, and agent manifest constraints."),
             )
         }
     }
@@ -337,14 +398,21 @@ pub fn inject_attachments_into_session(
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    let msg_path = "/api/agents/:id/message";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                msg_path,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use the id from GET /api/agents or the dashboard agent list."),
             );
         }
     };
@@ -352,17 +420,25 @@ pub async fn send_message(
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
     const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
     if req.message.len() > MAX_MESSAGE_SIZE {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "Message too large (max 64KB)"})),
+            &rid,
+            msg_path,
+            "Message too large",
+            format!("Message exceeds {MAX_MESSAGE_SIZE} bytes."),
+            Some("Shorten the prompt or split attachments across turns."),
         );
     }
 
     // Check agent exists before processing
     if state.kernel.registry.get(agent_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            msg_path,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Spawn an agent or pick a valid id from GET /api/agents."),
         );
     }
 
@@ -460,9 +536,20 @@ pub async fn send_message(
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             };
-            (
+            let hint = if status == StatusCode::TOO_MANY_REQUESTS {
+                Some("Budget or provider rate limit — check /api/budget and provider health.")
+            } else if status == StatusCode::NOT_FOUND {
+                Some("The agent may have been stopped; refresh GET /api/agents.")
+            } else {
+                Some("Check provider keys, model availability, and daemon logs for this request_id.")
+            };
+            api_json_error(
                 status,
-                Json(serde_json::json!({"error": format!("Message delivery failed: {e}")})),
+                &rid,
+                msg_path,
+                "Message delivery failed",
+                format!("{e}"),
+                hint,
             )
         }
     }
@@ -472,13 +559,20 @@ pub async fn send_message(
 pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/session";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
@@ -486,9 +580,13 @@ pub async fn get_agent_session(
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Spawn an agent or pick a valid id from GET /api/agents."),
             );
         }
     };
@@ -650,9 +748,13 @@ pub async fn get_agent_session(
         ),
         Err(e) => {
             tracing::warn!("Session load failed for agent {id}: {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Session load failed"})),
+                &rid,
+                PATH,
+                "Session load failed",
+                format!("{e}"),
+                Some("Check database health and GET /api/health/detail."),
             )
         }
     }
@@ -662,13 +764,20 @@ pub async fn get_agent_session(
 pub async fn kill_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
@@ -680,9 +789,13 @@ pub async fn kill_agent(
         ),
         Err(e) => {
             tracing::warn!("kill_agent failed for {id}: {e}");
-            (
+            api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found or already terminated"})),
+                &rid,
+                PATH,
+                "Agent not found or already terminated",
+                format!("{e}"),
+                Some("The agent may have exited; refresh GET /api/agents."),
             )
         }
     }
@@ -695,13 +808,20 @@ pub async fn kill_agent(
 pub async fn restart_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/restart";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
@@ -710,9 +830,13 @@ pub async fn restart_agent(
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Spawn an agent or pick a valid id from GET /api/agents."),
             );
         }
     };
@@ -811,17 +935,24 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// POST /api/workflows — Register a new workflow.
 pub async fn create_workflow(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/workflows";
     let name = req["name"].as_str().unwrap_or("unnamed").to_string();
     let description = req["description"].as_str().unwrap_or("").to_string();
 
     let steps_json = match req["steps"].as_array() {
         Some(s) => s,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'steps' array"})),
+                &rid,
+                PATH,
+                "Missing workflow steps",
+                "JSON body must include a 'steps' array.".to_string(),
+                Some("Each step needs agent_id or agent_name, mode, prompt, etc."),
             );
         }
     };
@@ -836,11 +967,13 @@ pub async fn create_workflow(
                 name: name.to_string(),
             }
         } else {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Step '{}' needs 'agent_id' or 'agent_name'", step_name)}),
-                ),
+                &rid,
+                PATH,
+                "Invalid workflow step",
+                format!("Step '{step_name}' needs 'agent_id' or 'agent_name'."),
+                Some("Reference an existing agent by UUID or name."),
             );
         };
 
@@ -932,14 +1065,21 @@ pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResp
 pub async fn run_workflow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/workflows/:id/run";
     let workflow_id = WorkflowId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+                &rid,
+                PATH,
+                "Invalid workflow ID",
+                "Workflow id must be a valid UUID.".to_string(),
+                Some("Use the id returned by POST /api/workflows or GET /api/workflows."),
             );
         }
     });
@@ -957,9 +1097,13 @@ pub async fn run_workflow(
         ),
         Err(e) => {
             tracing::warn!("Workflow run failed for {id}: {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workflow execution failed"})),
+                &rid,
+                PATH,
+                "Workflow execution failed",
+                format!("{e}"),
+                Some("Check agent availability, prompts, and kernel logs for this request_id."),
             )
         }
     }
@@ -991,13 +1135,20 @@ pub async fn list_workflow_runs(
 pub async fn get_workflow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/workflows/:id";
     let workflow_id = WorkflowId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+                &rid,
+                PATH,
+                "Invalid workflow ID",
+                "Workflow id must be a valid UUID.".to_string(),
+                Some("Use GET /api/workflows to list ids."),
             );
         }
     });
@@ -1013,9 +1164,13 @@ pub async fn get_workflow(
                 "created_at": w.created_at.to_rfc3339(),
             })),
         ),
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            &rid,
+            PATH,
+            "Workflow not found",
+            format!("No workflow registered for id {id}."),
+            Some("Register a workflow via POST /api/workflows."),
         ),
     }
 }
@@ -1024,14 +1179,21 @@ pub async fn get_workflow(
 pub async fn update_workflow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/workflows/:id";
     let workflow_id = WorkflowId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+                &rid,
+                PATH,
+                "Invalid workflow ID",
+                "Workflow id must be a valid UUID.".to_string(),
+                Some("Use GET /api/workflows to list ids."),
             );
         }
     });
@@ -1042,9 +1204,13 @@ pub async fn update_workflow(
     let steps_json = match req["steps"].as_array() {
         Some(s) => s,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'steps' array"})),
+                &rid,
+                PATH,
+                "Missing workflow steps",
+                "JSON body must include a 'steps' array.".to_string(),
+                Some("Each step needs agent_id or agent_name, mode, prompt, etc."),
             );
         }
     };
@@ -1059,11 +1225,13 @@ pub async fn update_workflow(
                 name: name.to_string(),
             }
         } else {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Step '{}' needs 'agent_id' or 'agent_name'", step_name)}),
-                ),
+                &rid,
+                PATH,
+                "Invalid workflow step",
+                format!("Step '{step_name}' needs 'agent_id' or 'agent_name'."),
+                Some("Reference an existing agent by UUID or name."),
             );
         };
 
@@ -1118,9 +1286,13 @@ pub async fn update_workflow(
             Json(serde_json::json!({"status": "updated", "workflow_id": id})),
         )
     } else {
-        (
+        api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            &rid,
+            PATH,
+            "Workflow not found",
+            format!("No workflow registered for id {id}."),
+            Some("Register a workflow via POST /api/workflows."),
         )
     }
 }
@@ -1129,13 +1301,20 @@ pub async fn update_workflow(
 pub async fn delete_workflow(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/workflows/:id";
     let workflow_id = WorkflowId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+                &rid,
+                PATH,
+                "Invalid workflow ID",
+                "Workflow id must be a valid UUID.".to_string(),
+                Some("Use GET /api/workflows to list ids."),
             );
         }
     });
@@ -1146,9 +1325,13 @@ pub async fn delete_workflow(
             Json(serde_json::json!({"status": "removed", "workflow_id": id})),
         )
     } else {
-        (
+        api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            &rid,
+            PATH,
+            "Workflow not found",
+            format!("No workflow registered for id {id}."),
+            Some("Register a workflow via POST /api/workflows."),
         )
     }
 }
@@ -1160,14 +1343,21 @@ pub async fn delete_workflow(
 /// POST /api/triggers — Register a new event trigger.
 pub async fn create_trigger(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/triggers";
     let agent_id_str = match req["agent_id"].as_str() {
         Some(id) => id,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'agent_id'"})),
+                &rid,
+                PATH,
+                "Missing agent_id",
+                "JSON body must include 'agent_id' (UUID).".to_string(),
+                Some("Use an agent id from GET /api/agents."),
             );
         }
     };
@@ -1175,9 +1365,13 @@ pub async fn create_trigger(
     let agent_id: AgentId = match agent_id_str.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent_id"})),
+                &rid,
+                PATH,
+                "Invalid agent_id",
+                "agent_id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list valid ids."),
             );
         }
     };
@@ -1187,16 +1381,24 @@ pub async fn create_trigger(
             Ok(pat) => pat,
             Err(e) => {
                 tracing::warn!("Invalid trigger pattern: {e}");
-                return (
+                return api_json_error(
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid trigger pattern"})),
+                    &rid,
+                    PATH,
+                    "Invalid trigger pattern",
+                    format!("Could not parse pattern: {e}"),
+                    Some("See TriggerPattern schema in the API docs / kernel types."),
                 );
             }
         },
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'pattern'"})),
+                &rid,
+                PATH,
+                "Missing pattern",
+                "JSON body must include a 'pattern' object.".to_string(),
+                Some("Define when the trigger should fire (event type, filters, etc.)."),
             );
         }
     };
@@ -1220,11 +1422,13 @@ pub async fn create_trigger(
         ),
         Err(e) => {
             tracing::warn!("Trigger registration failed: {e}");
-            (
+            api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({"error": "Trigger registration failed (agent not found?)"}),
-                ),
+                &rid,
+                PATH,
+                "Trigger registration failed",
+                format!("{e}"),
+                Some("Verify the agent exists and is running."),
             )
         }
     }
@@ -1262,13 +1466,20 @@ pub async fn list_triggers(
 pub async fn delete_trigger(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/triggers/:id";
     let trigger_id = TriggerId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid trigger ID"})),
+                &rid,
+                PATH,
+                "Invalid trigger ID",
+                "Trigger id must be a valid UUID.".to_string(),
+                Some("Use GET /api/triggers to list ids."),
             );
         }
     });
@@ -1279,9 +1490,13 @@ pub async fn delete_trigger(
             Json(serde_json::json!({"status": "removed", "trigger_id": id})),
         )
     } else {
-        (
+        api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Trigger not found"})),
+            &rid,
+            PATH,
+            "Trigger not found",
+            format!("No trigger registered for id {id}."),
+            Some("List triggers with GET /api/triggers."),
         )
     }
 }
@@ -1320,14 +1535,21 @@ pub async fn list_profiles() -> impl IntoResponse {
 pub async fn set_agent_mode(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<SetModeRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/mode";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
@@ -1341,9 +1563,13 @@ pub async fn set_agent_mode(
                 "mode": body.mode,
             })),
         ),
-        Err(_) => (
+        Err(_) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Spawn an agent or pick a valid id from GET /api/agents."),
         ),
     }
 }
@@ -1373,13 +1599,20 @@ pub async fn version() -> impl IntoResponse {
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
@@ -1387,9 +1620,13 @@ pub async fn get_agent(
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Spawn an agent or pick a valid id from GET /api/agents."),
             );
         }
     };
@@ -1432,39 +1669,55 @@ pub async fn get_agent(
 pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
     use axum::response::sse::{Event, Sse};
     use futures::stream;
     use openfang_runtime::llm_driver::StreamEvent;
 
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/message/stream";
+
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
     const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
     if req.message.len() > MAX_MESSAGE_SIZE {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "Message too large (max 64KB)"})),
+            &rid,
+            PATH,
+            "Message too large",
+            format!("Message exceeds {MAX_MESSAGE_SIZE} bytes (64KB)."),
+            Some("Shorten the prompt or split it across multiple messages."),
         )
-            .into_response();
+        .into_response();
     }
 
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
-                .into_response();
+            .into_response();
         }
     };
 
     if state.kernel.registry.get(agent_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Spawn an agent or pick a valid id from GET /api/agents."),
         )
-            .into_response();
+        .into_response();
     }
 
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
@@ -1479,11 +1732,15 @@ pub async fn send_message_stream(
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!("Streaming message failed for agent {id}: {e}");
-            return (
+            return api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Streaming message failed"})),
+                &rid,
+                PATH,
+                "Streaming message failed",
+                format!("{e}"),
+                Some("Check agent logs and LLM provider configuration."),
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -2607,14 +2864,21 @@ pub async fn list_channels(State(state): State<Arc<AppState>>) -> impl IntoRespo
 pub async fn configure_channel(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/channels/:name/configure";
     let meta = match find_channel_meta(&name) {
         Some(m) => m,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Unknown channel"})),
+                &rid,
+                PATH,
+                "Unknown channel",
+                format!("No channel definition named '{name}'."),
+                Some("Use GET /api/channels to list supported channels."),
             )
         }
     };
@@ -2622,9 +2886,13 @@ pub async fn configure_channel(
     let fields = match body.get("fields").and_then(|v| v.as_object()) {
         Some(f) => f,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'fields' object"})),
+                &rid,
+                PATH,
+                "Missing fields",
+                "JSON body must include a 'fields' object.".to_string(),
+                Some("Map field keys to string values (tokens, webhooks, etc.)."),
             )
         }
     };
@@ -2646,9 +2914,13 @@ pub async fn configure_channel(
         if let Some(env_var) = field_def.env_var {
             // Secret field — write to secrets.env and set in process
             if let Err(e) = write_secret_env(&secrets_path, env_var, value) {
-                return (
+                return api_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Failed to write secret: {e}")})),
+                    &rid,
+                    PATH,
+                    "Failed to write secret",
+                    format!("{e}"),
+                    Some("Check filesystem permissions on secrets.env and disk space."),
                 );
             }
             // SAFETY: We are the only writer; this is a single-threaded config operation
@@ -2672,9 +2944,13 @@ pub async fn configure_channel(
 
     // Write config.toml section
     if let Err(e) = upsert_channel_config(&config_path, &name, &config_fields) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write config: {e}")})),
+            &rid,
+            PATH,
+            "Failed to write config",
+            format!("{e}"),
+            Some("Check config.toml permissions and TOML syntax."),
         );
     }
 
@@ -2716,13 +2992,20 @@ pub async fn configure_channel(
 pub async fn remove_channel(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/channels/:name/configure";
     let meta = match find_channel_meta(&name) {
         Some(m) => m,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Unknown channel"})),
+                &rid,
+                PATH,
+                "Unknown channel",
+                format!("No channel definition named '{name}'."),
+                Some("Use GET /api/channels to list supported channels."),
             )
         }
     };
@@ -2744,9 +3027,13 @@ pub async fn remove_channel(
 
     // Remove config section
     if let Err(e) = remove_channel_config(&config_path, &name) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to remove config: {e}")})),
+            &rid,
+            PATH,
+            "Failed to remove config",
+            format!("{e}"),
+            Some("Check config.toml permissions."),
         );
     }
 
@@ -3208,14 +3495,23 @@ fn get_template_category(name: &str) -> &str {
 }
 
 /// GET /api/templates/:name — Get template details.
-pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
+pub async fn get_template(
+    Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/templates/:name";
     let agents_dir = openfang_kernel::config::openfang_home().join("agents");
     let manifest_path = agents_dir.join(&name).join("agent.toml");
 
     if !manifest_path.exists() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Template not found"})),
+            &rid,
+            PATH,
+            "Template not found",
+            format!("No template directory for '{name}' (missing agent.toml)."),
+            Some("Use GET /api/templates to list available templates."),
         );
     }
 
@@ -3244,17 +3540,25 @@ pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
             ),
             Err(e) => {
                 tracing::warn!("Invalid template manifest for '{name}': {e}");
-                (
+                api_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Invalid template manifest"})),
+                    &rid,
+                    PATH,
+                    "Invalid template manifest",
+                    format!("{e}"),
+                    Some("Fix agent.toml syntax or choose another template."),
                 )
             }
         },
         Err(e) => {
             tracing::warn!("Failed to read template '{name}': {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to read template"})),
+                &rid,
+                PATH,
+                "Failed to read template",
+                format!("{e}"),
+                Some("Check file permissions on the template path."),
             )
         }
     }
@@ -3271,7 +3575,10 @@ pub async fn get_template(Path(name): Path<String>) -> impl IntoResponse {
 pub async fn get_agent_kv(
     State(state): State<Arc<AppState>>,
     Path(_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/memory/agents/:id/kv";
     let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.list_kv(agent_id) {
@@ -3284,9 +3591,13 @@ pub async fn get_agent_kv(
         }
         Err(e) => {
             tracing::warn!("Memory list_kv failed: {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Memory operation failed"})),
+                &rid,
+                PATH,
+                "Memory operation failed",
+                format!("{e}"),
+                Some("Check SQLite / memory store health."),
             )
         }
     }
@@ -3296,7 +3607,10 @@ pub async fn get_agent_kv(
 pub async fn get_agent_kv_key(
     State(state): State<Arc<AppState>>,
     Path((_id, key)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/memory/agents/:id/kv/:key";
     let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.structured_get(agent_id, &key) {
@@ -3304,15 +3618,23 @@ pub async fn get_agent_kv_key(
             StatusCode::OK,
             Json(serde_json::json!({"key": key, "value": val})),
         ),
-        Ok(None) => (
+        Ok(None) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Key not found"})),
+            &rid,
+            PATH,
+            "Key not found",
+            format!("No value stored for key '{key}'."),
+            Some("Use PUT to create the key or list keys with GET /api/memory/agents/:id/kv."),
         ),
         Err(e) => {
             tracing::warn!("Memory get failed for key '{key}': {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Memory operation failed"})),
+                &rid,
+                PATH,
+                "Memory operation failed",
+                format!("{e}"),
+                Some("Check SQLite / memory store health."),
             )
         }
     }
@@ -3322,8 +3644,11 @@ pub async fn get_agent_kv_key(
 pub async fn set_agent_kv_key(
     State(state): State<Arc<AppState>>,
     Path((_id, key)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/memory/agents/:id/kv/:key";
     let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     let value = body.get("value").cloned().unwrap_or(body);
@@ -3335,9 +3660,13 @@ pub async fn set_agent_kv_key(
         ),
         Err(e) => {
             tracing::warn!("Memory set failed for key '{key}': {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Memory operation failed"})),
+                &rid,
+                PATH,
+                "Memory operation failed",
+                format!("{e}"),
+                Some("Check SQLite / memory store health."),
             )
         }
     }
@@ -3347,7 +3676,10 @@ pub async fn set_agent_kv_key(
 pub async fn delete_agent_kv_key(
     State(state): State<Arc<AppState>>,
     Path((_id, key)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/memory/agents/:id/kv/:key";
     let agent_id = openfang_kernel::kernel::shared_memory_agent_id();
 
     match state.kernel.memory.structured_delete(agent_id, &key) {
@@ -3357,9 +3689,13 @@ pub async fn delete_agent_kv_key(
         ),
         Err(e) => {
             tracing::warn!("Memory delete failed for key '{key}': {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Memory operation failed"})),
+                &rid,
+                PATH,
+                "Memory operation failed",
+                format!("{e}"),
+                Some("Check SQLite / memory store health."),
             )
         }
     }
@@ -3554,8 +3890,11 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
 /// POST /api/skills/install — Install a skill from FangHub (GitHub).
 pub async fn install_skill(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<SkillInstallRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/skills/install";
     let skills_dir = state.kernel.config.home_dir.join("skills");
     let config = openfang_skills::marketplace::MarketplaceConfig::default();
     let client = openfang_skills::marketplace::MarketplaceClient::new(config);
@@ -3575,9 +3914,13 @@ pub async fn install_skill(
         }
         Err(e) => {
             tracing::warn!("Skill install failed: {e}");
-            (
+            api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Install failed: {e}")})),
+                &rid,
+                PATH,
+                "Skill install failed",
+                format!("{e}"),
+                Some("Verify skill name, network access to the marketplace, and ~/.armaraos/skills permissions."),
             )
         }
     }
@@ -3586,8 +3929,11 @@ pub async fn install_skill(
 /// POST /api/skills/uninstall — Uninstall a skill.
 pub async fn uninstall_skill(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<SkillUninstallRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/skills/uninstall";
     let skills_dir = state.kernel.config.home_dir.join("skills");
     let mut registry = openfang_skills::registry::SkillRegistry::new(skills_dir);
     let _ = registry.load_all();
@@ -3601,9 +3947,13 @@ pub async fn uninstall_skill(
                 Json(serde_json::json!({"status": "uninstalled", "name": req.name})),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Skill not found",
+            format!("{e}"),
+            Some("List installed skills via GET /api/skills."),
         ),
     }
 }
@@ -3619,11 +3969,17 @@ pub async fn reload_skills(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// GET /api/marketplace/search — Search the FangHub marketplace.
 pub async fn marketplace_search(
+    ext: Option<Extension<RequestId>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/marketplace/search";
     let query = params.get("q").cloned().unwrap_or_default();
     if query.is_empty() {
-        return Json(serde_json::json!({"results": [], "total": 0}));
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"results": [], "total": 0})),
+        );
     }
 
     let config = openfang_skills::marketplace::MarketplaceConfig::default();
@@ -3642,11 +3998,21 @@ pub async fn marketplace_search(
                     })
                 })
                 .collect();
-            Json(serde_json::json!({"results": items, "total": items.len()}))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"results": items, "total": items.len()})),
+            )
         }
         Err(e) => {
             tracing::warn!("Marketplace search failed: {e}");
-            Json(serde_json::json!({"results": [], "total": 0, "error": format!("{e}")}))
+            api_json_error(
+                StatusCode::BAD_GATEWAY,
+                &rid,
+                PATH,
+                "Marketplace search failed",
+                format!("{e}"),
+                Some("Check network connectivity to the marketplace API."),
+            )
         }
     }
 }
@@ -3810,7 +4176,10 @@ pub async fn clawhub_browse(
 pub async fn clawhub_skill_detail(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/clawhub/skill/:slug";
     let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
     let client = openfang_skills::clawhub::ClawHubClient::new(cache_dir);
 
@@ -3865,7 +4234,19 @@ pub async fn clawhub_skill_detail(
             } else {
                 StatusCode::NOT_FOUND
             };
-            (status, Json(serde_json::json!({"error": format!("{e}")})))
+            let hint = if status == StatusCode::TOO_MANY_REQUESTS {
+                Some("ClawHub rate limit — wait and retry, or use cached browse results.")
+            } else {
+                Some("Verify the slug exists on ClawHub or check network connectivity.")
+            };
+            api_json_error(
+                status,
+                &rid,
+                PATH,
+                "ClawHub skill fetch failed",
+                format!("{e}"),
+                hint,
+            )
         }
     }
 }
@@ -3874,7 +4255,10 @@ pub async fn clawhub_skill_detail(
 pub async fn clawhub_skill_code(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/clawhub/skill/:slug/code";
     let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
     let client = openfang_skills::clawhub::ClawHubClient::new(cache_dir);
 
@@ -3894,9 +4278,13 @@ pub async fn clawhub_skill_code(
     }
 
     if code.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "No source code found for this skill"})),
+            &rid,
+            PATH,
+            "No source code found for this skill",
+            format!("Could not fetch SKILL.md, package.json, or skill.toml for '{slug}'."),
+            Some("Confirm the slug on ClawHub and network access."),
         );
     }
 
@@ -3916,20 +4304,24 @@ pub async fn clawhub_skill_code(
 /// manifest security scan, prompt injection scan, and binary dependency check.
 pub async fn clawhub_install(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<crate::types::ClawHubInstallRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/clawhub/install";
     let skills_dir = state.kernel.config.home_dir.join("skills");
     let cache_dir = state.kernel.config.home_dir.join(".cache").join("clawhub");
     let client = openfang_skills::clawhub::ClawHubClient::new(cache_dir);
 
     // Check if already installed
     if client.is_installed(&req.slug, &skills_dir) {
-        return (
+        return api_json_error(
             StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("Skill '{}' is already installed", req.slug),
-                "status": "already_installed",
-            })),
+            &rid,
+            PATH,
+            "Skill already installed",
+            format!("Skill '{}' is already installed.", req.slug),
+            Some("Uninstall first or pick a different skill."),
         );
     }
 
@@ -3980,7 +4372,16 @@ pub async fn clawhub_install(
                 StatusCode::INTERNAL_SERVER_ERROR
             };
             tracing::warn!("ClawHub install failed: {msg}");
-            (status, Json(serde_json::json!({"error": msg})))
+            let hint = if status == StatusCode::FORBIDDEN {
+                Some("Security scan blocked this package — inspect warnings in logs.")
+            } else if status == StatusCode::TOO_MANY_REQUESTS {
+                Some("ClawHub rate limit — wait and retry.")
+            } else if status == StatusCode::BAD_GATEWAY {
+                Some("Network error reaching ClawHub — check connectivity.")
+            } else {
+                Some("See daemon logs for this request_id.")
+            };
+            api_json_error(status, &rid, PATH, "ClawHub install failed", msg, hint)
         }
     }
 }
@@ -4090,7 +4491,10 @@ pub async fn list_active_hands(State(state): State<Arc<AppState>>) -> impl IntoR
 pub async fn get_hand(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id";
     match state.kernel.hand_registry.get_definition(&hand_id) {
         Some(def) => {
             let reqs = state
@@ -4159,9 +4563,13 @@ pub async fn get_hand(
                 })),
             )
         }
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
+            &rid,
+            PATH,
+            "Hand not found",
+            format!("No hand definition for id '{hand_id}'."),
+            Some("Use GET /api/hands to list available hands."),
         ),
     }
 }
@@ -4170,7 +4578,10 @@ pub async fn get_hand(
 pub async fn check_hand_deps(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id/check-deps";
     match state.kernel.hand_registry.get_definition(&hand_id) {
         Some(def) => {
             let reqs = state
@@ -4213,9 +4624,13 @@ pub async fn check_hand_deps(
                 })),
             )
         }
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
+            &rid,
+            PATH,
+            "Hand not found",
+            format!("No hand definition for id '{hand_id}'."),
+            Some("Use GET /api/hands to list available hands."),
         ),
     }
 }
@@ -4224,13 +4639,20 @@ pub async fn check_hand_deps(
 pub async fn install_hand_deps(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id/install-deps";
     let def = match state.kernel.hand_registry.get_definition(&hand_id) {
         Some(d) => d.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
+                &rid,
+                PATH,
+                "Hand not found",
+                format!("No hand definition for id '{hand_id}'."),
+                Some("Use GET /api/hands to list available hands."),
             );
         }
     };
@@ -4461,15 +4883,22 @@ pub async fn install_hand_deps(
 /// POST /api/hands/install — Install a hand from TOML content.
 pub async fn install_hand(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/install";
     let toml_content = body["toml_content"].as_str().unwrap_or("");
     let skill_content = body["skill_content"].as_str().unwrap_or("");
 
     if toml_content.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing toml_content field"})),
+            &rid,
+            PATH,
+            "Missing toml_content",
+            "JSON body must include non-empty 'toml_content'.".to_string(),
+            Some("Optional 'skill_content' can accompany the hand TOML."),
         );
     }
 
@@ -4487,9 +4916,13 @@ pub async fn install_hand(
                 "category": format!("{:?}", def.category),
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Hand install failed",
+            format!("{e}"),
+            Some("Validate hand TOML against the hand schema."),
         ),
     }
 }
@@ -4501,15 +4934,22 @@ pub async fn install_hand(
 /// to pick up the new definition.
 pub async fn upsert_hand(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/upsert";
     let toml_content = body["toml_content"].as_str().unwrap_or("");
     let skill_content = body["skill_content"].as_str().unwrap_or("");
 
     if toml_content.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing toml_content field"})),
+            &rid,
+            PATH,
+            "Missing toml_content",
+            "JSON body must include non-empty 'toml_content'.".to_string(),
+            Some("Optional 'skill_content' can accompany the hand TOML."),
         );
     }
 
@@ -4527,9 +4967,13 @@ pub async fn upsert_hand(
                 "category": format!("{:?}", def.category),
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Hand upsert failed",
+            format!("{e}"),
+            Some("Validate hand TOML against the hand schema."),
         ),
     }
 }
@@ -4538,8 +4982,11 @@ pub async fn upsert_hand(
 pub async fn activate_hand(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     body: Option<Json<openfang_hands::ActivateHandRequest>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id/activate";
     let config = body.map(|b| b.0.config).unwrap_or_default();
 
     match state.kernel.activate_hand(&hand_id, config) {
@@ -4578,9 +5025,13 @@ pub async fn activate_hand(
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Activate hand failed",
+            format!("{e}"),
+            Some("Check hand requirements and agent spawn limits."),
         ),
     }
 }
@@ -4589,15 +5040,22 @@ pub async fn activate_hand(
 pub async fn pause_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/instances/:id/pause";
     match state.kernel.pause_hand(id) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "paused", "instance_id": id})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Pause hand failed",
+            format!("{e}"),
+            Some("Verify the instance id from GET /api/hands/instances."),
         ),
     }
 }
@@ -4606,15 +5064,22 @@ pub async fn pause_hand(
 pub async fn resume_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/instances/:id/resume";
     match state.kernel.resume_hand(id) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "resumed", "instance_id": id})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Resume hand failed",
+            format!("{e}"),
+            Some("Verify the instance id from GET /api/hands/instances."),
         ),
     }
 }
@@ -4623,15 +5088,22 @@ pub async fn resume_hand(
 pub async fn deactivate_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/instances/:id";
     match state.kernel.deactivate_hand(id) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "deactivated", "instance_id": id})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Deactivate hand failed",
+            format!("{e}"),
+            Some("Verify the instance id from GET /api/hands/instances."),
         ),
     }
 }
@@ -4640,7 +5112,10 @@ pub async fn deactivate_hand(
 pub async fn get_hand_settings(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id/settings";
     let settings_status = match state
         .kernel
         .hand_registry
@@ -4648,9 +5123,13 @@ pub async fn get_hand_settings(
     {
         Ok(s) => s,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Hand not found: {hand_id}")})),
+                &rid,
+                PATH,
+                "Hand not found",
+                format!("No hand definition for id '{hand_id}'."),
+                Some("Use GET /api/hands to list available hands."),
             );
         }
     };
@@ -4679,8 +5158,11 @@ pub async fn get_hand_settings(
 pub async fn update_hand_settings(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(config): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/:hand_id/settings";
     // Find active instance for this hand
     let instance_id = state
         .kernel
@@ -4701,16 +5183,22 @@ pub async fn update_hand_settings(
                     "config": config,
                 })),
             ),
-            Err(e) => (
+            Err(e) => api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
+                &rid,
+                PATH,
+                "Hand settings update failed",
+                format!("{e}"),
+                Some("Validate values against the hand settings schema."),
             ),
         },
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({"error": format!("No active instance for hand: {hand_id}. Activate the hand first.")}),
-            ),
+            &rid,
+            PATH,
+            "No active hand instance",
+            format!("No active instance for hand '{hand_id}'. Activate the hand first."),
+            Some("POST /api/hands/:hand_id/activate to create an instance."),
         ),
     }
 }
@@ -4719,13 +5207,20 @@ pub async fn update_hand_settings(
 pub async fn hand_stats(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/instances/:id/stats";
     let instance = match state.kernel.hand_registry.get_instance(id) {
         Some(i) => i,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Instance not found"})),
+                &rid,
+                PATH,
+                "Instance not found",
+                format!("No hand instance for id {id}."),
+                Some("List instances via GET /api/hands/instances."),
             );
         }
     };
@@ -4733,9 +5228,13 @@ pub async fn hand_stats(
     let def = match state.kernel.hand_registry.get_definition(&instance.hand_id) {
         Some(d) => d,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Hand definition not found"})),
+                &rid,
+                PATH,
+                "Hand definition not found",
+                format!("Missing definition for hand '{}'.", instance.hand_id),
+                Some("Reinstall or repair the hand package."),
             );
         }
     };
@@ -4799,14 +5298,21 @@ pub async fn hand_stats(
 pub async fn hand_instance_browser(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/instances/:id/browser";
     // 1. Look up instance
     let instance = match state.kernel.hand_registry.get_instance(id) {
         Some(i) => i,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Instance not found"})),
+                &rid,
+                PATH,
+                "Instance not found",
+                format!("No hand instance for id {id}."),
+                Some("List instances via GET /api/hands/instances."),
             );
         }
     };
@@ -5461,13 +5967,20 @@ pub async fn update_budget(
 pub async fn agent_budget_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/budget/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -5475,9 +5988,13 @@ pub async fn agent_budget_status(
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Spawn an agent or pick a valid id from GET /api/agents."),
             )
         }
     };
@@ -5554,14 +6071,21 @@ pub async fn agent_budget_ranking(State(state): State<Arc<AppState>>) -> impl In
 pub async fn update_agent_budget(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/budget/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -5572,11 +6096,13 @@ pub async fn update_agent_budget(
     let tokens = body["max_llm_tokens_per_hour"].as_u64();
 
     if hourly.is_none() && daily.is_none() && monthly.is_none() && tokens.is_none() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Provide at least one of: max_cost_per_hour_usd, max_cost_per_day_usd, max_cost_per_month_usd, max_llm_tokens_per_hour"}),
-            ),
+            &rid,
+            PATH,
+            "Missing budget fields",
+            "Provide at least one of: max_cost_per_hour_usd, max_cost_per_day_usd, max_cost_per_month_usd, max_llm_tokens_per_hour.".to_string(),
+            Some("Send a JSON object with one or more limit fields."),
         );
     }
 
@@ -5595,9 +6121,13 @@ pub async fn update_agent_budget(
                 Json(serde_json::json!({"status": "ok", "message": "Agent budget updated"})),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Agent budget update failed",
+            format!("{e}"),
+            Some("Verify the agent exists and manifest resources are valid."),
         ),
     }
 }
@@ -5618,13 +6148,20 @@ pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoRespo
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/sessions/:id";
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => openfang_types::agent::SessionId(u),
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid session ID"})),
+                &rid,
+                PATH,
+                "Invalid session ID",
+                "Session id must be a valid UUID.".to_string(),
+                Some("Use GET /api/sessions to list session ids."),
             );
         }
     };
@@ -5634,9 +6171,13 @@ pub async fn delete_session(
             StatusCode::OK,
             Json(serde_json::json!({"status": "deleted", "session_id": id})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            &rid,
+            PATH,
+            "Session delete failed",
+            e.to_string(),
+            Some("Check database health and daemon logs."),
         ),
     }
 }
@@ -5645,14 +6186,21 @@ pub async fn delete_session(
 pub async fn set_session_label(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/sessions/:id/label";
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => openfang_types::agent::SessionId(u),
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid session ID"})),
+                &rid,
+                PATH,
+                "Invalid session ID",
+                "Session id must be a valid UUID.".to_string(),
+                Some("Use GET /api/sessions to list session ids."),
             );
         }
     };
@@ -5662,9 +6210,13 @@ pub async fn set_session_label(
     // Validate label if present
     if let Some(lbl) = label {
         if let Err(e) = openfang_types::agent::SessionLabel::new(lbl) {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
+                &rid,
+                PATH,
+                "Invalid session label",
+                e.to_string(),
+                Some("Labels must meet length and character rules."),
             );
         }
     }
@@ -5678,9 +6230,13 @@ pub async fn set_session_label(
                 "label": label,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            &rid,
+            PATH,
+            "Session label update failed",
+            e.to_string(),
+            Some("Check database health and whether the session exists."),
         ),
     }
 }
@@ -5689,7 +6245,10 @@ pub async fn set_session_label(
 pub async fn find_session_by_label(
     State(state): State<Arc<AppState>>,
     Path((agent_id_str, label)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/sessions/by-label/:label";
     let agent_id = match agent_id_str.parse::<uuid::Uuid>() {
         Ok(u) => openfang_types::agent::AgentId(u),
         Err(_) => {
@@ -5697,9 +6256,13 @@ pub async fn find_session_by_label(
             match state.kernel.registry.find_by_name(&agent_id_str) {
                 Some(entry) => entry.id,
                 None => {
-                    return (
+                    return api_json_error(
                         StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "Agent not found"})),
+                        &rid,
+                        PATH,
+                        "Agent not found",
+                        format!("No agent matches UUID or name '{agent_id_str}'."),
+                        Some("Use GET /api/agents or pass a valid agent id."),
                     );
                 }
             }
@@ -5716,13 +6279,21 @@ pub async fn find_session_by_label(
                 "message_count": session.messages.len(),
             })),
         ),
-        Ok(None) => (
+        Ok(None) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "No session found with that label"})),
+            &rid,
+            PATH,
+            "Session not found",
+            format!("No session with label '{label}' for this agent."),
+            Some("List sessions with GET /api/sessions."),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            &rid,
+            PATH,
+            "Session lookup failed",
+            e.to_string(),
+            Some("Check database health."),
         ),
     }
 }
@@ -5735,14 +6306,21 @@ pub async fn find_session_by_label(
 pub async fn update_trigger(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/triggers/:id";
     let trigger_id = TriggerId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid trigger ID"})),
+                &rid,
+                PATH,
+                "Invalid trigger ID",
+                "Trigger id must be a valid UUID.".to_string(),
+                Some("Use GET /api/triggers to list ids."),
             );
         }
     });
@@ -5756,15 +6334,23 @@ pub async fn update_trigger(
                 ),
             )
         } else {
-            (
+            api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Trigger not found"})),
+                &rid,
+                PATH,
+                "Trigger not found",
+                format!("No trigger registered for id {id}."),
+                Some("List triggers with GET /api/triggers."),
             )
         }
     } else {
-        (
+        api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing 'enabled' field"})),
+            &rid,
+            PATH,
+            "Missing enabled field",
+            "JSON body must include boolean 'enabled'.".to_string(),
+            Some("Send {\"enabled\": true} or {\"enabled\": false}."),
         )
     }
 }
@@ -5777,22 +6363,33 @@ pub async fn update_trigger(
 pub async fn update_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<AgentUpdateRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
 
     if state.kernel.registry.get(agent_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Spawn an agent or pick a valid id from GET /api/agents."),
         );
     }
 
@@ -5800,9 +6397,13 @@ pub async fn update_agent(
     let _manifest: AgentManifest = match toml::from_str(&req.manifest_toml) {
         Ok(m) => m,
         Err(e) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Invalid manifest: {e}")})),
+                &rid,
+                PATH,
+                "Invalid manifest",
+                format!("{e}"),
+                Some("Fix agent.toml syntax and retry."),
             );
         }
     };
@@ -5822,22 +6423,33 @@ pub async fn update_agent(
 pub async fn patch_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             );
         }
     };
 
     if state.kernel.registry.get(agent_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Spawn an agent or pick a valid id from GET /api/agents."),
         );
     }
 
@@ -5848,9 +6460,13 @@ pub async fn patch_agent(
             .registry
             .update_name(agent_id, name.to_string())
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
+                &rid,
+                PATH,
+                "Agent name update failed",
+                format!("{e}"),
+                Some("Check naming rules and uniqueness."),
             );
         }
     }
@@ -5860,9 +6476,13 @@ pub async fn patch_agent(
             .registry
             .update_description(agent_id, desc.to_string())
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
+                &rid,
+                PATH,
+                "Agent description update failed",
+                format!("{e}"),
+                None,
             );
         }
     }
@@ -5872,9 +6492,13 @@ pub async fn patch_agent(
             .kernel
             .set_agent_model(agent_id, model, explicit_provider)
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
+                &rid,
+                PATH,
+                "Agent model update failed",
+                format!("{e}"),
+                Some("Verify provider/model in config and GET /api/providers."),
             );
         }
     }
@@ -5884,9 +6508,13 @@ pub async fn patch_agent(
             .registry
             .update_system_prompt(agent_id, system_prompt.to_string())
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("{e}")})),
+                &rid,
+                PATH,
+                "System prompt update failed",
+                format!("{e}"),
+                None,
             );
         }
     }
@@ -5901,9 +6529,13 @@ pub async fn patch_agent(
             ),
         )
     } else {
-        (
+        api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Agent vanished during update"})),
+            &rid,
+            PATH,
+            "Agent vanished during update",
+            "Registry lost the agent while updating — inconsistent state.".to_string(),
+            Some("Retry the request or restart the daemon if this persists."),
         )
     }
 }
@@ -6012,12 +6644,21 @@ pub async fn migrate_detect() -> impl IntoResponse {
 }
 
 /// POST /api/migrate/scan — Scan a specific directory for OpenClaw workspace.
-pub async fn migrate_scan(Json(req): Json<MigrateScanRequest>) -> impl IntoResponse {
+pub async fn migrate_scan(
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<MigrateScanRequest>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/migrate/scan";
     let path = std::path::PathBuf::from(&req.path);
     if !path.exists() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Directory not found"})),
+            &rid,
+            PATH,
+            "Directory not found",
+            format!("Path does not exist: {}", req.path),
+            Some("Pass an absolute or relative path to an existing directory."),
         );
     }
     let scan = openfang_migrate::openclaw::scan_openclaw_workspace(&path);
@@ -6025,17 +6666,24 @@ pub async fn migrate_scan(Json(req): Json<MigrateScanRequest>) -> impl IntoRespo
 }
 
 /// POST /api/migrate — Run migration from another agent framework.
-pub async fn run_migrate(Json(req): Json<MigrateRequest>) -> impl IntoResponse {
+pub async fn run_migrate(
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<MigrateRequest>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/migrate";
     let source = match req.source.as_str() {
         "openclaw" => openfang_migrate::MigrateSource::OpenClaw,
         "langchain" => openfang_migrate::MigrateSource::LangChain,
         "autogpt" => openfang_migrate::MigrateSource::AutoGpt,
         other => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Unknown source: {other}. Use 'openclaw', 'langchain', or 'autogpt'")}),
-                ),
+                &rid,
+                PATH,
+                "Unknown migration source",
+                format!("Unknown source '{other}'. Use 'openclaw', 'langchain', or 'autogpt'."),
+                None,
             );
         }
     };
@@ -6087,9 +6735,13 @@ pub async fn run_migrate(Json(req): Json<MigrateRequest>) -> impl IntoResponse {
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Migration failed: {e}")})),
+            &rid,
+            PATH,
+            "Migration failed",
+            format!("{e}"),
+            Some("Check source_dir/target_dir permissions and logs."),
         ),
     }
 }
@@ -6210,7 +6862,10 @@ pub async fn list_aliases(State(state): State<Arc<AppState>>) -> impl IntoRespon
 pub async fn get_model(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/models/:id";
     let catalog = state
         .kernel
         .model_catalog
@@ -6241,9 +6896,13 @@ pub async fn get_model(
                 })),
             )
         }
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Model '{}' not found", id)})),
+            &rid,
+            PATH,
+            "Model not found",
+            format!("No model or alias matching '{id}'."),
+            Some("Use GET /api/models to list catalog entries."),
         ),
     }
 }
@@ -6343,8 +7002,11 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
 /// available for agent assignment.
 pub async fn add_custom_model(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/models/custom";
     let id = body
         .get("id")
         .and_then(|v| v.as_str())
@@ -6365,9 +7027,13 @@ pub async fn add_custom_model(
         .unwrap_or(8_192);
 
     if id.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing required field: id"})),
+            &rid,
+            PATH,
+            "Missing model id",
+            "JSON body must include non-empty 'id'.".to_string(),
+            Some("Optional: display_name, provider, context_window, pricing fields."),
         );
     }
 
@@ -6414,11 +7080,13 @@ pub async fn add_custom_model(
         .unwrap_or_else(|e| e.into_inner());
 
     if !catalog.add_custom_model(entry) {
-        return (
+        return api_json_error(
             StatusCode::CONFLICT,
-            Json(
-                serde_json::json!({"error": format!("Model '{}' already exists for provider '{}'", id, provider)}),
-            ),
+            &rid,
+            PATH,
+            "Model already exists",
+            format!("Model '{id}' already exists for provider '{provider}'."),
+            Some("Remove the existing entry or choose a different id."),
         );
     }
 
@@ -6441,8 +7109,11 @@ pub async fn add_custom_model(
 /// DELETE /api/models/custom/{id} — Remove a custom model.
 pub async fn remove_custom_model(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     axum::extract::Path(model_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/models/custom/:id";
     let mut catalog = state
         .kernel
         .model_catalog
@@ -6450,9 +7121,13 @@ pub async fn remove_custom_model(
         .unwrap_or_else(|e| e.into_inner());
 
     if !catalog.remove_custom_model(&model_id) {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Custom model '{}' not found", model_id)})),
+            &rid,
+            PATH,
+            "Custom model not found",
+            format!("No custom model '{model_id}' in the catalog."),
+            Some("List models with GET /api/models?available=false."),
         );
     }
 
@@ -6521,8 +7196,11 @@ pub async fn a2a_list_agents(State(state): State<Arc<AppState>>) -> impl IntoRes
 /// POST /a2a/tasks/send — Submit a task to an agent via A2A.
 pub async fn a2a_send_task(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(request): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/a2a/tasks/send";
     // Extract message text from A2A format
     let message_text = request["params"]["message"]["parts"]
         .as_array()
@@ -6540,9 +7218,13 @@ pub async fn a2a_send_task(
     // Find target agent (use first available or specified)
     let agents = state.kernel.registry.list();
     if agents.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "No agents available"})),
+            &rid,
+            PATH,
+            "No agents available",
+            "Spawn at least one agent before using A2A task send.".to_string(),
+            Some("POST /api/agents to spawn an agent."),
         );
     }
 
@@ -6583,9 +7265,13 @@ pub async fn a2a_send_task(
                     StatusCode::OK,
                     Json(serde_json::to_value(&completed_task).unwrap_or_default()),
                 ),
-                None => (
+                None => api_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Task disappeared after completion"})),
+                    &rid,
+                    PATH,
+                    "Task state lost",
+                    "Task disappeared after completion.".to_string(),
+                    Some("This is an internal consistency error — retry the request."),
                 ),
             }
         }
@@ -6602,9 +7288,13 @@ pub async fn a2a_send_task(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::to_value(&failed_task).unwrap_or_default()),
                 ),
-                None => (
+                None => api_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Agent error: {e}")})),
+                    &rid,
+                    PATH,
+                    "Agent error",
+                    format!("{e}"),
+                    Some("Check LLM provider, agent logs, and /api/budget."),
                 ),
             }
         }
@@ -6615,15 +7305,22 @@ pub async fn a2a_send_task(
 pub async fn a2a_get_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/a2a/tasks/:id";
     match state.kernel.a2a_task_store.get(&task_id) {
         Some(task) => (
             StatusCode::OK,
             Json(serde_json::to_value(&task).unwrap_or_default()),
         ),
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Task '{}' not found", task_id)})),
+            &rid,
+            PATH,
+            "Task not found",
+            format!("No task with id '{task_id}'."),
+            Some("Tasks are ephemeral — use the id returned from POST /a2a/tasks/send."),
         ),
     }
 }
@@ -6632,22 +7329,33 @@ pub async fn a2a_get_task(
 pub async fn a2a_cancel_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/a2a/tasks/:id/cancel";
     if state.kernel.a2a_task_store.cancel(&task_id) {
         match state.kernel.a2a_task_store.get(&task_id) {
             Some(task) => (
                 StatusCode::OK,
                 Json(serde_json::to_value(&task).unwrap_or_default()),
             ),
-            None => (
+            None => api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Task disappeared after cancellation"})),
+                &rid,
+                PATH,
+                "Task state lost",
+                "Task disappeared after cancellation.".to_string(),
+                Some("Retry or submit a new task."),
             ),
         }
     } else {
-        (
+        api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Task '{}' not found", task_id)})),
+            &rid,
+            PATH,
+            "Task not found",
+            format!("No task with id '{task_id}'."),
+            None,
         )
     }
 }
@@ -6679,14 +7387,21 @@ pub async fn a2a_list_external_agents(State(state): State<Arc<AppState>>) -> imp
 /// POST /api/a2a/discover — Discover a new external A2A agent by URL.
 pub async fn a2a_discover_external(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/a2a/discover";
     let url = match body["url"].as_str() {
         Some(u) => u.to_string(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' field"})),
+                &rid,
+                PATH,
+                "Missing url",
+                "JSON body must include string 'url'.".to_string(),
+                Some("Pass the agent card base URL for discovery."),
             )
         }
     };
@@ -6717,9 +7432,13 @@ pub async fn a2a_discover_external(
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "A2A discover failed",
+            e,
+            Some("Verify the URL serves a valid agent card."),
         ),
     }
 }
@@ -6727,23 +7446,34 @@ pub async fn a2a_discover_external(
 /// POST /api/a2a/send — Send a task to an external A2A agent.
 pub async fn a2a_send_external(
     State(_state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/a2a/send";
     let url = match body["url"].as_str() {
         Some(u) => u.to_string(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' field"})),
+                &rid,
+                PATH,
+                "Missing url",
+                "JSON body must include string 'url'.".to_string(),
+                None,
             )
         }
     };
     let message = match body["message"].as_str() {
         Some(m) => m.to_string(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'message' field"})),
+                &rid,
+                PATH,
+                "Missing message",
+                "JSON body must include string 'message'.".to_string(),
+                None,
             )
         }
     };
@@ -6755,9 +7485,13 @@ pub async fn a2a_send_external(
             StatusCode::OK,
             Json(serde_json::to_value(&task).unwrap_or_default()),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "A2A send failed",
+            e,
+            Some("Verify the remote agent URL and protocol compatibility."),
         ),
     }
 }
@@ -6766,14 +7500,21 @@ pub async fn a2a_send_external(
 pub async fn a2a_external_task_status(
     State(_state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/a2a/tasks/:id/status";
     let url = match params.get("url") {
         Some(u) => u.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'url' query parameter"})),
+                &rid,
+                PATH,
+                "Missing url parameter",
+                "Query string must include 'url' for the remote agent.".to_string(),
+                None,
             )
         }
     };
@@ -6784,9 +7525,13 @@ pub async fn a2a_external_task_status(
             StatusCode::OK,
             Json(serde_json::to_value(&task).unwrap_or_default()),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "External task status failed",
+            e,
+            Some("Verify task_id and remote agent availability."),
         ),
     }
 }
@@ -6900,13 +7645,20 @@ pub async fn mcp_http(
 pub async fn list_agent_sessions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/sessions";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -6915,9 +7667,13 @@ pub async fn list_agent_sessions(
             StatusCode::OK,
             Json(serde_json::json!({"sessions": sessions})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "List sessions failed",
+            format!("{e}"),
+            Some("Check database health."),
         ),
     }
 }
@@ -6926,23 +7682,34 @@ pub async fn list_agent_sessions(
 pub async fn create_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/sessions";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let label = req.get("label").and_then(|v| v.as_str());
     match state.kernel.create_agent_session(agent_id, label) {
         Ok(session) => (StatusCode::OK, Json(session)),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Create session failed",
+            format!("{e}"),
+            Some("Check database health and agent state."),
         ),
     }
 }
@@ -6951,22 +7718,33 @@ pub async fn create_agent_session(
 pub async fn switch_agent_session(
     State(state): State<Arc<AppState>>,
     Path((id, session_id_str)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/sessions/:session_id/switch";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let session_id = match session_id_str.parse::<uuid::Uuid>() {
         Ok(uuid) => openfang_types::agent::SessionId(uuid),
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid session ID"})),
+                &rid,
+                PATH,
+                "Invalid session ID",
+                "session_id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents/:id/sessions to list sessions."),
             )
         }
     };
@@ -6975,9 +7753,13 @@ pub async fn switch_agent_session(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "Session switched"})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Switch session failed",
+            format!("{e}"),
+            Some("Verify the session belongs to this agent."),
         ),
     }
 }
@@ -6988,13 +7770,20 @@ pub async fn switch_agent_session(
 pub async fn reset_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/session/reset";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7003,9 +7792,13 @@ pub async fn reset_session(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "Session reset"})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Session reset failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -7014,20 +7807,31 @@ pub async fn reset_session(
 pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/history";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     if state.kernel.registry.get(agent_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            None,
         );
     }
     match state.kernel.clear_agent_history(agent_id) {
@@ -7035,9 +7839,13 @@ pub async fn clear_agent_history(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "All history cleared"})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Clear history failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -7046,13 +7854,20 @@ pub async fn clear_agent_history(
 pub async fn compact_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/session/compact";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7061,9 +7876,13 @@ pub async fn compact_session(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": msg})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Session compaction failed",
+            format!("{e}"),
+            Some("Check LLM provider and session size."),
         ),
     }
 }
@@ -7072,13 +7891,20 @@ pub async fn compact_session(
 pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/stop";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7091,9 +7917,13 @@ pub async fn stop_agent(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": "No active run"})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Stop run failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -7102,23 +7932,34 @@ pub async fn stop_agent(
 pub async fn set_model(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/model";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let model = match body["model"].as_str() {
         Some(m) if !m.is_empty() => m,
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'model' field"})),
+                &rid,
+                PATH,
+                "Missing model",
+                "JSON body must include non-empty 'model'.".to_string(),
+                Some("Optional 'provider' overrides resolution."),
             )
         }
     };
@@ -7149,9 +7990,13 @@ pub async fn set_model(
                 ),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Set model failed",
+            format!("{e}"),
+            Some("Verify the model exists in GET /api/models."),
         ),
     }
 }
@@ -7160,22 +8005,33 @@ pub async fn set_model(
 pub async fn get_agent_tools(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/tools";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                None,
             )
         }
     };
@@ -7192,14 +8048,21 @@ pub async fn get_agent_tools(
 pub async fn set_agent_tools(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/tools";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7221,9 +8084,13 @@ pub async fn set_agent_tools(
         });
 
     if allowlist.is_none() && blocklist.is_none() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provide 'tool_allowlist' and/or 'tool_blocklist'"})),
+            &rid,
+            PATH,
+            "Missing tool filters",
+            "Provide 'tool_allowlist' and/or 'tool_blocklist'.".to_string(),
+            None,
         );
     }
 
@@ -7232,9 +8099,13 @@ pub async fn set_agent_tools(
         .set_agent_tool_filters(agent_id, allowlist, blocklist)
     {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Update tool filters failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -7245,22 +8116,33 @@ pub async fn set_agent_tools(
 pub async fn get_agent_skills(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/skills";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                None,
             )
         }
     };
@@ -7289,14 +8171,21 @@ pub async fn get_agent_skills(
 pub async fn set_agent_skills(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/skills";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7313,9 +8202,13 @@ pub async fn set_agent_skills(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "skills": skills})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Set agent skills failed",
+            format!("{e}"),
+            Some("Use names from GET /api/agents/:id/skills available list."),
         ),
     }
 }
@@ -7324,22 +8217,33 @@ pub async fn set_agent_skills(
 pub async fn get_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/mcp_servers";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                None,
             )
         }
     };
@@ -7374,14 +8278,21 @@ pub async fn get_agent_mcp_servers(
 pub async fn set_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/mcp_servers";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
             )
         }
     };
@@ -7401,9 +8312,13 @@ pub async fn set_agent_mcp_servers(
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "mcp_servers": servers})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("{e}")})),
+            &rid,
+            PATH,
+            "Set MCP servers failed",
+            format!("{e}"),
+            Some("Use server names from connected MCP tools."),
         ),
     }
 }
@@ -7417,14 +8332,21 @@ pub async fn set_agent_mcp_servers(
 pub async fn set_provider_key(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name/key";
     let key = match body["key"].as_str() {
         Some(k) if !k.trim().is_empty() => k.trim().to_string(),
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing or empty 'key' field"})),
+                &rid,
+                PATH,
+                "Missing API key",
+                "JSON body must include non-empty 'key'.".to_string(),
+                Some("Keys are written to secrets.env and the process environment."),
             );
         }
     };
@@ -7451,9 +8373,13 @@ pub async fn set_provider_key(
     // Write to secrets.env file (dual-write for backward compat / vault corruption recovery)
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
     if let Err(e) = write_secret_env(&secrets_path, &env_var, &key) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write secrets.env: {e}")})),
+            &rid,
+            PATH,
+            "Failed to write secrets.env",
+            format!("{e}"),
+            Some("Check permissions on ~/.openfang/secrets.env."),
         );
     }
 
@@ -7593,7 +8519,10 @@ pub async fn set_provider_key(
 pub async fn delete_provider_key(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name/key";
     let env_var = {
         let catalog = state
             .kernel
@@ -7610,9 +8539,13 @@ pub async fn delete_provider_key(
     };
 
     if env_var.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provider does not require an API key"})),
+            &rid,
+            PATH,
+            "No API key for provider",
+            "This provider does not use a configurable API key.".to_string(),
+            Some("Local providers may not need keys."),
         );
     }
 
@@ -7622,9 +8555,13 @@ pub async fn delete_provider_key(
     // Remove from secrets.env
     let secrets_path = state.kernel.config.home_dir.join("secrets.env");
     if let Err(e) = remove_secret_env(&secrets_path, &env_var) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to update secrets.env: {e}")})),
+            &rid,
+            PATH,
+            "Failed to update secrets.env",
+            format!("{e}"),
+            Some("Check file permissions."),
         );
     }
 
@@ -7649,7 +8586,10 @@ pub async fn delete_provider_key(
 pub async fn test_provider(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name/test";
     let (env_var, base_url, key_required, default_model) = {
         let catalog = state
             .kernel
@@ -7670,9 +8610,13 @@ pub async fn test_provider(
                 )
             }
             None => {
-                return (
+                return api_json_error(
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("Unknown provider '{}'", name)})),
+                    &rid,
+                    PATH,
+                    "Unknown provider",
+                    format!("No provider '{name}' in the catalog."),
+                    Some("Use GET /api/providers for valid ids."),
                 );
             }
         }
@@ -7681,9 +8625,13 @@ pub async fn test_provider(
     let api_key = std::env::var(&env_var).ok();
     // Only require API key for providers that need one (skip local providers like ollama/vllm/lmstudio)
     if key_required && api_key.is_none() && !env_var.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provider API key not configured"})),
+            &rid,
+            PATH,
+            "Provider API key not configured",
+            format!("Set {} via POST /api/providers/:name/key.", env_var),
+            Some("Or export the variable before starting the daemon."),
         );
     }
 
@@ -7749,24 +8697,35 @@ pub async fn test_provider(
 pub async fn set_provider_url(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name/url";
     // Accept any provider name — custom providers are supported via OpenAI-compatible format.
     let base_url = match body["base_url"].as_str() {
         Some(u) if !u.trim().is_empty() => u.trim().to_string(),
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing or empty 'base_url' field"})),
+                &rid,
+                PATH,
+                "Missing base_url",
+                "JSON body must include non-empty 'base_url'.".to_string(),
+                None,
             );
         }
     };
 
     // Validate URL scheme
     if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "base_url must start with http:// or https://"})),
+            &rid,
+            PATH,
+            "Invalid base_url",
+            "base_url must start with http:// or https://.".to_string(),
+            None,
         );
     }
 
@@ -7783,9 +8742,13 @@ pub async fn set_provider_url(
     // Persist to config.toml [provider_urls] section
     let config_path = state.kernel.config.home_dir.join("config.toml");
     if let Err(e) = upsert_provider_url(&config_path, &name, &base_url) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save config: {e}")})),
+            &rid,
+            PATH,
+            "Failed to save config",
+            format!("{e}"),
+            Some("Check config.toml permissions."),
         );
     }
 
@@ -7857,14 +8820,21 @@ fn upsert_provider_url(
 /// POST /api/skills/create — Create a local prompt-only skill.
 pub async fn create_skill(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/skills/create";
     let name = match body["name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.trim().to_string(),
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing or empty 'name' field"})),
+                &rid,
+                PATH,
+                "Missing skill name",
+                "JSON body must include non-empty 'name'.".to_string(),
+                None,
             );
         }
     };
@@ -7874,11 +8844,13 @@ pub async fn create_skill(
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Skill name must contain only letters, numbers, hyphens, and underscores"}),
-            ),
+            &rid,
+            PATH,
+            "Invalid skill name",
+            "Skill name must contain only letters, numbers, hyphens, and underscores.".to_string(),
+            None,
         );
     }
 
@@ -7888,27 +8860,37 @@ pub async fn create_skill(
 
     // Only allow prompt_only skills from the web UI for safety
     if runtime != "prompt_only" {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Only prompt_only skills can be created from the web UI"}),
-            ),
+            &rid,
+            PATH,
+            "Unsupported runtime",
+            "Only prompt_only skills can be created from the web UI.".to_string(),
+            None,
         );
     }
 
     // Write skill.toml to ~/.openfang/skills/{name}/
     let skill_dir = state.kernel.config.home_dir.join("skills").join(&name);
     if skill_dir.exists() {
-        return (
+        return api_json_error(
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": format!("Skill '{}' already exists", name)})),
+            &rid,
+            PATH,
+            "Skill already exists",
+            format!("Skill '{name}' already exists."),
+            Some("Choose a different name or remove the existing directory."),
         );
     }
 
     if let Err(e) = std::fs::create_dir_all(&skill_dir) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to create skill directory: {e}")})),
+            &rid,
+            PATH,
+            "Failed to create skill directory",
+            format!("{e}"),
+            Some("Check disk space and permissions on the skills folder."),
         );
     }
 
@@ -7921,9 +8903,13 @@ pub async fn create_skill(
 
     let toml_path = skill_dir.join("skill.toml");
     if let Err(e) = std::fs::write(&toml_path, &toml_content) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write skill.toml: {e}")})),
+            &rid,
+            PATH,
+            "Failed to write skill.toml",
+            format!("{e}"),
+            None,
         );
     }
 
@@ -7942,6 +8928,15 @@ pub async fn create_skill(
 /// Write or update a key in the secrets.env file.
 /// File format: one `KEY=value` per line. Existing keys are overwritten.
 fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
+    // Avoid corrupting the KEY=value line format if the user accidentally pasted
+    // with trailing newlines/spaces (common on Windows).
+    let value = value.trim();
+    if value.contains('\n') || value.contains('\r') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "secret value contains newline characters",
+        ));
+    }
     let mut lines: Vec<String> = if path.exists() {
         std::fs::read_to_string(path)?
             .lines()
@@ -8040,8 +9035,10 @@ fn upsert_channel_config(
                 // Always store list items as strings so that numeric IDs
                 // (e.g. Discord guild snowflakes, Telegram user IDs) are
                 // deserialized correctly into Vec<String> config fields.
+                // Accept comma-separated values, whitespace/newline-separated values,
+                // or mixed (users often paste IDs one-per-line).
                 let items: Vec<toml::Value> = v
-                    .split(',')
+                    .split(|c: char| c == ',' || c.is_whitespace())
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                     .map(|s| toml::Value::String(s.to_string()))
@@ -8175,14 +9172,21 @@ pub async fn list_available_integrations(State(state): State<Arc<AppState>>) -> 
 /// POST /api/integrations/add — Install an integration.
 pub async fn add_integration(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/add";
     let id = match req.get("id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'id' field"})),
+                &rid,
+                PATH,
+                "Missing integration id",
+                "JSON body must include string 'id'.".to_string(),
+                Some("Use GET /api/integrations/available to list templates."),
             );
         }
     };
@@ -8221,7 +9225,14 @@ pub async fn add_integration(
     }; // write lock dropped here
 
     if let Some((status, error)) = install_err {
-        return (status, Json(serde_json::json!({"error": error})));
+        return api_json_error(
+            status,
+            &rid,
+            PATH,
+            "Integration install failed",
+            error,
+            None,
+        );
     }
 
     state.kernel.extension_health.register(&id);
@@ -8244,7 +9255,10 @@ pub async fn add_integration(
 pub async fn remove_integration(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/:id";
     // Scope the write lock
     let uninstall_err = {
         let mut registry = state
@@ -8256,9 +9270,13 @@ pub async fn remove_integration(
     };
 
     if let Some(e) = uninstall_err {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e.to_string()})),
+            &rid,
+            PATH,
+            "Integration remove failed",
+            e.to_string(),
+            Some("The integration may not be installed."),
         );
     }
 
@@ -8280,7 +9298,10 @@ pub async fn remove_integration(
 pub async fn reconnect_integration(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/:id/reconnect";
     let is_installed = {
         let registry = state
             .kernel
@@ -8291,9 +9312,13 @@ pub async fn reconnect_integration(
     };
 
     if !is_installed {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Integration '{}' not installed", id)})),
+            &rid,
+            PATH,
+            "Integration not installed",
+            format!("Integration '{id}' is not installed."),
+            Some("POST /api/integrations/add first."),
         );
     }
 
@@ -8306,13 +9331,13 @@ pub async fn reconnect_integration(
                 "tool_count": tool_count,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "id": id,
-                "status": "error",
-                "error": e,
-            })),
+            &rid,
+            PATH,
+            "Integration reconnect failed",
+            e,
+            Some("Check MCP server logs and required environment variables."),
         ),
     }
 }
@@ -8344,7 +9369,12 @@ pub async fn integrations_health(State(state): State<Arc<AppState>>) -> impl Int
 }
 
 /// POST /api/integrations/reload — Hot-reload integration configs and reconnect MCP.
-pub async fn reload_integrations(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn reload_integrations(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/reload";
     match state.kernel.reload_extension_mcps().await {
         Ok(connected) => (
             StatusCode::OK,
@@ -8353,9 +9383,13 @@ pub async fn reload_integrations(State(state): State<Arc<AppState>>) -> impl Int
                 "new_connections": connected,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Integration reload failed",
+            e,
+            Some("Check extension configs and MCP connectivity."),
         ),
     }
 }
@@ -8376,17 +9410,34 @@ fn schedule_shared_agent_id() -> AgentId {
 const SCHEDULES_KEY: &str = "__openfang_schedules";
 
 /// GET /api/schedules — List all cron-based scheduled jobs.
-pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn list_schedules(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
     let agent_id = schedule_shared_agent_id();
     match state.kernel.memory.structured_get(agent_id, SCHEDULES_KEY) {
         Ok(Some(serde_json::Value::Array(arr))) => {
             let total = arr.len();
-            Json(serde_json::json!({"schedules": arr, "total": total}))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"schedules": arr, "total": total})),
+            )
         }
-        Ok(_) => Json(serde_json::json!({"schedules": [], "total": 0})),
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"schedules": [], "total": 0})),
+        ),
         Err(e) => {
             tracing::warn!("Failed to load schedules: {e}");
-            Json(serde_json::json!({"schedules": [], "total": 0, "error": format!("{e}")}))
+            api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                "/api/schedules",
+                "Failed to load schedules",
+                format!("{e}"),
+                Some("Check memory/sqlite configuration and daemon logs."),
+            )
         }
     }
 }
@@ -8394,14 +9445,21 @@ pub async fn list_schedules(State(state): State<Arc<AppState>>) -> impl IntoResp
 /// POST /api/schedules — Create a new cron-based scheduled job.
 pub async fn create_schedule(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/schedules";
     let name = match req["name"].as_str() {
         Some(n) if !n.is_empty() => n.to_string(),
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'name' field"})),
+                &rid,
+                PATH,
+                "Missing schedule name",
+                "JSON body must include a non-empty 'name' field.".to_string(),
+                Some("Pass name, cron, agent_id, and optional message for the scheduler."),
             );
         }
     };
@@ -8409,9 +9467,13 @@ pub async fn create_schedule(
     let cron = match req["cron"].as_str() {
         Some(c) if !c.is_empty() => c.to_string(),
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'cron' field"})),
+                &rid,
+                PATH,
+                "Missing cron expression",
+                "JSON body must include a non-empty 'cron' field.".to_string(),
+                Some("Use five fields: minute hour day-of-month month day-of-week."),
             );
         }
     };
@@ -8419,19 +9481,25 @@ pub async fn create_schedule(
     // Validate cron expression: must be 5 space-separated fields
     let cron_parts: Vec<&str> = cron.split_whitespace().collect();
     if cron_parts.len() != 5 {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Invalid cron expression: must have 5 fields (min hour dom mon dow)"}),
-            ),
+            &rid,
+            PATH,
+            "Invalid cron expression",
+            "Cron must have exactly 5 fields (minute hour dom mon dow), space-separated.".to_string(),
+            Some("Example: \"0 9 * * *\" for daily 9:00."),
         );
     }
 
     let agent_id_str = req["agent_id"].as_str().unwrap_or("").to_string();
     if agent_id_str.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing required field: agent_id"})),
+            &rid,
+            PATH,
+            "Missing agent_id",
+            "JSON body must include 'agent_id' (UUID or agent name).".to_string(),
+            Some("Use an id from GET /api/agents."),
         );
     }
     // Validate agent exists (UUID or name lookup)
@@ -8446,9 +9514,13 @@ pub async fn create_schedule(
             .any(|a| a.name == agent_id_str)
     };
     if !agent_exists {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Agent not found: {agent_id_str}")})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent matches agent_id {agent_id_str}."),
+            Some("Create the agent first or fix agent_id."),
         );
     }
     let message = req["message"].as_str().unwrap_or("").to_string();
@@ -8481,9 +9553,13 @@ pub async fn create_schedule(
         serde_json::Value::Array(schedules),
     ) {
         tracing::warn!("Failed to save schedule: {e}");
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to save schedule: {e}")})),
+            &rid,
+            PATH,
+            "Failed to save schedule",
+            format!("{e}"),
+            Some("Check memory/sqlite storage and daemon logs."),
         );
     }
 
@@ -8494,8 +9570,11 @@ pub async fn create_schedule(
 pub async fn update_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/schedules/:id";
     let shared_id = schedule_shared_agent_id();
     let mut schedules: Vec<serde_json::Value> =
         match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
@@ -8516,9 +9595,13 @@ pub async fn update_schedule(
             if let Some(cron) = req.get("cron").and_then(|v| v.as_str()) {
                 let cron_parts: Vec<&str> = cron.split_whitespace().collect();
                 if cron_parts.len() != 5 {
-                    return (
+                    return api_json_error(
                         StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({"error": "Invalid cron expression"})),
+                        &rid,
+                        PATH,
+                        "Invalid cron expression",
+                        "Cron must have exactly 5 fields (minute hour dom mon dow).".to_string(),
+                        None,
                     );
                 }
                 s["cron"] = serde_json::Value::String(cron.to_string());
@@ -8534,9 +9617,13 @@ pub async fn update_schedule(
     }
 
     if !found {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Schedule not found"})),
+            &rid,
+            PATH,
+            "Schedule not found",
+            format!("No schedule with id {id}."),
+            Some("Use GET /api/schedules to list ids."),
         );
     }
 
@@ -8545,9 +9632,13 @@ pub async fn update_schedule(
         SCHEDULES_KEY,
         serde_json::Value::Array(schedules),
     ) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to update schedule: {e}")})),
+            &rid,
+            PATH,
+            "Failed to update schedule",
+            format!("{e}"),
+            Some("Check memory/sqlite storage."),
         );
     }
 
@@ -8561,7 +9652,10 @@ pub async fn update_schedule(
 pub async fn delete_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/schedules/:id";
     let shared_id = schedule_shared_agent_id();
     let mut schedules: Vec<serde_json::Value> =
         match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
@@ -8573,9 +9667,13 @@ pub async fn delete_schedule(
     schedules.retain(|s| s["id"].as_str() != Some(&id));
 
     if schedules.len() == before {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Schedule not found"})),
+            &rid,
+            PATH,
+            "Schedule not found",
+            format!("No schedule with id {id}."),
+            Some("Use GET /api/schedules to list ids."),
         );
     }
 
@@ -8584,9 +9682,13 @@ pub async fn delete_schedule(
         SCHEDULES_KEY,
         serde_json::Value::Array(schedules),
     ) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to delete schedule: {e}")})),
+            &rid,
+            PATH,
+            "Failed to delete schedule",
+            format!("{e}"),
+            Some("Check memory/sqlite storage."),
         );
     }
 
@@ -8600,7 +9702,10 @@ pub async fn delete_schedule(
 pub async fn run_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/schedules/:id/run";
     let shared_id = schedule_shared_agent_id();
     let schedules: Vec<serde_json::Value> =
         match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
@@ -8611,9 +9716,13 @@ pub async fn run_schedule(
     let schedule = match schedules.iter().find(|s| s["id"].as_str() == Some(&id)) {
         Some(s) => s.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Schedule not found"})),
+                &rid,
+                PATH,
+                "Schedule not found",
+                format!("No schedule with id {id}."),
+                Some("Use GET /api/schedules to list ids."),
             );
         }
     };
@@ -8648,11 +9757,13 @@ pub async fn run_schedule(
     let target_agent = match target_agent {
         Some(a) => a,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({"error": "No target agent found. Specify an agent_id or start an agent first."}),
-                ),
+                &rid,
+                PATH,
+                "No target agent",
+                "No target agent found. Specify an agent_id or start an agent first.".to_string(),
+                Some("Fix the schedule's agent_id or spawn the agent."),
             );
         }
     };
@@ -8698,15 +9809,299 @@ pub async fn run_schedule(
                 "response": result.response,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "status": "failed",
-                "schedule_id": id,
-                "error": format!("{e}"),
-            })),
+            &rid,
+            PATH,
+            "Scheduled run failed",
+            format!("{e}"),
+            Some("Check LLM provider, agent state, and /api/budget."),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Support endpoints
+// ---------------------------------------------------------------------------
+
+/// POST /api/support/diagnostics — Generate a redacted diagnostics bundle.
+///
+/// Produces a `.zip` under `~/.armaraos/support/` containing:
+/// - `config.toml` (as-is)
+/// - `secrets.env` (redacted values)
+/// - `audit.json` (recent audit trail entries)
+/// - the SQLite DB (openfang.db + -wal/-shm when present)
+/// - recent logs (best-effort)
+/// - basic version/build metadata
+pub async fn create_diagnostics_bundle(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/support/diagnostics";
+    let home = openfang_kernel::config::openfang_home();
+    let support_dir = home.join("support");
+    if let Err(e) = std::fs::create_dir_all(&support_dir) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to create support directory",
+            format!("{e}"),
+            Some("Check permissions on the OpenFang home directory."),
+        );
+    }
+
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let out_path = support_dir.join(format!("armaraos-diagnostics-{ts}.zip"));
+    let tmp_redacted = support_dir.join(format!("secrets.redacted-{ts}.env"));
+    let tmp_meta = support_dir.join(format!("meta-{ts}.json"));
+    let tmp_audit = support_dir.join(format!("audit-{ts}.json"));
+
+    // 1) Create redacted secrets.env copy
+    let secrets_path = home.join("secrets.env");
+    if secrets_path.exists() {
+        match std::fs::read_to_string(&secrets_path) {
+            Ok(s) => {
+                let mut out = String::new();
+                for line in s.lines() {
+                    let t = line.trim();
+                    if t.is_empty() || t.starts_with('#') || !t.contains('=') {
+                        out.push_str(line);
+                        out.push('\n');
+                        continue;
+                    }
+                    let mut parts = t.splitn(2, '=');
+                    let k = parts.next().unwrap_or("").trim();
+                    let _v = parts.next().unwrap_or("");
+                    out.push_str(k);
+                    out.push('=');
+                    out.push_str("***REDACTED***");
+                    out.push('\n');
+                }
+                if let Err(e) = std::fs::write(&tmp_redacted, out) {
+                    return api_json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &rid,
+                        PATH,
+                        "Failed to write redacted secrets",
+                        format!("{e}"),
+                        Some("Check disk space and permissions in the support folder."),
+                    );
+                }
+            }
+            Err(e) => {
+                return api_json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &rid,
+                    PATH,
+                    "Failed to read secrets.env",
+                    format!("{e}"),
+                    Some("Check file permissions on secrets.env."),
+                )
+            }
+        }
+    }
+
+    // 2) Write metadata
+    let config_path = home.join("config.toml");
+    let data_dir = state.kernel.config.data_dir.clone();
+    let db_path = state
+        .kernel
+        .config
+        .memory
+        .sqlite_path
+        .clone()
+        .unwrap_or_else(|| data_dir.join("openfang.db"));
+    let logs_dir = home.join("logs");
+    let meta = serde_json::json!({
+        "app": "ArmaraOS",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "home_dir": home.display().to_string(),
+        "data_dir": data_dir.display().to_string(),
+        "db_path": db_path.display().to_string(),
+        "logs_dir": logs_dir.display().to_string(),
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    });
+    if let Err(e) = std::fs::write(&tmp_meta, serde_json::to_vec_pretty(&meta).unwrap_or_default())
+    {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to write metadata",
+            format!("{e}"),
+            None,
+        );
+    }
+
+    // 3) Write audit export (explicit file, even though the backing store may be SQLite)
+    let audit_entries = state.kernel.audit_log.recent(500);
+    let audit_export = serde_json::json!({
+        "tip_hash": state.kernel.audit_log.tip_hash(),
+        "total": state.kernel.audit_log.len(),
+        "exported": audit_entries.len(),
+        "entries": audit_entries,
+    });
+    if let Err(e) = std::fs::write(
+        &tmp_audit,
+        serde_json::to_vec_pretty(&audit_export).unwrap_or_default(),
+    ) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to write audit export",
+            format!("{e}"),
+            None,
+        );
+    }
+
+    // 4) Build archive
+    let file = match std::fs::File::create(&out_path) {
+        Ok(f) => f,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Failed to create archive",
+                format!("{e}"),
+                Some("Check disk space and permissions."),
+            )
+        }
+    };
+    let mut zip = ZipWriter::new(file);
+    let opts = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut add_path = |src: &FsPath, dest: &str| -> Result<(), String> {
+        if !src.exists() {
+            return Ok(());
+        }
+        if src.is_dir() {
+            return Ok(());
+        }
+        zip.start_file(dest, opts)
+            .map_err(|e| format!("zip start {dest}: {e}"))?;
+        let mut f = std::fs::File::open(src).map_err(|e| format!("open {dest}: {e}"))?;
+        std::io::copy(&mut f, &mut zip).map_err(|e| format!("zip write {dest}: {e}"))?;
+        Ok(())
+    };
+
+    if let Err(e) = add_path(&config_path, "config.toml") {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Diagnostics bundle failed",
+            e,
+            Some("Could not add config.toml to the archive."),
+        );
+    }
+    if tmp_redacted.exists() {
+        if let Err(e) = add_path(&tmp_redacted, "secrets.env") {
+            let _ = std::fs::remove_file(&out_path);
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Diagnostics bundle failed",
+                e,
+                Some("Could not add redacted secrets to the archive."),
+            );
+        }
+    }
+    if let Err(e) = add_path(&tmp_meta, "meta.json") {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Diagnostics bundle failed",
+            e,
+            None,
+        );
+    }
+    if let Err(e) = add_path(&tmp_audit, "audit.json") {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Diagnostics bundle failed",
+            e,
+            None,
+        );
+    }
+
+    // Include DB + WAL/SHM if present
+    let db_base = db_path.clone();
+    for (src, name) in [
+        (db_base.clone(), "data/openfang.db".to_string()),
+        (
+            PathBuf::from(format!("{}-wal", db_base.display())),
+            "data/openfang.db-wal".to_string(),
+        ),
+        (
+            PathBuf::from(format!("{}-shm", db_base.display())),
+            "data/openfang.db-shm".to_string(),
+        ),
+    ] {
+        let _ = add_path(&src, &name);
+    }
+
+    // Logs (best-effort, cap to a reasonable number of files)
+    if logs_dir.is_dir() {
+        let mut added = 0usize;
+        for entry in WalkDir::new(&logs_dir)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if added >= 25 {
+                break;
+            }
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let p = entry.path();
+            let rel = p.strip_prefix(&home).unwrap_or(p);
+            let name = format!("home/{}", rel.display());
+            if add_path(p, &name).is_ok() {
+                added += 1;
+            }
+        }
+    }
+
+    if let Err(e) = zip.finish() {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to finalize archive",
+            format!("{e}"),
+            None,
+        );
+    }
+
+    // Cleanup temp files (best-effort)
+    let _ = std::fs::remove_file(&tmp_redacted);
+    let _ = std::fs::remove_file(&tmp_meta);
+    let _ = std::fs::remove_file(&tmp_audit);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "bundle_path": out_path.display().to_string(),
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -8731,14 +10126,21 @@ pub struct UpdateIdentityRequest {
 pub async fn update_agent_identity(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<UpdateIdentityRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/identity";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
@@ -8746,9 +10148,13 @@ pub async fn update_agent_identity(
     // Validate color format if provided
     if let Some(ref color) = req.color {
         if !color.is_empty() && !color.starts_with('#') {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Color must be a hex code starting with '#'"})),
+                &rid,
+                PATH,
+                "Invalid color",
+                "Color must be a hex code starting with '#'.".to_string(),
+                None,
             );
         }
     }
@@ -8760,9 +10166,13 @@ pub async fn update_agent_identity(
             && !url.starts_with("https://")
             && !url.starts_with("data:")
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Avatar URL must be http/https or data URI"})),
+                &rid,
+                PATH,
+                "Invalid avatar URL",
+                "Avatar URL must be http(s) or a data URI.".to_string(),
+                None,
             );
         }
     }
@@ -8787,9 +10197,13 @@ pub async fn update_agent_identity(
                 Json(serde_json::json!({"status": "ok", "agent_id": id})),
             )
         }
-        Err(_) => (
+        Err(_) => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Agent not found"})),
+            &rid,
+            PATH,
+            "Agent not found",
+            format!("No agent registered for id {id}."),
+            Some("Use GET /api/agents to list agents."),
         ),
     }
 }
@@ -8821,14 +10235,21 @@ pub struct PatchAgentConfigRequest {
 pub async fn patch_agent_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<PatchAgentConfigRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/config";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
@@ -8840,31 +10261,37 @@ pub async fn patch_agent_config(
 
     if let Some(ref name) = req.name {
         if name.len() > MAX_NAME_LEN {
-            return (
+            return api_json_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(
-                    serde_json::json!({"error": format!("Name exceeds max length ({MAX_NAME_LEN} chars)")}),
-                ),
+                &rid,
+                PATH,
+                "Name too long",
+                format!("Name exceeds max length ({MAX_NAME_LEN} chars)."),
+                None,
             );
         }
     }
     if let Some(ref desc) = req.description {
         if desc.len() > MAX_DESC_LEN {
-            return (
+            return api_json_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(
-                    serde_json::json!({"error": format!("Description exceeds max length ({MAX_DESC_LEN} chars)")}),
-                ),
+                &rid,
+                PATH,
+                "Description too long",
+                format!("Description exceeds max length ({MAX_DESC_LEN} chars)."),
+                None,
             );
         }
     }
     if let Some(ref prompt) = req.system_prompt {
         if prompt.len() > MAX_PROMPT_LEN {
-            return (
+            return api_json_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(
-                    serde_json::json!({"error": format!("System prompt exceeds max length ({MAX_PROMPT_LEN} chars)")}),
-                ),
+                &rid,
+                PATH,
+                "System prompt too long",
+                format!("System prompt exceeds max length ({MAX_PROMPT_LEN} chars)."),
+                None,
             );
         }
     }
@@ -8872,9 +10299,13 @@ pub async fn patch_agent_config(
     // Validate color format if provided
     if let Some(ref color) = req.color {
         if !color.is_empty() && !color.starts_with('#') {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Color must be a hex code starting with '#'"})),
+                &rid,
+                PATH,
+                "Invalid color",
+                "Color must be a hex code starting with '#'.".to_string(),
+                None,
             );
         }
     }
@@ -8886,9 +10317,13 @@ pub async fn patch_agent_config(
             && !url.starts_with("https://")
             && !url.starts_with("data:")
         {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Avatar URL must be http/https or data URI"})),
+                &rid,
+                PATH,
+                "Invalid avatar URL",
+                "Avatar URL must be http(s) or a data URI.".to_string(),
+                None,
             );
         }
     }
@@ -8901,9 +10336,13 @@ pub async fn patch_agent_config(
                 .registry
                 .update_name(agent_id, new_name.clone())
             {
-                return (
+                return api_json_error(
                     StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": format!("{e}")})),
+                    &rid,
+                    PATH,
+                    "Name update failed",
+                    format!("{e}"),
+                    None,
                 );
             }
         }
@@ -8917,9 +10356,13 @@ pub async fn patch_agent_config(
             .update_description(agent_id, new_desc.clone())
             .is_err()
         {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     }
@@ -8932,9 +10375,13 @@ pub async fn patch_agent_config(
             .update_system_prompt(agent_id, new_prompt.clone())
             .is_err()
         {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     }
@@ -8969,9 +10416,13 @@ pub async fn patch_agent_config(
             .update_identity(agent_id, merged)
             .is_err()
         {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     }
@@ -8991,26 +10442,38 @@ pub async fn patch_agent_config(
                             .kernel
                             .set_agent_model(agent_id, new_model, Some(new_provider))
                     {
-                        return (
+                        return api_json_error(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": format!("{e}")})),
+                            &rid,
+                            PATH,
+                            "Model update failed",
+                            format!("{e}"),
+                            None,
                         );
                     }
                 } else {
                     // Provider is empty string — resolve from catalog
                     if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
-                        return (
+                        return api_json_error(
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": format!("{e}")})),
+                            &rid,
+                            PATH,
+                            "Model update failed",
+                            format!("{e}"),
+                            None,
                         );
                     }
                 }
             } else {
                 // No provider field at all — resolve from catalog
                 if let Err(e) = state.kernel.set_agent_model(agent_id, new_model, None) {
-                    return (
+                    return api_json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": format!("{e}")})),
+                        &rid,
+                        PATH,
+                        "Model update failed",
+                        format!("{e}"),
+                        None,
                     );
                 }
             }
@@ -9025,9 +10488,13 @@ pub async fn patch_agent_config(
             .update_fallback_models(agent_id, fallbacks)
             .is_err()
         {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     }
@@ -9059,38 +10526,57 @@ pub struct CloneAgentRequest {
 pub async fn clone_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<CloneAgentRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/clone";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
 
     if req.new_name.len() > 256 {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "Name exceeds max length (256 chars)"})),
+            &rid,
+            PATH,
+            "Name too long",
+            "Name exceeds max length (256 chars).".to_string(),
+            None,
         );
     }
 
     if req.new_name.trim().is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "new_name cannot be empty"})),
+            &rid,
+            PATH,
+            "Invalid new_name",
+            "new_name cannot be empty.".to_string(),
+            None,
         );
     }
 
     let source = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     };
@@ -9104,9 +10590,13 @@ pub async fn clone_agent(
     let new_id = match state.kernel.spawn_agent(cloned_manifest) {
         Ok(id) => id,
         Err(e) => {
-            return (
+            return api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Clone spawn failed: {e}")})),
+                &rid,
+                PATH,
+                "Clone failed",
+                format!("Clone spawn failed: {e}"),
+                None,
             );
         }
     };
@@ -9168,13 +10658,20 @@ const KNOWN_IDENTITY_FILES: &[&str] = &[
 pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/files";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
@@ -9182,9 +10679,13 @@ pub async fn list_agent_files(
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     };
@@ -9192,9 +10693,13 @@ pub async fn list_agent_files(
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
+                &rid,
+                PATH,
+                "No workspace",
+                "This agent has no workspace directory configured.".to_string(),
+                None,
             );
         }
     };
@@ -9222,31 +10727,46 @@ pub async fn list_agent_files(
 pub async fn get_agent_file(
     State(state): State<Arc<AppState>>,
     Path((id, filename)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/files/:filename";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
 
     // Validate filename whitelist
     if !KNOWN_IDENTITY_FILES.contains(&filename.as_str()) {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "File not in whitelist"})),
+            &rid,
+            PATH,
+            "File not allowed",
+            "Filename must be one of the whitelisted identity files.".to_string(),
+            None,
         );
     }
 
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     };
@@ -9254,9 +10774,13 @@ pub async fn get_agent_file(
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
+                &rid,
+                PATH,
+                "No workspace",
+                "This agent has no workspace directory configured.".to_string(),
+                None,
             );
         }
     };
@@ -9266,34 +10790,50 @@ pub async fn get_agent_file(
     let canonical = match file_path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "File not found"})),
+                &rid,
+                PATH,
+                "File not found",
+                "The file does not exist or could not be accessed.".to_string(),
+                None,
             );
         }
     };
     let ws_canonical = match workspace.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workspace path error"})),
+                &rid,
+                PATH,
+                "Workspace path error",
+                "Could not canonicalize the agent workspace path.".to_string(),
+                None,
             );
         }
     };
     if !canonical.starts_with(&ws_canonical) {
-        return (
+        return api_json_error(
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Path traversal denied"})),
+            &rid,
+            PATH,
+            "Path traversal denied",
+            "Resolved path escapes the workspace directory.".to_string(),
+            None,
         );
     }
 
     let content = match std::fs::read_to_string(&canonical) {
         Ok(c) => c,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "File not found"})),
+                &rid,
+                PATH,
+                "File not found",
+                "Could not read file contents.".to_string(),
+                None,
             );
         }
     };
@@ -9319,41 +10859,60 @@ pub struct SetAgentFileRequest {
 pub async fn set_agent_file(
     State(state): State<Arc<AppState>>,
     Path((id, filename)): Path<(String, String)>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<SetAgentFileRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/files/:filename";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
 
     // Validate filename whitelist
     if !KNOWN_IDENTITY_FILES.contains(&filename.as_str()) {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "File not in whitelist"})),
+            &rid,
+            PATH,
+            "File not allowed",
+            "Filename must be one of the whitelisted identity files.".to_string(),
+            None,
         );
     }
 
     // Max 32KB content
     const MAX_FILE_SIZE: usize = 32_768;
     if req.content.len() > MAX_FILE_SIZE {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "File content too large (max 32KB)"})),
+            &rid,
+            PATH,
+            "Payload too large",
+            format!("File content exceeds max size ({MAX_FILE_SIZE} bytes)."),
+            None,
         );
     }
 
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent not found"})),
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
             );
         }
     };
@@ -9361,9 +10920,13 @@ pub async fn set_agent_file(
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
+                &rid,
+                PATH,
+                "No workspace",
+                "This agent has no workspace directory configured.".to_string(),
+                None,
             );
         }
     };
@@ -9372,9 +10935,13 @@ pub async fn set_agent_file(
     let ws_canonical = match workspace.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workspace path error"})),
+                &rid,
+                PATH,
+                "Workspace path error",
+                "Could not canonicalize the agent workspace path.".to_string(),
+                None,
             );
         }
     };
@@ -9394,25 +10961,37 @@ pub async fn set_agent_file(
             .unwrap_or_else(|| file_path.clone())
     };
     if !check_path.starts_with(&ws_canonical) {
-        return (
+        return api_json_error(
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Path traversal denied"})),
+            &rid,
+            PATH,
+            "Path traversal denied",
+            "Resolved path escapes the workspace directory.".to_string(),
+            None,
         );
     }
 
     // Atomic write: write to .tmp, then rename
     let tmp_path = workspace.join(format!(".{filename}.tmp"));
     if let Err(e) = std::fs::write(&tmp_path, &req.content) {
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Write failed: {e}")})),
+            &rid,
+            PATH,
+            "Write failed",
+            format!("{e}"),
+            None,
         );
     }
     if let Err(e) = std::fs::rename(&tmp_path, &file_path) {
         let _ = std::fs::remove_file(&tmp_path);
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Rename failed: {e}")})),
+            &rid,
+            PATH,
+            "Rename failed",
+            format!("{e}"),
+            None,
         );
     }
 
@@ -9473,14 +11052,21 @@ fn is_allowed_content_type(ct: &str) -> bool {
 pub async fn upload_file(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/upload";
     let _agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid agent ID"})),
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                None,
             );
         }
     };
@@ -9492,9 +11078,13 @@ pub async fn upload_file(
         let field = match field {
             Ok(f) => f,
             Err(e) => {
-                return (
+                return api_json_error(
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": format!("Failed to read field: {}", e)})),
+                    &rid,
+                    PATH,
+                    "Multipart read failed",
+                    format!("Failed to read field: {e}"),
+                    None,
                 );
             }
         };
@@ -9511,11 +11101,13 @@ pub async fn upload_file(
                 let bytes = match field.bytes().await {
                     Ok(b) => b,
                     Err(e) => {
-                        return (
+                        return api_json_error(
                             StatusCode::BAD_REQUEST,
-                            Json(
-                                serde_json::json!({"error": format!("Failed to read file: {}", e)}),
-                            ),
+                            &rid,
+                            PATH,
+                            "File read failed",
+                            format!("Failed to read file: {e}"),
+                            None,
                         );
                     }
                 };
@@ -9531,9 +11123,13 @@ pub async fn upload_file(
     let (filename_attr, content_type, body) = match file_data {
         Some(data) => data,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "No file provided"})),
+                &rid,
+                PATH,
+                "No file provided",
+                "Multipart request must include a `file` field.".to_string(),
+                None,
             );
         }
     };
@@ -9543,28 +11139,36 @@ pub async fn upload_file(
         .unwrap_or_else(|| "upload".to_string());
 
     if !is_allowed_content_type(&content_type) {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Unsupported content type. Allowed: image/*, text/*, audio/*, application/pdf"}),
-            ),
+            &rid,
+            PATH,
+            "Unsupported content type",
+            "Allowed: image/*, text/*, audio/*, application/pdf.".to_string(),
+            None,
         );
     }
 
     // Validate size
     if body.len() > MAX_UPLOAD_SIZE {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(
-                serde_json::json!({"error": format!("File too large (max {} MB)", MAX_UPLOAD_SIZE / (1024 * 1024))}),
-            ),
+            &rid,
+            PATH,
+            "File too large",
+            format!("Max size is {} MB.", MAX_UPLOAD_SIZE / (1024 * 1024)),
+            None,
         );
     }
 
     if body.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Empty file body"})),
+            &rid,
+            PATH,
+            "Empty file body",
+            "Upload body was empty.".to_string(),
+            None,
         );
     }
 
@@ -9573,18 +11177,26 @@ pub async fn upload_file(
     let upload_dir = std::env::temp_dir().join("openfang_uploads");
     if let Err(e) = std::fs::create_dir_all(&upload_dir) {
         tracing::warn!("Failed to create upload dir: {e}");
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to create upload directory"})),
+            &rid,
+            PATH,
+            "Failed to create upload directory",
+            format!("{e}"),
+            None,
         );
     }
 
     let file_path = upload_dir.join(&file_id);
     if let Err(e) = std::fs::write(&file_path, &body) {
         tracing::warn!("Failed to write upload: {e}");
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to save file"})),
+            &rid,
+            PATH,
+            "Failed to save file",
+            format!("{e}"),
+            None,
         );
     }
 
@@ -9831,13 +11443,20 @@ pub async fn create_approval(
 pub async fn approve_request(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/approvals/:id/approve";
     let uuid = match uuid::Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid approval ID"})),
+                &rid,
+                PATH,
+                "Invalid approval ID",
+                "Approval id must be a UUID.".to_string(),
+                None,
             );
         }
     };
@@ -9853,7 +11472,14 @@ pub async fn approve_request(
                 serde_json::json!({"id": id, "status": "approved", "decided_at": resp.decided_at.to_rfc3339()}),
             ),
         ),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))),
+        Err(e) => api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Approval not found",
+            e,
+            None,
+        ),
     }
 }
 
@@ -9861,13 +11487,20 @@ pub async fn approve_request(
 pub async fn reject_request(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/approvals/:id/reject";
     let uuid = match uuid::Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid approval ID"})),
+                &rid,
+                PATH,
+                "Invalid approval ID",
+                "Approval id must be a UUID.".to_string(),
+                None,
             );
         }
     };
@@ -9883,7 +11516,14 @@ pub async fn reject_request(
                 serde_json::json!({"id": id, "status": "rejected", "decided_at": resp.decided_at.to_rfc3339()}),
             ),
         ),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))),
+        Err(e) => api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Approval not found",
+            e,
+            None,
+        ),
     }
 }
 
@@ -9896,7 +11536,12 @@ pub async fn reject_request(
 /// Reads the config file, diffs against current config, validates the new config,
 /// and applies hot-reloadable actions (approval policy, cron limits, etc.).
 /// Returns the reload plan showing what changed and what was applied.
-pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn config_reload(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/config/reload";
     // SECURITY: Record config reload in audit trail
     state.kernel.audit_log.record(
         "system",
@@ -9925,9 +11570,13 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"status": "error", "error": e})),
+            &rid,
+            PATH,
+            "Config reload failed",
+            e,
+            Some("Fix config errors on disk, then retry."),
         ),
     }
 }
@@ -10195,7 +11844,10 @@ pub async fn get_agent_deliveries(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/deliveries";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -10203,9 +11855,13 @@ pub async fn get_agent_deliveries(
             match state.kernel.registry.find_by_name(&id) {
                 Some(entry) => entry.id,
                 None => {
-                    return (
+                    return api_json_error(
                         StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "Agent not found"})),
+                        &rid,
+                        PATH,
+                        "Agent not found",
+                        format!("No agent matches id or name `{id}`."),
+                        Some("Use GET /api/agents to list agents."),
                     );
                 }
             }
@@ -10237,7 +11893,10 @@ pub async fn get_agent_deliveries(
 pub async fn list_cron_jobs(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs";
     let jobs = if let Some(agent_id_str) = params.get("agent_id") {
         match uuid::Uuid::parse_str(agent_id_str) {
             Ok(uuid) => {
@@ -10245,9 +11904,13 @@ pub async fn list_cron_jobs(
                 state.kernel.cron_scheduler.list_jobs(aid)
             }
             Err(_) => {
-                return (
+                return api_json_error(
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid agent_id"})),
+                    &rid,
+                    PATH,
+                    "Invalid agent_id",
+                    "The agent_id query parameter must be a UUID.".to_string(),
+                    None,
                 );
             }
         }
@@ -10268,17 +11931,24 @@ pub async fn list_cron_jobs(
 /// POST /api/cron/jobs — Create a new cron job.
 pub async fn create_cron_job(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs";
     let agent_id = body["agent_id"].as_str().unwrap_or("");
     match state.kernel.cron_create(agent_id, body.clone()).await {
         Ok(result) => (
             StatusCode::CREATED,
             Json(serde_json::json!({"result": result})),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Cron job creation failed",
+            e,
+            Some("Validate agent_id (UUID), name, schedule, action, and optional delivery against the cron schema."),
         ),
     }
 }
@@ -10287,7 +11957,10 @@ pub async fn create_cron_job(
 pub async fn delete_cron_job(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs/:id";
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = openfang_types::scheduler::CronJobId(uuid);
@@ -10299,15 +11972,23 @@ pub async fn delete_cron_job(
                         Json(serde_json::json!({"status": "deleted"})),
                     )
                 }
-                Err(e) => (
+                Err(e) => api_json_error(
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("{e}")})),
+                    &rid,
+                    PATH,
+                    "Cron job not found",
+                    format!("{e}"),
+                    Some("List jobs with GET /api/cron/jobs."),
                 ),
             }
         }
-        Err(_) => (
+        Err(_) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid job ID"})),
+            &rid,
+            PATH,
+            "Invalid job ID",
+            "Job id must be a UUID.".to_string(),
+            Some("Use the id from GET /api/cron/jobs."),
         ),
     }
 }
@@ -10316,8 +11997,11 @@ pub async fn delete_cron_job(
 pub async fn toggle_cron_job(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs/:id/enable";
     let enabled = body["enabled"].as_bool().unwrap_or(true);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
@@ -10330,15 +12014,23 @@ pub async fn toggle_cron_job(
                         Json(serde_json::json!({"id": id, "enabled": enabled})),
                     )
                 }
-                Err(e) => (
+                Err(e) => api_json_error(
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("{e}")})),
+                    &rid,
+                    PATH,
+                    "Cron job not found",
+                    format!("{e}"),
+                    Some("List jobs with GET /api/cron/jobs."),
                 ),
             }
         }
-        Err(_) => (
+        Err(_) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid job ID"})),
+            &rid,
+            PATH,
+            "Invalid job ID",
+            "Job id must be a UUID.".to_string(),
+            Some("Use the id from GET /api/cron/jobs."),
         ),
     }
 }
@@ -10347,7 +12039,10 @@ pub async fn toggle_cron_job(
 pub async fn cron_job_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs/:id/status";
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = openfang_types::scheduler::CronJobId(uuid);
@@ -10356,15 +12051,23 @@ pub async fn cron_job_status(
                     StatusCode::OK,
                     Json(serde_json::to_value(&meta).unwrap_or_default()),
                 ),
-                None => (
+                None => api_json_error(
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "Job not found"})),
+                    &rid,
+                    PATH,
+                    "Job not found",
+                    format!("No cron job with id {id}."),
+                    Some("List jobs with GET /api/cron/jobs."),
                 ),
             }
         }
-        Err(_) => (
+        Err(_) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid job ID"})),
+            &rid,
+            PATH,
+            "Invalid job ID",
+            "Job id must be a UUID.".to_string(),
+            Some("Use the id from GET /api/cron/jobs."),
         ),
     }
 }
@@ -10381,13 +12084,20 @@ pub async fn cron_job_status(
 pub async fn run_cron_job(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs/:id/run";
     let uuid = match uuid::Uuid::parse_str(&id) {
         Ok(u) => u,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"status": "error", "error": "Invalid job ID"})),
+                &rid,
+                PATH,
+                "Invalid job ID",
+                "Job id must be a UUID.".to_string(),
+                Some("Use the id from GET /api/cron/jobs."),
             );
         }
     };
@@ -10397,15 +12107,23 @@ pub async fn run_cron_job(
     let job = match state.kernel.cron_scheduler.try_claim_for_run(job_id) {
         Ok(j) => j,
         Err(openfang_kernel::cron::ClaimError::NotFound) => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"status": "error", "error": "Job not found"})),
+                &rid,
+                PATH,
+                "Job not found",
+                format!("No cron job with id {id}."),
+                Some("List jobs with GET /api/cron/jobs."),
             );
         }
         Err(openfang_kernel::cron::ClaimError::Disabled) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"status": "error", "error": "Job is disabled"})),
+                &rid,
+                PATH,
+                "Job is disabled",
+                "Enable the job before running it on demand.".to_string(),
+                Some("PUT /api/cron/jobs/:id/enable with {\"enabled\": true}."),
             );
         }
     };
@@ -10439,33 +12157,48 @@ pub async fn run_cron_job(
 /// trigger proactive agents that subscribe to the event type.
 pub async fn webhook_wake(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     headers: axum::http::HeaderMap,
     Json(body): Json<openfang_types::webhook::WakePayload>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/hooks/wake";
     // Check if webhook triggers are enabled
     let wh_config = match &state.kernel.config.webhook_triggers {
         Some(c) if c.enabled => c,
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Webhook triggers not enabled"})),
+                &rid,
+                PATH,
+                "Webhook triggers not enabled",
+                "Enable webhook_triggers in config and restart.".to_string(),
+                None,
             );
         }
     };
 
     // Validate bearer token (constant-time comparison)
     if !validate_webhook_token(&headers, &wh_config.token_env) {
-        return (
+        return api_json_error(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Invalid or missing token"})),
+            &rid,
+            PATH,
+            "Invalid or missing token",
+            "Provide Authorization: Bearer <token> matching the configured env.".to_string(),
+            None,
         );
     }
 
     // Validate payload
     if let Err(e) = body.validate() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Invalid payload",
+            e,
+            None,
         );
     }
 
@@ -10480,9 +12213,13 @@ pub async fn webhook_wake(
         KernelHandle::publish_event(state.kernel.as_ref(), "webhook.wake", event_payload).await
     {
         tracing::warn!("Webhook wake event publish failed: {e}");
-        return (
+        return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Event publish failed: {e}")})),
+            &rid,
+            PATH,
+            "Event publish failed",
+            e.to_string(),
+            None,
         );
     }
 
@@ -10498,33 +12235,48 @@ pub async fn webhook_wake(
 /// This enables external systems (CI/CD, Slack, etc.) to trigger agent work.
 pub async fn webhook_agent(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     headers: axum::http::HeaderMap,
     Json(body): Json<openfang_types::webhook::AgentHookPayload>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/hooks/agent";
     // Check if webhook triggers are enabled
     let wh_config = match &state.kernel.config.webhook_triggers {
         Some(c) if c.enabled => c,
         _ => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Webhook triggers not enabled"})),
+                &rid,
+                PATH,
+                "Webhook triggers not enabled",
+                "Enable webhook_triggers in config and restart.".to_string(),
+                None,
             );
         }
     };
 
     // Validate bearer token
     if !validate_webhook_token(&headers, &wh_config.token_env) {
-        return (
+        return api_json_error(
             StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Invalid or missing token"})),
+            &rid,
+            PATH,
+            "Invalid or missing token",
+            "Provide Authorization: Bearer <token> matching the configured env.".to_string(),
+            None,
         );
     }
 
     // Validate payload
     if let Err(e) = body.validate() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Invalid payload",
+            e,
+            None,
         );
     }
 
@@ -10537,11 +12289,13 @@ pub async fn webhook_agent(
                 match state.kernel.registry.find_by_name(agent_ref) {
                     Some(entry) => entry.id,
                     None => {
-                        return (
+                        return api_json_error(
                             StatusCode::NOT_FOUND,
-                            Json(
-                                serde_json::json!({"error": format!("Agent not found: {}", agent_ref)}),
-                            ),
+                            &rid,
+                            PATH,
+                            "Agent not found",
+                            format!("No agent matches `{agent_ref}`."),
+                            Some("Use GET /api/agents to list agents."),
                         );
                     }
                 }
@@ -10552,9 +12306,13 @@ pub async fn webhook_agent(
             match state.kernel.registry.list().first() {
                 Some(entry) => entry.id,
                 None => {
-                    return (
+                    return api_json_error(
                         StatusCode::NOT_FOUND,
-                        Json(serde_json::json!({"error": "No agents available"})),
+                        &rid,
+                        PATH,
+                        "No agents available",
+                        "Spawn an agent before calling this webhook.".to_string(),
+                        None,
                     );
                 }
             }
@@ -10575,9 +12333,13 @@ pub async fn webhook_agent(
                 },
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Agent execution failed: {e}")})),
+            &rid,
+            PATH,
+            "Agent execution failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -10617,15 +12379,22 @@ pub async fn add_binding(
 pub async fn remove_binding(
     State(state): State<Arc<AppState>>,
     Path(index): Path<usize>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/bindings/:index";
     match state.kernel.remove_binding(index) {
         Some(_) => (
             StatusCode::OK,
             Json(serde_json::json!({ "status": "removed" })),
         ),
-        None => (
+        None => api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Binding index out of range" })),
+            &rid,
+            PATH,
+            "Binding not found",
+            format!("No binding at index {index}."),
+            Some("Use GET /api/bindings to list bindings."),
         ),
     }
 }
@@ -10633,13 +12402,22 @@ pub async fn remove_binding(
 // ─── Device Pairing endpoints ───────────────────────────────────────────
 
 /// POST /api/pairing/request — Create a new pairing request (returns token + QR URI).
-pub async fn pairing_request(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn pairing_request(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/pairing/request";
     if !state.kernel.config.pairing.enabled {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
+            &rid,
+            PATH,
+            "Pairing not enabled",
+            "Enable pairing in config and restart.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     match state.kernel.pairing.create_pairing_request() {
         Ok(req) => {
@@ -10651,25 +12429,36 @@ pub async fn pairing_request(State(state): State<Arc<AppState>>) -> impl IntoRes
             }))
             .into_response()
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Pairing request failed",
+            e,
+            None,
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
 /// POST /api/pairing/complete — Complete pairing with token + device info.
 pub async fn pairing_complete(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/pairing/complete";
     if !state.kernel.config.pairing.enabled {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
+            &rid,
+            PATH,
+            "Pairing not enabled",
+            "Enable pairing in config and restart.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
     let display_name = body
@@ -10700,22 +12489,35 @@ pub async fn pairing_complete(
             "paired_at": device.paired_at.to_rfc3339(),
         }))
         .into_response(),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Pairing failed",
+            e,
+            None,
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
 /// GET /api/pairing/devices — List paired devices.
-pub async fn pairing_devices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn pairing_devices(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/pairing/devices";
     if !state.kernel.config.pairing.enabled {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
+            &rid,
+            PATH,
+            "Pairing not enabled",
+            "Enable pairing in config and restart.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     let devices: Vec<_> = state
         .kernel
@@ -10739,31 +12541,46 @@ pub async fn pairing_devices(State(state): State<Arc<AppState>>) -> impl IntoRes
 pub async fn pairing_remove_device(
     State(state): State<Arc<AppState>>,
     Path(device_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/pairing/devices/:id";
     if !state.kernel.config.pairing.enabled {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
+            &rid,
+            PATH,
+            "Pairing not enabled",
+            "Enable pairing in config and restart.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     match state.kernel.pairing.remove_device(&device_id) {
         Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e}))).into_response(),
+        Err(e) => api_json_error(StatusCode::NOT_FOUND, &rid, PATH, "Device not found", e, None)
+            .into_response(),
     }
 }
 
 /// POST /api/pairing/notify — Push a notification to all paired devices.
 pub async fn pairing_notify(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/pairing/notify";
     if !state.kernel.config.pairing.enabled {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Pairing not enabled"})),
+            &rid,
+            PATH,
+            "Pairing not enabled",
+            "Enable pairing in config and restart.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     let title = body
         .get("title")
@@ -10771,11 +12588,15 @@ pub async fn pairing_notify(
         .unwrap_or("ArmaraOS");
     let message = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
     if message.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "message is required"})),
+            &rid,
+            PATH,
+            "Invalid body",
+            "Field `message` is required and must be non-empty.".to_string(),
+            None,
         )
-            .into_response();
+        .into_response();
     }
     state.kernel.pairing.notify_devices(title, message).await;
     Json(serde_json::json!({"ok": true, "notified": state.kernel.pairing.list_devices().len()}))
@@ -10858,7 +12679,11 @@ static COPILOT_FLOWS: LazyLock<DashMap<String, CopilotFlowState>> = LazyLock::ne
 ///
 /// Initiates a GitHub device flow for Copilot authentication.
 /// Returns a user code and verification URI that the user visits in their browser.
-pub async fn copilot_oauth_start() -> impl IntoResponse {
+pub async fn copilot_oauth_start(
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/github-copilot/oauth/start";
     // Clean up expired flows first
     COPILOT_FLOWS.retain(|_, state| state.expires_at > Instant::now());
 
@@ -10886,9 +12711,13 @@ pub async fn copilot_oauth_start() -> impl IntoResponse {
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            &rid,
+            PATH,
+            "Device flow start failed",
+            e,
+            None,
         ),
     }
 }
@@ -10901,14 +12730,21 @@ pub async fn copilot_oauth_start() -> impl IntoResponse {
 pub async fn copilot_oauth_poll(
     State(state): State<Arc<AppState>>,
     Path(poll_id): Path<String>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/github-copilot/oauth/poll/:poll_id";
     let flow = match COPILOT_FLOWS.get(&poll_id) {
         Some(f) => f,
         None => {
-            return (
+            return api_json_error(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"status": "not_found", "error": "Unknown poll_id"})),
-            )
+                &rid,
+                PATH,
+                "Unknown poll_id",
+                "No OAuth device flow matches this poll_id (expired or invalid).".to_string(),
+                Some("Start a new flow via POST /api/providers/github-copilot/oauth/start."),
+            );
         }
     };
 
@@ -10936,11 +12772,13 @@ pub async fn copilot_oauth_poll(
             // Save to secrets.env (dual-write)
             let secrets_path = state.kernel.config.home_dir.join("secrets.env");
             if let Err(e) = write_secret_env(&secrets_path, "GITHUB_TOKEN", &access_token) {
-                return (
+                return api_json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(
-                        serde_json::json!({"status": "error", "error": format!("Failed to save token: {e}")}),
-                    ),
+                    &rid,
+                    PATH,
+                    "Failed to save token",
+                    format!("{e}"),
+                    Some("Check permissions on secrets.env under the config home directory."),
                 );
             }
 
@@ -11308,22 +13146,33 @@ pub async fn comms_events_stream(State(state): State<Arc<AppState>>) -> axum::re
 /// POST /api/comms/send — Send a message from one agent to another.
 pub async fn comms_send(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<openfang_types::comms::CommsSendRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/comms/send";
     // Validate from agent exists
     let from_id: openfang_types::agent::AgentId = match req.from_agent_id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid from_agent_id"})),
-            )
+                &rid,
+                PATH,
+                "Invalid from_agent_id",
+                "from_agent_id must be a valid agent UUID.".to_string(),
+                None,
+            );
         }
     };
     if state.kernel.registry.get(from_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Source agent not found"})),
+            &rid,
+            PATH,
+            "Source agent not found",
+            format!("No agent registered for from_agent_id {}.", req.from_agent_id),
+            Some("Use GET /api/agents to list agents."),
         );
     }
 
@@ -11331,24 +13180,36 @@ pub async fn comms_send(
     let to_id: openfang_types::agent::AgentId = match req.to_agent_id.parse() {
         Ok(id) => id,
         Err(_) => {
-            return (
+            return api_json_error(
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid to_agent_id"})),
-            )
+                &rid,
+                PATH,
+                "Invalid to_agent_id",
+                "to_agent_id must be a valid agent UUID.".to_string(),
+                None,
+            );
         }
     };
     if state.kernel.registry.get(to_id).is_none() {
-        return (
+        return api_json_error(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Target agent not found"})),
+            &rid,
+            PATH,
+            "Target agent not found",
+            format!("No agent registered for to_agent_id {}.", req.to_agent_id),
+            Some("Use GET /api/agents to list agents."),
         );
     }
 
     // SECURITY: Limit message size
     if req.message.len() > 64 * 1024 {
-        return (
+        return api_json_error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(serde_json::json!({"error": "Message too large (max 64KB)"})),
+            &rid,
+            PATH,
+            "Message too large",
+            "Message body exceeds max size (64KB).".to_string(),
+            None,
         );
     }
 
@@ -11362,9 +13223,13 @@ pub async fn comms_send(
                 "output_tokens": result.total_usage.output_tokens,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Message delivery failed: {e}")})),
+            &rid,
+            PATH,
+            "Message delivery failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -11372,12 +13237,19 @@ pub async fn comms_send(
 /// POST /api/comms/task — Post a task to the agent task queue.
 pub async fn comms_task(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<openfang_types::comms::CommsTaskRequest>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/comms/task";
     if req.title.is_empty() {
-        return (
+        return api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Title is required"})),
+            &rid,
+            PATH,
+            "Title required",
+            "Field `title` must be non-empty.".to_string(),
+            None,
         );
     }
 
@@ -11399,9 +13271,13 @@ pub async fn comms_task(
                 "task_id": task_id,
             })),
         ),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to post task: {e}")})),
+            &rid,
+            PATH,
+            "Failed to post task",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -11411,19 +13287,29 @@ pub async fn comms_task(
 /// POST /api/auth/login — Authenticate with username/password, returns session token.
 pub async fn auth_login(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(req): Json<serde_json::Value>,
 ) -> axum::response::Response {
     use axum::body::Body;
     use axum::response::Response;
 
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/auth/login";
+
     let auth_cfg = &state.kernel.config.auth;
     if !auth_cfg.enabled {
+        let (st, Json(body)) = api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Auth not enabled",
+            "Dashboard username/password auth is disabled in config.".to_string(),
+            None,
+        );
         return Response::builder()
-            .status(StatusCode::NOT_FOUND)
+            .status(st)
             .header("content-type", "application/json")
-            .body(Body::from(
-                serde_json::json!({"error": "Auth not enabled"}).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
     }
 
@@ -11450,12 +13336,18 @@ pub async fn auth_login(
             "dashboard login failed",
             format!("username: {username}"),
         );
+        let (st, Json(body)) = api_json_error(
+            StatusCode::UNAUTHORIZED,
+            &rid,
+            PATH,
+            "Invalid credentials",
+            "Username or password did not match.".to_string(),
+            None,
+        );
         return Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
+            .status(st)
             .header("content-type", "application/json")
-            .body(Body::from(
-                serde_json::json!({"error": "Invalid credentials"}).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap();
     }
 
@@ -11607,7 +13499,10 @@ fn ainl_library_query_max_hints(params: &HashMap<String, String>) -> usize {
 pub async fn get_ainl_library(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/ainl/library";
     let home = &state.kernel.config.home_dir;
     let root = home.join("ainl-library");
     let root_display = root.display().to_string();
@@ -11705,22 +13600,34 @@ pub async fn get_ainl_library(
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Library scan failed",
+            e,
+            None,
         ),
     }
 }
 
 /// GET /api/ainl/library/curated — Static catalog used for optional cron registration.
-pub async fn get_ainl_library_curated() -> impl IntoResponse {
+pub async fn get_ainl_library_curated(
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/ainl/library/curated";
     match serde_json::from_str::<serde_json::Value>(
         openfang_kernel::ainl_library::CURATED_AINL_CRON_JSON,
     ) {
         Ok(v) => (StatusCode::OK, Json(v)),
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("embedded catalog: {e}")})),
+            &rid,
+            PATH,
+            "Embedded catalog invalid",
+            format!("embedded catalog: {e}"),
+            None,
         ),
     }
 }
@@ -11731,7 +13638,10 @@ pub async fn get_ainl_library_curated() -> impl IntoResponse {
 pub async fn post_ainl_register_curated(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/ainl/library/register-curated";
     const WINDOW_MS: u64 = 60_000;
     const MAX_PER_WINDOW: usize = 5;
     let ip = addr.ip();
@@ -11744,11 +13654,14 @@ pub async fn post_ainl_register_curated(
             let v = o.get_mut();
             v.retain(|t| now.saturating_sub(*t) < WINDOW_MS);
             if v.len() >= MAX_PER_WINDOW {
-                return (
+                return api_json_error(
                     StatusCode::TOO_MANY_REQUESTS,
-                    Json(serde_json::json!({
-                        "error": "Too many register-curated requests from this IP; try again in about a minute."
-                    })),
+                    &rid,
+                    PATH,
+                    "Rate limited",
+                    "Too many register-curated requests from this IP; try again in about a minute."
+                        .to_string(),
+                    None,
                 );
             }
             v.push(now);
@@ -11780,9 +13693,13 @@ pub async fn post_ainl_register_curated(
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Registration failed",
+            e,
+            None,
         ),
     }
 }
@@ -11794,8 +13711,11 @@ pub async fn post_ainl_register_curated(
 /// POST /api/learning/skill-draft — Write `~/.armaraos/skills/staging/draft-<run_id>-<unix>.md` from [`LearningFrameV1`].
 pub async fn post_learning_skill_draft(
     State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
     Json(frame): Json<openfang_types::learning_frame::LearningFrameV1>,
 ) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/learning/skill-draft";
     match openfang_kernel::skills_staging::write_skill_draft_markdown(
         &state.kernel.config.home_dir,
         &frame,
@@ -11810,9 +13730,13 @@ pub async fn post_learning_skill_draft(
                 })),
             )
         }
-        Err(e) => (
+        Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            &rid,
+            PATH,
+            "Draft write failed",
+            e,
+            None,
         ),
     }
 }

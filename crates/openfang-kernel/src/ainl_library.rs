@@ -136,7 +136,10 @@ pub fn resolve_cwd_under_ainl_library(
     }
 }
 
-/// Pick `ARMARAOS_AINL_BIN`, then job override, then `ainl` on `PATH`.
+/// Written by the desktop after a successful internal-venv AINL install (`openfang-desktop` ainl bootstrap).
+/// One line: absolute path to the real `ainl` executable (so the daemon finds it without relying on GUI PATH).
+pub const AINL_BIN_CACHE_FILENAME: &str = ".armaraos-ainl-bin";
+
 /// First `# ...` comment line from the start of a source file (up to 2048 bytes), for library browsing hints.
 pub fn ainl_source_first_hint(path: &Path) -> Option<String> {
     let mut f = std::fs::File::open(path).ok()?;
@@ -164,7 +167,9 @@ pub fn read_ainl_library_sync_metadata(home_dir: &Path) -> Option<serde_json::Va
     serde_json::from_reader(f).ok()
 }
 
-pub fn resolve_ainl_binary(override_opt: &Option<String>) -> String {
+/// Pick `ARMARAOS_AINL_BIN`, per-job override, [`AINL_BIN_CACHE_FILENAME`] under `home_dir`, then
+/// `home_dir/bin/ainl` (Unix) or `home_dir/bin/ainl.exe` (Windows) when present, else `ainl` for `PATH` lookup.
+pub fn resolve_ainl_binary(home_dir: &Path, override_opt: &Option<String>) -> String {
     if let Ok(bin) = std::env::var("ARMARAOS_AINL_BIN") {
         if !bin.is_empty() {
             return bin;
@@ -173,6 +178,27 @@ pub fn resolve_ainl_binary(override_opt: &Option<String>) -> String {
     if let Some(b) = override_opt {
         if !b.is_empty() {
             return b.clone();
+        }
+    }
+    let cache = home_dir.join(AINL_BIN_CACHE_FILENAME);
+    if let Ok(s) = std::fs::read_to_string(&cache) {
+        let line = s.lines().next().unwrap_or("").trim();
+        if !line.is_empty() && Path::new(line).is_file() {
+            return line.to_string();
+        }
+    }
+    #[cfg(unix)]
+    {
+        let p = home_dir.join("bin").join("ainl");
+        if p.is_file() {
+            return p.display().to_string();
+        }
+    }
+    #[cfg(windows)]
+    {
+        let p = home_dir.join("bin").join("ainl.exe");
+        if p.is_file() {
+            return p.display().to_string();
         }
     }
     "ainl".to_string()

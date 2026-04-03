@@ -88,6 +88,14 @@
       <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" x-text="wsConnected ? 'WS' : 'HTTP'" x-show="connected"></span>
       <span class="conn-badge sidebar-label sse" title="Kernel events (live)" x-show="connected && $store.kernelEvents && $store.kernelEvents.connected" x-text="'SSE'"></span>
     </div>
+    <div class="sidebar-conn-help" x-show="!$store.app.connected && !$store.app.booting" style="padding:8px 12px;font-size:11px;line-height:1.45;color:var(--text-muted);border-bottom:1px solid var(--border)">
+      <p style="margin:0 0 8px" x-show="$store.app.lastErrorHint" x-text="$store.app.lastErrorHint"></p>
+      <div class="flex gap-2 flex-wrap" style="align-items:center">
+        <button type="button" class="btn btn-ghost btn-sm" style="font-size:11px;padding:4px 8px" @click="$store.app.copyConnectionDebug()">Copy debug info</button>
+        <button type="button" class="btn btn-primary btn-sm" style="font-size:11px;padding:4px 8px" @click="$store.app.generateAndCopyDebugBundle()">Generate + copy bundle</button>
+        <span class="text-xs text-dim">Or Settings → System Info → Support (same redacted .zip bundle)</span>
+      </div>
+    </div>
 
     <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
       <!-- Chat — primary action -->
@@ -234,6 +242,13 @@
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
       <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K agents | Ctrl+N new</div>
+      <div style="padding:0 16px 12px;display:flex;flex-direction:column;gap:6px">
+        <a class="text-xs" href="mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support" style="color:var(--accent);text-decoration:underline">Get Help (Email)</a>
+        <a class="text-xs" href="https://x.com/ainativelang" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">X Profile</a>
+        <a class="text-xs" href="https://t.me/AINL_Portal" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">Telegram</a>
+        <a class="text-xs" href="https://ainativelang.com" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">Website</a>
+        <a class="text-xs" href="https://github.com/sbhooley/ainativelang" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">AINL Compiler Repo</a>
+      </div>
     </div>
     <div class="sidebar-toggle" @click="toggleSidebar()" x-text="sidebarCollapsed ? '\u276F' : '\u276E'"></div>
   </nav>
@@ -281,16 +296,28 @@
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
             </div>
             <h3 style="color:var(--error)">Connection Error</h3>
-            <p class="text-xs text-dim" x-text="loadError"></p>
-            <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">Retry</button>
+            <p class="text-xs text-dim" style="line-height:1.7;margin-bottom:6px" x-text="loadError"></p>
+            <p class="text-xs text-dim" x-show="loadErrorDetail" style="line-height:1.6;margin-bottom:8px;white-space:pre-wrap" x-text="loadErrorDetail"></p>
+            <p class="text-xs text-dim" x-show="loadErrorHint" style="line-height:1.6;margin-bottom:8px" x-text="loadErrorHint"></p>
+            <p class="text-xs text-dim" x-show="loadErrorRequestId || loadErrorServerPath" style="margin-bottom:10px">
+              <span x-show="loadErrorServerPath"><span class="text-dim">Route:</span> <code style="font-size:10px" x-text="loadErrorServerPath"></code></span>
+              <span x-show="loadErrorRequestId && loadErrorServerPath"> · </span>
+              <span x-show="loadErrorRequestId"><span class="text-dim">Request ID:</span> <code style="font-size:10px" x-text="loadErrorRequestId"></code></span>
+            </p>
+            <div class="flex gap-2 flex-wrap" style="align-items:center;margin-top:8px">
+              <button class="btn btn-primary btn-sm" @click="loadData()">Retry</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="copyOverviewErrorDebug()">Copy debug info</button>
+              <button type="button" class="btn btn-primary btn-sm" @click="$store.app.generateAndCopyDebugBundle()">Generate + copy bundle</button>
+            </div>
+            <p class="text-xs text-dim" style="margin-top:10px;line-height:1.5">You can also use Settings → System Info → Support for the same redacted diagnostics .zip.</p>
           </div>
           <!-- Setup Checklist -->
-          <div class="setup-checklist" x-show="!loading && !loadError && setupProgress < 100 && !checklistDismissed" style="animation:slideUp 0.3s var(--ease-spring)">
+          <div class="setup-checklist" x-show="showSetupChecklist" style="animation:slideUp 0.3s var(--ease-spring)">
             <div class="card" style="border-left:4px solid var(--accent)">
               <div class="flex justify-between items-center mb-2">
                 <div>
-                  <div class="card-header" style="margin:0">Getting Started</div>
-                  <div class="text-xs text-dim" x-text="setupDoneCount + ' of 5 steps completed'"></div>
+                  <div class="card-header" style="margin:0" x-text="setupChecklistCardTitle"></div>
+                  <div class="text-xs text-dim" x-text="setupChecklistSubtitle"></div>
                 </div>
                 <div class="flex gap-2">
                   <button class="btn btn-primary btn-sm" @click="location.hash='wizard'">Setup Wizard</button>
@@ -298,18 +325,35 @@
                 </div>
               </div>
               <div class="progress-bar mb-2" style="margin-top:8px">
-                <div class="progress-bar-fill" :style="'width:' + setupProgress + '%'"></div>
+                <div class="progress-bar-fill" :style="'width:' + setupProgressForBar + '%'"></div>
               </div>
-              <template x-for="item in setupChecklist" :key="item.key">
-                <div class="setup-checklist-item">
-                  <div class="setup-checklist-icon" :class="{ done: item.done }">
-                    <span x-show="item.done">&#10003;</span>
-                    <span x-show="!item.done">&#9675;</span>
+              <div>
+                <div class="setup-checklist-section-label">Core</div>
+                <template x-for="item in setupChecklistCore" :key="item.key">
+                  <div class="setup-checklist-item">
+                    <div class="setup-checklist-icon" :class="{ done: item.done }">
+                      <span x-show="item.done">&#10003;</span>
+                      <span x-show="!item.done">&#9675;</span>
+                    </div>
+                    <span style="flex:1" :style="item.done ? 'text-decoration:line-through;opacity:0.6' : ''" x-text="item.label"></span>
+                    <a x-show="!item.done" :href="item.action" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px">Go</a>
                   </div>
-                  <span style="flex:1" :style="item.done ? 'text-decoration:line-through;opacity:0.6' : ''" x-text="item.label"></span>
-                  <a x-show="!item.done" :href="item.action" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px">Go</a>
-                </div>
-              </template>
+                </template>
+              </div>
+              <div class="setup-checklist-section">
+                <div class="setup-checklist-section-label">Optional</div>
+                <p class="text-xs text-dim" style="margin:0 0 6px;line-height:1.45">Messaging, extra polish — skip if the dashboard is enough.</p>
+                <template x-for="item in setupChecklistOptional" :key="item.key">
+                  <div class="setup-checklist-item">
+                    <div class="setup-checklist-icon" :class="{ done: item.done }">
+                      <span x-show="item.done">&#10003;</span>
+                      <span x-show="!item.done">&#9675;</span>
+                    </div>
+                    <span style="flex:1" :style="item.done ? 'text-decoration:line-through;opacity:0.6' : ''" x-text="item.label"></span>
+                    <a x-show="!item.done" :href="item.action" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px">Go</a>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
           <!-- Onboarding banner -->
@@ -587,7 +631,29 @@
 
     <!-- Page: Agents -->
     <template x-if="page === 'agents'">
-      <div x-data="agentsPage" @close-chat.window="closeChat()">
+      <div x-data="agentsPage" x-init="init()" @close-chat.window="closeChat()" @page-leave.window="onAgentsPageLeave()">
+        <div x-show="loading" class="loading-state" style="padding:32px"><div class="spinner"></div><span>Loading agents…</span></div>
+        <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s;padding:24px">
+          <div class="empty-state-icon">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          </div>
+          <h3 style="color:var(--error)">Could not load agents</h3>
+          <p class="text-xs text-dim" style="line-height:1.7;margin-bottom:6px" x-text="loadError"></p>
+          <p class="text-xs text-dim" x-show="loadErrorDetail" style="line-height:1.6;margin-bottom:8px;white-space:pre-wrap" x-text="loadErrorDetail"></p>
+          <p class="text-xs text-dim" x-show="loadErrorHint" style="line-height:1.6;margin-bottom:8px" x-text="loadErrorHint"></p>
+          <p class="text-xs text-dim" x-show="loadErrorRequestId || loadErrorServerPath" style="margin-bottom:10px">
+            <span x-show="loadErrorServerPath"><span class="text-dim">Route:</span> <code style="font-size:10px" x-text="loadErrorServerPath"></code></span>
+            <span x-show="loadErrorRequestId && loadErrorServerPath"> · </span>
+            <span x-show="loadErrorRequestId"><span class="text-dim">Request ID:</span> <code style="font-size:10px" x-text="loadErrorRequestId"></code></span>
+          </p>
+          <div class="flex gap-2 flex-wrap" style="align-items:center;margin-top:8px">
+            <button class="btn btn-primary btn-sm" @click="loadData()">Retry</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="copyAgentsLoadErrorDebug()">Copy debug info</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="$store.app.generateAndCopyDebugBundle()">Generate + copy bundle</button>
+          </div>
+          <p class="text-xs text-dim" style="margin-top:10px;line-height:1.5">You can also use Settings → System Info → Support for the same redacted diagnostics .zip.</p>
+        </div>
+        <div x-show="!loading && !loadError" class="agents-main">
 
         <!-- MODE 1: Inline Chat (agent selected) -->
         <template x-if="activeChatAgent">
@@ -655,7 +721,7 @@
             </div>
 
             <!-- Messages area -->
-            <div class="messages" id="messages" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
+            <div class="messages" id="messages" @scroll.passive="onMessagesScroll()" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
               <!-- Empty state: no agent selected -->
               <template x-if="!currentAgent">
                 <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;opacity:0.8">
@@ -1321,6 +1387,7 @@
           </template>
 
         </div><!-- /activeChatAgent picker wrapper -->
+        </div><!-- /!loading && !loadError -->
       </div>
     </template>
 
@@ -3314,10 +3381,23 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="page-header"><h2>Settings</h2></div>
         <div class="page-body" x-init="loadSettings()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading settings...</span></div>
-          <div x-show="!loading && loadError" class="error-state">
+          <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s">
             <span class="error-icon">!</span>
-            <p x-text="loadError"></p>
-            <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
+            <h3 style="color:var(--error);margin:0 0 8px;font-size:15px">Could not load settings</h3>
+            <p class="text-xs text-dim" style="line-height:1.7;margin-bottom:6px" x-text="loadError"></p>
+            <p class="text-xs text-dim" x-show="loadErrorDetail" style="line-height:1.6;margin-bottom:8px;white-space:pre-wrap" x-text="loadErrorDetail"></p>
+            <p class="text-xs text-dim" x-show="loadErrorHint" style="line-height:1.6;margin-bottom:8px" x-text="loadErrorHint"></p>
+            <p class="text-xs text-dim" x-show="loadErrorRequestId || loadErrorServerPath" style="margin-bottom:10px">
+              <span x-show="loadErrorServerPath"><span class="text-dim">Route:</span> <code style="font-size:10px" x-text="loadErrorServerPath"></code></span>
+              <span x-show="loadErrorRequestId && loadErrorServerPath"> · </span>
+              <span x-show="loadErrorRequestId"><span class="text-dim">Request ID:</span> <code style="font-size:10px" x-text="loadErrorRequestId"></code></span>
+            </p>
+            <div class="flex gap-2 flex-wrap" style="align-items:center;margin-top:8px">
+              <button class="btn btn-primary btn-sm" @click="loadData()">Retry</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="copySettingsLoadErrorDebug()">Copy debug info</button>
+              <button type="button" class="btn btn-primary btn-sm" @click="$store.app.generateAndCopyDebugBundle()">Generate + copy bundle</button>
+            </div>
+            <p class="text-xs text-dim" style="margin-top:10px;line-height:1.5">You can also use Settings → System Info → Support for the same redacted diagnostics .zip.</p>
           </div>
           <div x-show="!loading && !loadError">
           <div class="tabs" role="tablist">
@@ -3552,17 +3632,73 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="card-meta" x-text="sysInfo.default_provider + ' : ' + sysInfo.default_model"></div>
             </div>
             <div class="card mt-4" x-show="isDesktopShell">
-              <div class="card-header">Desktop Updates</div>
+              <div class="card-header">Desktop app (Tauri shell)</div>
               <div class="card-meta text-dim" style="margin-top:6px">
-                Check for updates from the desktop shell. If the website feed is unavailable, ArmaraOS will fall back to a GitHub releases check.
+                Updates the native desktop window. Uses the signed updater feed; if it is unreachable, ArmaraOS falls back to a GitHub releases check.
               </div>
+              <div class="flex flex-wrap items-center gap-2" style="margin-top:10px" x-show="updaterPrefs">
+                <label class="text-xs text-dim">Channel</label>
+                <select class="form-select" style="width:140px;font-size:12px"
+                  x-model="updaterPrefs.release_channel"
+                  @change="saveReleaseChannel()">
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                </select>
+                <span class="text-xs text-dim" x-show="updaterPrefs.active_feed_url" style="word-break:break-all;max-width:100%" x-text="'Feed: ' + updaterPrefs.active_feed_url"></span>
+              </div>
+              <div class="text-xs text-dim" style="margin-top:8px" x-show="updaterPrefs && updaterPrefs.updater_last_check_at">
+                Last desktop check: <span x-text="updaterPrefs.updater_last_check_at"></span>
+              </div>
+              <div class="text-xs" style="margin-top:4px;color:var(--error)" x-show="updaterPrefs && updaterPrefs.updater_last_error" x-text="updaterPrefs.updater_last_error"></div>
               <div class="flex items-center gap-2" style="margin-top:10px">
                 <button class="btn btn-primary btn-sm" @click="checkForDesktopUpdates()" :disabled="updateChecking">
-                  <span x-show="!updateChecking">Check for Updates</span>
+                  <span x-show="!updateChecking">Check for desktop updates</span>
                   <span x-show="updateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
                 </button>
-                <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="'source: ' + updateInfo.source"></span>
+                <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="'source: ' + updateInfo.source + (updateInfo.feed_url ? ' · ' + updateInfo.feed_url : '')"></span>
               </div>
+            </div>
+
+            <div class="card mt-4">
+              <div class="card-header">Daemon / API runtime</div>
+              <div class="card-meta text-dim" style="margin-top:6px">
+                Compares this dashboard’s API version (<code>/api/version</code>) with the latest GitHub release. Updating the daemon usually means installing a newer binary or desktop build.
+              </div>
+              <div class="flex items-center gap-2" style="margin-top:10px">
+                <button class="btn btn-primary btn-sm" @click="checkDaemonRuntimeUpdate()" :disabled="daemonUpdateChecking">
+                  <span x-show="!daemonUpdateChecking">Check daemon vs GitHub</span>
+                  <span x-show="daemonUpdateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <span class="text-xs text-dim" x-show="daemonUpdateInfo && daemonUpdateInfo.current && !daemonUpdateInfo.error">
+                  Running <span x-text="daemonUpdateInfo.current"></span> · Latest <span x-text="daemonUpdateInfo.latest"></span>
+                  <template x-if="daemonUpdateInfo.upToDate"><span> — up to date</span></template>
+                  <template x-if="!daemonUpdateInfo.upToDate"><span> — update available</span></template>
+                </span>
+              </div>
+              <div class="text-xs" style="margin-top:8px;color:var(--error)" x-show="daemonUpdateInfo && daemonUpdateInfo.error" x-text="daemonUpdateInfo.error"></div>
+              <div class="flex gap-2 mt-2" x-show="daemonUpdateInfo && daemonUpdateInfo.url && !daemonUpdateInfo.error">
+                <a class="btn btn-ghost btn-sm" :href="daemonUpdateInfo.url" target="_blank" rel="noopener noreferrer">Open releases</a>
+              </div>
+              <div class="text-xs text-dim" style="margin-top:8px" x-show="isDesktopShell && updaterPrefs && updaterPrefs.daemon_update_last_check_at">
+                Last daemon check recorded: <span x-text="updaterPrefs.daemon_update_last_check_at"></span>
+              </div>
+              <div class="text-xs" style="margin-top:4px;color:var(--error)" x-show="isDesktopShell && updaterPrefs && updaterPrefs.daemon_update_last_error" x-text="updaterPrefs.daemon_update_last_error"></div>
+            </div>
+
+            <div class="card mt-4">
+              <div class="card-header">Support</div>
+              <div class="card-meta text-dim" style="margin-top:6px">
+                Generate a redacted diagnostics bundle (.zip) you can attach when reporting bugs.
+              </div>
+              <div class="flex items-center gap-2" style="margin-top:10px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" @click="generateDiagnosticsBundle()" :disabled="diagGenerating">
+                  <span x-show="!diagGenerating">Generate diagnostics bundle</span>
+                  <span x-show="diagGenerating" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <button class="btn btn-ghost btn-sm" @click="openSupportEmail()">Get Help</button>
+                <span class="text-xs text-dim" x-show="diagBundlePath" style="font-family:var(--font-mono)" x-text="diagBundlePath"></span>
+              </div>
+              <div class="text-xs" x-show="diagError" style="margin-top:8px;color:var(--error)" x-text="diagError"></div>
             </div>
           </div>
 
@@ -4944,7 +5080,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <img src="/logo.png" alt="ArmaraOS" style="width:80px;height:80px;margin:0 auto 20px;display:block;opacity:0.85">
               <h3 style="font-size:22px;font-weight:700;margin-bottom:12px;color:var(--accent)">Welcome to ArmaraOS</h3>
               <p style="font-size:13px;color:var(--text-dim);line-height:1.8;max-width:480px;margin:0 auto 24px">
-                ArmaraOS is an open-source Agent Operating System. It lets you run AI agents that can chat, use tools, access memory, and connect to messaging channels &mdash; all from a single dashboard.
+                ArmaraOS is an open-source Agent Operating System. Run agents with full visibility in this dashboard &mdash; chat, tools, memory, scheduled jobs, and logs. Messaging apps (Telegram, Discord, Slack) are optional add-ons if you want the same agent in those places too.
               </p>
               <div class="card" style="text-align:left;margin-bottom:20px">
                 <div class="card-header">This wizard will help you:</div>
@@ -4961,13 +5097,17 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <span class="badge badge-info" style="min-width:20px;justify-content:center">3</span>
                     <span style="font-size:12px">Try it out with a quick test message</span>
                   </div>
-                  <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+                  <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
                     <span class="badge badge-info" style="min-width:20px;justify-content:center">4</span>
-                    <span style="font-size:12px">Optionally connect a messaging channel (Telegram, Discord, Slack)</span>
+                    <span style="font-size:12px">Optionally add Telegram, Discord, or Slack &mdash; or skip and keep everything in the dashboard</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
+                    <span class="badge badge-info" style="min-width:20px;justify-content:center">5</span>
+                    <span style="font-size:12px">Add a sample scheduled job (daily check-in) for automation and visibility in Scheduler and Logs &mdash; no messaging app required</span>
                   </div>
                 </div>
               </div>
-              <p style="font-size:11px;color:var(--text-muted)">Takes about 2 minutes. You can skip any step and configure later.</p>
+              <p style="font-size:11px;color:var(--text-muted)">Takes about 2 minutes. External channels are never required &mdash; web chat and scheduled jobs are enough for many users.</p>
             </div>
             <div class="wizard-nav">
               <div></div>
@@ -5132,7 +5272,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <label>Agent Name</label>
                   <input class="form-input" type="text" x-model="agentName" placeholder="my-assistant" style="max-width:320px" @keydown.enter="if(!$event.isComposing && $event.keyCode !== 229) createAgent()">
                 </div>
-                <div class="text-xs text-dim" x-text="'Will use ' + templates[selectedTemplate].provider + ' / ' + templates[selectedTemplate].model + ' with ' + profileInfo(templates[selectedTemplate].profile).label + ' profile'"></div>
+                <div class="text-xs text-dim" x-text="'Will use ' + previewAgentProvider + ' / ' + previewAgentModel + ' with ' + profileInfo(templates[selectedTemplate].profile).label + ' profile'"></div>
                 <div class="mt-2">
                   <button class="btn btn-primary" @click="createAgent()" :disabled="creatingAgent || !agentName.trim()">
                     <span x-show="!creatingAgent">Create Agent</span>
@@ -5190,7 +5330,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div class="wizard-step" x-show="step === 5">
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Connect a Channel <span class="badge badge-muted">Optional</span></h3>
-              <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Channels let your agent communicate via messaging platforms. This is optional &mdash; you can always use the built-in web chat.</p>
+              <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Use Telegram, Discord, or Slack if you want your agent in those apps. Skip this step if you only use the dashboard &mdash; <strong>Chat</strong> and <strong>Scheduler</strong> still give you agents, logs, and automation without any messaging platform.</p>
 
               <div class="card-grid" style="grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));margin-bottom:16px">
                 <template x-for="ch in channelOptions" :key="ch.name">
@@ -5266,6 +5406,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       <span x-show="!setupSummary.channel" class="badge badge-muted">None (web chat available)</span>
                     </span>
                   </div>
+                  <div class="detail-row" x-show="setupSummary.schedule">
+                    <span class="detail-label">Scheduled job</span>
+                    <span class="detail-value">
+                      <span x-text="setupSummary.schedule"></span>
+                      <span class="text-dim" style="font-size:11px;margin-left:6px">(Scheduler)</span>
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -5274,6 +5421,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div style="margin-top:8px;font-size:12px;color:var(--text-dim);line-height:1.8">
                   <div style="padding:4px 0" x-show="createdAgent">&#8226; Open <strong>Agents</strong> to start talking to your agent</div>
                   <div style="padding:4px 0" x-show="!createdAgent">&#8226; Go to <strong>Agents</strong> to create your first agent</div>
+                  <div style="padding:4px 0" x-show="setupSummary.schedule">&#8226; Open <strong>Scheduler</strong> or <strong>Logs</strong> to see your sample job</div>
                   <div style="padding:4px 0">&#8226; Browse <strong>Skills</strong> to add capabilities (web search, code execution, etc.)</div>
                   <div style="padding:4px 0">&#8226; Check <strong>Settings</strong> for advanced configuration</div>
                   <div style="padding:4px 0" x-show="!setupSummary.channel">&#8226; Visit <strong>Channels</strong> to connect messaging platforms</div>
@@ -5451,15 +5599,39 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <tr><td style="font-weight:500">Log Level</td><td x-text="logLevel"></td></tr>
                   <tr><td style="font-weight:500">Network</td><td x-text="networkEnabled ? 'Enabled' : 'Disabled'"></td></tr>
                   <tr x-show="isDesktopShell">
-                    <td style="font-weight:500">Desktop Updates</td>
+                    <td style="font-weight:500">Desktop app updates</td>
                     <td>
-                      <div class="flex items-center gap-2">
+                      <div class="flex flex-wrap items-center gap-2" x-show="updaterPrefs">
+                        <select class="form-select" style="width:120px;font-size:12px"
+                          x-model="updaterPrefs.release_channel"
+                          @change="saveReleaseChannel()">
+                          <option value="stable">Stable</option>
+                          <option value="beta">Beta</option>
+                        </select>
                         <button class="btn btn-primary btn-sm" @click="checkForDesktopUpdates()" :disabled="updateChecking">
-                          <span x-show="!updateChecking">Check for Updates</span>
+                          <span x-show="!updateChecking">Check</span>
                           <span x-show="updateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
                         </button>
-                        <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="'source: ' + updateInfo.source"></span>
+                        <span class="text-xs text-dim" x-show="updateInfo && updateInfo.source" x-text="updateInfo.source + (updateInfo.feed_url ? ' · ' + updateInfo.feed_url : '')"></span>
                       </div>
+                      <div class="text-xs text-dim mt-1" x-show="updaterPrefs && updaterPrefs.updater_last_check_at" x-text="'Last check: ' + updaterPrefs.updater_last_check_at"></div>
+                      <div class="text-xs" style="color:var(--error)" x-show="updaterPrefs && updaterPrefs.updater_last_error" x-text="updaterPrefs.updater_last_error"></div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="font-weight:500">Daemon / API</td>
+                    <td>
+                      <div class="flex items-center gap-2">
+                        <button class="btn btn-primary btn-sm" @click="checkDaemonRuntimeUpdate()" :disabled="daemonUpdateChecking">
+                          <span x-show="!daemonUpdateChecking">Check vs GitHub</span>
+                          <span x-show="daemonUpdateChecking" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                        </button>
+                        <span class="text-xs text-dim" x-show="daemonUpdateInfo && daemonUpdateInfo.current && !daemonUpdateInfo.error">
+                          <span x-text="daemonUpdateInfo.current"></span> → <span x-text="daemonUpdateInfo.latest"></span>
+                          <template x-if="daemonUpdateInfo.upToDate"><span> (current)</span></template>
+                        </span>
+                      </div>
+                      <div class="text-xs" style="color:var(--error)" x-show="daemonUpdateInfo && daemonUpdateInfo.error" x-text="daemonUpdateInfo.error"></div>
                     </td>
                   </tr>
                 </tbody>

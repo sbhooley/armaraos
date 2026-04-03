@@ -34,6 +34,8 @@ flate2 = "1"
 tar = "0.4"
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 semver = "1"
+chrono = { workspace = true }
+url = { workspace = true }
 
 [features]
 # Tauri uses custom-protocol in production builds

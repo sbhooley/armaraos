@@ -14,6 +14,7 @@ pub mod qwen_code;
 pub mod vertex;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
+use openfang_types::config::DEFAULT_OPENROUTER_MODEL_ID;
 use openfang_types::model_catalog::{
     AI21_BASE_URL, ANTHROPIC_BASE_URL, AZURE_OPENAI_BASE_URL, CEREBRAS_BASE_URL, CHUTES_BASE_URL,
     COHERE_BASE_URL, DEEPSEEK_BASE_URL, FIREWORKS_BASE_URL, GEMINI_BASE_URL, GROQ_BASE_URL,
@@ -507,11 +508,7 @@ pub fn detect_available_provider() -> Option<(&'static str, &'static str, &'stat
         ("gemini", "gemini-2.5-flash", "GEMINI_API_KEY"),
         ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        (
-            "openrouter",
-            "openrouter/google/gemini-2.5-flash",
-            "OPENROUTER_API_KEY",
-        ),
+        ("openrouter", DEFAULT_OPENROUTER_MODEL_ID, "OPENROUTER_API_KEY"),
         ("mistral", "mistral-large-latest", "MISTRAL_API_KEY"),
         (
             "together",

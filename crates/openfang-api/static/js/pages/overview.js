@@ -29,32 +29,61 @@ function overviewPage() {
     providers: [],
     mcpServers: [],
     skillCount: 0,
+    scheduleCount: 0,
     loading: true,
     loadError: '',
+    loadErrorDetail: '',
+    loadErrorHint: '',
+    loadErrorRequestId: '',
+    loadErrorWhere: '',
+    loadErrorServerPath: '',
     refreshTimer: null,
     lastRefresh: null,
     _kernelEventHandler: null,
     _kernelDebounce: null,
+    _onboardingLocalHandler: null,
+    /** Bumps when onboarding localStorage flags change so checklist getters re-run */
+    checklistVersion: 0,
+    _checklistLocalSig: '',
+
+    touchChecklistLocalState() {
+      try {
+        var sig = [
+          localStorage.getItem('of-first-msg') || '',
+          localStorage.getItem('of-skill-browsed') || ''
+        ].join('|');
+        if (sig !== this._checklistLocalSig) {
+          this._checklistLocalSig = sig;
+          this.checklistVersion++;
+        }
+      } catch(e) { /* ignore private mode / storage errors */ }
+    },
 
     async loadOverview() {
       this.loading = true;
-      this.loadError = '';
+      clearPageLoadError(this);
       try {
+        this.touchChecklistLocalState();
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
           this.loadAudit(),
           this.loadChannels(),
+          this.loadSchedules(),
           this.loadProviders(),
           this.loadMcpServers(),
           this.loadSkills()
         ]);
         this.lastRefresh = Date.now();
       } catch(e) {
-        this.loadError = e.message || 'Could not load overview data.';
+        applyPageLoadError(this, e, 'Could not load overview data.');
       }
       this.loading = false;
+    },
+
+    copyOverviewErrorDebug() {
+      copyPageLoadErrorDebug(this, 'ArmaraOS overview load error');
     },
 
     async loadData() { return this.loadOverview(); },
@@ -62,12 +91,14 @@ function overviewPage() {
     // Silent background refresh (no loading spinner)
     async silentRefresh() {
       try {
+        this.touchChecklistLocalState();
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
           this.loadAudit(),
           this.loadChannels(),
+          this.loadSchedules(),
           this.loadProviders(),
           this.loadMcpServers(),
           this.loadSkills()
@@ -80,6 +111,7 @@ function overviewPage() {
       this.stopAutoRefresh();
       this.refreshTimer = setInterval(() => this.silentRefresh(), 30000);
       this.bindKernelEventRefresh();
+      this.bindOnboardingLocalRefresh();
     },
 
     stopAutoRefresh() {
@@ -88,6 +120,7 @@ function overviewPage() {
         this.refreshTimer = null;
       }
       this.unbindKernelEventRefresh();
+      this.unbindOnboardingLocalRefresh();
     },
 
     /** Debounced refresh when kernel SSE emits lifecycle/system events (same tab). */
@@ -117,6 +150,22 @@ function overviewPage() {
       if (this._kernelDebounce) {
         clearTimeout(this._kernelDebounce);
         this._kernelDebounce = null;
+      }
+    },
+
+    bindOnboardingLocalRefresh() {
+      var self = this;
+      if (this._onboardingLocalHandler) return;
+      this._onboardingLocalHandler = function() {
+        self.touchChecklistLocalState();
+      };
+      window.addEventListener('armaraos-onboarding-local', this._onboardingLocalHandler);
+    },
+
+    unbindOnboardingLocalRefresh() {
+      if (this._onboardingLocalHandler) {
+        window.removeEventListener('armaraos-onboarding-local', this._onboardingLocalHandler);
+        this._onboardingLocalHandler = null;
       }
     },
 
@@ -167,6 +216,13 @@ function overviewPage() {
         var data = await OpenFangAPI.get('/api/channels');
         this.channels = (data.channels || []).filter(function(ch) { return ch.has_token; });
       } catch(e) { this.channels = []; }
+    },
+
+    async loadSchedules() {
+      try {
+        var data = await OpenFangAPI.get('/api/schedules');
+        this.scheduleCount = (data.schedules || []).filter(function(s) { return s && s.enabled !== false; }).length;
+      } catch(e) { this.scheduleCount = 0; }
     },
 
     async loadProviders() {
@@ -233,22 +289,88 @@ function overviewPage() {
     checklistDismissed: localStorage.getItem('of-checklist-dismissed') === 'true',
 
     get setupChecklist() {
+      void this.checklistVersion;
       return [
         { key: 'provider', label: 'Configure an LLM provider', done: this.configuredProviders.length > 0, action: '#settings' },
         { key: 'agent', label: 'Create your first agent', done: (Alpine.store('app').agents || []).length > 0, action: '#agents' },
-        { key: 'chat', label: 'Send your first message', done: localStorage.getItem('of-first-msg') === 'true', action: '#chat' },
-        { key: 'channel', label: 'Connect a messaging channel', done: this.channels.length > 0, action: '#channels' },
-        { key: 'skill', label: 'Browse or install a skill', done: localStorage.getItem('of-skill-browsed') === 'true', action: '#skills' }
+        { key: 'schedule', label: 'Create a scheduled job', done: this.scheduleCount > 0, action: '#scheduler' },
+        { key: 'channel', label: 'Connect a messaging channel (optional)', done: this.channels.length > 0, action: '#channels' },
+        { key: 'chat', label: 'Send your first message (optional)', done: localStorage.getItem('of-first-msg') === 'true', action: '#agents' },
+        { key: 'skill', label: 'Browse or install a skill (optional)', done: localStorage.getItem('of-skill-browsed') === 'true', action: '#skills' }
       ];
     },
 
+    get setupChecklistCore() {
+      void this.checklistVersion;
+      return this.setupChecklist.filter(function(i) {
+        return i.key === 'provider' || i.key === 'agent' || i.key === 'schedule';
+      });
+    },
+
+    get setupChecklistOptional() {
+      void this.checklistVersion;
+      return this.setupChecklist.filter(function(i) {
+        return i.key === 'channel' || i.key === 'chat' || i.key === 'skill';
+      });
+    },
+
+    /** Card title: phase shifts once core (provider, agent, schedule) is complete. */
+    get setupChecklistCardTitle() {
+      if (this.setupCoreDoneCount < this.setupCoreTotal) return 'Getting Started';
+      return 'Optional setup';
+    },
+
     get setupProgress() {
-      var done = this.setupChecklist.filter(function(item) { return item.done; }).length;
-      return (done / 5) * 100;
+      var required = this.setupChecklist.filter(function(i) {
+        return i.key !== 'chat' && i.key !== 'skill' && i.key !== 'channel';
+      });
+      var doneReq = required.filter(function(item) { return item.done; }).length;
+      return (doneReq / required.length) * 100;
     },
 
     get setupDoneCount() {
       return this.setupChecklist.filter(function(item) { return item.done; }).length;
+    },
+
+    get setupCoreDoneCount() {
+      return this.setupChecklist.filter(function(item) {
+        return item.key !== 'chat' && item.key !== 'skill' && item.key !== 'channel' && item.done;
+      }).length;
+    },
+
+    get setupCoreTotal() {
+      return 3;
+    },
+
+    get setupOptionalDoneCount() {
+      return this.setupChecklist.filter(function(item) {
+        return (item.key === 'chat' || item.key === 'skill' || item.key === 'channel') && item.done;
+      }).length;
+    },
+
+    get setupOptionalTotal() {
+      return 3;
+    },
+
+    /** Show checklist until core + optional tasks are done, or user dismisses. */
+    get showSetupChecklist() {
+      if (this.loading || this.loadError || this.checklistDismissed) return false;
+      if (this.setupCoreDoneCount < this.setupCoreTotal) return true;
+      return this.setupOptionalDoneCount < this.setupOptionalTotal;
+    },
+
+    get setupChecklistSubtitle() {
+      void this.checklistVersion;
+      if (this.setupCoreDoneCount < this.setupCoreTotal) {
+        return this.setupCoreDoneCount + '/' + this.setupCoreTotal + ' core steps · ' + this.setupDoneCount + '/6 tasks completed';
+      }
+      return 'Core complete — optional ' + this.setupOptionalDoneCount + '/' + this.setupOptionalTotal + ' (channel + message + skill)';
+    },
+
+    /** After core steps, drive the bar from optional tasks (0–100%). */
+    get setupProgressForBar() {
+      if (this.setupCoreDoneCount < this.setupCoreTotal) return this.setupProgress;
+      return (this.setupOptionalDoneCount / this.setupOptionalTotal) * 100;
     },
 
     dismissChecklist() {

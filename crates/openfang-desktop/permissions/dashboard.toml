@@ -5,4 +5,10 @@ commands.allow = [
   "set_dashboard_theme_mode",
   "open_external_url",
   "open_ainl_library_dir",
+  "check_for_updates",
+  "install_update",
+  "get_desktop_updater_prefs",
+  "set_release_channel",
+  "report_daemon_update_check",
+  "generate_support_bundle",
 ]

@@ -3,6 +3,7 @@
 //! Provides a comprehensive catalog of 130+ builtin models across 28 providers,
 //! with alias resolution, auth status detection, and pricing lookups.
 
+use openfang_types::config::DEFAULT_OPENROUTER_MODEL_ID;
 use openfang_types::model_catalog::{
     AuthStatus, ModelCatalogEntry, ModelTier, ProviderInfo, AI21_BASE_URL, ANTHROPIC_BASE_URL,
     AZURE_OPENAI_BASE_URL, BEDROCK_BASE_URL, CEREBRAS_BASE_URL, CHUTES_BASE_URL, COHERE_BASE_URL,
@@ -266,6 +267,21 @@ impl ModelCatalog {
         // Check aliases first — e.g. "minimax" alias resolves to "MiniMax-M2.5"
         if let Some(model_id) = self.aliases.get(provider) {
             return Some(model_id.clone());
+        }
+        // OpenRouter: must match [`openfang_types::config::DefaultModelConfig`] /
+        // `DEFAULT_OPENROUTER_MODEL_ID`, not merely the first row in the builtin list (Gemini).
+        if provider == "openrouter" {
+            let preferred = format!("openrouter/{DEFAULT_OPENROUTER_MODEL_ID}");
+            if self.find_model(&preferred).is_some() {
+                return Some(preferred);
+            }
+            return self
+                .models
+                .iter()
+                .find(|m| {
+                    m.provider == "openrouter" && m.id.ends_with(DEFAULT_OPENROUTER_MODEL_ID)
+                })
+                .map(|m| m.id.clone());
         }
         // Fall back to the first model registered for this provider
         self.models
@@ -4053,6 +4069,16 @@ mod tests {
         let anthropic = catalog.models_by_provider("anthropic");
         assert_eq!(anthropic.len(), 7);
         assert!(anthropic.iter().all(|m| m.provider == "anthropic"));
+    }
+
+    #[test]
+    fn test_default_model_for_openrouter_matches_kernel_default() {
+        use openfang_types::config::DEFAULT_OPENROUTER_MODEL_ID;
+        let catalog = ModelCatalog::new();
+        let id = catalog
+            .default_model_for_provider("openrouter")
+            .expect("openrouter should have a default");
+        assert_eq!(id, format!("openrouter/{DEFAULT_OPENROUTER_MODEL_ID}"));
     }
 
     #[test]

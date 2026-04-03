@@ -65,11 +65,43 @@ pub fn run() {
     {
         builder = builder
             .menu(crate::app_menu::build)
-            .on_menu_event(|_app, event| {
+            .on_menu_event(|app, event| {
                 if event.id() == "help_ainl_website" {
                     let _ = open::that("https://ainativelang.com/");
                 } else if event.id() == "help_ainl_x" {
                     let _ = open::that("https://x.com/ainativelang");
+                } else if event.id() == "help_generate_diagnostics" {
+                    let handle = app.app_handle().clone();
+                    let port = app.state::<PortState>().0;
+                    tauri::async_runtime::spawn(async move {
+                        match crate::commands::post_support_bundle(port).await {
+                            Ok(v) => {
+                                let path = v
+                                    .get("bundle_path")
+                                    .and_then(|x| x.as_str())
+                                    .unwrap_or("(see ~/.armaraos/support/)");
+                                let _ = crate::notification_icon::apply_notification_icon(
+                                    handle
+                                        .notification()
+                                        .builder()
+                                        .title("Diagnostics bundle ready")
+                                        .body(path.to_string()),
+                                )
+                                .show();
+                            }
+                            Err(e) => {
+                                warn!("Diagnostics bundle failed: {e}");
+                                let _ = crate::notification_icon::apply_notification_icon(
+                                    handle
+                                        .notification()
+                                        .builder()
+                                        .title("Diagnostics bundle failed")
+                                        .body(e.clone()),
+                                )
+                                .show();
+                            }
+                        }
+                    });
                 }
             });
     }
@@ -121,6 +153,10 @@ pub fn run() {
             commands::set_autostart,
             commands::check_for_updates,
             commands::install_update,
+            commands::generate_support_bundle,
+            commands::get_desktop_updater_prefs,
+            commands::set_release_channel,
+            commands::report_daemon_update_check,
             commands::open_config_dir,
             commands::open_logs_dir,
             commands::ainl_status,

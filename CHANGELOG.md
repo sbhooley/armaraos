@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-02
+
+### Added
+
+- **Dashboard resilience:** Friendly recovery UI when the embedded dashboard fails to load (static assets or API unreachable), with reload and open-in-browser actions.
+- **`scripts/verify-dashboard-smoke.sh`:** Optional local smoke script for dashboard/API checks documented in `docs/dashboard-testing.md`.
+
+### Changed
+
+- **HTTP API:** More consistent JSON error bodies (`detail`, `path`, `request_id` where applicable) on key routes; rate limiting and middleware aligned with expanded route surface.
+- **Dashboard:** Chat layout and scroll behavior updates; wizard and settings copy aligned with configured provider/model; assorted Overview, Runtime, Skills, and Agents polish.
+- **Docs:** Troubleshooting, production checklist, desktop and dashboard testing guides updated for diagnostics bundles and release flow.
+
+### Fixed
+
+- **AINL cron / daemon:** The desktop app now writes **`~/.armaraos/.armaraos-ainl-bin`** (absolute path to the internal venv `ainl`) whenever AINL status is healthy, so the background kernel can run scheduled AINL jobs without **`ainl` on `PATH`** or **`ARMARAOS_AINL_BIN`** (resolves “No such file or directory” spawn failures in Audit logs).
+
 ## [0.6.1] - 2026-04-02
 
 ### Added

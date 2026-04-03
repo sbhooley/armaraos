@@ -3,6 +3,7 @@
 //! Each API operation has a token cost (e.g., health=1, spawn=50, message=30).
 //! The GCRA algorithm allows 500 tokens per minute per IP address.
 
+use crate::middleware::RequestId;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use axum::middleware::Next;
@@ -72,13 +73,23 @@ pub async fn gcra_rate_limit(
 
     if limiter.check_key_n(&ip, cost).is_err() {
         tracing::warn!(ip = %ip, cost = cost.get(), path = %path, "GCRA rate limit exceeded");
+        let request_id = request
+            .extensions()
+            .get::<RequestId>()
+            .map(|r| r.0.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let body = serde_json::json!({
+            "error": "Rate limit exceeded",
+            "detail": format!("Token budget exhausted for this IP (cost {} for {} {}). Retry after ~60s.", cost.get(), method, path),
+            "path": path,
+            "request_id": request_id,
+            "hint": "Reduce request frequency or spread heavy operations (spawn, chat, workflows) over time."
+        });
         return Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
             .header("content-type", "application/json")
             .header("retry-after", "60")
-            .body(Body::from(
-                serde_json::json!({"error": "Rate limit exceeded"}).to_string(),
-            ))
+            .body(Body::from(body.to_string()))
             .unwrap_or_default();
     }
 

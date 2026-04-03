@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.6.1-green?style=flat-square" alt="v0.6.1" />
+  <img src="https://img.shields.io/badge/version-0.6.2-green?style=flat-square" alt="v0.6.2" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -71,7 +71,7 @@ The desktop app syncs upstream **`demo/`**, **`examples/`**, and **`intelligence
 
 | Topic | Details |
 |-------|---------|
-| **Binary** | `ainl` on `PATH`, or **`ARMARAOS_AINL_BIN`** set to the full path of the CLI. If the OS reports “not found”, install AINL or set that env var. |
+| **Binary** | `ainl` on `PATH`, or **`ARMARAOS_AINL_BIN`**, or (desktop internal venv) **`~/.armaraos/.armaraos-ainl-bin`** written by the app when AINL is healthy. If the OS reports “not found”, install AINL or set **`ARMARAOS_AINL_BIN`**. |
 | **Structured output** | Cron actions of kind `ainl_run` support **`json_output: true`**, which runs `ainl run --json …` and pretty-prints JSON for delivery/webhooks. |
 | **HTTP API** | `GET /api/ainl/library` — scan `.ainl` / `.lang` files; `GET /api/ainl/library/curated` — embedded curated catalog; `POST /api/ainl/library/register-curated` — idempotent registration (rate-limited). |
 | **Dashboard** | **Scheduler** page lists job **type** (Agent / AINL / Workflow / Event) and can create agent-turn, AINL, or workflow cron jobs. |
@@ -84,6 +84,36 @@ See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/o
 The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for the kernel event bus. Each message updates `Alpine.store('kernelEvents').last` and dispatches a window event **`armaraos-kernel-event`**. The **Overview** page listens for lifecycle/system events and **debounces** a silent data refresh (~400ms) so stats stay current after spawns, crashes, quota events, etc., without a full reload.
 
 **Auth:** If `api_key` is set in config, clients on **loopback** (127.0.0.1 / ::1) may connect to the stream without a token (embedded UI). **Non-loopback** clients must use the same authentication as the rest of the API (`Authorization: Bearer` with the configured key, or a `token` query parameter). See [`docs/dashboard-testing.md`](docs/dashboard-testing.md) for manual checks; [`docs/release-desktop.md`](docs/release-desktop.md) for desktop smoke (Tauri + SSE badge).
+
+### Dashboard: diagnostics bundle (support)
+
+- **`POST /api/support/diagnostics`** generates a **redacted `.zip`** under `~/.armaraos/support/` (includes `config.toml`, redacted `secrets.env`, `audit.json`, SQLite DB + WAL/SHM when present, recent logs, and `meta.json`).
+- **Loopback-only access** is allowed for this endpoint (so the embedded UI / desktop shell can fetch a bundle without fighting API-key auth); remote clients should use normal API authentication.
+- The dashboard can **generate + copy** a single pasteable block (bundle path + connection context). You can also use **Settings → System Info → Support** (or the desktop Help menu) for the same archive.
+
+### JSON error shape (REST integrators)
+
+Many endpoints return a consistent JSON body on **4xx/5xx** (best-effort across the API; high-traffic routes are covered first):
+
+| Field | Meaning |
+|-------|---------|
+| `error` | Short error code / title |
+| `detail` | What failed (human-readable) |
+| `path` | Logical route (e.g. `/api/agents`, `/api/workflows/:id/run`) |
+| `request_id` | Same value as the **`x-request-id`** response header (correlation for logs) |
+| `hint` | Optional recovery hint |
+
+Example — **`POST /api/agents`** with an empty body / missing manifest:
+
+```json
+{
+  "error": "Missing manifest",
+  "detail": "Either 'manifest_toml' or 'template' is required in the JSON body.",
+  "path": "/api/agents",
+  "request_id": "<uuid>",
+  "hint": "Paste a manifest TOML or set template to a folder name under ~/.armaraos/agents/."
+}
+```
 
 ---
 

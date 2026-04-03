@@ -175,6 +175,16 @@ document.addEventListener('alpine:init', function() {
     wsConnected: false,
     connectionState: 'connected',
     lastError: '',
+    /** Longer recovery hint when the daemon is unreachable or returns an error */
+    lastErrorHint: '',
+    /** Extra detail (e.g. server message body) for copy-debug */
+    lastErrorDetail: '',
+    /** Method + path for the last failing request (when known) */
+    lastErrorWhere: '',
+    /** Server route template from JSON `path` (when known) */
+    lastErrorServerPath: '',
+    /** x-request-id for the last failing request (when known) */
+    lastErrorRequestId: '',
     version: '0.1.0',
     agentCount: 0,
     pendingApprovalCount: 0,
@@ -222,12 +232,83 @@ document.addEventListener('alpine:init', function() {
         this.connected = true;
         this.booting = false;
         this.lastError = '';
+        this.lastErrorHint = '';
+        this.lastErrorDetail = '';
+        this.lastErrorWhere = '';
+        this.lastErrorServerPath = '';
+        this.lastErrorRequestId = '';
         this.version = s.version || '0.1.0';
         this.agentCount = s.agent_count || 0;
       } catch(e) {
         this.connected = false;
         this.lastError = e.message || 'Unknown error';
+        this.lastErrorHint = e.hint || '';
+        this.lastErrorDetail = e.detail || '';
+        this.lastErrorWhere = e.where || '';
+        this.lastErrorServerPath = e.serverPath || '';
+        this.lastErrorRequestId = e.requestId || '';
         console.warn('[ArmaraOS] Status check failed:', e.message);
+      }
+    },
+
+    copyConnectionDebug() {
+      var lines = [
+        'ArmaraOS connection debug',
+        'URL: ' + (typeof window !== 'undefined' ? window.location.origin : ''),
+        'Where: ' + (this.lastErrorWhere || ''),
+        'API path: ' + (this.lastErrorServerPath || ''),
+        'Request ID: ' + (this.lastErrorRequestId || ''),
+        'Error: ' + (this.lastError || ''),
+        'Hint: ' + (this.lastErrorHint || ''),
+        'Detail: ' + (this.lastErrorDetail || ''),
+        'Time: ' + new Date().toISOString()
+      ];
+      var text = lines.join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('Copied debug info');
+        }).catch(function() {});
+      }
+    },
+
+    async generateAndCopyDebugBundle() {
+      var bundlePath = '';
+      try {
+        // Prefer desktop shell command (works even when API key is enabled).
+        var bundle = await ArmaraosDesktopTauriInvoke('generate_support_bundle');
+        if (bundle && bundle.bundle_path) bundlePath = bundle.bundle_path;
+      } catch(e1) { /* ignore */ }
+
+      if (!bundlePath) {
+        try {
+          var res = await OpenFangAPI.post('/api/support/diagnostics', {});
+          bundlePath = (res && res.bundle_path) ? res.bundle_path : '';
+        } catch(e2) {
+          // If the bundle fails, still copy actionable debug info
+          this.copyConnectionDebug();
+          if (typeof OpenFangToast !== 'undefined') {
+            OpenFangToast.error((e2 && e2.message) ? e2.message : 'Diagnostics bundle failed');
+          }
+          return;
+        }
+      }
+
+      var lines = [
+        'ArmaraOS debug bundle',
+        'Bundle: ' + bundlePath,
+        'URL: ' + (typeof window !== 'undefined' ? window.location.origin : ''),
+        'Where: ' + (this.lastErrorWhere || ''),
+        'Request ID: ' + (this.lastErrorRequestId || ''),
+        'Error: ' + (this.lastError || ''),
+        'Hint: ' + (this.lastErrorHint || ''),
+        'Detail: ' + (this.lastErrorDetail || ''),
+        'Time: ' + new Date().toISOString()
+      ];
+      var text = lines.join('\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function() {
+          if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('Generated + copied debug bundle');
+        }).catch(function() {});
       }
     },
 
@@ -642,6 +723,21 @@ function app() {
       this.version = store.version;
       this.agentCount = store.agentCount;
       this.wsConnected = OpenFangAPI.isWsConnected();
+      this.maybeOfferFirstRunWizard();
+    },
+
+    /** One-time redirect to Setup Wizard for new installs (default #agents, no agents, daemon up). */
+    maybeOfferFirstRunWizard() {
+      try {
+        if (typeof localStorage === 'undefined') return;
+        if (localStorage.getItem('openfang-onboarded') === 'true') return;
+        if (localStorage.getItem('of-first-run-wizard-offered') === 'true') return;
+        var store = Alpine.store('app');
+        if (!store.connected || store.agentCount > 0) return;
+        if (this.page !== 'agents') return;
+        localStorage.setItem('of-first-run-wizard-offered', 'true');
+        window.location.hash = 'wizard';
+      } catch (e) { /* ignore */ }
     }
   };
 }

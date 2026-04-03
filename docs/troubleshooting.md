@@ -48,6 +48,22 @@ curl http://127.0.0.1:4200/api/health
 curl http://127.0.0.1:4200/api/health/detail  # Requires auth
 ```
 
+### Dashboard support bundle (redacted `.zip`)
+
+For bug reports, the API can generate a **redacted archive** under `~/.armaraos/support/`:
+
+- **Endpoint:** `POST /api/support/diagnostics` (returns JSON with `bundle_path`).
+- **Contents (typical):** `config.toml`, redacted `secrets.env`, `audit.json` (recent audit entries + tip hash), SQLite DB + WAL/SHM when present, recent log files, `meta.json` (paths, version, platform).
+- **Access:** From **loopback** (127.0.0.1 / ::1) the embedded dashboard can call this without Bearer auth so local troubleshooting works when an API key is set. Remote clients must use normal API authentication.
+
+From the UI: **Generate + copy bundle** when disconnected, or **Settings → System Info → Support** (desktop Help menu uses the same flow).
+
+### Remote access vs loopback (diagnostics)
+
+**By design**, `POST /api/support/diagnostics` is allowed **without** Bearer auth only from **loopback** (127.0.0.1 / ::1) so the embedded dashboard and desktop shell can fetch a bundle when an API key is configured. **Non-loopback** callers must use the same authentication as the rest of the API.
+
+If you ever need **remote** support bundles (e.g. field support over the internet), that is a separate product decision: require strong auth, rate limits, audit logging, and possibly a dedicated support role — do not widen loopback-only endpoints without a threat model.
+
 ### View Logs
 
 OpenFang uses `tracing` for structured logging. Set the log level via environment:

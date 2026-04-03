@@ -236,13 +236,20 @@ After the release workflow completes (~15-30 min):
 - [ ] CLI `.zip` present (Windows)
 - [ ] SHA256 checksum files present for each CLI archive
 
-### Auto-Updater Manifest
-Visit: `https://github.com/RightNow-AI/openfang/releases/latest/download/latest.json`
+### Auto-Updater Manifest (GitHub Release)
+Visit the release assets on GitHub for your tag and open `latest.json`.
 
 - [ ] JSON is valid
 - [ ] Contains `signature` fields (not empty strings)
 - [ ] Contains download URLs for all platforms
 - [ ] Version matches the tag
+
+### Public website mirrors (desktop)
+After `sync-desktop-updates-to-website` succeeds, verify the Amplify-hosted copies:
+
+- [ ] `https://ainativelang.com/downloads/armaraos/latest.json` — valid; URLs point at `ainativelang.com/downloads/armaraos/`
+- [ ] `https://ainativelang.com/downloads/armaraos/beta.json` — present (stable releases copy the same manifest; beta channel users resolve this URL)
+- [ ] If you cut a **prerelease** tag (e.g. `v1.0.0-beta.1`), `beta.json` updates but **`latest.json` on the site is unchanged** until a stable tag ships
 
 ### Docker Image
 ```bash

@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_notification::NotificationExt;
+use url::Url;
 
 use crate::notification_icon::apply_notification_icon;
 use tauri_plugin_updater::UpdaterExt;
@@ -22,6 +23,21 @@ pub struct UpdateInfo {
     pub download_url: Option<String>,
     /// True if the app can download+install automatically (tauri updater flow).
     pub installable: bool,
+    /// Updater JSON URL used for this check (or channel feed when fallback).
+    pub feed_url: String,
+}
+
+fn updater_for_feed(
+    app_handle: &tauri::AppHandle,
+    feed_url: &str,
+) -> Result<tauri_plugin_updater::Updater, String> {
+    let url = Url::parse(feed_url).map_err(|e| e.to_string())?;
+    app_handle
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 /// Spawn a background task that checks for updates after a 10-second delay.
@@ -32,11 +48,12 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-        match do_check(&app_handle).await {
+        let result = check_for_update(&app_handle).await;
+
+        match result {
             Ok(info) if info.available && info.installable => {
                 let version = info.version.as_deref().unwrap_or("unknown");
                 info!("Update available: v{version}, installing silently...");
-                // Notify user first, then install
                 let _ = apply_notification_icon(
                     app_handle
                         .notification()
@@ -45,7 +62,6 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
                         .body(format!("Installing v{version}. App will restart shortly.")),
                 )
                 .show();
-                // Small delay so notification is visible
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 if let Err(e) = download_and_install_update(&app_handle).await {
                     warn!("Auto-update install failed: {e}");
@@ -74,7 +90,12 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
 
 /// Perform an on-demand update check. Returns structured result.
 pub async fn check_for_update(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
-    do_check(app_handle).await
+    let r = do_check(app_handle).await;
+    match &r {
+        Ok(_) => crate::ui_prefs::record_updater_check(app_handle, None),
+        Err(e) => crate::ui_prefs::record_updater_check(app_handle, Some(e.as_str())),
+    }
+    r
 }
 
 /// Download and install the latest update, then restart the app.
@@ -83,7 +104,9 @@ pub async fn check_for_update(app_handle: &tauri::AppHandle) -> Result<UpdateInf
 /// On success, calls `app_handle.restart()` which terminates the process —
 /// the function never returns `Ok`. On failure, returns `Err(message)`.
 pub async fn download_and_install_update(app_handle: &tauri::AppHandle) -> Result<(), String> {
-    let updater = app_handle.updater().map_err(|e| e.to_string())?;
+    let channel = crate::ui_prefs::load_release_channel(app_handle);
+    let feed = crate::ui_prefs::feed_url_for_channel(&channel);
+    let updater = updater_for_feed(app_handle, feed)?;
     let update = updater
         .check()
         .await
@@ -101,7 +124,9 @@ pub async fn download_and_install_update(app_handle: &tauri::AppHandle) -> Resul
 }
 
 async fn do_check(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let updater = app_handle.updater().map_err(|e| e.to_string())?;
+    let channel = crate::ui_prefs::load_release_channel(app_handle);
+    let feed = crate::ui_prefs::feed_url_for_channel(&channel);
+    let updater = updater_for_feed(app_handle, feed)?;
     match updater.check().await {
         Ok(Some(update)) => Ok(UpdateInfo {
             available: true,
@@ -110,6 +135,7 @@ async fn do_check(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
             source: "website".to_string(),
             download_url: None,
             installable: true,
+            feed_url: feed.to_string(),
         }),
         Ok(None) => Ok(UpdateInfo {
             available: false,
@@ -118,15 +144,12 @@ async fn do_check(app_handle: &tauri::AppHandle) -> Result<UpdateInfo, String> {
             source: "website".to_string(),
             download_url: None,
             installable: false,
+            feed_url: feed.to_string(),
         }),
-        Err(e) => {
-            // Fallback: if the website updater feed is unreachable, check public GitHub releases.
-            // This is a *check-only* fallback; installation still requires the updater feed.
-            match github_fallback_check().await {
-                Ok(info) => Ok(info),
-                Err(_) => Err(e.to_string()),
-            }
-        }
+        Err(e) => match github_fallback_check(feed).await {
+            Ok(info) => Ok(info),
+            Err(_) => Err(e.to_string()),
+        },
     }
 }
 
@@ -137,7 +160,7 @@ struct GithubLatestRelease {
     body: Option<String>,
 }
 
-async fn github_fallback_check() -> Result<UpdateInfo, String> {
+async fn github_fallback_check(channel_feed: &str) -> Result<UpdateInfo, String> {
     let url = "https://api.github.com/repos/sbhooley/armaraos/releases/latest";
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -155,7 +178,6 @@ async fn github_fallback_check() -> Result<UpdateInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    // Compare versions (tag is usually vX.Y.Z).
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| format!("current version parse: {e}"))?;
     let tag = rel.tag_name.trim().trim_start_matches('v');
@@ -170,5 +192,6 @@ async fn github_fallback_check() -> Result<UpdateInfo, String> {
         source: "github".to_string(),
         download_url: Some(rel.html_url),
         installable: false,
+        feed_url: format!("{channel_feed} (fallback: GitHub API)"),
     })
 }

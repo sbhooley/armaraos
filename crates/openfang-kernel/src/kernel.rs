@@ -5717,7 +5717,7 @@ impl OpenFangKernel {
                             return Err(e);
                         }
                     };
-                let bin = crate::ainl_library::resolve_ainl_binary(ainl_binary);
+                let bin = crate::ainl_library::resolve_ainl_binary(home, ainl_binary);
 
                 let mut cmd = tokio::process::Command::new(&bin);
                 cmd.arg("run");

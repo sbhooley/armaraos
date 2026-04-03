@@ -321,6 +321,11 @@ pub async fn build_router(
             "/api/schedules/{id}/run",
             axum::routing::post(routes::run_schedule),
         )
+        // Support endpoints
+        .route(
+            "/api/support/diagnostics",
+            axum::routing::post(routes::create_diagnostics_bundle),
+        )
         // Workflow endpoints
         .route(
             "/api/workflows",

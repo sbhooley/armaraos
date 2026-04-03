@@ -18,6 +18,8 @@ function chatPage() {
     dragOver: false,
     contextPressure: 'low', // green/yellow/orange/red indicator
     _typingTimeout: null,
+    /** When false, streaming updates must not call scrollToBottom() — user scrolled up to read history */
+    _chatPinnedToBottom: true,
     // Multi-session state
     sessions: [],
     sessionsOpen: false,
@@ -329,7 +331,7 @@ function chatPage() {
       switch (cmd) {
         case '/help':
           self.messages.push({ id: ++msgId, role: 'system', text: self.slashCommands.map(function(c) { return '`' + c.cmd + '` — ' + c.desc; }).join('\n'), meta: '', tools: [] });
-          self.scrollToBottom();
+          self.scrollToBottom(true);
           break;
         case '/agents':
           location.hash = 'agents';
@@ -347,7 +349,7 @@ function chatPage() {
             self.messages.push({ id: ++msgId, role: 'system', text: 'Compacting session...', meta: '', tools: [] });
             OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/session/compact', {}).then(function(res) {
               self.messages.push({ id: ++msgId, role: 'system', text: res.message || 'Compaction complete', meta: '', tools: [] });
-              self.scrollToBottom();
+              self.scrollToBottom(true);
             }).catch(function(e) { OpenFangToast.error('Compaction failed: ' + e.message); });
           }
           break;
@@ -356,7 +358,7 @@ function chatPage() {
             OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/stop', {}).then(function(res) {
               self.messages.push({ id: ++msgId, role: 'system', text: res.message || 'Run cancelled', meta: '', tools: [] });
               self.sending = false;
-              self.scrollToBottom();
+              self.scrollToBottom(true);
             }).catch(function(e) { OpenFangToast.error('Stop failed: ' + e.message); });
           }
           break;
@@ -364,7 +366,7 @@ function chatPage() {
           if (self.currentAgent) {
             var approxTokens = self.messages.reduce(function(sum, m) { return sum + Math.round((m.text || '').length / 4); }, 0);
             self.messages.push({ id: ++msgId, role: 'system', text: '**Session Usage**\n- Messages: ' + self.messages.length + '\n- Approx tokens: ~' + approxTokens, meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }
           break;
         case '/think':
@@ -385,7 +387,7 @@ function chatPage() {
             (self.thinkingMode === 'stream' ? 'Reasoning tokens will appear in a collapsible panel.' :
              self.thinkingMode === 'on' ? 'The agent will show its reasoning when supported by the model.' :
              'Normal response mode.'), meta: '', tools: [] });
-          self.scrollToBottom();
+          self.scrollToBottom(true);
           break;
         case '/context':
           // Send via WS command
@@ -393,7 +395,7 @@ function chatPage() {
             OpenFangAPI.wsSend({ type: 'command', command: 'context', args: '' });
           } else {
             self.messages.push({ id: ++msgId, role: 'system', text: 'Not connected. Connect to an agent first.', meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }
           break;
         case '/verbose':
@@ -401,7 +403,7 @@ function chatPage() {
             OpenFangAPI.wsSend({ type: 'command', command: 'verbose', args: cmdArgs });
           } else {
             self.messages.push({ id: ++msgId, role: 'system', text: 'Not connected. Connect to an agent first.', meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }
           break;
         case '/queue':
@@ -409,13 +411,13 @@ function chatPage() {
             OpenFangAPI.wsSend({ type: 'command', command: 'queue', args: '' });
           } else {
             self.messages.push({ id: ++msgId, role: 'system', text: 'Not connected.', meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }
           break;
         case '/status':
           OpenFangAPI.get('/api/status').then(function(s) {
             self.messages.push({ id: ++msgId, role: 'system', text: '**System Status**\n- Agents: ' + (s.agent_count || 0) + '\n- Uptime: ' + (s.uptime_seconds || 0) + 's\n- Version: ' + (s.version || '?'), meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }).catch(function() {});
           break;
         case '/model':
@@ -428,15 +430,15 @@ function chatPage() {
                 self.currentAgent.model_name = resolvedModel;
                 if (resolvedProvider) { self.currentAgent.model_provider = resolvedProvider; }
                 self.messages.push({ id: ++msgId, role: 'system', text: 'Model switched to: `' + resolvedModel + '`' + (resolvedProvider ? ' (provider: `' + resolvedProvider + '`)' : ''), meta: '', tools: [] });
-                self.scrollToBottom();
+                self.scrollToBottom(true);
               }).catch(function(e) { OpenFangToast.error('Model switch failed: ' + e.message); });
             } else {
               self.messages.push({ id: ++msgId, role: 'system', text: '**Current Model**\n- Provider: `' + (self.currentAgent.model_provider || '?') + '`\n- Model: `' + (self.currentAgent.model_name || '?') + '`', meta: '', tools: [] });
-              self.scrollToBottom();
+              self.scrollToBottom(true);
             }
           } else {
             self.messages.push({ id: ++msgId, role: 'system', text: 'No agent selected.', meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }
           break;
         case '/clear':
@@ -456,7 +458,7 @@ function chatPage() {
               '- Hourly: $' + (b.hourly_spend||0).toFixed(4) + ' / ' + fmt(b.hourly_limit) + '\n' +
               '- Daily: $' + (b.daily_spend||0).toFixed(4) + ' / ' + fmt(b.daily_limit) + '\n' +
               '- Monthly: $' + (b.monthly_spend||0).toFixed(4) + ' / ' + fmt(b.monthly_limit), meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }).catch(function() {});
           break;
         case '/peers':
@@ -464,7 +466,7 @@ function chatPage() {
             self.messages.push({ id: ++msgId, role: 'system', text: '**OFP Network**\n' +
               '- Status: ' + (ns.enabled ? 'Enabled' : 'Disabled') + '\n' +
               '- Connected peers: ' + (ns.connected_peers||0) + ' / ' + (ns.total_peers||0), meta: '', tools: [] });
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }).catch(function() {});
           break;
         case '/a2a':
@@ -476,13 +478,18 @@ function chatPage() {
               var lines = agents.map(function(a) { return '- **' + a.name + '** — ' + a.url; });
               self.messages.push({ id: ++msgId, role: 'system', text: '**A2A Agents (' + agents.length + ')**\n' + lines.join('\n'), meta: '', tools: [] });
             }
-            self.scrollToBottom();
+            self.scrollToBottom(true);
           }).catch(function() {});
           break;
       }
     },
 
     selectAgent(agent) {
+      // Reset in-flight UI so switching agents mid-stream cannot leave a stuck "Generating" state
+      this.sending = false;
+      this.messageQueue = [];
+      this._clearTypingTimeout();
+      this._chatPinnedToBottom = true;
       this.currentAgent = agent;
       this.messages = [];
       this.connectWs(agent.id);
@@ -541,7 +548,7 @@ function chatPage() {
             });
             return { id: ++msgId, role: role, text: text, meta: '', tools: tools, images: images };
           });
-          self.$nextTick(function() { self.scrollToBottom(); });
+          self.$nextTick(function() { self.scrollToBottom(true); });
         }
       } catch(e) { /* silent */ }
     },
@@ -566,7 +573,7 @@ function chatPage() {
         await this.loadSessions(this.currentAgent.id);
         await this.loadSession(this.currentAgent.id);
         this.messages = [];
-        this.scrollToBottom();
+        this.scrollToBottom(true);
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('New session created');
       } catch(e) {
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to create session');
@@ -611,6 +618,7 @@ function chatPage() {
     },
 
     handleWsMessage(data) {
+      try {
       switch (data.type) {
         case 'connected': break;
 
@@ -862,7 +870,7 @@ function chatPage() {
           this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + data.content, meta: '', tools: [], ts: Date.now() });
           this.sending = false;
           this.tokenCount = 0;
-          this.scrollToBottom();
+          this.scrollToBottom(true);
           var self2 = this;
           this.$nextTick(function() {
             var el = document.getElementById('msg-input'); if (el) el.focus();
@@ -883,7 +891,7 @@ function chatPage() {
             this.contextPressure = data.context_pressure;
           }
           this.messages.push({ id: ++msgId, role: 'system', text: data.message || 'Command executed.', meta: '', tools: [] });
-          this.scrollToBottom();
+          this.scrollToBottom(true);
           break;
 
         case 'canvas':
@@ -899,6 +907,9 @@ function chatPage() {
           break;
 
         case 'pong': break;
+      }
+      } catch (err) {
+        console.warn('[ArmaraOS chat] WebSocket handler error:', err);
       }
     },
 
@@ -985,8 +996,11 @@ function chatPage() {
 
       // Always show user message immediately
       this.messages.push({ id: ++msgId, role: 'user', text: finalText, meta: '', tools: [], images: msgImages, ts: Date.now() });
-      this.scrollToBottom();
+      this.scrollToBottom(true);
       localStorage.setItem('of-first-msg', 'true');
+      try {
+        window.dispatchEvent(new CustomEvent('armaraos-onboarding-local'));
+      } catch(e) { /* ignore */ }
 
       // If already streaming, queue this message
       if (this.sending) {
@@ -1005,7 +1019,7 @@ function chatPage() {
       if (uploadedFiles && uploadedFiles.length) wsPayload.attachments = uploadedFiles;
       if (OpenFangAPI.wsSend(wsPayload)) {
         this.messages.push({ id: ++msgId, role: 'agent', text: '', meta: '', thinking: true, streaming: true, tools: [], ts: Date.now() });
-        this.scrollToBottom();
+        this.scrollToBottom(true);
         return;
       }
 
@@ -1014,7 +1028,7 @@ function chatPage() {
         OpenFangToast.info('Using HTTP mode (no streaming)');
       }
       this.messages.push({ id: ++msgId, role: 'agent', text: '', meta: '', thinking: true, tools: [], ts: Date.now() });
-      this.scrollToBottom();
+      this.scrollToBottom(true);
 
       try {
         var httpBody = { message: finalText };
@@ -1031,7 +1045,7 @@ function chatPage() {
         this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + e.message, meta: '', tools: [], ts: Date.now() });
       }
       this.sending = false;
-      this.scrollToBottom();
+      this.scrollToBottom(true);
       // Process next queued message
       var self = this;
       this.$nextTick(function() {
@@ -1047,7 +1061,7 @@ function chatPage() {
       OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/stop', {}).then(function(res) {
         self.messages.push({ id: ++msgId, role: 'system', text: res.message || 'Run cancelled', meta: '', tools: [], ts: Date.now() });
         self.sending = false;
-        self.scrollToBottom();
+        self.scrollToBottom(true);
         self.$nextTick(function() { self._processQueue(); });
       }).catch(function(e) { OpenFangToast.error('Stop failed: ' + e.message); });
     },
@@ -1072,8 +1086,23 @@ function chatPage() {
     },
 
     _latexTimer: null,
-    scrollToBottom() {
+
+    onMessagesScroll() {
+      var el = document.getElementById('messages');
+      if (!el) return;
+      var threshold = 72;
+      var dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+      this._chatPinnedToBottom = dist <= threshold;
+    },
+
+    /** @param {boolean} [force] - If true, always scroll (user action or new session). If omitted, only scroll when user is already near the bottom (avoids fighting scroll while reading history during streaming). */
+    scrollToBottom(force) {
       var self = this;
+      if (force === true) {
+        this._chatPinnedToBottom = true;
+      } else if (!this._chatPinnedToBottom) {
+        return;
+      }
       var el = document.getElementById('messages');
       if (el) self.$nextTick(function() {
         el.scrollTop = el.scrollHeight;
@@ -1200,7 +1229,7 @@ function chatPage() {
 
       // Show a temporary "Transcribing..." message
       this.messages.push({ id: ++msgId, role: 'system', text: 'Transcribing audio...', thinking: true, ts: Date.now(), tools: [] });
-      this.scrollToBottom();
+      this.scrollToBottom(true);
 
       try {
         // Upload audio file

@@ -40,6 +40,10 @@ socket2 = { workspace = true }
 reqwest = { workspace = true }
 argon2 = { workspace = true }
 rand = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+walkdir = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

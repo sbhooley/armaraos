@@ -598,6 +598,40 @@ async fn test_request_id_header_is_uuid() {
 }
 
 #[tokio::test]
+async fn test_spawn_missing_manifest_returns_structured_error_and_request_id() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": ""}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+    let request_id_hdr = resp
+        .headers()
+        .get("x-request-id")
+        .expect("x-request-id should be set by request_logging middleware")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(uuid::Uuid::parse_str(&request_id_hdr).is_ok());
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Missing manifest");
+    assert!(!body["detail"].as_str().unwrap().is_empty());
+    assert_eq!(body["path"], "/api/agents");
+    assert_eq!(body["request_id"].as_str().unwrap(), request_id_hdr);
+    assert!(!body
+        .get("hint")
+        .and_then(|h| h.as_str())
+        .unwrap_or("")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn test_multiple_agents_lifecycle() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
@@ -727,9 +761,10 @@ async fn test_register_curated_rate_limit_6th_returns_429() {
     let resp = client.post(&url).send().await.unwrap();
     assert_eq!(resp.status(), 429);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let err = body["error"].as_str().expect("error field");
+    assert_eq!(body["error"].as_str(), Some("Rate limited"));
+    let detail = body["detail"].as_str().expect("detail field");
     assert!(
-        err.contains("Too many register-curated"),
+        detail.contains("Too many register-curated"),
         "unexpected body: {body}"
     );
 }

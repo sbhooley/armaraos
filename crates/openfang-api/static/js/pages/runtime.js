@@ -16,6 +16,9 @@ document.addEventListener('alpine:init', function() {
       providers: [],
       updateChecking: false,
       updateInfo: null,
+      updaterPrefs: null,
+      daemonUpdateChecking: false,
+      daemonUpdateInfo: null,
 
       get isDesktopShell() {
         try {
@@ -27,6 +30,72 @@ document.addEventListener('alpine:init', function() {
         }
       },
 
+      semverCompare(a, b) {
+        var pa = String(a).split('.').map(function(x) { return parseInt(x, 10) || 0; });
+        var pb = String(b).split('.').map(function(x) { return parseInt(x, 10) || 0; });
+        for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+          var da = pa[i] || 0;
+          var db = pb[i] || 0;
+          if (da > db) return 1;
+          if (da < db) return -1;
+        }
+        return 0;
+      },
+
+      async loadUpdaterPrefs() {
+        if (!this.isDesktopShell) return;
+        try {
+          var p = await ArmaraosDesktopTauriInvoke('get_desktop_updater_prefs');
+          this.updaterPrefs = p || null;
+        } catch(e) {
+          this.updaterPrefs = null;
+        }
+      },
+
+      async saveReleaseChannel() {
+        if (!this.isDesktopShell || !this.updaterPrefs) return;
+        try {
+          await ArmaraosDesktopTauriInvoke('set_release_channel', { channel: this.updaterPrefs.release_channel || 'stable' });
+          await this.loadUpdaterPrefs();
+          OpenFangToast && OpenFangToast.success('Channel saved');
+        } catch(e) {
+          OpenFangToast && OpenFangToast.error(e.message || String(e));
+        }
+      },
+
+      async checkDaemonRuntimeUpdate() {
+        this.daemonUpdateChecking = true;
+        this.daemonUpdateInfo = null;
+        var err = null;
+        try {
+          var ver = await OpenFangAPI.get('/api/version');
+          var current = ver.version || '';
+          var r = await fetch('https://api.github.com/repos/sbhooley/armaraos/releases/latest', {
+            headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'ArmaraOS-Dashboard' }
+          });
+          if (!r.ok) throw new Error('GitHub returned ' + r.status);
+          var rel = await r.json();
+          var tag = String(rel.tag_name || '').replace(/^v/i, '');
+          var cmp = this.semverCompare(current, tag);
+          this.daemonUpdateInfo = {
+            current: current,
+            latest: tag,
+            url: rel.html_url || 'https://github.com/sbhooley/armaraos/releases',
+            upToDate: cmp >= 0
+          };
+        } catch(e) {
+          err = e.message || String(e);
+          this.daemonUpdateInfo = { error: err };
+        }
+        if (this.isDesktopShell) {
+          try {
+            await ArmaraosDesktopTauriInvoke('report_daemon_update_check', { error: err });
+            await this.loadUpdaterPrefs();
+          } catch(e2) {}
+        }
+        this.daemonUpdateChecking = false;
+      },
+
       async loadData() {
         this.loading = true;
         try {
@@ -34,7 +103,8 @@ document.addEventListener('alpine:init', function() {
             OpenFangAPI.get('/api/status'),
             OpenFangAPI.get('/api/version'),
             OpenFangAPI.get('/api/providers'),
-            OpenFangAPI.get('/api/agents')
+            OpenFangAPI.get('/api/agents'),
+            this.loadUpdaterPrefs()
           ]);
           var status = results[0];
           var ver = results[1];
@@ -78,6 +148,7 @@ document.addEventListener('alpine:init', function() {
         try {
           var info = await ArmaraosDesktopTauriInvoke('check_for_updates');
           this.updateInfo = info;
+          await this.loadUpdaterPrefs();
           if (!info) {
             OpenFangToast && OpenFangToast.error('Update check returned no data');
           } else if (info.available && info.installable) {
@@ -101,6 +172,7 @@ document.addEventListener('alpine:init', function() {
           }
         } catch (e) {
           OpenFangToast && OpenFangToast.error(e.message || String(e));
+          await this.loadUpdaterPrefs();
         }
         this.updateChecking = false;
       }

@@ -116,16 +116,49 @@ var OpenFangToast = (function() {
 })();
 
 // ── Friendly Error Messages ──
+function errorHintForStatus(status, serverHint) {
+  if (serverHint) return serverHint;
+  if (status === 0 || !status) {
+    return 'If you use the desktop app, wait until it finishes starting. For a remote daemon, verify host/port, VPN, and firewall. Use Copy debug info or Generate + copy bundle (sidebar when disconnected) or Settings → System Info → Support — the bundle includes recent daemon logs without SSH.';
+  }
+  if (status === 401) {
+    return 'Open Settings → Security and set your API key, or complete dashboard login.';
+  }
+  if (status === 403) return 'Your account or API key does not have access to this action.';
+  if (status === 404) return 'The resource may have been deleted or the URL is wrong.';
+  if (status === 429) return 'Wait a few seconds and retry, or reduce request frequency.';
+  if (status === 413) return 'Reduce payload size (smaller file or shorter prompt).';
+  if (status === 500) {
+    return 'Internal server error. Retry once; if it persists, click Generate + copy bundle (sidebar) or Settings → System Info → Support, then attach the .zip when reporting the issue.';
+  }
+  if (status === 502 || status === 503) {
+    return 'The API may be restarting or overloaded. Confirm the daemon is running, then use Copy debug info or Generate + copy bundle if the problem continues.';
+  }
+  return '';
+}
+
 function friendlyError(status, serverMsg) {
-  if (status === 0 || !status) return 'Cannot reach daemon — is openfang running?';
-  if (status === 401) return 'Not authorized — check your API key';
+  if (status === 0 || !status) return 'Cannot reach daemon';
+  if (status === 401) return 'Not authorized — check your API key or login';
   if (status === 403) return 'Permission denied';
   if (status === 404) return serverMsg || 'Resource not found';
-  if (status === 429) return 'Rate limited — slow down and try again';
+  if (status === 429) return 'Rate limited — try again shortly';
   if (status === 413) return 'Request too large';
-  if (status === 500) return 'Server error — check daemon logs';
-  if (status === 502 || status === 503) return 'Daemon unavailable — is it running?';
+  if (status === 500) return 'Server error — see detail and hint below';
+  if (status === 502 || status === 503) return 'Daemon unavailable';
   return serverMsg || 'Unexpected error (' + status + ')';
+}
+
+function makeApiError(message, status, detail, hint, where, requestId, serverPath) {
+  var e = new Error(message);
+  e.name = 'OpenFangAPIError';
+  e.status = status || 0;
+  e.detail = detail || '';
+  e.hint = hint || errorHintForStatus(status, '');
+  e.where = where || '';
+  e.requestId = requestId || '';
+  e.serverPath = serverPath || '';
+  return e;
 }
 
 // ── API Client ──
@@ -174,13 +207,28 @@ var OpenFangAPI = (function() {
         }
         return r.text().then(function(text) {
           var msg = '';
+          var detail = '';
+          var hint = '';
+          var requestId = '';
+          var serverPath = '';
+          try {
+            var rid = r.headers && r.headers.get ? r.headers.get('x-request-id') : '';
+            if (rid) requestId = String(rid);
+          } catch(e3) { /* ignore */ }
           try {
             var json = JSON.parse(text);
-            msg = json.error || r.statusText;
-          } catch(e) {
-            msg = r.statusText;
+            msg = json.error || json.message || r.statusText;
+            if (json.detail) detail = String(json.detail);
+            else if (json.reason) detail = String(json.reason);
+            if (json.hint) hint = String(json.hint);
+            if (!requestId && json.request_id) requestId = String(json.request_id);
+            if (json.path) serverPath = String(json.path);
+          } catch(e2) {
+            msg = text || r.statusText;
           }
-          throw new Error(friendlyError(r.status, msg));
+          var primary = friendlyError(r.status, msg);
+          var h = hint || errorHintForStatus(r.status, '');
+          throw makeApiError(primary, r.status, detail || msg, h, method + ' ' + path, requestId, serverPath);
         });
       }
       var ct = r.headers.get('content-type') || '';
@@ -191,7 +239,15 @@ var OpenFangAPI = (function() {
     }).catch(function(e) {
       if (e.name === 'TypeError' && e.message.includes('Failed to fetch')) {
         setConnectionState('disconnected');
-        throw new Error('Cannot connect to daemon — is openfang running?');
+        throw makeApiError(
+          'Cannot connect to daemon',
+          0,
+          e.message,
+          errorHintForStatus(0, ''),
+          method + ' ' + path,
+          '',
+          ''
+        );
       }
       throw e;
     });
@@ -241,6 +297,8 @@ var OpenFangAPI = (function() {
       };
 
       socket.onmessage = function(e) {
+        // Ignore frames from a socket we already replaced (agent switch / disconnect race)
+        if (_ws !== socket) return;
         try {
           var data = JSON.parse(e.data);
         } catch(parseErr) {
@@ -291,6 +349,8 @@ var OpenFangAPI = (function() {
     if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
     if (_ws) { _ws.close(1000); _ws = null; }
     _wsConnected = false;
+    // Drop handlers so a destroyed chat component cannot receive frames after navigation away
+    _wsCallbacks = {};
   }
 
   function wsSend(data) {

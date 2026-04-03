@@ -170,6 +170,24 @@ function wizardPage() {
     },
     profileInfo: function(name) { return this.profileDescriptions[name] || { label: name, desc: '' }; },
 
+    /** Same provider/model logic as createAgent() — for honest UI under the agent name field */
+    get previewAgentProvider() {
+      var tpl = this.templates[this.selectedTemplate];
+      if (!tpl) return '';
+      if (this.selectedProviderObj && this.providerIsConfigured(this.selectedProviderObj)) {
+        return this.selectedProviderObj.id;
+      }
+      return tpl.provider;
+    },
+    get previewAgentModel() {
+      var tpl = this.templates[this.selectedTemplate];
+      if (!tpl) return '';
+      if (this.selectedProviderObj && this.providerIsConfigured(this.selectedProviderObj)) {
+        return this.defaultModelForProvider(this.selectedProviderObj.id) || tpl.model;
+      }
+      return tpl.model;
+    },
+
     // Step 4: Try It chat
     tryItMessages: [],
     tryItInput: '',
@@ -196,6 +214,9 @@ function wizardPage() {
         var res = await OpenFangAPI.post('/api/agents/' + this.createdAgent.id + '/message', { message: text });
         this.tryItMessages.push({ role: 'agent', text: res.response || '(no response)' });
         localStorage.setItem('of-first-msg', 'true');
+        try {
+          window.dispatchEvent(new CustomEvent('armaraos-onboarding-local'));
+        } catch(e2) { /* ignore */ }
       } catch(e) {
         this.tryItMessages.push({ role: 'agent', text: 'Error: ' + (e.message || 'Could not reach agent') });
       }
@@ -244,7 +265,8 @@ function wizardPage() {
     setupSummary: {
       provider: '',
       agent: '',
-      channel: ''
+      channel: '',
+      schedule: ''
     },
 
     // ── Lifecycle ──
@@ -543,10 +565,11 @@ function wizardPage() {
       }
       this.configuringChannel = true;
       try {
-        var fields = {};
-        fields[ch.token_env.toLowerCase()] = token;
-        fields.token = token;
-        await OpenFangAPI.post('/api/channels/' + ch.name + '/configure', { fields: fields });
+        // Channel configure endpoint expects canonical field keys (e.g. bot_token_env),
+        // not raw env var names. It will write the secret to secrets.env and set the env var.
+        await OpenFangAPI.post('/api/channels/' + ch.name + '/configure', {
+          fields: { bot_token_env: token }
+        });
         this.channelConfigured = true;
         this.setupSummary.channel = ch.display_name;
         OpenFangToast.success(ch.display_name + ' configured and activated.');
@@ -558,9 +581,29 @@ function wizardPage() {
 
     // ── Step 6: Finish ──
 
-    finish() {
+    async finish() {
       localStorage.setItem('openfang-onboarded', 'true');
       Alpine.store('app').showOnboarding = false;
+      // If we created an agent, automatically create a simple scheduled job so
+      // the first-run flow ends with something visible in Scheduler + Logs.
+      try {
+        if (this.createdAgent && this.createdAgent.id) {
+          var created = await OpenFangAPI.post('/api/schedules', {
+            name: 'Daily check-in',
+            cron: '0 9 * * *',
+            agent_id: this.createdAgent.id,
+            message: 'Daily check-in: summarize what changed since yesterday and suggest 1 next action.',
+            enabled: true
+          });
+          if (created && created.id) {
+            this.setupSummary.schedule = created.name || 'Daily check-in';
+            // Run once immediately so the user sees output right away.
+            try {
+              await OpenFangAPI.post('/api/schedules/' + created.id + '/run', {});
+            } catch (e2) { /* ignore */ }
+          }
+        }
+      } catch (e) { /* ignore */ }
       // Navigate to agents with chat if an agent was created, otherwise overview
       if (this.createdAgent) {
         var agent = this.createdAgent;

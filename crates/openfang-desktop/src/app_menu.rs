@@ -17,8 +17,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             )?;
             let x_profile =
                 MenuItem::with_id(app, "help_ainl_x", "X — @ainativelang", true, None::<&str>)?;
+            let diagnostics = MenuItem::with_id(
+                app,
+                "help_generate_diagnostics",
+                "Generate Diagnostics Bundle…",
+                true,
+                None::<&str>,
+            )?;
             help.append(&website)?;
             help.append(&x_profile)?;
+            help.append(&diagnostics)?;
         }
     }
     Ok(menu)

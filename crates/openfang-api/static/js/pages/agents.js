@@ -30,6 +30,11 @@ function agentsPage() {
     filterState: 'all',
     loading: true,
     loadError: '',
+    loadErrorDetail: '',
+    loadErrorHint: '',
+    loadErrorRequestId: '',
+    loadErrorWhere: '',
+    loadErrorServerPath: '',
     spawnForm: {
       name: '',
       provider: 'groq',
@@ -95,11 +100,6 @@ function agentsPage() {
     searchQuery: '',
 
     builtinTemplates: [],
-    
-    // Load templates from API
-    async init() {
-      await this.loadTemplates();
-    },
 
     // ── Profile Descriptions ──
     profileDescriptions: {
@@ -193,12 +193,12 @@ function agentsPage() {
     async init() {
       var self = this;
       this.loading = true;
-      this.loadError = '';
+      clearPageLoadError(this);
       try {
         await Alpine.store('app').refreshAgents();
         await this.loadTemplates();
       } catch(e) {
-        this.loadError = e.message || 'Could not load agents. Is the daemon running?';
+        applyPageLoadError(this, e, 'Could not load agents. Is the daemon running?');
       }
       this.loading = false;
 
@@ -217,13 +217,17 @@ function agentsPage() {
 
     async loadData() {
       this.loading = true;
-      this.loadError = '';
+      clearPageLoadError(this);
       try {
         await Alpine.store('app').refreshAgents();
       } catch(e) {
-        this.loadError = e.message || 'Could not load agents.';
+        applyPageLoadError(this, e, 'Could not load agents.');
       }
       this.loading = false;
+    },
+
+    copyAgentsLoadErrorDebug() {
+      copyPageLoadErrorDebug(this, 'ArmaraOS agents load error');
     },
 
     async loadTemplates() {
@@ -313,6 +317,14 @@ function agentsPage() {
 
     closeChat() {
       this.activeChatAgent = null;
+      try { Alpine.store('app').pendingAgent = null; } catch(e) { /* ignore */ }
+      OpenFangAPI.wsDisconnect();
+    },
+
+    /** Called before leaving the Agents page (sidebar / hash). Keeps WS from targeting a torn-down chat UI. */
+    onAgentsPageLeave() {
+      this.activeChatAgent = null;
+      try { Alpine.store('app').pendingAgent = null; } catch(e) { /* ignore */ }
       OpenFangAPI.wsDisconnect();
     },
 

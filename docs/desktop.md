@@ -248,6 +248,8 @@ The app checks for updates 10 seconds after startup. If an update is available, 
 - `plugins.updater.endpoints` — URL to `latest.json` (hosted on GitHub Releases)
 - `plugins.updater.windows.installMode` — `"passive"` (install without full UI)
 
+**Website-hosted feeds:** Production builds also support updater JSON mirrored to the marketing site: stable **`https://ainativelang.com/downloads/armaraos/latest.json`**, beta channel **`.../beta.json`** (see `crates/openfang-desktop/src/ui_prefs.rs` — `STABLE_FEED_URL` / `BETA_FEED_URL`). CI copies manifests there on each tag; prerelease tags update `beta.json` without overwriting stable `latest.json` (see `docs/release-desktop.md`).
+
 **Signing:** Every release bundle is signed with `TAURI_SIGNING_PRIVATE_KEY` (GitHub Secret). The `tauri-action` generates `latest.json` containing download URLs and signatures for each platform.
 
 See [Production Checklist](production-checklist.md) for key generation and setup instructions.

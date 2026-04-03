@@ -16,9 +16,16 @@ use tracing::info;
 /// Request ID header name (standard).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 
+/// Per-request correlation ID (handlers may read via `Extension<RequestId>`; also sent as `x-request-id`).
+#[derive(Clone, Debug)]
+pub struct RequestId(pub String);
+
 /// Middleware: inject a unique request ID and log the request/response.
-pub async fn request_logging(request: Request<Body>, next: Next) -> Response<Body> {
+pub async fn request_logging(mut request: Request<Body>, next: Next) -> Response<Body> {
     let request_id = uuid::Uuid::new_v4().to_string();
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
     let method = request.method().clone();
     let uri = request.uri().path().to_string();
     let start = Instant::now();
@@ -78,6 +85,19 @@ pub async fn auth(
             .map(|ci| ci.0.ip().is_loopback())
             .unwrap_or(false); // SECURITY: default-deny — unknown origin is NOT loopback
         if is_loopback_shutdown {
+            return next.run(request).await;
+        }
+    }
+
+    // Redacted support bundle: same machine only (desktop shell / local CLI).
+    // Writes go under ~/.armaraos/support/; loopback prevents remote abuse when api_key is set.
+    if path == "/api/support/diagnostics" && method == axum::http::Method::POST {
+        let is_loopback_diag = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().is_loopback())
+            .unwrap_or(false);
+        if is_loopback_diag {
             return next.run(request).await;
         }
     }
@@ -221,11 +241,27 @@ pub async fn auth(
         "Missing Authorization: Bearer <api_key> header"
     };
 
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let path = request.uri().path().to_string();
+    let detail = if credential_provided {
+        "Authentication failed for this request (API key mismatch)."
+    } else {
+        "No Bearer token was provided for a protected endpoint."
+    };
+
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header("www-authenticate", "Bearer")
+        .header(REQUEST_ID_HEADER, request_id.clone())
         .body(Body::from(
-            serde_json::json!({"error": error_msg}).to_string(),
+            serde_json::json!({
+                "error": error_msg,
+                "detail": detail,
+                "path": path,
+                "request_id": request_id,
+                "hint": "Open Settings → Security and set your API key, or sign in with dashboard login."
+            })
+            .to_string(),
         ))
         .unwrap_or_default()
 }

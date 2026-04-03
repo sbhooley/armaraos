@@ -18,6 +18,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use openfang_kernel::ainl_library::AINL_BIN_CACHE_FILENAME;
+use openfang_kernel::config::openfang_home;
 use tauri::{AppHandle, Manager};
 use tracing::warn;
 
@@ -347,6 +349,25 @@ pub(crate) fn venv_bin(venv: &Path, name: &str) -> PathBuf {
     unix
 }
 
+/// Writes [`openfang_kernel::ainl_library::AINL_BIN_CACHE_FILENAME`] under [`openfang_home`] so the
+/// background daemon (cron, no GUI `PATH`) can spawn the internal venv `ainl` without `ARMARAOS_AINL_BIN`.
+fn sync_ainl_executable_cache(venv: &Path) {
+    let ainl = venv_bin(venv, "ainl");
+    if !ainl.exists() {
+        return;
+    }
+    let home = openfang_home();
+    if let Err(e) = fs::create_dir_all(&home) {
+        warn!(error = %e, "failed to create armaraos home for ainl bin cache");
+        return;
+    }
+    let path = ainl.canonicalize().unwrap_or(ainl);
+    let cache_path = home.join(AINL_BIN_CACHE_FILENAME);
+    if let Err(e) = fs::write(&cache_path, format!("{}\n", path.display())) {
+        warn!(error = %e, path = %cache_path.display(), "failed to write ainl bin cache");
+    }
+}
+
 fn find_bundled_wheel(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let base = match app.path().resource_dir() {
         Ok(r) => r.join("resources").join("ainl"),
@@ -625,6 +646,9 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
     };
     apply_armaraos_host_bootstrap(app, &mut status);
     crate::ainl_upstream::apply_library_sync(app, &mut status);
+    if status.ok {
+        sync_ainl_executable_cache(&venv);
+    }
     Ok(status)
 }
 
@@ -668,6 +692,9 @@ pub fn ainl_status(app: &AppHandle) -> Result<AinlStatus, String> {
         upstream_commit: None,
     };
     crate::ainl_upstream::enrich_status_from_manifest(app, &mut s);
+    if ready {
+        sync_ainl_executable_cache(&venv);
+    }
     Ok(s)
 }
 

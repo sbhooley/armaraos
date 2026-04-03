@@ -72,7 +72,8 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
                     }
 
                     match root_value.try_into::<KernelConfig>() {
-                        Ok(config) => {
+                        Ok(mut config) => {
+                            migrate_legacy_openrouter_default_model(&mut config);
                             info!(path = %config_path.display(), "Loaded configuration");
                             return config;
                         }
@@ -109,6 +110,27 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
     }
 
     KernelConfig::default()
+}
+
+/// If `[default_model]` still has the old OpenRouter placeholder (first catalog row /
+/// auto-detect default), align it with [`DEFAULT_OPENROUTER_MODEL_ID`] in memory.
+fn migrate_legacy_openrouter_default_model(config: &mut KernelConfig) {
+    if config.default_model.provider != "openrouter" {
+        return;
+    }
+    let m = config.default_model.model.trim();
+    const LEGACY: &[&str] = &[
+        "openrouter/google/gemini-2.5-flash",
+        "google/gemini-2.5-flash",
+    ];
+    if LEGACY.contains(&m) {
+        info!(
+            old = %m,
+            new = %DEFAULT_OPENROUTER_MODEL_ID,
+            "Migrating legacy OpenRouter default model to current bundled default"
+        );
+        config.default_model.model = DEFAULT_OPENROUTER_MODEL_ID.to_string();
+    }
 }
 
 /// Resolve config includes by deep-merging included files into the root value.

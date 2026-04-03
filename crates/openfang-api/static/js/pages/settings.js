@@ -33,6 +33,11 @@ function settingsPage() {
     addingCustomProvider: false,
     loading: true,
     loadError: '',
+    loadErrorDetail: '',
+    loadErrorHint: '',
+    loadErrorRequestId: '',
+    loadErrorWhere: '',
+    loadErrorServerPath: '',
 
     // -- Desktop (Tauri) AINL status (synced via Alpine.store('ainl').desktop) --
     ainlDesktopLoading: false,
@@ -46,6 +51,15 @@ function settingsPage() {
     // -- Desktop (Tauri) app updates --
     updateChecking: false,
     updateInfo: null,
+    updaterPrefs: null,
+    releaseChannelSaving: false,
+    daemonUpdateChecking: false,
+    daemonUpdateInfo: null,
+
+    // -- Support / diagnostics --
+    diagGenerating: false,
+    diagBundlePath: '',
+    diagError: '',
 
     // -- Dynamic config state --
     configSchema: null,
@@ -184,7 +198,7 @@ function settingsPage() {
         }
       } catch (e) { /* ignore */ }
       this.loading = true;
-      this.loadError = '';
+      clearPageLoadError(this);
       try {
         await Promise.all([
           this.loadSysInfo(),
@@ -192,15 +206,89 @@ function settingsPage() {
           this.loadTools(),
           this.loadConfig(),
           this.loadProviders(),
-          this.loadModels()
+          this.loadModels(),
+          this.loadUpdaterPrefs()
         ]);
       } catch(e) {
-        this.loadError = e.message || 'Could not load settings.';
+        applyPageLoadError(this, e, 'Could not load settings.');
       }
       this.loading = false;
     },
 
+    copySettingsLoadErrorDebug() {
+      copyPageLoadErrorDebug(this, 'ArmaraOS settings load error');
+    },
+
     async loadData() { return this.loadSettings(); },
+
+    async loadUpdaterPrefs() {
+      if (!this.isDesktopShell) return;
+      try {
+        var p = await ArmaraosDesktopTauriInvoke('get_desktop_updater_prefs');
+        this.updaterPrefs = p || null;
+      } catch(e) {
+        this.updaterPrefs = null;
+      }
+    },
+
+    async saveReleaseChannel() {
+      if (!this.isDesktopShell || !this.updaterPrefs) return;
+      var ch = this.updaterPrefs.release_channel || 'stable';
+      this.releaseChannelSaving = true;
+      try {
+        await ArmaraosDesktopTauriInvoke('set_release_channel', { channel: ch });
+        await this.loadUpdaterPrefs();
+        OpenFangToast && OpenFangToast.success('Update channel saved');
+      } catch(e) {
+        OpenFangToast && OpenFangToast.error(e.message || String(e));
+      }
+      this.releaseChannelSaving = false;
+    },
+
+    semverCompare(a, b) {
+      var pa = String(a).split('.').map(function(x) { return parseInt(x, 10) || 0; });
+      var pb = String(b).split('.').map(function(x) { return parseInt(x, 10) || 0; });
+      for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+        var da = pa[i] || 0;
+        var db = pb[i] || 0;
+        if (da > db) return 1;
+        if (da < db) return -1;
+      }
+      return 0;
+    },
+
+    async checkDaemonRuntimeUpdate() {
+      this.daemonUpdateChecking = true;
+      this.daemonUpdateInfo = null;
+      var err = null;
+      try {
+        var ver = await OpenFangAPI.get('/api/version');
+        var current = ver.version || '';
+        var r = await fetch('https://api.github.com/repos/sbhooley/armaraos/releases/latest', {
+          headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'ArmaraOS-Dashboard' }
+        });
+        if (!r.ok) throw new Error('GitHub returned ' + r.status);
+        var rel = await r.json();
+        var tag = String(rel.tag_name || '').replace(/^v/i, '');
+        var cmp = this.semverCompare(current, tag);
+        this.daemonUpdateInfo = {
+          current: current,
+          latest: tag,
+          url: rel.html_url || 'https://github.com/sbhooley/armaraos/releases',
+          upToDate: cmp >= 0
+        };
+      } catch(e) {
+        err = e.message || String(e);
+        this.daemonUpdateInfo = { error: err };
+      }
+      if (this.isDesktopShell) {
+        try {
+          await ArmaraosDesktopTauriInvoke('report_daemon_update_check', { error: err });
+          await this.loadUpdaterPrefs();
+        } catch(e2) { /* ignore */ }
+      }
+      this.daemonUpdateChecking = false;
+    },
 
     async loadSysInfo() {
       try {
@@ -377,6 +465,7 @@ function settingsPage() {
       try {
         var info = await ArmaraosDesktopTauriInvoke('check_for_updates');
         this.updateInfo = info;
+        await this.loadUpdaterPrefs();
         if (!info) {
           OpenFangToast.error('Update check returned no data');
         } else if (info.available && info.installable) {
@@ -401,8 +490,54 @@ function settingsPage() {
         }
       } catch (e) {
         OpenFangToast.error(e.message || String(e));
+        await this.loadUpdaterPrefs();
       }
       this.updateChecking = false;
+    },
+
+    async generateDiagnosticsBundle() {
+      this.diagError = '';
+      this.diagBundlePath = '';
+      this.diagGenerating = true;
+      try {
+        if (this.isDesktopShell) {
+          try {
+            var bundle = await ArmaraosDesktopTauriInvoke('generate_support_bundle');
+            if (bundle && bundle.bundle_path) {
+              this.diagBundlePath = bundle.bundle_path;
+              OpenFangToast && OpenFangToast.success('Diagnostics bundle generated');
+              this.diagGenerating = false;
+              return;
+            }
+          } catch(e0) {
+            /* fall back to HTTP */
+          }
+        }
+        var res = await OpenFangAPI.post('/api/support/diagnostics', {});
+        this.diagBundlePath = (res && res.bundle_path) ? res.bundle_path : '';
+        if (this.diagBundlePath) {
+          OpenFangToast && OpenFangToast.success('Diagnostics bundle generated');
+        } else {
+          OpenFangToast && OpenFangToast.warn('Diagnostics bundle generated (no path returned)');
+        }
+      } catch (e) {
+        this.diagError = e && (e.message || String(e)) || 'Diagnostics bundle failed';
+        OpenFangToast && OpenFangToast.error(this.diagError);
+      }
+      this.diagGenerating = false;
+    },
+
+    openSupportEmail() {
+      var subject = encodeURIComponent('ArmaraOS Support — Bug Report');
+      var body = 'Hi ArmaraOS team,%0D%0A%0D%0A' +
+        'Describe the bug here:%0D%0A%0D%0A' +
+        (this.diagBundlePath ? ('Diagnostics bundle path: ' + this.diagBundlePath + '%0D%0A%0D%0A') : '') +
+        'Thanks!';
+      try {
+        window.location.href = 'mailto:ainativelang@gmail.com?subject=' + subject + '&body=' + body;
+      } catch (e) {
+        // ignore
+      }
     },
 
     get ainlDesktop() {

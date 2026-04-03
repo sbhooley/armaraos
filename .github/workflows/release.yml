@@ -62,6 +62,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libfuse2 \
+            fuse3 \
             patchelf
 
       - uses: dtolnay/rust-toolchain@stable
@@ -125,6 +127,22 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> $GITHUB_ENV
           rm -f $RUNNER_TEMP/certificate.p12
 
+      - name: Configure macOS notarization (optional)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID_SECRET: ${{ secrets.MAC_NOTARIZE_APPLE_ID }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.MAC_NOTARIZE_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.MAC_NOTARIZE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_ID_SECRET:-}" ] || [ -z "${APPLE_PASSWORD_SECRET:-}" ] || [ -z "${APPLE_TEAM_ID_SECRET:-}" ]; then
+            echo "Notarization secrets missing; skipping notarization."
+            exit 0
+          fi
+          echo "APPLE_ID=$APPLE_ID_SECRET" >> $GITHUB_ENV
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD_SECRET" >> $GITHUB_ENV
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET" >> $GITHUB_ENV
+
       - name: Build and bundle Tauri desktop app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -132,9 +150,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.MAC_NOTARIZE_APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.MAC_NOTARIZE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.MAC_NOTARIZE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ArmaraOS ${{ github.ref_name }}"
@@ -188,6 +203,19 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Detect prerelease tag (semver pre-release segment)
+        id: tagkind
+        run: |
+          set -euo pipefail
+          T="${GITHUB_REF_NAME#v}"
+          if [[ "$T" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${GITHUB_REF_NAME} is a prerelease (beta channel only; stable latest.json unchanged on the website)."
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${GITHUB_REF_NAME} is stable (latest.json + beta.json on the website)."
+          fi
+
       - name: Download latest.json from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -219,19 +247,26 @@ jobs:
             --dir /tmp/armaraos-release \
             "${args[@]}"
 
-      - name: Rewrite latest.json and stage updater files
+      - name: Rewrite updater JSON and stage binaries
+        env:
+          PRERELEASE: ${{ steps.tagkind.outputs.prerelease }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/updater-web
           BASE="https://ainativelang.com/downloads/armaraos"
-          jq --arg base "$BASE" '
-            def fname: split("/") | last | split("?") | .[0];
+          jq_rewrite='def fname: split("/") | last | split("?") | .[0];
             walk(
               if type == "object" and has("url") then
                 .url = ($base + "/" + (.url | fname))
               else . end
-            )
-          ' /tmp/armaraos-release/latest.json > /tmp/updater-web/latest.json
+            )'
+          if [ "${PRERELEASE}" = "true" ]; then
+            jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/beta.json
+            echo "Staged beta.json only (prerelease)."
+          else
+            jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/latest.json
+            cp -v /tmp/updater-web/latest.json /tmp/updater-web/beta.json
+          fi
           mapfile -t FILES < <(jq -r '[.. | objects | select(has("url")) | .url] | unique[] | split("/") | last | split("?") | .[0]' /tmp/armaraos-release/latest.json)
           for f in "${FILES[@]}"; do
             if [[ -f "/tmp/armaraos-release/$f" ]]; then
@@ -249,12 +284,27 @@ jobs:
           path: web
 
       - name: Copy into public/downloads/armaraos (keep README.md)
+        env:
+          PRERELEASE: ${{ steps.tagkind.outputs.prerelease }}
         run: |
           set -euo pipefail
           DEST="web/public/downloads/armaraos"
           mkdir -p "$DEST"
-          find "$DEST" -mindepth 1 -maxdepth 1 ! -name 'README.md' -exec rm -rf {} +
-          cp -v /tmp/updater-web/* "$DEST/"
+          if [ "${PRERELEASE}" = "true" ]; then
+            echo "Prerelease: merge beta.json + new binaries into $DEST (do not delete stable latest.json)."
+            cp -v /tmp/updater-web/beta.json "$DEST/beta.json"
+            for src in /tmp/updater-web/*; do
+              [ -e "$src" ] || continue
+              base=$(basename "$src")
+              if [ "$base" = "latest.json" ]; then
+                continue
+              fi
+              cp -v "$src" "$DEST/$base"
+            done
+          else
+            find "$DEST" -mindepth 1 -maxdepth 1 ! -name 'README.md' -exec rm -rf {} +
+            cp -v /tmp/updater-web/* "$DEST/"
+          fi
 
       - name: Commit and push
         run: |

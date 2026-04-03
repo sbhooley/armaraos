@@ -160,6 +160,8 @@ const WEBCHAT_HTML: &str = concat!(
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/js/api.js"),
     "\n",
+    include_str!("../static/js/page-load-error.js"),
+    "\n",
     include_str!("../static/js/app.js"),
     "\n",
     include_str!("../static/js/pages/overview.js"),
