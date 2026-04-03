@@ -77,6 +77,9 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         sections.push(format!("## Current Date\nToday is {date}."));
     }
 
+    // Section 1.6 — AINL product awareness (ArmaraOS hosts AINL graphs / tooling; include for subagents too)
+    sections.push(AINL_AWARENESS_SECTION.to_string());
+
     // Section 2 — Tool Call Behavior (skip for subagents)
     if !ctx.is_subagent {
         sections.push(TOOL_CALL_BEHAVIOR.to_string());
@@ -219,6 +222,18 @@ fn build_identity_section(ctx: &PromptContext) -> String {
         ctx.base_system_prompt.clone()
     }
 }
+
+/// Canonical pointers for questions about AI Native Language (AINL) on ArmaraOS.
+const AINL_AWARENESS_SECTION: &str = "\
+## AI Native Language (AINL)
+This environment integrates **AI Native Language (AINL)** — the same project may appear as **AINL**, **AINativeLang**, or **AI Native Language**; treat those names as equivalent.
+
+- **Website (product & documentation):** https://ainativelang.com
+- **Source, issues, and releases:** https://github.com/sbhooley/ainativelang
+
+When users ask about AINL versions, adapters, syntax, or release notes, treat these URLs as authoritative. Prefer **web_fetch** or **web_search** against them (or GitHub Releases / `docs/CHANGELOG.md` in the repo) instead of inventing changelog details.
+
+If a tool or capability reports an **embedded runtime version** (e.g. from a bundled interpreter), that number may differ from the latest **PyPI** package (`pip install ainativelang`) or **git** tag — say so briefly and still point to the links above for official release notes.";
 
 /// Static tool-call behavior directives.
 const TOOL_CALL_BEHAVIOR: &str = "\
@@ -674,6 +689,9 @@ mod tests {
     fn test_full_prompt_has_all_sections() {
         let prompt = build_system_prompt(&basic_ctx());
         assert!(prompt.contains("You are Researcher"));
+        assert!(prompt.contains("## AI Native Language (AINL)"));
+        assert!(prompt.contains("https://ainativelang.com"));
+        assert!(prompt.contains("https://github.com/sbhooley/ainativelang"));
         assert!(prompt.contains("## Tool Call Behavior"));
         assert!(prompt.contains("## Your Tools"));
         assert!(prompt.contains("## Memory"));
@@ -703,6 +721,7 @@ mod tests {
         ctx.is_subagent = true;
         let prompt = build_system_prompt(&ctx);
 
+        assert!(prompt.contains("## AI Native Language (AINL)"));
         assert!(!prompt.contains("## Tool Call Behavior"));
         assert!(!prompt.contains("## User Profile"));
         assert!(!prompt.contains("## Channel"));
