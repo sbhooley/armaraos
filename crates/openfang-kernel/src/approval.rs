@@ -1,10 +1,14 @@
 //! Execution approval manager — gates dangerous operations behind human approval.
 
+use crate::event_bus::EventBus;
 use chrono::Utc;
 use dashmap::DashMap;
+use openfang_types::agent::AgentId;
 use openfang_types::approval::{
     ApprovalDecision, ApprovalPolicy, ApprovalRequest, ApprovalResponse, RiskLevel,
 };
+use openfang_types::event::{Event, EventPayload, EventTarget, SystemEvent};
+use openfang_types::truncate_str;
 use std::collections::VecDeque;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -50,7 +54,13 @@ impl ApprovalManager {
     }
 
     /// Submit an approval request. Returns a future that resolves when approved/denied/timed out.
-    pub async fn request_approval(&self, req: ApprovalRequest) -> ApprovalDecision {
+    ///
+    /// When `event_bus` is set, publishes [`SystemEvent::ApprovalPending`] after the request is queued.
+    pub async fn request_approval(
+        &self,
+        req: ApprovalRequest,
+        event_bus: Option<&EventBus>,
+    ) -> ApprovalDecision {
         // Check per-agent pending limit
         let agent_pending = self
             .pending
@@ -66,6 +76,13 @@ impl ApprovalManager {
         let id = req.id;
         let req_for_timeout = req.clone();
 
+        let tool_name = req.tool_name.clone();
+        let action_summary = truncate_str(&req.action_summary, 400).to_string();
+        let source = req
+            .agent_id
+            .parse::<AgentId>()
+            .unwrap_or_else(|_| AgentId::new());
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.pending.insert(
             id,
@@ -76,6 +93,20 @@ impl ApprovalManager {
         );
 
         info!(request_id = %id, "Approval request submitted, waiting for resolution");
+
+        if let Some(bus) = event_bus {
+            let ev = Event::new(
+                source,
+                EventTarget::Broadcast,
+                EventPayload::System(SystemEvent::ApprovalPending {
+                    request_id: id,
+                    agent_id: source,
+                    tool_name,
+                    action_summary,
+                }),
+            );
+            bus.publish(ev).await;
+        }
 
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(decision)) => {
@@ -161,7 +192,7 @@ impl ApprovalManager {
     pub fn classify_risk(tool_name: &str) -> RiskLevel {
         match tool_name {
             "shell_exec" => RiskLevel::Critical,
-            "file_write" | "file_delete" => RiskLevel::High,
+            "file_write" | "file_delete" | "spreadsheet_build" => RiskLevel::High,
             "web_fetch" | "browser_navigate" => RiskLevel::Medium,
             _ => RiskLevel::Low,
         }
@@ -340,7 +371,7 @@ mod tests {
     async fn test_request_approval_timeout() {
         let mgr = Arc::new(default_manager());
         let req = make_request("agent-1", "shell_exec", 10);
-        let decision = mgr.request_approval(req).await;
+        let decision = mgr.request_approval(req, None).await;
         assert_eq!(decision, ApprovalDecision::TimedOut);
         // After timeout, pending map should be cleaned up
         assert_eq!(mgr.pending_count(), 0);
@@ -375,7 +406,7 @@ mod tests {
             assert_eq!(resp.decided_by, Some("admin".to_string()));
         });
 
-        let decision = mgr.request_approval(req).await;
+        let decision = mgr.request_approval(req, None).await;
         assert_eq!(decision, ApprovalDecision::Approved);
         let recent = mgr.list_recent(10);
         assert_eq!(recent.len(), 1);
@@ -400,7 +431,7 @@ mod tests {
             assert!(result.is_ok());
         });
 
-        let decision = mgr.request_approval(req).await;
+        let decision = mgr.request_approval(req, None).await;
         assert_eq!(decision, ApprovalDecision::Denied);
         let recent = mgr.list_recent(10);
         assert_eq!(recent.len(), 1);
@@ -422,7 +453,7 @@ mod tests {
             ids.push(req.id);
             let mgr_clone = Arc::clone(&mgr);
             tokio::spawn(async move {
-                mgr_clone.request_approval(req).await;
+                mgr_clone.request_approval(req, None).await;
             });
         }
 
@@ -432,7 +463,7 @@ mod tests {
 
         // 6th request for the same agent should be immediately denied
         let req6 = make_request("agent-1", "shell_exec", 300);
-        let decision = mgr.request_approval(req6).await;
+        let decision = mgr.request_approval(req6, None).await;
         assert_eq!(decision, ApprovalDecision::Denied);
 
         // A different agent should still be able to submit
@@ -440,7 +471,7 @@ mod tests {
         let other_id = req_other.id;
         let mgr2 = Arc::clone(&mgr);
         tokio::spawn(async move {
-            mgr2.request_approval(req_other).await;
+            mgr2.request_approval(req_other, None).await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(mgr.pending_count(), MAX_PENDING_PER_AGENT + 1);

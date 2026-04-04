@@ -2,8 +2,47 @@
 //!
 //! Confines agent file operations to their workspace directory.
 //! Prevents path traversal, symlink escapes, and access outside the sandbox.
+//!
+//! Read-only tools may also resolve paths under the host **AINL library** tree
+//! (e.g. `~/.armaraos/ainl-library`) via the virtual prefix `ainl-library/...` or an
+//! absolute path inside that directory — see [`resolve_sandbox_path_read`].
 
 use std::path::{Path, PathBuf};
+
+/// Canonicalize `candidate` relative to `root` and ensure the result stays under `root`
+/// (after resolving symlinks). Used for workspace and AINL library roots.
+fn finalize_within_root(candidate: PathBuf, root: &Path) -> Result<PathBuf, String> {
+    let canon_root = root
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve sandbox root: {e}"))?;
+
+    let canon_candidate = if candidate.exists() {
+        candidate
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve path: {e}"))?
+    } else {
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
+        let filename = candidate
+            .file_name()
+            .ok_or_else(|| "Invalid path: no filename".to_string())?;
+        let canon_parent = parent
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
+        canon_parent.join(filename)
+    };
+
+    if !canon_candidate.starts_with(&canon_root) {
+        return Err(format!(
+            "Access denied: path '{}' escapes allowed root '{}'",
+            candidate.display(),
+            root.display()
+        ));
+    }
+
+    Ok(canon_candidate)
+}
 
 /// Resolve a user-supplied path within a workspace sandbox.
 ///
@@ -29,43 +68,72 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
         workspace_root.join(path)
     };
 
-    // Canonicalize the workspace root
-    let canon_root = workspace_root
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve workspace root: {e}"))?;
+    finalize_within_root(candidate, workspace_root).map_err(|e| {
+        if e.contains("escapes allowed root") {
+            format!(
+                "Access denied: path '{}' resolves outside workspace. \
+                 To read synced AINL programs, use paths starting with `ainl-library/` \
+                 (e.g. `ainl-library/examples/...`) or an absolute path under that directory.",
+                user_path
+            )
+        } else {
+            e
+        }
+    })
+}
 
-    // Canonicalize the candidate (or its parent for new files)
-    let canon_candidate = if candidate.exists() {
-        candidate
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?
-    } else {
-        // For new files: canonicalize the parent and append the filename
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
-        let filename = candidate
-            .file_name()
-            .ok_or_else(|| "Invalid path: no filename".to_string())?;
-        let canon_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
-        canon_parent.join(filename)
-    };
+/// Resolve a path for **read** operations: workspace sandbox **or** the host AINL library tree.
+///
+/// - **`ainl-library/` prefix:** virtual path into `ainl_library_root` (e.g. `~/.armaraos/ainl-library`).
+///   Example: `ainl-library/examples/wishlist/01_cache_and_memory.ainl`
+/// - **Absolute path:** if it resolves under `ainl_library_root`, allowed for reads.
+/// - Otherwise same as [`resolve_sandbox_path`] on `workspace_root`.
+pub fn resolve_sandbox_path_read(
+    user_path: &str,
+    workspace_root: &Path,
+    ainl_library_root: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let trimmed = user_path.trim();
 
-    // Verify the canonical path is inside the workspace
-    if !canon_candidate.starts_with(&canon_root) {
-        return Err(format!(
-            "Access denied: path '{}' resolves outside workspace. \
-             If you have an MCP filesystem server configured, use the \
-             mcp_filesystem_* tools (e.g. mcp_filesystem_read_file, \
-             mcp_filesystem_list_directory) to access files outside \
-             the workspace.",
-            user_path
-        ));
+    if let Some(lib_root) = ainl_library_root {
+        const PREFIX: &str = "ainl-library/";
+        if trimmed == "ainl-library" || trimmed.starts_with(PREFIX) {
+            let rest = trimmed
+                .strip_prefix("ainl-library")
+                .unwrap_or("")
+                .trim_start_matches('/');
+            let rest_path = Path::new(rest);
+            for component in rest_path.components() {
+                if matches!(component, std::path::Component::ParentDir) {
+                    return Err(
+                        "Path traversal denied: '..' not allowed in ainl-library paths".to_string(),
+                    );
+                }
+            }
+            let candidate = lib_root.join(rest_path);
+            return finalize_within_root(candidate, lib_root).map_err(|e| {
+                if e.contains("Failed to resolve sandbox root") {
+                    format!(
+                        "AINL library directory not available: {}. \
+                         Sync or bootstrap the library (see ArmaraOS AINL docs).",
+                        lib_root.display()
+                    )
+                } else {
+                    e
+                }
+            });
+        }
+
+        // Absolute path: allow if under the AINL library root
+        let p = Path::new(trimmed);
+        if p.is_absolute() && lib_root.exists() {
+            if let Ok(res) = finalize_within_root(p.to_path_buf(), lib_root) {
+                return Ok(res);
+            }
+        }
     }
 
-    Ok(canon_candidate)
+    resolve_sandbox_path(trimmed, workspace_root)
 }
 
 #[cfg(test)]

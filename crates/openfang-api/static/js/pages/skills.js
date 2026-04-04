@@ -91,6 +91,21 @@ function skillsPage() {
       return n.toString();
     },
 
+    /** ClawHub vector search returns score (often 0–1). Show as % match when in range. */
+    formatClawhubMatchScore: function(score) {
+      if (score == null || score === '' || !(typeof score === 'number') || isNaN(score) || score <= 0) return '';
+      if (score <= 1) return Math.round(score * 100) + '% match';
+      return score.toFixed(2) + ' score';
+    },
+
+    /** ClawHub uses Unix ms for updated_at. */
+    formatClawhubUpdatedAt: function(ms) {
+      if (ms == null || ms === 0) return '';
+      var d = new Date(typeof ms === 'number' ? ms : parseInt(ms, 10));
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    },
+
     async loadSkills() {
       this.loading = true;
       this.loadError = '';

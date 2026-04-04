@@ -483,6 +483,18 @@ pub async fn build_router(
         // Tools endpoint
         .route("/api/tools", axum::routing::get(routes::list_tools))
         // Config endpoints
+        .route(
+            "/api/armaraos-home/list",
+            axum::routing::get(routes::armaraos_home_list),
+        )
+        .route(
+            "/api/armaraos-home/read",
+            axum::routing::get(routes::armaraos_home_read),
+        )
+        .route(
+            "/api/armaraos-home/write",
+            axum::routing::post(routes::armaraos_home_write),
+        )
         .route("/api/config", axum::routing::get(routes::get_config))
         .route(
             "/api/config/schema",
@@ -605,7 +617,7 @@ pub async fn build_router(
         )
         .route(
             "/api/cron/jobs/{id}",
-            axum::routing::delete(routes::delete_cron_job),
+            axum::routing::delete(routes::delete_cron_job).put(routes::update_cron_job),
         )
         .route(
             "/api/cron/jobs/{id}/enable",

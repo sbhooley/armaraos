@@ -508,7 +508,11 @@ pub fn detect_available_provider() -> Option<(&'static str, &'static str, &'stat
         ("gemini", "gemini-2.5-flash", "GEMINI_API_KEY"),
         ("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY"),
         ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-        ("openrouter", DEFAULT_OPENROUTER_MODEL_ID, "OPENROUTER_API_KEY"),
+        (
+            "openrouter",
+            DEFAULT_OPENROUTER_MODEL_ID,
+            "OPENROUTER_API_KEY",
+        ),
         ("mistral", "mistral-large-latest", "MISTRAL_API_KEY"),
         (
             "together",

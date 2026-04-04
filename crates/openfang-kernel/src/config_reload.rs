@@ -3,7 +3,7 @@
 //! **Hot-reload safe**: channels, skills, usage footer, web config, browser,
 //! approval policy, cron settings, webhook triggers, extensions.
 //!
-//! **No-op** (informational only): log_level, language, mode.
+//! **No-op** (informational only): log_level, language, mode, dashboard (Home folder editor).
 //!
 //! **Restart required**: api_listen, api_key, network, memory.
 
@@ -239,6 +239,11 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
 
     if field_changed(&old.provider_urls, &new.provider_urls) {
         plan.hot_actions.push(HotAction::ReloadProviderUrls);
+    }
+
+    if field_changed(&old.dashboard, &new.dashboard) {
+        plan.noop_changes
+            .push("dashboard config changed (Home folder editor; applies immediately)".to_string());
     }
 
     if field_changed(&old.provider_api_keys, &new.provider_api_keys) {

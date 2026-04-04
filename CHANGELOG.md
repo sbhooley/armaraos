@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-04
+
+### Added
+
+- **Dashboard → Home folder:** Read-only browse of the daemon ArmaraOS home directory (`~/.armaraos` / `ARMARAOS_HOME`) with `GET /api/armaraos-home/list` and `GET /api/armaraos-home/read` (path sandboxing, size caps).
+- **Optional safe edits:** `[dashboard] home_editable_globs` in `config.toml` (globset patterns) enables `POST /api/armaraos-home/write` for UTF-8 files; blocked paths include `data/`, `.env`, `config.toml`, `vault.enc`, and other secrets/core files. Optional `.bak` before overwrite.
+
 ### Changed
 
 - **Desktop updater:** After the marketing-site Tauri feed reports “up to date”, the app now also compares the running version to **GitHub’s latest release** (same as the existing fallback when the feed errors), so users see an update notification and release link when ainativelang.com is stale.
+- **Formatting:** Workspace rustfmt applied (`cargo fmt --all`) so CI `cargo fmt --check` stays green.
 
 ### Docs
 

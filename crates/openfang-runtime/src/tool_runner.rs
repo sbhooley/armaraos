@@ -102,6 +102,9 @@ pub fn current_agent_depth() -> u32 {
 /// `allowed_tools` enforces capability-based security: if provided, only
 /// tools in the list may execute. This prevents an LLM from hallucinating
 /// tool names outside the agent's capability grants.
+///
+/// `ainl_library_root`: host `~/.../ainl-library` path for virtual `ainl-library/...` reads
+/// (`file_read`, `file_list`, `document_extract`).
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_tool(
     tool_use_id: &str,
@@ -116,6 +119,7 @@ pub async fn execute_tool(
     browser_ctx: Option<&crate::browser::BrowserManager>,
     allowed_env_vars: Option<&[String]>,
     workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
     exec_policy: Option<&openfang_types::config::ExecPolicy>,
     tts_engine: Option<&crate::tts::TtsEngine>,
@@ -199,10 +203,17 @@ pub async fn execute_tool(
     debug!(tool_name, "Executing tool");
     let result = match tool_name {
         // Filesystem tools
-        "file_read" => tool_file_read(input, workspace_root).await,
+        "file_read" => tool_file_read(input, workspace_root, ainl_library_root).await,
         "file_write" => tool_file_write(input, workspace_root).await,
-        "file_list" => tool_file_list(input, workspace_root).await,
+        "file_list" => tool_file_list(input, workspace_root, ainl_library_root).await,
         "apply_patch" => tool_apply_patch(input, workspace_root).await,
+        "document_extract" => {
+            crate::document_tools::tool_document_extract(input, workspace_root, ainl_library_root)
+                .await
+        }
+        "spreadsheet_build" => {
+            crate::document_tools::tool_spreadsheet_build(input, workspace_root).await
+        }
 
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
@@ -557,11 +568,11 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Filesystem tools ---
         ToolDefinition {
             name: "file_read".to_string(),
-            description: "Read the contents of a file. Paths are relative to the agent workspace.".to_string(),
+            description: "Read the contents of a text file. Paths are relative to the agent workspace, or use the virtual prefix `ainl-library/...` for the synced AINL library tree. For .pdf / .xlsx / .docx use `document_extract`.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "The file path to read" }
+                    "path": { "type": "string", "description": "File path (e.g. `notes.txt` or `ainl-library/examples/foo.ainl`)" }
                 },
                 "required": ["path"]
             }),
@@ -580,11 +591,11 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "file_list".to_string(),
-            description: "List files in a directory. Paths are relative to the agent workspace.".to_string(),
+            description: "List files in a directory. Workspace-relative paths, or `ainl-library/...` for the synced AINL library.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "The directory path to list" }
+                    "path": { "type": "string", "description": "Directory path to list" }
                 },
                 "required": ["path"]
             }),
@@ -601,6 +612,36 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["patch"]
+            }),
+        },
+        ToolDefinition {
+            name: "document_extract".to_string(),
+            description: "Extract text or tabular data from a document. Supports .pdf (text extraction), .docx (body text), and spreadsheets .xlsx / .xls / .xlsb / .ods (tab-separated rows per sheet). Paths are workspace-relative or `ainl-library/...`. Spreadsheet cell values are usually cached; original formulas may not appear. Use optional max_sheets, max_rows_per_sheet, max_cols to limit output size.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to the file (e.g. `uploads/file.xlsx` or `ainl-library/...`)" },
+                    "max_sheets": { "type": "integer", "description": "Max worksheets to include (default 8, cap 20)" },
+                    "max_rows_per_sheet": { "type": "integer", "description": "Max rows per sheet (default 400, cap 2000)" },
+                    "max_cols": { "type": "integer", "description": "Max columns per row (default 40, cap 100)" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "spreadsheet_build".to_string(),
+            description: "Create a new .xlsx file in the workspace from JSON. Each sheet has a name and rows as arrays of cells. Numbers and booleans are written as typed cells; strings starting with '=' are written as formulas; null skips the cell. Use for delivering corrected spreadsheets or formula fixes.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Output path ending in .xlsx (workspace-relative)" },
+                    "sheets": {
+                        "type": "array",
+                        "description": "Sheet objects: { \"name\": string, \"rows\": [ [ cell, ... ], ... ] }",
+                        "items": { "type": "object" }
+                    }
+                },
+                "required": ["path", "sheets"]
             }),
         },
         // --- Web tools ---
@@ -1289,8 +1330,11 @@ fn validate_path(path: &str) -> Result<&str, String> {
     Ok(path)
 }
 
-/// Resolve a file path through the workspace sandbox (if available) or legacy validation.
-fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
+/// Resolve a file path through the workspace sandbox (if available) or legacy validation (writes).
+pub(crate) fn resolve_file_path(
+    raw_path: &str,
+    workspace_root: Option<&Path>,
+) -> Result<PathBuf, String> {
     if let Some(root) = workspace_root {
         crate::workspace_sandbox::resolve_sandbox_path(raw_path, root)
     } else {
@@ -1299,15 +1343,68 @@ fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<Pa
     }
 }
 
+/// Resolve a path for **reads**: workspace sandbox and/or virtual `ainl-library/...` tree.
+pub(crate) fn resolve_file_path_read(
+    raw_path: &str,
+    workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let _ = validate_path(raw_path)?;
+    if let Some(root) = workspace_root {
+        crate::workspace_sandbox::resolve_sandbox_path_read(raw_path, root, ainl_library_root)
+    } else {
+        Ok(PathBuf::from(raw_path))
+    }
+}
+
 async fn tool_file_read(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
-    tokio::fs::read_to_string(&resolved)
+    let resolved = resolve_file_path_read(raw_path, workspace_root, ainl_library_root)?;
+
+    if let Ok(meta) = tokio::fs::metadata(&resolved).await {
+        if meta.is_dir() {
+            return Err(
+                "Path is a directory, not a file. Use file_list on this path, then file_read a file inside it."
+                    .to_string(),
+            );
+        }
+    }
+
+    let bytes = tokio::fs::read(&resolved)
         .await
-        .map_err(|e| format!("Failed to read file: {e}"))
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+
+    const MAX_READ_BYTES: usize = 2_000_000;
+    if bytes.len() > MAX_READ_BYTES {
+        return Err(format!(
+            "File too large to read ({} bytes; max {} MB).",
+            bytes.len(),
+            MAX_READ_BYTES / (1024 * 1024)
+        ));
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(e) => {
+            let bytes = e.into_bytes();
+            let lower = resolved.to_string_lossy().to_lowercase();
+            if lower.ends_with(".pdf") || bytes.starts_with(b"%PDF") {
+                Ok(format!(
+                    "[PDF / binary document: {} bytes. file_read returns plain text only; use the document_extract tool for text, or export to text.]",
+                    bytes.len()
+                ))
+            } else {
+                Ok(format!(
+                    "[Binary or non-UTF-8 file: {} bytes. For .xlsx/.docx/.pdf use document_extract.]",
+                    bytes.len()
+                ))
+            }
+        }
+    }
 }
 
 async fn tool_file_write(
@@ -1337,9 +1434,10 @@ async fn tool_file_write(
 async fn tool_file_list(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
+    let resolved = resolve_file_path_read(raw_path, workspace_root, ainl_library_root)?;
     let mut entries = tokio::fs::read_dir(&resolved)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;
@@ -3305,6 +3403,8 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         // Original 12
         assert!(names.contains(&"file_read"));
+        assert!(names.contains(&"document_extract"));
+        assert!(names.contains(&"spreadsheet_build"));
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
@@ -3360,6 +3460,63 @@ mod tests {
         assert!(names.contains(&"canvas_present"));
     }
 
+    /// Every builtin definition must map to a real `execute_tool` arm (not MCP/skill fallback).
+    #[tokio::test]
+    async fn test_builtin_tools_are_dispatched_not_unknown() {
+        let empty = serde_json::json!({});
+        // Network tools would call out with `{}` — skip; they are still covered by `builtin_tool_definitions` + match arms.
+        let skip_minimal_probe: &[&str] = &["web_search", "web_fetch"];
+        for def in builtin_tool_definitions() {
+            if skip_minimal_probe.contains(&def.name.as_str()) {
+                continue;
+            }
+            let res = execute_tool(
+                "probe",
+                def.name.as_str(),
+                &empty,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None, // media_engine
+                None, // exec_policy
+                None, // tts_engine
+                None, // docker_config
+                None, // process_manager
+            )
+            .await;
+            assert!(
+                !res.content.contains("Unknown tool"),
+                "builtin `{}` fell through to unknown tool: {}",
+                def.name,
+                res.content
+            );
+        }
+    }
+
+    #[test]
+    fn test_builtin_tool_names_unique() {
+        let defs = builtin_tool_definitions();
+        let mut names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        names.sort_unstable();
+        let deduped_len = names
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert_eq!(
+            deduped_len,
+            defs.len(),
+            "duplicate tool names in builtin_tool_definitions"
+        );
+    }
+
     #[test]
     fn test_collaboration_tool_schemas() {
         let tools = builtin_tool_definitions();
@@ -3408,6 +3565,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3428,6 +3586,7 @@ mod tests {
             "test-id",
             "file_read",
             &serde_json::json!({"path": "../../etc/passwd"}),
+            None,
             None,
             None,
             None,
@@ -3463,6 +3622,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3480,6 +3640,7 @@ mod tests {
             "test-id",
             "file_list",
             &serde_json::json!({"path": "/foo/../../etc"}),
+            None,
             None,
             None,
             None,
@@ -3515,6 +3676,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3541,6 +3703,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3558,6 +3721,7 @@ mod tests {
             "test-id",
             "agent_list",
             &serde_json::json!({}),
+            None,
             None,
             None,
             None,
@@ -3594,6 +3758,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3618,6 +3783,7 @@ mod tests {
             &serde_json::json!({"path": bad_path.to_str().unwrap()}),
             None,
             Some(&allowed),
+            None,
             None,
             None,
             None,
@@ -3670,6 +3836,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3698,6 +3865,7 @@ mod tests {
             &serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
             None,
             Some(&allowed),
+            None,
             None,
             None,
             None,
@@ -3874,6 +4042,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             None, // media_engine
             None, // exec_policy
             None, // tts_engine
@@ -3910,6 +4079,7 @@ mod tests {
             "test-id",
             "schedule_list",
             &serde_json::json!({}),
+            None,
             None,
             None,
             None,

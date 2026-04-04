@@ -34,6 +34,10 @@ rmcp = { workspace = true }
 http = "1"
 tokio-tungstenite = "0.24"
 shlex = "1"
+calamine = "0.34.0"
+pdf-extract = "0.10.0"
+rust_xlsxwriter = "0.94.0"
+zip = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

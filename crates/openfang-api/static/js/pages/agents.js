@@ -331,6 +331,7 @@ function agentsPage() {
     async showDetail(agent) {
       this.detailAgent = agent;
       this.detailAgent._fallbacks = [];
+      this.detailAgent.scheduled_ainl_host_adapter = null;
       this.detailTab = 'info';
       this.agentFiles = [];
       this.editingFile = null;
@@ -350,6 +351,7 @@ function agentsPage() {
       try {
         var full = await OpenFangAPI.get('/api/agents/' + agent.id);
         this.detailAgent._fallbacks = full.fallback_models || [];
+        this.detailAgent.scheduled_ainl_host_adapter = full.scheduled_ainl_host_adapter || null;
       } catch(e) { /* ignore */ }
     },
 

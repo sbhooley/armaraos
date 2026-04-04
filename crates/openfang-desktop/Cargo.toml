@@ -36,6 +36,7 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 semver = "1"
 chrono = { workspace = true }
 url = { workspace = true }
+notify-rust = "4.12"
 
 [features]
 # Tauri uses custom-protocol in production builds

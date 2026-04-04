@@ -267,6 +267,7 @@ function networkPage() {
         var k = ev.kind || '';
         if (f === 'all') return true;
         if (f === 'messages') return k === 'agent_message';
+        if (f === 'activity') return k === 'agent_activity';
         if (f === 'tasks') {
           return k === 'task_posted' || k === 'task_claimed' || k === 'task_completed';
         }
@@ -280,6 +281,7 @@ function networkPage() {
     eventBadgeClass(kind) {
       switch (kind) {
         case 'agent_message': return 'badge badge-info';
+        case 'agent_activity': return 'badge badge-warn';
         case 'agent_spawned': return 'badge badge-success';
         case 'agent_terminated': return 'badge badge-danger';
         case 'task_posted': return 'badge badge-warning';
@@ -292,6 +294,7 @@ function networkPage() {
     eventLabel(kind) {
       switch (kind) {
         case 'agent_message': return 'Message';
+        case 'agent_activity': return 'Activity';
         case 'agent_spawned': return 'Spawned';
         case 'agent_terminated': return 'Terminated';
         case 'task_posted': return 'Task';

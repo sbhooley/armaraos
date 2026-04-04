@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.6.2-green?style=flat-square" alt="v0.6.2" />
+  <img src="https://img.shields.io/badge/version-0.6.3-green?style=flat-square" alt="v0.6.3" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -76,8 +76,9 @@ The desktop app syncs upstream **`demo/`**, **`examples/`**, and **`intelligence
 | **HTTP API** | `GET /api/ainl/library` — scan `.ainl` / `.lang` files; `GET /api/ainl/library/curated` — embedded curated catalog; `POST /api/ainl/library/register-curated` — idempotent registration (rate-limited). |
 | **Dashboard** | **Scheduler** page lists job **type** (Agent / AINL / Workflow / Event) and can create agent-turn, AINL, or workflow cron jobs. |
 | **Curated templates** | On boot, missing catalog entries are registered idempotently. A **safe** weekly health job (`core` only) is **enabled** by default; opt-in jobs and upstream examples are **disabled** until you enable them. |
+| **Secrets & scheduled graphs** | Scheduled `ainl run` uses the **same** credential resolver as the daemon (**vault → `~/.armaraos/.env` → env**); optional per-agent **`metadata.ainl_host_adapter_allowlist`**. Details: [`docs/scheduled-ainl.md`](docs/scheduled-ainl.md). |
 
-See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/ootb-ainl.md`](docs/ootb-ainl.md), manual smoke [`docs/ootb-ainl-smoke.md`](docs/ootb-ainl-smoke.md).
+See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/ootb-ainl.md`](docs/ootb-ainl.md), manual smoke [`docs/ootb-ainl-smoke.md`](docs/ootb-ainl-smoke.md), [`docs/scheduled-ainl.md`](docs/scheduled-ainl.md).
 
 ### Dashboard: kernel SSE (live events)
 

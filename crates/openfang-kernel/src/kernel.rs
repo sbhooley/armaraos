@@ -38,7 +38,103 @@ use openfang_types::tool::ToolDefinition;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
+
+/// Matches `ainl` CLI default registry (`cli/main.py` `_adapter_registry_from_args`) for
+/// `AINL_HOST_ADAPTER_ALLOWLIST` when intersecting IR policy with a host grant.
+const AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST: &str = "core,ext,http,bridge,sqlite,postgres,mysql,redis,dynamodb,airtable,supabase,fs,tools,db,api,cache,queue,txn,auth,wasm,memory,vector_memory,embedding_memory,code_context,tool_registry,langchain_tool,llm,llm_query,fanout,web,tiktok";
+
+/// Resolves `AINL_HOST_ADAPTER_ALLOWLIST` for an agent entry.
+///
+/// Returns `Some((true, csv))` when set from manifest metadata, or `Some((false, csv))`
+/// when derived from online capabilities. `None` means the env var is not set for cron.
+fn resolve_ainl_host_adapter_allowlist_for_entry(entry: &AgentEntry) -> Option<(bool, String)> {
+    if let Some(serde_json::Value::String(s)) =
+        entry.manifest.metadata.get("ainl_host_adapter_allowlist")
+    {
+        let t = s.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("off") || t == "-" {
+            return None;
+        }
+        return Some((true, s.clone()));
+    }
+    let caps = &entry.manifest.capabilities;
+    let online = !caps.network.is_empty()
+        || !caps.tools.is_empty()
+        || !caps.shell.is_empty()
+        || caps.agent_spawn
+        || !caps.ofp_connect.is_empty();
+    if online {
+        Some((false, AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST.to_string()))
+    } else {
+        None
+    }
+}
+
+/// Env var names passed through to scheduled `ainl run` when the credential resolver has a value.
+/// See [`AINL_CRON_RESOLVE_ENV_KEYS_EXTENSION`] for niche keys; enable `trace` on target
+/// `openfang_kernel::ainl_cron_env` to log which extension keys actually resolve in your install.
+const AINL_CRON_RESOLVE_ENV_KEYS: &[&str] = &[
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "COHERE_API_KEY",
+    "MISTRAL_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "XAI_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "AINL_WEB_MODEL",
+    "OPENCLAW_BIN",
+    "OPENCLAW_TARGET",
+    "OPENCLAW_NOTIFY_CHANNEL",
+    "OPENCLAW_WORKSPACE",
+    "ARMARAOS_SKILLS_WORKSPACE",
+    "OPENCLAW_CONFIG",
+    "OPENCLAW_BOOTSTRAP_PREFER_SESSION_CONTEXT",
+    "AINL_FS_ROOT",
+    "AINL_MEMORY_DB",
+    "OPENFANG_MEMORY_DB",
+    "ARMARAOS_MEMORY_DB",
+    "ARMARAOS_MEMORY_DIR",
+    "ARMARAOS_DAILY_MEMORY_DIR",
+    "ARMARAOS_WORKSPACE",
+    "MONITOR_CACHE_JSON",
+    "AINL_CACHE_JSON",
+    "AINL_SOLANA_RPC_URL",
+    "AINL_PYTH_HERMES_URL",
+    "AINL_SOLANA_KEYPAIR_JSON",
+    "AINL_POSTGRES_URL",
+    "AINL_POSTGRES_PASSWORD",
+    "AINL_MYSQL_URL",
+    "AINL_MYSQL_PASSWORD",
+    "AINL_REDIS_URL",
+    "AINL_REDIS_PASSWORD",
+    "AINL_DYNAMODB_URL",
+    "AINL_AIRTABLE_API_KEY",
+    "AINL_AIRTABLE_BASE_ID",
+    "AINL_SUPABASE_URL",
+    "AINL_SUPABASE_ANON_KEY",
+    "AINL_SUPABASE_SERVICE_ROLE_KEY",
+    "AINL_SUPABASE_DB_URL",
+    "AINL_SESSION_KEY",
+    "AINL_VECTOR_MEMORY_PATH",
+    "AINL_CODE_CONTEXT_STORE",
+    "ARMARAOS_TOKEN_AUDIT",
+    "OPENFANG_TOKEN_AUDIT",
+    "BRAVE_API_KEY",
+    "SERPER_API_KEY",
+    "TAVILY_API_KEY",
+];
+
+/// Rarely-set keys (OpenClaw social/CRM demos). Still forwarded when defined in vault or `~/.armaraos/.env`.
+const AINL_CRON_RESOLVE_ENV_KEYS_EXTENSION: &[&str] = &[
+    "SOCIAL_MONITOR_QUERY",
+    "LEADS_CSV",
+    "CRM_API_BASE",
+    "CRM_DB_PATH",
+];
 
 /// The main OpenFang kernel — coordinates all subsystems.
 /// Stub LLM driver used when no providers are configured.
@@ -331,6 +427,8 @@ fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - Search memory (memory_recall) before asking the user for context they may have given before.\n\n\
          ## Tool Usage Protocols\n\
          - file_read BEFORE file_write \u{2014} always understand what exists.\n\
+         - Chat uploads (images, PDF, code, Office, etc.) are validated server-side; images also go to the vision model when supported. Non-audio files are copied into `uploads/` — the user message lists paths. Use **document_extract** for `.pdf`, `.docx`, `.xlsx`/`.xls`/`.ods` (tables and text); **file_read** is for plain text. To produce a corrected workbook, use **spreadsheet_build** (writes `.xlsx`).\n\
+         - AINL library (ArmaraOS): use paths like `ainl-library/README_ARMARAOS.md` or `ainl-library/examples/...`. Call file_list on a folder before guessing filenames; file_read is for files only, not directories.\n\
          - web_search for current info, web_fetch for specific URLs.\n\
          - browser_* for interactive sites that need clicks/forms.\n\
          - shell_exec: explain destructive commands before running.\n\n\
@@ -554,6 +652,9 @@ impl OpenFangKernel {
         // Ensure data directory exists
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| KernelError::BootFailed(format!("Failed to create data dir: {e}")))?;
+
+        // OpenClaw workspace: roll `.learnings/` into daily memory (best-effort).
+        crate::openclaw_workspace::run_startup_export_if_configured(&config);
 
         // Initialize memory substrate
         let db_path = config
@@ -1294,6 +1395,23 @@ impl OpenFangKernel {
                 tracing::warn!("Embedded AINL programs materialization failed: {e}");
             }
         }
+        if let Err(e) = crate::embedded_ainl_programs::ensure_ainl_library_pointer_files(
+            &kernel.config.home_dir,
+        ) {
+            tracing::warn!("AINL library pointer files (README.md / .embedded-revision): {e}");
+        }
+
+        match crate::ainl_intelligence_overlays::materialize_intelligence_overlays(
+            &kernel.config.home_dir,
+        ) {
+            Ok(n) if n > 0 => {
+                tracing::info!(written = n, "AINL intelligence overlays refreshed on disk");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("AINL intelligence overlays materialization failed: {e}");
+            }
+        }
 
         match crate::ainl_library::register_curated_ainl_cron_jobs(&kernel) {
             Ok(n) => {
@@ -2015,7 +2133,10 @@ impl OpenFangKernel {
             // closure — it already contains bundled + global + workspace skills.
 
             // Create a phase callback that emits PhaseChange events to WS/SSE clients
+            // and publishes AgentActivity on the kernel event bus (SSE / Comms / overview).
             let phase_tx = tx.clone();
+            let kernel_phase = kernel_clone.clone();
+            let agent_id_phase = agent_id;
             let phase_cb: openfang_runtime::agent_loop::PhaseCallback =
                 std::sync::Arc::new(move |phase| {
                     use openfang_runtime::agent_loop::LoopPhase;
@@ -2029,12 +2150,31 @@ impl OpenFangKernel {
                         LoopPhase::Error => ("error".to_string(), None),
                     };
                     let event = StreamEvent::PhaseChange {
-                        phase: phase_str,
-                        detail,
+                        phase: phase_str.clone(),
+                        detail: detail.clone(),
                     };
                     let _ = phase_tx.try_send(event);
+                    if phase_str == "done" || phase_str == "error" {
+                        return;
+                    }
+                    let k = kernel_phase.clone();
+                    let ps = phase_str;
+                    let det = detail;
+                    let aid = agent_id_phase;
+                    tokio::spawn(async move {
+                        let ev = Event::new(
+                            aid,
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::AgentActivity {
+                                phase: ps,
+                                detail: det,
+                            }),
+                        );
+                        k.event_bus.publish(ev).await;
+                    });
                 });
 
+            let ainl_library_root = kernel_clone.config.home_dir.join("ainl-library");
             let result = run_agent_loop_streaming(
                 &manifest,
                 &message_owned,
@@ -2050,6 +2190,7 @@ impl OpenFangKernel {
                 Some(&kernel_clone.browser_ctx),
                 kernel_clone.embedding_driver.as_deref(),
                 manifest.workspace.as_deref(),
+                Some(ainl_library_root.as_path()),
                 Some(&phase_cb),
                 Some(&kernel_clone.media_engine),
                 if kernel_clone.config.tts.enabled {
@@ -2607,6 +2748,7 @@ impl OpenFangKernel {
             message.to_string()
         };
 
+        let ainl_library_root = self.config.home_dir.join("ainl-library");
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -2621,6 +2763,7 @@ impl OpenFangKernel {
             Some(&self.browser_ctx),
             self.embedding_driver.as_deref(),
             manifest.workspace.as_deref(),
+            Some(ainl_library_root.as_path()),
             None, // on_phase callback
             Some(&self.media_engine),
             if self.config.tts.enabled {
@@ -4410,16 +4553,8 @@ impl OpenFangKernel {
                             .registry
                             .set_state(status.agent_id, AgentState::Running);
 
-                        // Publish recovery event
-                        let event = Event::new(
-                            status.agent_id,
-                            EventTarget::System,
-                            EventPayload::System(SystemEvent::HealthCheckFailed {
-                                agent_id: status.agent_id,
-                                unresponsive_secs: 0, // 0 signals recovery attempt
-                            }),
-                        );
-                        kernel.event_bus.publish(event).await;
+                        // Do not publish HealthCheckFailed here: it is not a user-facing failure
+                        // (desktop would show a bogus "unresponsive for 0s" alert every recovery).
                         continue;
                     }
 
@@ -4570,6 +4705,104 @@ impl OpenFangKernel {
             .unwrap_or_else(|e| e.into_inner())
             .resolve(key)
             .map(|z| z.to_string())
+    }
+
+    /// Merge resolved credentials into an `ainl` subprocess environment.
+    ///
+    /// The daemon does not load `~/.armaraos/.env` into [`std::env`], but the
+    /// [`CredentialResolver`] reads that file (and vault). Without this, scheduled
+    /// `ainl run` jobs would miss API keys the user already configured in Settings
+    /// or dotenv — while interactive LLM calls still work via [`resolve_credential`].
+    ///
+    /// Also sets [`AINL_HOST_ADAPTER_ALLOWLIST`] when the job's agent manifest indicates
+    /// online capabilities (or an explicit `ainl_host_adapter_allowlist` metadata value),
+    /// so `ainl run` intersects IR policy the same way as hosted runners.
+    fn apply_resolved_env_to_ainl_command(
+        &self,
+        cmd: &mut tokio::process::Command,
+        agent_id: AgentId,
+    ) {
+        let mut resolved_keys: Vec<&'static str> = Vec::new();
+        let mut extension_resolved: Vec<&'static str> = Vec::new();
+        for key in AINL_CRON_RESOLVE_ENV_KEYS {
+            if let Some(v) = self.resolve_credential(key) {
+                cmd.env(key, v);
+                resolved_keys.push(key);
+            }
+        }
+        for key in AINL_CRON_RESOLVE_ENV_KEYS_EXTENSION {
+            if let Some(v) = self.resolve_credential(key) {
+                cmd.env(key, v);
+                resolved_keys.push(key);
+                extension_resolved.push(key);
+                trace!(
+                    target: "openfang_kernel::ainl_cron_env",
+                    agent = %agent_id,
+                    %key,
+                    "scheduled ainl: extension-tier env key resolved (values not logged)"
+                );
+            }
+        }
+        debug!(
+            agent = %agent_id,
+            injected_env_key_count = resolved_keys.len(),
+            keys = ?resolved_keys,
+            extension_resolved_keys = ?extension_resolved,
+            "ainl cron: injected credential env keys for subprocess (values not logged)"
+        );
+        // Always clear any inherited value first. The daemon process may have been started with a
+        // narrow `AINL_HOST_ADAPTER_ALLOWLIST` (or a stale shell export); without removal, offline
+        // agents (kernel omits the var) would still see the parent's list and `ainl` would
+        // intersect IR adapters against that — e.g. blocking `web` for intelligence graphs.
+        cmd.env_remove("AINL_HOST_ADAPTER_ALLOWLIST");
+        if let Some(list) = self.ainl_host_adapter_allowlist_for_agent(agent_id) {
+            cmd.env("AINL_HOST_ADAPTER_ALLOWLIST", &list);
+            debug!(agent = %agent_id, "ainl cron: set AINL_HOST_ADAPTER_ALLOWLIST for subprocess");
+        }
+    }
+
+    /// JSON for API/dashboard: how scheduled `ainl run` sets `AINL_HOST_ADAPTER_ALLOWLIST`.
+    pub fn scheduled_ainl_host_adapter_info(&self, agent_id: AgentId) -> serde_json::Value {
+        let Some(entry) = self.registry.get(agent_id) else {
+            return serde_json::Value::Null;
+        };
+        match resolve_ainl_host_adapter_allowlist_for_entry(&entry) {
+            None => serde_json::json!({
+                "source": "none",
+                "summary": "No host-adapter allowlist env for scheduled AINL (offline-style agent or metadata off). IR/graph limits still apply.",
+            }),
+            Some((true, list)) => {
+                let pr = openfang_types::truncate_str(&list, 93);
+                let preview = if pr.len() < list.len() {
+                    format!("{pr}…")
+                } else {
+                    pr.to_string()
+                };
+                serde_json::json!({
+                    "source": "metadata",
+                    "summary": format!("Custom list from manifest metadata: {preview}."),
+                    "allowlist": list,
+                })
+            }
+            Some((false, list)) => serde_json::json!({
+                "source": "default_online",
+                "summary": "Default full host-adapter allowlist (agent has network, tools, shell, spawn, or OFP).",
+                "adapter_count": list.split(',').filter(|s| !s.is_empty()).count(),
+            }),
+        }
+    }
+
+    /// Build `AINL_HOST_ADAPTER_ALLOWLIST` for the cron job's target agent.
+    ///
+    /// - Manifest metadata `ainl_host_adapter_allowlist` (string): use as-is (`off` / `-` skips).
+    /// - Otherwise, if the agent has network, tools, shell, spawn, or OFP connect capabilities,
+    ///   use the full default AINL registry string (matches unrestricted `ainl run`).
+    /// - Offline-only agents: omit (no host narrowing; same as unset env).
+    fn ainl_host_adapter_allowlist_for_agent(&self, agent_id: AgentId) -> Option<String> {
+        self.registry
+            .get(agent_id)
+            .and_then(|e| resolve_ainl_host_adapter_allowlist_for_entry(&e))
+            .map(|(_, s)| s)
     }
 
     /// Store a credential in the vault (best-effort — falls through silently if no vault).
@@ -5748,6 +5981,7 @@ impl OpenFangKernel {
                 cmd.stdout(Stdio::piped());
                 cmd.stderr(Stdio::piped());
                 cmd.kill_on_drop(true);
+                self.apply_resolved_env_to_ainl_command(&mut cmd, agent_id);
 
                 match tokio::time::timeout(timeout, cmd.output()).await {
                     Ok(Ok(output)) => {
@@ -5790,8 +6024,7 @@ impl OpenFangKernel {
                                     job_id: job_id.to_string(),
                                     job_name: job_name.clone(),
                                     agent_id,
-                                        error: openfang_types::truncate_str(&err_msg, 220)
-                                            .to_string(),
+                                    error: openfang_types::truncate_str(&err_msg, 220).to_string(),
                                 }),
                             );
                             self.publish_event(evt).await;
@@ -5800,7 +6033,15 @@ impl OpenFangKernel {
 
                         // Always append scheduler output into the agent session (inbox-style),
                         // without triggering an LLM turn.
-                        append_cron_output_to_agent_session(self, agent_id, job_name, combined.trim());
+                        append_cron_output_to_agent_session(
+                            self,
+                            agent_id,
+                            job_id,
+                            job_name,
+                            program_path.as_str(),
+                            *json_output,
+                            combined.trim(),
+                        );
 
                         match cron_deliver_response(self, agent_id, combined.trim(), &delivery)
                             .await
@@ -5821,8 +6062,11 @@ impl OpenFangKernel {
                                         job_id: job_id.to_string(),
                                         job_name: job_name.clone(),
                                         agent_id,
-                                        output_preview: openfang_types::truncate_str(combined.trim(), 220)
-                                            .to_string(),
+                                        output_preview: openfang_types::truncate_str(
+                                            combined.trim(),
+                                            220,
+                                        )
+                                        .to_string(),
                                     }),
                                 );
                                 self.publish_event(evt).await;
@@ -5910,7 +6154,10 @@ impl OpenFangKernel {
 fn append_cron_output_to_agent_session(
     kernel: &OpenFangKernel,
     agent_id: AgentId,
+    job_id: openfang_types::scheduler::CronJobId,
     job_name: &str,
+    program_path: &str,
+    json_output: bool,
     output: &str,
 ) {
     use openfang_types::message::{Message, MessageContent, Role};
@@ -5932,8 +6179,25 @@ fn append_cron_output_to_agent_session(
     };
 
     let ts = chrono::Utc::now().to_rfc3339();
+    let output_mode = if json_output { "json" } else { "markdown" };
+    let meta = serde_json::json!({
+        "v": 2,
+        "job_id": job_id.to_string(),
+        "job_name": job_name,
+        "program": program_path,
+        "ran_at": ts,
+        "output_mode": output_mode,
+    });
+    let meta_line = match serde_json::to_string(&meta) {
+        Ok(s) => s,
+        Err(_) => format!(
+            "{{\"v\":2,\"job_id\":\"{}\",\"job_name\":\"\",\"program\":\"\",\"ran_at\":\"{}\",\"output_mode\":\"{}\"}}",
+            job_id, ts, output_mode
+        ),
+    };
     let body = format!(
-        "[Scheduler] {job_name} @ {ts}\n\n{}",
+        "<<<ARMARAOS_SCHEDULER_V2>>>\n{}\n<<<SCHEDULER_OUTPUT>>>\n{}",
+        meta_line,
         openfang_types::truncate_str(output, 20_000)
     );
 
@@ -6280,6 +6544,37 @@ impl KernelHandle for OpenFangKernel {
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
         Ok(result.response)
+    }
+
+    async fn notify_inter_agent_message(
+        &self,
+        from_agent_id: &str,
+        to_agent_id: &str,
+        message_preview: &str,
+    ) -> Result<(), String> {
+        let from_id: AgentId = from_agent_id
+            .parse()
+            .map_err(|_| format!("Invalid from_agent_id: {from_agent_id}"))?;
+        let to_id: AgentId = match to_agent_id.parse() {
+            Ok(id) => id,
+            Err(_) => self
+                .registry
+                .find_by_name(to_agent_id)
+                .map(|e| e.id)
+                .ok_or_else(|| format!("Agent not found: {to_agent_id}"))?,
+        };
+        let preview = openfang_types::truncate_str(message_preview, 200);
+        let event = Event::new(
+            from_id,
+            EventTarget::Agent(to_id),
+            EventPayload::Message(AgentMessage {
+                content: preview.to_string(),
+                metadata: std::collections::HashMap::new(),
+                role: MessageRole::Agent,
+            }),
+        );
+        self.event_bus.publish(event).await;
+        Ok(())
     }
 
     fn list_agents(&self) -> Vec<kernel_handle::AgentInfo> {
@@ -6667,7 +6962,10 @@ impl KernelHandle for OpenFangKernel {
             timeout_secs: policy.timeout_secs,
         };
 
-        let decision = self.approval_manager.request_approval(req).await;
+        let decision = self
+            .approval_manager
+            .request_approval(req, Some(&self.event_bus))
+            .await;
         Ok(decision == ApprovalDecision::Approved)
     }
 

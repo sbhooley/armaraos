@@ -182,6 +182,36 @@ impl CronScheduler {
             .ok_or_else(|| OpenFangError::Internal(format!("Cron job {id} not found")))
     }
 
+    /// Replace an existing job in place (same [`CronJobId`]). Recomputes `next_run`,
+    /// resets consecutive error count, and preserves `one_shot` and the original
+    /// `created_at` / `last_run` from the stored job.
+    pub fn update_job(&self, id: CronJobId, mut job: CronJob) -> OpenFangResult<()> {
+        let old_meta = self
+            .get_meta(id)
+            .ok_or_else(|| OpenFangError::Internal(format!("Cron job {id} not found")))?;
+        job.id = id;
+        job.created_at = old_meta.job.created_at;
+        job.last_run = old_meta.job.last_run;
+        let one_shot = old_meta.one_shot;
+        let exclude = id;
+        let c = self
+            .jobs
+            .iter()
+            .filter(|r| r.value().job.agent_id == job.agent_id && *r.key() != exclude)
+            .count();
+        job.validate(c).map_err(OpenFangError::InvalidInput)?;
+        job.next_run = Some(compute_next_run(&job.schedule));
+        match self.jobs.get_mut(&id) {
+            Some(mut meta) => {
+                meta.job = job;
+                meta.one_shot = one_shot;
+                meta.consecutive_errors = 0;
+                Ok(())
+            }
+            None => Err(OpenFangError::Internal(format!("Cron job {id} not found"))),
+        }
+    }
+
     /// Enable or disable a job. Re-enabling resets errors and recomputes
     /// `next_run`.
     pub fn set_enabled(&self, id: CronJobId, enabled: bool) -> OpenFangResult<()> {
@@ -490,7 +520,8 @@ pub fn compute_next_run_after(
 mod tests {
     use super::*;
     use chrono::{Duration, Timelike};
-    use openfang_types::scheduler::{CronAction, CronDelivery};
+    use openfang_types::error::OpenFangError;
+    use openfang_types::scheduler::{CronAction, CronDelivery, CronJobId};
 
     /// Build a minimal valid `CronJob` with an `Every` schedule.
     fn make_job(agent_id: AgentId) -> CronJob {
@@ -1321,5 +1352,34 @@ mod tests {
             after > Utc::now(),
             "try_claim should advance next_run past now for overdue jobs"
         );
+    }
+
+    #[test]
+    fn update_job_changes_name_and_preserves_id() {
+        let (sched, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let job = make_job(agent);
+        let id = sched.add_job(job, false).unwrap();
+        let created = sched.get_job(id).unwrap().created_at;
+
+        let mut next = make_job(agent);
+        next.name = "renamed".into();
+        next.id = CronJobId::new(); // must be ignored
+        sched.update_job(id, next).unwrap();
+
+        let got = sched.get_job(id).unwrap();
+        assert_eq!(got.name, "renamed");
+        assert_eq!(got.id, id);
+        assert_eq!(got.created_at, created);
+    }
+
+    #[test]
+    fn update_job_unknown_id_errors() {
+        let (sched, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let j = make_job(agent);
+        let bad_id = CronJobId::new();
+        let err = sched.update_job(bad_id, j).unwrap_err();
+        assert!(matches!(err, OpenFangError::Internal(_)));
     }
 }

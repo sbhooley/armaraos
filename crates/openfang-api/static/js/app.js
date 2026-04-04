@@ -51,6 +51,49 @@ function ArmaraosDesktopTauriInvoke(cmd, args) {
   });
 }
 
+/**
+ * Fallback for WebViews (e.g. Tauri/WKWebView) where navigator.clipboard.writeText
+ * rejects or is unavailable despite a user gesture.
+ */
+function copyTextViaExecCommand(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    ta.setSelectionRange(0, text.length);
+  } catch (e) { /* IE */ }
+  var ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (e) {}
+  document.body.removeChild(ta);
+  return ok;
+}
+
+/** Resolves true on success. Tries Clipboard API, then execCommand. */
+function copyTextToClipboard(text) {
+  text = text == null ? '' : String(text);
+  return new Promise(function(resolve, reject) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(function() {
+        resolve(true);
+      }).catch(function() {
+        if (copyTextViaExecCommand(text)) resolve(true);
+        else reject(new Error('Clipboard write failed'));
+      });
+    } else {
+      if (copyTextViaExecCommand(text)) resolve(true);
+      else reject(new Error('Clipboard API unavailable'));
+    }
+  });
+}
+
 function escapeHtml(text) {
   var div = document.createElement('div');
   div.textContent = text || '';
@@ -105,10 +148,12 @@ function renderMarkdown(text) {
 function copyCode(btn) {
   var code = btn.nextElementSibling;
   if (code) {
-    navigator.clipboard.writeText(code.textContent).then(function() {
+    copyTextToClipboard(code.textContent || '').then(function() {
       btn.textContent = 'Copied!';
       btn.classList.add('copied');
       setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+    }).catch(function() {
+      if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Could not copy');
     });
   }
 }
@@ -155,6 +200,37 @@ function toolIcon(toolName) {
   return '<svg ' + s + '><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
 }
 
+/** EventTarget JSON: `{ type: 'Agent', value: '<uuid>' }` from kernel SSE. */
+function armaraosEventTargetAgentId(target) {
+  if (!target || typeof target !== 'object') return '';
+  if (target.type === 'Agent' && target.value != null) return String(target.value);
+  return '';
+}
+
+function armaraosAgentDisplayName(agentId) {
+  if (!agentId) return '';
+  try {
+    var agents = Alpine.store('app').agents || [];
+    for (var i = 0; i < agents.length; i++) {
+      if (agents[i].id === agentId) return agents[i].name || agentId;
+    }
+  } catch (e) { /* ignore */ }
+  var s = String(agentId);
+  return s.length > 14 ? s.slice(0, 8) + '…' : s;
+}
+
+function armaraosAgentActivityLineFromSystemPayload(p) {
+  if (!p || p.type !== 'System' || !p.data || p.data.event !== 'AgentActivity') return '';
+  var d = p.data;
+  var phase = d.phase || '';
+  var det = d.detail;
+  if (phase === 'thinking') return 'Thinking…';
+  if (phase === 'tool_use') return 'Using tool: ' + (det || 'tool');
+  if (phase === 'streaming') return 'Writing response…';
+  if (det) return phase ? (phase + ': ' + det) : String(det);
+  return phase || '';
+}
+
 // Alpine.js global store
 document.addEventListener('alpine:init', function() {
   // Restore saved API key on load
@@ -195,6 +271,24 @@ document.addEventListener('alpine:init', function() {
     showAuthPrompt: false,
     authMode: 'apikey',
     sessionUser: null,
+    /** Per-agent status line from kernel SSE (loop phase + inter-agent sends). */
+    agentActivityLines: {},
+
+    setAgentActivityLine(agentId, text) {
+      if (!agentId || !text) return;
+      var self = this;
+      var ts = Date.now();
+      if (!this.agentActivityLines) this.agentActivityLines = {};
+      this.agentActivityLines[agentId] = { text: text, ts: ts };
+      setTimeout(function() {
+        try {
+          var cur = self.agentActivityLines && self.agentActivityLines[agentId];
+          if (cur && cur.ts === ts) {
+            delete self.agentActivityLines[agentId];
+          }
+        } catch (e) { /* ignore */ }
+      }, 18000);
+    },
 
     toggleFocusMode() {
       this.focusMode = !this.focusMode;
@@ -417,13 +511,11 @@ document.addEventListener('alpine:init', function() {
   /** Subscribe to GET /api/events/stream (kernel bus). Started from app().init. */
   window.ArmaraosKernelSse = (function() {
     var _es = null;
-    function isTauriShell() {
-      var w = typeof window !== 'undefined' ? window : null;
-      return !!(w && w.__TAURI__ && w.__TAURI__.core);
-    }
     function maybeToast(ev) {
       if (typeof OpenFangToast === 'undefined' || !ev || !ev.payload) return;
-      if (isTauriShell()) return;
+      // Always show in-app toasts for kernel SSE events. Native OS notifications
+      // (desktop) are best-effort and often blocked by OS permissions / DND; relying
+      // on them alone left users with no feedback.
       var p = ev.payload;
       if (p.type === 'Lifecycle' && p.data && p.data.event === 'Crashed') {
         var err = (p.data.error || '').slice(0, 220);
@@ -524,7 +616,7 @@ function app() {
       });
 
       // Hash routing
-      var validPages = ['overview','agents','sessions','approvals','comms','network','workflows','scheduler','channels','skills','hands','ainl-library','analytics','logs','runtime','settings','wizard'];
+      var validPages = ['overview','agents','bookmarks','sessions','approvals','comms','network','workflows','scheduler','channels','skills','hands','ainl-library','home-files','analytics','logs','runtime','settings','wizard'];
       var pageRedirects = {
         'chat': 'agents',
         'templates': 'agents',
@@ -627,6 +719,29 @@ function app() {
 
       if (typeof window.ArmaraosKernelSse !== 'undefined' && window.ArmaraosKernelSse.start) {
         window.ArmaraosKernelSse.start();
+      }
+
+      if (!window.__armaraosKernelActivityBound) {
+        window.__armaraosKernelActivityBound = true;
+        window.addEventListener('armaraos-kernel-event', function(ev) {
+          try {
+            var j = ev.detail;
+            if (!j || !j.payload) return;
+            var p = j.payload;
+            var src = String(j.source || '');
+            var app = Alpine.store('app');
+            if (p.type === 'System' && p.data && p.data.event === 'AgentActivity') {
+              var line = armaraosAgentActivityLineFromSystemPayload(p);
+              if (line && src) app.setAgentActivityLine(src, line);
+            }
+            if (p.type === 'Message' && p.data && p.data.role === 'agent') {
+              var toId = armaraosEventTargetAgentId(j.target);
+              var preview = (p.data.content || '').slice(0, 120);
+              var toName = armaraosAgentDisplayName(toId);
+              if (src) app.setAgentActivityLine(src, '\u2192 ' + toName + ': ' + preview);
+            }
+          } catch (e) { /* ignore */ }
+        });
       }
 
       // Desktop: poll AINL status while Rust boots the venv + pip (startup ensure_ainl_installed).

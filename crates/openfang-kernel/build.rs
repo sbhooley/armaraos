@@ -7,6 +7,12 @@ use std::path::Path;
 
 fn main() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest
+            .join("ainl-intelligence-overlays/auto_tune_ainl_caps.lang")
+            .display()
+    );
     let src = manifest.join("../../programs");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
     let out = Path::new(&out_dir);

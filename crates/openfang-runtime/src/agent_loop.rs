@@ -54,6 +54,7 @@ const AGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 fn tool_timeout_for(tool_name: &str) -> Duration {
     match tool_name {
         "agent_send" | "agent_spawn" => Duration::from_secs(AGENT_TOOL_TIMEOUT_SECS),
+        "document_extract" | "spreadsheet_build" => Duration::from_secs(180),
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -184,6 +185,8 @@ pub async fn run_agent_loop(
     browser_ctx: Option<&crate::browser::BrowserManager>,
     embedding_driver: Option<&(dyn EmbeddingDriver + Send + Sync)>,
     workspace_root: Option<&Path>,
+    // Host AINL library root (~/.armaraos/ainl-library) for file_read / file_list virtual paths.
+    ainl_library_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
     tts_engine: Option<&crate::tts::TtsEngine>,
@@ -781,6 +784,7 @@ pub async fn run_agent_loop(
                                 Some(&hand_allowed_env)
                             },
                             workspace_root,
+                            ainl_library_root,
                             media_engine,
                             effective_exec_policy,
                             tts_engine,
@@ -1464,6 +1468,7 @@ pub async fn run_agent_loop_streaming(
     browser_ctx: Option<&crate::browser::BrowserManager>,
     embedding_driver: Option<&(dyn EmbeddingDriver + Send + Sync)>,
     workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
     tts_engine: Option<&crate::tts::TtsEngine>,
@@ -2046,6 +2051,7 @@ pub async fn run_agent_loop_streaming(
                                 Some(&hand_allowed_env)
                             },
                             workspace_root,
+                            ainl_library_root,
                             media_engine,
                             effective_exec_policy,
                             tts_engine,
@@ -3173,6 +3179,14 @@ mod tests {
     fn test_tool_timeout_for_agent_tools() {
         assert_eq!(tool_timeout_for("agent_send"), Duration::from_secs(600));
         assert_eq!(tool_timeout_for("agent_spawn"), Duration::from_secs(600));
+        assert_eq!(
+            tool_timeout_for("document_extract"),
+            Duration::from_secs(180)
+        );
+        assert_eq!(
+            tool_timeout_for("spreadsheet_build"),
+            Duration::from_secs(180)
+        );
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
         assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
     }
@@ -3326,6 +3340,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3379,6 +3394,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3434,6 +3450,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3487,6 +3504,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3533,6 +3551,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -3657,6 +3676,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None,
             None,
             None,
@@ -3704,6 +3724,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None,
             None,
             None,
@@ -3759,6 +3780,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -4735,6 +4757,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine
@@ -4805,14 +4828,15 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None, // ainl_library_root
+            None, // on_phase
+            None, // media_engine
+            None, // tts_engine
+            None, // docker_config
+            None, // hooks
+            None, // context_window_tokens
+            None, // process_manager
+            None, // user_content_blocks
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -4877,13 +4901,14 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None, // ainl_library_root
+            None, // on_phase
+            None, // media_engine
+            None, // tts_engine
+            None, // docker_config
+            None, // hooks
+            None, // context_window_tokens
+            None, // process_manager
             None, // user_content_blocks
         )
         .await
@@ -4940,6 +4965,7 @@ mod tests {
             None,
             None,
             None,
+            None, // ainl_library_root
             None, // on_phase
             None, // media_engine
             None, // tts_engine

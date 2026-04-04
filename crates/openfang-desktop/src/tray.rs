@@ -1,16 +1,20 @@
 //! System tray setup for the ArmaraOS desktop app.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use openfang_kernel::config::openfang_home;
+use openfang_kernel::openclaw_workspace;
+use openfang_kernel::OpenFangKernel;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_notification::NotificationExt;
 use tracing::{info, warn};
 
-use crate::notification_icon::apply_notification_icon;
+use crate::os_notify;
 
 /// Format seconds into a human-readable uptime string.
 fn format_uptime(secs: u64) -> String {
@@ -24,6 +28,20 @@ fn format_uptime(secs: u64) -> String {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         format!("{h}h {m}m")
+    }
+}
+
+fn tooltip_for_kernel(kernel: &OpenFangKernel) -> String {
+    let cfg = &kernel.config.openclaw_workspace;
+    if !cfg.enabled || !cfg.show_pending_in_tray {
+        return "ArmaraOS Agent OS".to_string();
+    }
+    let root = openclaw_workspace::resolve_openclaw_workspace_root(&kernel.config);
+    let total = openclaw_workspace::read_pipeline_pending_total(&root).unwrap_or(0);
+    if total > 0 {
+        format!("ArmaraOS — {total} learnings pending (skills workspace)")
+    } else {
+        "ArmaraOS Agent OS".to_string()
     }
 }
 
@@ -59,6 +77,48 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         false,
         None::<&str>,
     )?;
+
+    let sep_oc_pre = PredefinedMenuItem::separator(app)?;
+
+    let (oc_total, oc_enabled) = app
+        .try_state::<crate::KernelState>()
+        .map(|ks| {
+            let en = ks.kernel.config.openclaw_workspace.enabled;
+            if !en {
+                return (0u32, false);
+            }
+            let root = openclaw_workspace::resolve_openclaw_workspace_root(&ks.kernel.config);
+            let t = openclaw_workspace::read_pipeline_pending_total(&root).unwrap_or(0);
+            (t, true)
+        })
+        .unwrap_or((0, false));
+
+    let oc_info = MenuItem::with_id(
+        app,
+        "oc_info",
+        if oc_enabled {
+            format!("Skills workspace: {oc_total} pending")
+        } else {
+            "Skills workspace: off (see config)".to_string()
+        },
+        false,
+        None::<&str>,
+    )?;
+    let open_oc_learnings = MenuItem::with_id(
+        app,
+        "open_oc_learnings",
+        "Open .learnings folder (skills workspace)",
+        oc_enabled,
+        None::<&str>,
+    )?;
+    let run_oc_digest = MenuItem::with_id(
+        app,
+        "run_oc_digest",
+        "Run learnings digest now",
+        oc_enabled,
+        None::<&str>,
+    )?;
+
     let sep2 = PredefinedMenuItem::separator(app)?;
 
     // Settings items
@@ -97,6 +157,10 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &sep1,
             &agents_info,
             &status_info,
+            &sep_oc_pre,
+            &oc_info,
+            &open_oc_learnings,
+            &run_oc_digest,
             &sep2,
             &launch_at_login,
             &check_updates,
@@ -107,13 +171,18 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Load the tray icon from embedded PNG bytes
-    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+    let tray_image = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
         .expect("Failed to decode tray icon PNG");
 
-    let _tray = TrayIconBuilder::new()
-        .icon(tray_icon)
+    let initial_tip = app
+        .try_state::<crate::KernelState>()
+        .map(|ks| tooltip_for_kernel(&ks.kernel))
+        .unwrap_or_else(|| "ArmaraOS Agent OS".to_string());
+
+    let tray = TrayIconBuilder::new()
+        .icon(tray_image)
         .menu(&menu)
-        .tooltip("ArmaraOS Agent OS")
+        .tooltip(&initial_tip)
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show" => {
                 if let Some(w) = app.get_webview_window("main") {
@@ -126,6 +195,48 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(port) = app.try_state::<crate::PortState>() {
                     let url = format!("http://127.0.0.1:{}", port.0);
                     let _ = open::that(&url);
+                }
+            }
+            "open_oc_learnings" => {
+                if let Some(ks) = app.try_state::<crate::KernelState>() {
+                    let root =
+                        openclaw_workspace::resolve_openclaw_workspace_root(&ks.kernel.config);
+                    let p = root.join(".learnings");
+                    if let Err(e) = std::fs::create_dir_all(&p) {
+                        warn!("create .learnings: {e}");
+                    }
+                    if let Err(e) = open::that(&p) {
+                        warn!("open .learnings: {e}");
+                    }
+                }
+            }
+            "run_oc_digest" => {
+                if let Some(ks) = app.try_state::<crate::KernelState>() {
+                    if !ks.kernel.config.openclaw_workspace.enabled {
+                        return;
+                    }
+                    let root =
+                        openclaw_workspace::resolve_openclaw_workspace_root(&ks.kernel.config);
+                    let app_h = app.clone();
+                    std::thread::spawn(move || {
+                        match openclaw_workspace::export_learnings_digest(&root) {
+                            Ok(s) => {
+                                os_notify::post_from_app(
+                                    &app_h,
+                                    "Skills workspace digest updated",
+                                    s.daily_path.display().to_string(),
+                                );
+                            }
+                            Err(e) => {
+                                warn!("Skills workspace digest: {e}");
+                                os_notify::post_from_app(
+                                    &app_h,
+                                    "Skills workspace digest failed",
+                                    e,
+                                );
+                            }
+                        }
+                    });
                 }
             }
             "launch_at_login" => {
@@ -150,51 +261,40 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     match crate::updater::check_for_update(&app_handle).await {
                         Ok(info) if info.available => {
                             let version = info.version.as_deref().unwrap_or("unknown");
-                            // Notify user we're starting install
-                            let _ = app_handle
-                                .notification()
-                                .builder()
-                                .title("Installing Update...")
-                                .body(format!(
+                            os_notify::post_from_app(
+                                &app_handle,
+                                "Installing Update...",
+                                format!(
                                     "Downloading ArmaraOS v{version}. App will restart shortly."
-                                ))
-                                .show();
+                                ),
+                            );
                             // Perform install
                             if let Err(e) =
                                 crate::updater::download_and_install_update(&app_handle).await
                             {
                                 warn!("Manual update install failed: {e}");
-                                let _ = apply_notification_icon(
-                                    app_handle
-                                        .notification()
-                                        .builder()
-                                        .title("Update Failed")
-                                        .body(format!("Could not install update: {e}")),
-                                )
-                                .show();
+                                os_notify::post_from_app(
+                                    &app_handle,
+                                    "Update Failed",
+                                    format!("Could not install update: {e}"),
+                                );
                             }
                             // If we reach here, install failed (success causes restart)
                         }
                         Ok(_) => {
-                            let _ = apply_notification_icon(
-                                app_handle
-                                    .notification()
-                                    .builder()
-                                    .title("Up to Date")
-                                    .body("You're running the latest version of ArmaraOS."),
-                            )
-                            .show();
+                            os_notify::post_from_app(
+                                &app_handle,
+                                "Up to Date",
+                                "You're running the latest version of ArmaraOS.",
+                            );
                         }
                         Err(e) => {
                             warn!("Tray update check failed: {e}");
-                            let _ = apply_notification_icon(
-                                app_handle
-                                    .notification()
-                                    .builder()
-                                    .title("Update Check Failed")
-                                    .body("Could not check for updates. Try again later."),
-                            )
-                            .show();
+                            os_notify::post_from_app(
+                                &app_handle,
+                                "Update Check Failed",
+                                "Could not check for updates. Try again later.",
+                            );
                         }
                     }
                 });
@@ -228,6 +328,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build(app)?;
+
+    if let Some(ks) = app.try_state::<crate::KernelState>() {
+        let tray_bg = tray.clone();
+        let kernel_bg: Arc<OpenFangKernel> = Arc::clone(&ks.kernel);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(90));
+            let tip = tooltip_for_kernel(kernel_bg.as_ref());
+            let _ = tray_bg.set_tooltip(Some(tip.as_str()));
+        });
+    }
 
     Ok(())
 }

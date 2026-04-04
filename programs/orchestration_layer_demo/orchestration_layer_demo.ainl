@@ -1,0 +1,16 @@
+# Cache + vector_memory round-trip (default ainl run registers cache + vector_memory).
+# Run: ainl run orchestration_layer_demo.ainl --json --frame-json '{"key":"k1","note":"hello"}'
+# Compact entry label is _entry (omit --label or pass --label _entry).
+# Validate: ainl validate orchestration_layer_demo.ainl --strict
+
+orchestration_layer_demo:
+  in: key note
+
+  cached = cache.get key
+  if cached:
+    out cached
+
+  vm_u = vector_memory.UPSERT "armaraos_demo" "turn" key note "{}"
+  hits = vector_memory.SEARCH note 5
+  cache.set key note
+  out hits

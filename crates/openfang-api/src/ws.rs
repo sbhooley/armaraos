@@ -459,8 +459,19 @@ async fn handle_text_message(
                 }
             };
 
+            // Attachment refs (used for vision blocks + workspace file materialization)
+            let attachment_refs: Vec<crate::types::AttachmentRef> = parsed["attachments"]
+                .as_array()
+                .map(|attachments| {
+                    attachments
+                        .iter()
+                        .filter_map(|a| serde_json::from_value(a.clone()).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+
             // Sanitize inbound user input
-            let content = sanitize_user_input(&raw_content);
+            let mut content = sanitize_user_input(&raw_content);
             if content.is_empty() {
                 let _ = send_json(
                     sender,
@@ -473,20 +484,26 @@ async fn handle_text_message(
                 return;
             }
 
+            if !attachment_refs.is_empty() {
+                if let Some(entry) = state.kernel.registry.get(agent_id) {
+                    if let Some(ref ws) = entry.manifest.workspace {
+                        let hint =
+                            crate::routes::workspace_upload_hints(ws.as_path(), &attachment_refs);
+                        if !hint.is_empty() {
+                            content.push_str(&hint);
+                        }
+                    }
+                }
+            }
+
             // Resolve file attachments into image content blocks
             let mut has_images = false;
             let mut ws_content_blocks: Option<Vec<openfang_types::message::ContentBlock>> = None;
-            if let Some(attachments) = parsed["attachments"].as_array() {
-                let refs: Vec<crate::types::AttachmentRef> = attachments
-                    .iter()
-                    .filter_map(|a| serde_json::from_value(a.clone()).ok())
-                    .collect();
-                if !refs.is_empty() {
-                    let image_blocks = crate::routes::resolve_attachments(&refs);
-                    if !image_blocks.is_empty() {
-                        has_images = true;
-                        ws_content_blocks = Some(image_blocks);
-                    }
+            if !attachment_refs.is_empty() {
+                let image_blocks = crate::routes::resolve_attachments(&attachment_refs);
+                if !image_blocks.is_empty() {
+                    has_images = true;
+                    ws_content_blocks = Some(image_blocks);
                 }
             }
 

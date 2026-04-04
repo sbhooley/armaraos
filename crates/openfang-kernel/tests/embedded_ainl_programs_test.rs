@@ -31,4 +31,10 @@ fn materialize_writes_expected_layout() {
     let n2 = openfang_kernel::embedded_ainl_programs::materialize_embedded_programs(home)
         .expect("materialize idempotent");
     assert_eq!(n2, 0, "second run should not rewrite unchanged files");
+
+    openfang_kernel::embedded_ainl_programs::ensure_ainl_library_pointer_files(home)
+        .expect("pointers");
+    let lib = home.join("ainl-library");
+    assert!(lib.join("README.md").is_file());
+    assert!(lib.join(".embedded-revision.txt").is_file());
 }

@@ -278,9 +278,7 @@ impl ModelCatalog {
             return self
                 .models
                 .iter()
-                .find(|m| {
-                    m.provider == "openrouter" && m.id.ends_with(DEFAULT_OPENROUTER_MODEL_ID)
-                })
+                .find(|m| m.provider == "openrouter" && m.id.ends_with(DEFAULT_OPENROUTER_MODEL_ID))
                 .map(|m| m.id.clone());
         }
         // Fall back to the first model registered for this provider

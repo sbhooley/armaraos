@@ -110,6 +110,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
               <span class="nav-label">Chat</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'bookmarks' }" @click="navigate('bookmarks')" :aria-current="page === 'bookmarks' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></span>
+              <span class="nav-label">Bookmarks</span>
+            </a>
           </div>
         </template>
       </div>
@@ -210,6 +214,10 @@
             <a class="nav-item" :class="{ active: page === 'ainl-library' }" @click="navigate('ainl-library')" :aria-current="page === 'ainl-library' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h8"/></svg></span>
               <span class="nav-label">AINL Library</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'home-files' }" @click="navigate('home-files')" :aria-current="page === 'home-files' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+              <span class="nav-label">Home folder</span>
             </a>
           </div>
         </template>
@@ -668,6 +676,7 @@
                 <div style="min-width:0">
                   <div class="font-bold" x-text="currentAgent ? currentAgent.name : ''"></div>
                   <div class="text-xs text-dim truncate" style="font-family:var(--font-mono);font-size:11px" x-text="currentAgent ? currentAgent.model_provider + ':' + currentAgent.model_name : ''"></div>
+                  <div class="text-xs truncate" style="max-width:min(420px,55vw);color:var(--accent);margin-top:2px" x-show="currentAgent && $store.app.agentActivityLines[currentAgent.id]" x-text="$store.app.agentActivityLines[currentAgent.id].text"></div>
                 </div>
               </div>
               <div class="flex gap-2 items-center">
@@ -734,7 +743,7 @@
               <template x-if="currentAgent">
                 <div>
                   <template x-for="(msg, $index) in filteredMessages" :key="msg.id">
-                    <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '')">
+                    <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '') + (schedulerParts(msg) ? ' message-scheduler' : '')">
                       <div class="message-avatar" x-show="msg.role === 'agent'">
                         <img src="/assets/armaraos-logo.png" alt="ArmaraOS">
                       </div>
@@ -742,8 +751,11 @@
                         <img src="/assets/armaraos-logo.png" alt="You">
                       </div>
                       <div class="message-body">
-                        <!-- Copy button on hover -->
-                        <div class="message-actions" x-show="msg.text && msg.text.trim() && !msg.thinking && !msg.streaming">
+                        <!-- Copy + bookmark on hover -->
+                        <div class="message-actions" x-show="msg.text && msg.text.trim() && !msg.thinking && !msg.streaming && (msg.role === 'agent' || msg.role === 'user')">
+                          <button type="button" class="message-action-btn" @click="openBookmarkModal(msg)" title="Save to Bookmarks">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+                          </button>
                           <button class="message-action-btn" :class="{ copied: msg._copied }" @click="copyMessage(msg)" :title="msg._copied ? 'Copied!' : 'Copy message'">
                             <svg x-show="!msg._copied" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
                             <svg x-show="msg._copied" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
@@ -753,55 +765,95 @@
                         <div class="message-bubble" x-show="msg.thinking" style="background:transparent;border:none;padding:4px 0">
                           <div class="typing-dots"><span></span><span></span><span></span></div>
                         </div>
-                        <!-- Normal message content -->
-                        <div class="message-bubble" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-show="msg.text && msg.text.trim() && !msg.thinking" x-html="highlightSearch(msg.isHtml ? msg.text : ((msg.role === 'agent' || msg.role === 'system') && !msg.thinking ? renderMarkdown(msg.text) : escapeHtml(msg.text)))"></div>
-                        <!-- Inline images from uploads (shown above tool cards) -->
-                        <template x-if="msg.images && msg.images.length">
+                        <!-- Scheduled job output (kernel scheduler v2 envelope or legacy `[Scheduler]` line) -->
+                        <template x-if="msg.text && msg.text.trim() && !msg.thinking && schedulerParts(msg)">
+                          <div class="message-bubble message-scheduler-card">
+                            <div class="message-scheduler-top">
+                              <div class="message-scheduler-icon" aria-hidden="true">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                              </div>
+                              <div class="message-scheduler-meta">
+                                <div class="message-scheduler-job" x-text="schedulerParts(msg).jobName"></div>
+                                <div class="message-scheduler-ran" x-text="formatSchedulerAt(schedulerParts(msg).atIso)"></div>
+                                <div class="message-scheduler-program" x-show="schedulerParts(msg).program" x-text="schedulerParts(msg).program"></div>
+                                <div class="message-scheduler-jobid" x-show="schedulerParts(msg).jobId">
+                                  <span class="message-scheduler-jobid-label">Job</span>
+                                  <code class="message-scheduler-jobid-code" :title="schedulerParts(msg).jobId" x-text="shortSchedulerJobId(schedulerParts(msg).jobId)"></code>
+                                </div>
+                              </div>
+                              <span class="message-scheduler-pill">Scheduler · AINL</span>
+                            </div>
+                            <div class="message-scheduler-output" x-show="schedulerParts(msg).body" x-html="schedulerBodyHtml(msg)"></div>
+                          </div>
+                        </template>
+                        <!-- Tool calls first, assistant reply last (same message object) -->
+                        <template x-if="(msg.tools || []).length && !schedulerParts(msg)">
+                          <div class="message-reply-with-tools">
+                            <div class="message-tools-cluster">
+                              <template x-if="msg.images && msg.images.length">
+                                <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0 0">
+                                  <template x-for="img in msg.images" :key="img.file_id">
+                                    <a :href="'/api/uploads/' + img.file_id" target="_blank" style="display:block">
+                                      <img :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'uploaded image'" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
+                                    </a>
+                                  </template>
+                                </div>
+                              </template>
+                              <template x-for="tool in (msg.tools || [])" :key="tool.id">
+                                <div class="tool-card" :class="{ 'tool-card-error': tool.is_error }" :data-tool="tool.name">
+                                  <div class="tool-card-header" @click="tool.expanded = !tool.expanded">
+                                    <template x-if="tool.running"><div class="tool-card-spinner"></div></template>
+                                    <template x-if="!tool.running && !tool.is_error"><span class="tool-icon-ok">&#10003;</span></template>
+                                    <template x-if="!tool.running && tool.is_error"><span class="tool-icon-err">&#10007;</span></template>
+                                    <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
+                                    <span class="tool-card-name" x-text="tool.name"></span>
+                                    <span class="text-xs text-dim" x-text="tool.running ? 'running...' : (tool.is_error ? 'error' : (tool.result ? (tool.result.length > 500 ? Math.round(tool.result.length/1024) + 'KB' : 'done') : 'done'))" style="margin-left:auto"></span>
+                                    <span class="tool-expand-chevron" :style="tool.expanded ? 'transform:rotate(90deg)' : ''" style="transition:transform 0.15s">&#9654;</span>
+                                  </div>
+                                  <div x-show="tool._imageUrls && tool._imageUrls.length" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px">
+                                    <template x-for="iurl in (tool._imageUrls || [])" :key="iurl">
+                                      <a :href="iurl" target="_blank" style="display:block">
+                                        <img :src="iurl" alt="Generated image" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
+                                      </a>
+                                    </template>
+                                  </div>
+                                  <div x-show="tool._audioFile" style="padding:8px 12px">
+                                    <div class="audio-player">
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                                      <span class="text-xs" x-text="'Audio: ' + tool._audioFile.split('/').pop()"></span>
+                                      <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
+                                    </div>
+                                  </div>
+                                  <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+                                    <div x-show="tool.input" style="margin-bottom:6px">
+                                      <div class="tool-section-label">Input</div>
+                                      <pre class="tool-pre" x-text="formatToolJson(tool.input)"></pre>
+                                    </div>
+                                    <div x-show="tool.result">
+                                      <div class="tool-section-label">Result <span class="text-xs text-muted" x-show="tool.result && tool.result.length > 200" x-text="'(' + tool.result.length + ' chars)'"></span></div>
+                                      <pre class="tool-pre" :class="{ 'tool-pre-error': tool.is_error, 'tool-pre-short': !tool.is_error && tool.result && tool.result.length < 100, 'tool-pre-medium': !tool.is_error && tool.result && tool.result.length >= 100 && tool.result.length < 500 }" x-text="formatToolJson(tool.result)"></pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              </template>
+                            </div>
+                            <template x-if="msg.text && msg.text.trim() && !msg.thinking && !schedulerParts(msg)">
+                              <div class="message-bubble" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-html="formatChatMessageHtml(msg)"></div>
+                            </template>
+                          </div>
+                        </template>
+                        <!-- Normal message content (no tool calls in this turn) -->
+                        <template x-if="!(msg.tools || []).length && msg.text && msg.text.trim() && !msg.thinking && !schedulerParts(msg)">
+                          <div class="message-bubble" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-html="formatChatMessageHtml(msg)"></div>
+                        </template>
+                        <!-- Inline images from uploads when this turn did not use tools -->
+                        <template x-if="msg.images && msg.images.length && !(msg.tools || []).length">
                           <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">
                             <template x-for="img in msg.images" :key="img.file_id">
                               <a :href="'/api/uploads/' + img.file_id" target="_blank" style="display:block">
                                 <img :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'uploaded image'" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
                               </a>
                             </template>
-                          </div>
-                        </template>
-                        <template x-for="tool in (msg.tools || [])" :key="tool.id">
-                          <div class="tool-card" :class="{ 'tool-card-error': tool.is_error }" :data-tool="tool.name">
-                            <div class="tool-card-header" @click="tool.expanded = !tool.expanded">
-                              <template x-if="tool.running"><div class="tool-card-spinner"></div></template>
-                              <template x-if="!tool.running && !tool.is_error"><span class="tool-icon-ok">&#10003;</span></template>
-                              <template x-if="!tool.running && tool.is_error"><span class="tool-icon-err">&#10007;</span></template>
-                              <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
-                              <span class="tool-card-name" x-text="tool.name"></span>
-                              <span class="text-xs text-dim" x-text="tool.running ? 'running...' : (tool.is_error ? 'error' : (tool.result ? (tool.result.length > 500 ? Math.round(tool.result.length/1024) + 'KB' : 'done') : 'done'))" style="margin-left:auto"></span>
-                              <span class="tool-expand-chevron" :style="tool.expanded ? 'transform:rotate(90deg)' : ''" style="transition:transform 0.15s">&#9654;</span>
-                            </div>
-                            <!-- Render generated images above the raw result -->
-                            <div x-show="tool._imageUrls && tool._imageUrls.length" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px">
-                              <template x-for="iurl in (tool._imageUrls || [])" :key="iurl">
-                                <a :href="iurl" target="_blank" style="display:block">
-                                  <img :src="iurl" alt="Generated image" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
-                                </a>
-                              </template>
-                            </div>
-                            <!-- Audio player for TTS results -->
-                            <div x-show="tool._audioFile" style="padding:8px 12px">
-                              <div class="audio-player">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-                                <span class="text-xs" x-text="'Audio: ' + tool._audioFile.split('/').pop()"></span>
-                                <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
-                              </div>
-                            </div>
-                            <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
-                              <div x-show="tool.input" style="margin-bottom:6px">
-                                <div class="tool-section-label">Input</div>
-                                <pre class="tool-pre" x-text="formatToolJson(tool.input)"></pre>
-                              </div>
-                              <div x-show="tool.result">
-                                <div class="tool-section-label">Result <span class="text-xs text-muted" x-show="tool.result && tool.result.length > 200" x-text="'(' + tool.result.length + ' chars)'"></span></div>
-                                <pre class="tool-pre" :class="{ 'tool-pre-error': tool.is_error, 'tool-pre-short': !tool.is_error && tool.result && tool.result.length < 100, 'tool-pre-medium': !tool.is_error && tool.result && tool.result.length >= 100 && tool.result.length < 500 }" x-text="formatToolJson(tool.result)"></pre>
-                              </div>
-                            </div>
                           </div>
                         </template>
                         <!-- Timestamp + meta row -->
@@ -859,9 +911,9 @@
                 <button class="btn btn-ghost btn-sm" @click="$refs.fileInput.click()" title="Attach file" style="padding:6px 8px;flex-shrink:0">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
                 </button>
-                <input type="file" x-ref="fileInput" multiple accept="image/*,.txt,.pdf,.md,.json,.csv,.mp3,.wav,.ogg,.webm,.m4a,.flac" @change="addFiles($event.target.files); $event.target.value = ''" style="display:none">
+                <input type="file" x-ref="fileInput" multiple accept="image/*,audio/*,video/*,text/*,.pdf,.json,.csv,.tsv,.md,.txt,.xml,.html,.htm,.css,.js,.jsx,.mjs,.ts,.tsx,.vue,.php,.py,.rs,.go,.java,.sql,.yaml,.yml,.toml,.ainl,.lang,.xlsx,.xls,.ods,.docx,.doc,.odt,.pptx,.ppt,.odp,.rtf,.svg,.woff,.woff2,.ttf,.otf,.mp3,.wav,.ogg,.webm,.mp4,.mov,.mkv,.flac,.m4a" @change="addFiles($event.target.files); $event.target.value = ''" style="display:none">
                 <!-- Mic button -->
-                <button class="btn btn-ghost btn-sm" :class="{ 'btn-recording': recording }" @mousedown="startRecording()" @mouseup="stopRecording()" @mouseleave="if(recording) stopRecording()" title="Hold to record voice" style="padding:6px 8px;flex-shrink:0">
+                <button class="btn btn-ghost btn-sm" :class="{ 'btn-recording': recording }" @mousedown="startRecording()" @mouseup="stopRecording()" @mouseleave="if(recording) stopRecording()" title="Hold to record a voice message (macOS: grant Microphone in System Settings if prompted)" style="padding:6px 8px;flex-shrink:0">
                   <svg x-show="!recording" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                   <span x-show="recording" class="recording-dot"></span>
                 </button>
@@ -954,6 +1006,38 @@
                 </div>
               </div>
             </div>
+
+            <template x-if="bookmarkModalOpen">
+              <div class="modal-overlay" style="z-index:200" @click.self="closeBookmarkModal()">
+                <div class="modal" style="max-width:440px" @click.stop role="dialog" aria-modal="true" aria-labelledby="bookmark-modal-title">
+                  <div class="modal-header">
+                    <h3 id="bookmark-modal-title">Save to Bookmarks</h3>
+                    <button type="button" class="modal-close" @click="closeBookmarkModal()" aria-label="Close">&times;</button>
+                  </div>
+                  <div class="form-group">
+                    <label class="text-xs">Title</label>
+                    <input class="form-input" x-model="bookmarkTitle" placeholder="Short label for this save">
+                  </div>
+                  <div class="form-group">
+                    <label class="text-xs">Category</label>
+                    <select class="form-select" x-model="bookmarkCategoryId" :disabled="bookmarkNewCategory && bookmarkNewCategory.trim().length > 0">
+                      <template x-for="c in bookmarkCategoriesSorted()" :key="c.id">
+                        <option :value="c.id" x-text="c.name"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label class="text-xs">Or create category</label>
+                    <input class="form-input" x-model="bookmarkNewCategory" placeholder="New category name (optional)">
+                  </div>
+                  <p class="text-xs text-dim" style="line-height:1.5">Stores this message text, any images in the turn, and tool outputs. Saved in this browser only.</p>
+                  <div class="flex gap-2 justify-end" style="margin-top:16px">
+                    <button type="button" class="btn btn-ghost btn-sm" @click="closeBookmarkModal()">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" @click="confirmBookmark()">Save</button>
+                  </div>
+                </div>
+              </div>
+            </template>
           </div>
         </template>
 
@@ -981,8 +1065,9 @@
                   <div style="min-width:0;flex:1">
                     <div class="font-bold" style="font-size:13px" x-text="agent.name"></div>
                     <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_name"></div>
+                    <div class="text-xs truncate" style="font-size:10px;color:var(--accent);max-width:200px;margin-top:2px" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
                   </div>
-                  <span class="badge" :class="'badge-' + agent.state.toLowerCase()" x-text="agent.state" style="font-size:10px"></span>
+                  <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px"></span>
                   <button class="agent-chip-config-btn" @click.stop="showDetail(agent)" title="Agent settings" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.color='var(--accent)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                   </button>
@@ -1031,7 +1116,7 @@
                 <div x-show="detailTab === 'info'">
                   <div class="detail-grid">
                     <div class="detail-row"><span class="detail-label">ID</span><span class="detail-value text-xs" x-text="detailAgent.id" style="word-break:break-all"></span></div>
-                    <div class="detail-row"><span class="detail-label">State</span><span class="badge" :class="'badge-' + detailAgent.state.toLowerCase()" x-text="detailAgent.state"></span></div>
+                    <div class="detail-row"><span class="detail-label">State</span><span class="badge" :class="detailAgent.state === 'Crashed' ? 'badge-muted' : ('badge-' + detailAgent.state.toLowerCase())" x-text="detailAgent.state === 'Crashed' ? 'idle' : detailAgent.state"></span></div>
                     <div class="detail-row"><span class="detail-label">Mode</span>
                       <select class="form-select" style="width:140px" :value="detailAgent.mode || 'full'" @change="setMode(detailAgent, $event.target.value)">
                         <option value="observe">Observe</option><option value="assist">Assist</option><option value="full">Full</option>
@@ -1073,6 +1158,10 @@
                       </template>
                     </div>
                     <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value" x-text="detailAgent.created_at ? new Date(detailAgent.created_at).toLocaleString() : '-'"></span></div>
+                    <div class="detail-row" style="align-items:flex-start" x-show="detailAgent.scheduled_ainl_host_adapter && detailAgent.scheduled_ainl_host_adapter.summary">
+                      <span class="detail-label">Scheduled AINL</span>
+                      <div class="detail-value text-xs text-dim" style="flex:1;min-width:0;word-break:break-word;line-height:1.45" x-text="detailAgent.scheduled_ainl_host_adapter.summary"></div>
+                    </div>
 
                     <!-- Fallback Model Chain -->
                     <div class="detail-row" style="align-items:flex-start">
@@ -1441,6 +1530,103 @@
               </div>
             </div>
           </template>
+        </div>
+      </div>
+    </template>
+
+    <!-- Page: Bookmarks (saved chat outputs — local browser storage) -->
+    <template x-if="page === 'bookmarks'">
+      <div x-data="bookmarksPage()" x-init="init()">
+        <div class="page-header">
+          <h2>Bookmarks</h2>
+          <button type="button" class="btn btn-ghost btn-sm" @click="location.hash='agents'">Back to Chat</button>
+        </div>
+        <div class="page-body" style="display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:16px;align-items:start">
+          <div class="card" style="padding:12px;position:sticky;top:12px">
+            <div class="font-bold" style="font-size:13px;margin-bottom:8px">Categories</div>
+            <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">
+              <template x-for="c in categories" :key="c.id">
+                <div style="display:flex;align-items:center;gap:4px">
+                  <button type="button" class="btn btn-ghost btn-sm" style="flex:1;text-align:left;justify-content:flex-start;font-size:12px;padding:6px 8px;border-radius:6px"
+                    :style="selectedCategoryId === c.id ? 'background:var(--accent-subtle);border:1px solid var(--accent)' : ''"
+                    @click="selectedCategoryId = c.id" x-text="c.name"></button>
+                  <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" @click="moveCat(c, -1)" title="Move up">↑</button>
+                  <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" @click="moveCat(c, 1)" title="Move down">↓</button>
+                </div>
+              </template>
+            </div>
+            <div class="form-group" style="margin-bottom:8px">
+              <input class="form-input" style="font-size:12px" x-model="newCategoryName" placeholder="New category" @keydown.enter="addCategory()">
+            </div>
+            <button type="button" class="btn btn-primary btn-sm btn-block" @click="addCategory()">Add category</button>
+            <template x-if="categories.length > 1">
+              <button type="button" class="btn btn-danger btn-sm btn-block mt-2" @click="removeSelectedCategory()" x-show="selectedCategoryId">Delete current category</button>
+            </template>
+          </div>
+          <div style="min-width:0">
+            <p class="text-xs text-dim mb-3" style="line-height:1.5">Saved from chat with the bookmark icon. Data stays in this browser (localStorage). Images use the same upload URLs while your daemon keeps them.</p>
+            <template x-if="!itemsInCategory.length">
+              <div class="empty-state" style="padding:32px">
+                <div class="empty-state-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+                </div>
+                <h3>No bookmarks in this category</h3>
+                <p>Open <strong>Chat</strong>, hover a message, and click the bookmark icon.</p>
+              </div>
+            </template>
+            <template x-for="it in itemsInCategory" :key="it.id">
+              <div class="card mb-3" style="overflow:hidden">
+                <div class="flex justify-between items-start gap-2 mb-2" style="flex-wrap:wrap">
+                  <div style="min-width:0;flex:1">
+                    <div class="font-bold" style="font-size:14px" x-text="it.title || 'Bookmark'"></div>
+                    <div class="text-xs text-dim mt-1">
+                      <span x-text="formatDate(it.createdAt)"></span>
+                      <span x-show="it.agentName"> · <span x-text="it.agentName"></span></span>
+                    </div>
+                  </div>
+                  <div class="flex gap-1 flex-wrap" style="align-items:center">
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="itemUp(it)" title="Move up">↑</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="itemDown(it)" title="Move down">↓</button>
+                    <select class="form-select" style="width:auto;max-width:140px;font-size:11px;padding:2px 6px" @change="moveItem(it, $event)">
+                      <template x-for="c in categories" :key="'mv-' + c.id">
+                        <option :value="c.id" :selected="c.id === it.categoryId" x-text="c.name"></option>
+                      </template>
+                    </select>
+                    <button type="button" class="btn btn-danger btn-sm" style="padding:2px 8px" @click="deleteItem(it)">Delete</button>
+                  </div>
+                </div>
+                <template x-if="it.images && it.images.length">
+                  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+                    <template x-for="img in it.images" :key="img.file_id">
+                      <a :href="'/api/uploads/' + img.file_id" target="_blank" rel="noopener">
+                        <img :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'image'" style="max-width:280px;max-height:240px;border-radius:8px;border:1px solid var(--border)" loading="lazy">
+                      </a>
+                    </template>
+                  </div>
+                </template>
+                <div class="markdown-body" style="font-size:13px;line-height:1.55" x-html="renderMarkdown(it.text)"></div>
+                <template x-if="it.tools && it.tools.length">
+                  <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+                    <div class="text-xs font-bold text-dim mb-2">Tool outputs</div>
+                    <template x-for="(t, ti) in it.tools" :key="it.id + '-tool-' + ti">
+                      <div class="tool-card mb-2" :class="{ 'tool-card-error': t.is_error }">
+                        <div class="tool-card-header" @click="toggleToolExpand(it.id, ti)">
+                          <span class="tool-card-name" x-text="t.name"></span>
+                          <span class="text-xs text-dim" x-text="isToolExpanded(it.id, ti) ? 'hide' : 'show'"></span>
+                        </div>
+                        <div x-show="isToolExpanded(it.id, ti)" style="padding:8px 10px;font-size:11px">
+                          <div class="text-dim mb-1">Input</div>
+                          <pre class="text-xs" style="white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;background:var(--surface2);padding:8px;border-radius:6px" x-text="t.input"></pre>
+                          <div class="text-dim mb-1 mt-2">Result</div>
+                          <pre class="text-xs" style="white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;background:var(--surface2);padding:8px;border-radius:6px" x-text="t.result"></pre>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
         </div>
       </div>
     </template>
@@ -1832,6 +2018,9 @@
                   manually with the "Run Now" button. Advanced jobs can run workflows or
                   <span class="text-dim">AINL</span> programs from your synced library (see below).
                 </div>
+                <div class="text-xs text-dim mt-2" style="line-height:1.5">
+                  <strong style="color:var(--text)">Secrets:</strong> Scheduled <code>ainl run</code> uses the same API keys as the rest of the daemon (vault / <code>~/.armaraos/.env</code> / environment). Optional per-agent adapter policy: manifest metadata <code>ainl_host_adapter_allowlist</code> (or <code>off</code>). See <a href="https://github.com/sbhooley/armaraos/blob/main/docs/scheduled-ainl.md" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">docs/scheduled-ainl.md</a>.
+                </div>
               </div>
 
               <div class="card mb-4" style="border-left:3px solid #3d7a5a">
@@ -1840,6 +2029,9 @@
                     <div class="font-bold" style="font-size:13px;margin-bottom:4px">AINL program library</div>
                     <div class="text-xs text-dim mb-2" style="line-height:1.5">
                       <strong>armaraos-programs/</strong> is shipped with the kernel (see docs/ootb-ainl.md). Upstream <code>demo/</code>, <code>examples/</code>, <code>intelligence/</code> are mirrored separately. Default OOTB job: <strong>armaraos-ainl-health-weekly</strong> (core-only ping). Enable <strong>armaraos-learning-frame-echo-quarterly</strong> in the table below when you want a learning-frame smoke run.
+                    </div>
+                    <div class="text-xs text-dim mt-2" style="line-height:1.5">
+                      <strong style="color:var(--text)">AINL adapters:</strong> For jobs tied to an online-capable agent, the daemon sets <code>AINL_HOST_ADAPTER_ALLOWLIST</code> for the subprocess so graph policy matches the host (same idea as <code>ainl run</code> / hosted runners). Override via agent metadata if needed — see the doc linked above.
                     </div>
                     <div class="text-sm text-dim" style="line-height:1.5">
                       <span x-show="ainlLibLoading">Scanning synced programs…</span>
@@ -1903,6 +2095,8 @@
                               <span x-show="runningJobId !== job.id">Run</span>
                               <span x-show="runningJobId === job.id">...</span>
                             </button>
+                            <button class="btn btn-ghost btn-sm" @click="editJob(job)" title="Edit in place">Edit</button>
+                            <button class="btn btn-ghost btn-sm" @click="duplicateJob(job)" title="Copy settings to a new job">Dup</button>
                             <button class="btn btn-ghost btn-sm" @click="toggleJob(job)" x-text="job.enabled ? 'Pause' : 'Enable'"></button>
                             <button class="btn btn-danger btn-sm" @click="deleteJob(job)">Del</button>
                           </div>
@@ -1923,11 +2117,11 @@
 
             <!-- Create Job Modal -->
             <template x-if="showCreateForm">
-              <div class="modal-overlay" @click.self="showCreateForm = false" @keydown.escape.window="showCreateForm = false">
+              <div class="modal-overlay" @click.self="showCreateForm = false; resetNewJobForm()" @keydown.escape.window="showCreateForm = false; resetNewJobForm()">
                 <div class="modal">
                   <div class="modal-header">
-                    <h3>Create Scheduled Job</h3>
-                    <button class="modal-close" @click="showCreateForm = false">&times;</button>
+                    <h3 x-text="editingJobId ? 'Edit Scheduled Job' : 'Create Scheduled Job'"></h3>
+                    <button class="modal-close" @click="showCreateForm = false; resetNewJobForm()">&times;</button>
                   </div>
 
                   <div class="form-group">
@@ -2009,8 +2203,9 @@
                   </div>
 
                   <button class="btn btn-primary btn-block mt-4" @click="createJob()" :disabled="creating">
-                    <span x-show="!creating">Create Schedule</span>
-                    <span x-show="creating">Creating...</span>
+                    <span x-show="!creating && !editingJobId">Create Schedule</span>
+                    <span x-show="!creating && editingJobId">Save Changes</span>
+                    <span x-show="creating">Saving...</span>
                   </button>
                 </div>
               </div>
@@ -2451,8 +2646,13 @@
               <span class="filter-pill" :class="{ active: clawhubSort === 'trending' }" @click="browseClawHub('trending')">Trending</span>
               <span class="filter-pill" :class="{ active: clawhubSort === 'downloads' }" @click="browseClawHub('downloads')">Most Downloaded</span>
               <span class="filter-pill" :class="{ active: clawhubSort === 'stars' }" @click="browseClawHub('stars')">Most Starred</span>
+              <span class="filter-pill" :class="{ active: clawhubSort === 'rating' }" @click="browseClawHub('rating')">Highest Rated</span>
               <span class="filter-pill" :class="{ active: clawhubSort === 'updated' }" @click="browseClawHub('updated')">Recently Updated</span>
             </div>
+
+            <p class="text-xs text-dim mb-3" x-show="clawhubSearch" style="line-height:1.4">
+              Search is ranked by <strong>relevance</strong> (not downloads or stars). Open a skill for full stats, or clear the box to browse by popularity.
+            </p>
 
             <!-- Category quick-search chips (always visible when not searching) -->
             <div class="mb-4" x-show="!clawhubSearch">
@@ -2490,7 +2690,9 @@
                     </div>
                     <div class="card-meta" x-text="skill.description" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden"></div>
                     <div class="flex justify-between items-center mt-3">
-                      <div class="flex gap-3 items-center">
+                      <div class="flex gap-3 items-center flex-wrap">
+                        <span class="text-xs text-dim" x-show="formatClawhubMatchScore(skill.score)" x-text="formatClawhubMatchScore(skill.score)"></span>
+                        <span class="text-xs text-dim" x-show="formatClawhubUpdatedAt(skill.updated_at)" x-text="'Updated ' + formatClawhubUpdatedAt(skill.updated_at)"></span>
                         <span class="text-xs text-dim" x-show="skill.version" x-text="'v' + skill.version"></span>
                       </div>
                       <button class="btn btn-primary btn-sm" @click.stop="installFromClawHub(skill.slug)" :disabled="installingSlug === skill.slug || skill.installed || isSkillInstalled(skill.slug)" x-text="skill.installed || isSkillInstalled(skill.slug) ? 'Installed' : installingSlug === skill.slug ? 'Installing...' : 'Install'"></button>
@@ -3419,6 +3621,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="info-card">
               <h4>LLM Providers</h4>
               <p>ArmaraOS supports 12 LLM providers out of the box. Configure API keys to unlock models from each provider. Set environment variables and restart, or use the form below to save keys directly.</p>
+              <p class="text-xs text-dim mt-2" style="line-height:1.5">Scheduled <code>ainl run</code> jobs use the same keys (vault / <code>~/.armaraos/.env</code>) as chat — no separate cron credential file.</p>
             </div>
             <div class="card-grid">
               <template x-for="p in providers" :key="p.id">
@@ -4293,6 +4496,80 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab" :class="{ active: tab === 'costs' }" @click="tab = 'costs'">Costs</div>
           </div>
           <div x-show="tab === 'summary'">
+            <div class="cost-charts-row mt-4">
+              <div class="card cost-chart-panel">
+                <div class="card-header">Input vs output tokens</div>
+                <div x-show="summaryTokenDonutSegments().length === 0" class="text-sm text-dim" style="padding:20px;text-align:center">No token usage yet.</div>
+                <div x-show="summaryTokenDonutSegments().length > 0" class="donut-chart-wrap">
+                  <div class="donut-chart">
+                    <svg viewBox="0 0 160 160" width="160" height="160">
+                      <template x-for="seg in summaryTokenDonutSegments()" :key="'tok-' + seg.label">
+                        <circle
+                          cx="80" cy="80" r="60"
+                          fill="none"
+                          :stroke="seg.color"
+                          stroke-width="24"
+                          :stroke-dasharray="seg.dasharray"
+                          :stroke-dashoffset="seg.dashoffset"
+                          transform="rotate(-90 80 80)"
+                          class="donut-segment"
+                        >
+                          <title x-text="seg.label + ': ' + seg.percent + '% (' + formatTokens(seg.value) + ')'"></title>
+                        </circle>
+                      </template>
+                      <text x="80" y="76" text-anchor="middle" fill="var(--text)" style="font-size:13px;font-weight:700;font-family:var(--font-mono)" x-text="formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))"></text>
+                      <text x="80" y="92" text-anchor="middle" fill="var(--text-muted)" style="font-size:9px;font-family:var(--font-mono)">TOKENS</text>
+                    </svg>
+                  </div>
+                  <div class="donut-legend">
+                    <template x-for="seg in summaryTokenDonutSegments()" :key="'tok-lg-' + seg.label">
+                      <div class="donut-legend-item">
+                        <span class="donut-legend-swatch" :style="'background:' + seg.color"></span>
+                        <span class="donut-legend-label" x-text="seg.label"></span>
+                        <span class="donut-legend-pct" x-text="seg.percent + '%'"></span>
+                        <span class="donut-legend-cost text-dim" x-text="formatTokens(seg.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+              <div class="card cost-chart-panel">
+                <div class="card-header">API vs tool calls</div>
+                <div x-show="summaryActivityDonutSegments().length === 0" class="text-sm text-dim" style="padding:20px;text-align:center">No call activity yet.</div>
+                <div x-show="summaryActivityDonutSegments().length > 0" class="donut-chart-wrap">
+                  <div class="donut-chart">
+                    <svg viewBox="0 0 160 160" width="160" height="160">
+                      <template x-for="seg in summaryActivityDonutSegments()" :key="'act-' + seg.label">
+                        <circle
+                          cx="80" cy="80" r="60"
+                          fill="none"
+                          :stroke="seg.color"
+                          stroke-width="24"
+                          :stroke-dasharray="seg.dasharray"
+                          :stroke-dashoffset="seg.dashoffset"
+                          transform="rotate(-90 80 80)"
+                          class="donut-segment"
+                        >
+                          <title x-text="seg.label + ': ' + seg.percent + '% (' + seg.value + ')'"></title>
+                        </circle>
+                      </template>
+                      <text x="80" y="76" text-anchor="middle" fill="var(--text)" style="font-size:14px;font-weight:700;font-family:var(--font-mono)" x-text="(summary.call_count || 0) + (summary.total_tool_calls || 0)"></text>
+                      <text x="80" y="92" text-anchor="middle" fill="var(--text-muted)" style="font-size:9px;font-family:var(--font-mono)">TOTAL</text>
+                    </svg>
+                  </div>
+                  <div class="donut-legend">
+                    <template x-for="seg in summaryActivityDonutSegments()" :key="'act-lg-' + seg.label">
+                      <div class="donut-legend-item">
+                        <span class="donut-legend-swatch" :style="'background:' + seg.color"></span>
+                        <span class="donut-legend-label" x-text="seg.label"></span>
+                        <span class="donut-legend-pct" x-text="seg.percent + '%'"></span>
+                        <span class="donut-legend-cost text-dim" x-text="String(seg.value)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="card mt-4">
               <div class="card-header">Token Breakdown</div>
               <div class="detail-grid" style="margin-top:8px">
@@ -4305,6 +4582,21 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
           </div>
           <div x-show="tab === 'by-model'">
+            <div class="card mt-4" x-show="modelTokenBars().length">
+              <div class="card-header">Token volume by model (top)</div>
+              <div class="analytics-hbar-wrap">
+                <!-- HTML/CSS bars: Alpine x-for inside SVG is unreliable in Tauri/WebKit; same pattern as the usage column in the table below. -->
+                <template x-for="(row, idx) in modelTokenBars()" :key="'mbar-' + idx">
+                  <div class="analytics-hbar-row" :title="row.model + ': ' + formatTokens(row.tokens) + ' tokens'">
+                    <div class="analytics-hbar-label" x-text="row.shortLabel"></div>
+                    <div class="analytics-hbar-track">
+                      <div class="analytics-hbar-fill" :style="'width:' + row.barPct + '%;background:' + row.color + ';opacity:0.88'"></div>
+                    </div>
+                    <div class="analytics-hbar-value text-dim" x-text="formatTokens(row.tokens)"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
             <div class="table-wrap mt-4" x-show="byModel.length">
               <table>
                 <thead><tr><th>Model</th><th>Calls</th><th>Input Tokens</th><th>Output Tokens</th><th>Cost</th><th style="width:30%">Usage</th></tr></thead>
@@ -4325,6 +4617,20 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="empty-state" x-show="!byModel.length"><p>No model usage data yet.</p></div>
           </div>
           <div x-show="tab === 'by-agent'">
+            <div class="card mt-4" x-show="agentTokenBars().length">
+              <div class="card-header">Tokens by agent (top)</div>
+              <div class="analytics-hbar-wrap">
+                <template x-for="(row, idx) in agentTokenBars()" :key="'abar-' + idx">
+                  <div class="analytics-hbar-row" :title="row.shortLabel + ': ' + formatTokens(row.tokens) + ' tokens'">
+                    <div class="analytics-hbar-label" x-text="row.shortLabel"></div>
+                    <div class="analytics-hbar-track">
+                      <div class="analytics-hbar-fill" :style="'width:' + row.barPct + '%;background:' + row.color + ';opacity:0.88'"></div>
+                    </div>
+                    <div class="analytics-hbar-value text-dim" x-text="formatTokens(row.tokens)"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
             <div class="table-wrap mt-4" x-show="byAgent.length">
               <table>
                 <thead><tr><th>Agent</th><th>Total Tokens</th><th>Tool Calls</th></tr></thead>
@@ -5014,6 +5320,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <select class="form-select" style="width:auto;min-width:140px;font-size:12px" x-model="trafficFilter">
                     <option value="all">All events</option>
                     <option value="messages">Messages only</option>
+                    <option value="activity">Live activity</option>
                     <option value="tasks">Tasks</option>
                     <option value="lifecycle">Spawn / terminate</option>
                   </select>
@@ -5435,6 +5742,100 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
           </div>
 
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ─── ArmaraOS home folder ─── -->
+    <template x-if="page === 'home-files'">
+      <div x-data="homeFilesPage()" x-init="init()">
+        <div class="page-header">
+          <h2>Home folder</h2>
+          <div class="flex items-center gap-2 flex-wrap">
+            <button type="button" class="btn btn-ghost btn-sm" @click="refresh()" :disabled="loading">Refresh</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="goUp()" :disabled="loading || !currentPath">Up</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="goRoot()" :disabled="loading">Root</button>
+          </div>
+        </div>
+        <div class="page-body">
+          <div class="card mb-4" style="border-left:3px solid var(--accent)">
+            <p class="text-sm text-dim" style="line-height:1.7;margin:0">
+              Browse the daemon <strong>ArmaraOS home</strong> (typically <code style="font-size:11px">~/.armaraos</code> / <code style="font-size:11px">ARMARAOS_HOME</code>).
+              Paths are validated server-side; <code style="font-size:11px">..</code> and symlinks that escape this tree are blocked. Opens are capped at 512&nbsp;KiB.
+            </p>
+            <p class="text-sm text-dim mt-2 mb-0" style="line-height:1.6">
+              <strong>Editing</strong> is off by default. Add <code style="font-size:11px">[dashboard]</code> with <code style="font-size:11px">home_editable_globs</code> in <code style="font-size:11px">config.toml</code> (globset syntax, e.g. <code style="font-size:11px">notes/**</code>), then reload config. Secrets and core files (<code style="font-size:11px">.env</code>, <code style="font-size:11px">config.toml</code>, <code style="font-size:11px">data/</code>, …) stay blocked regardless.
+            </p>
+            <p class="text-xs text-dim mt-2 mb-0" x-show="homeEditError" style="color:var(--warn,#c9a227)">Allowlist error: <span x-text="homeEditError"></span></p>
+            <p class="text-xs text-dim mt-2 mb-0" x-show="rootDisplay">
+              <span class="text-dim">Resolved root:</span> <code style="font-size:11px;word-break:break-all" x-text="rootDisplay"></code>
+            </p>
+          </div>
+          <div class="mb-3 flex flex-wrap items-center gap-2 text-sm">
+            <span class="text-dim">Path:</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="font-size:12px;padding:2px 6px" @click="goRoot()">~</button>
+            <template x-for="(part, idx) in breadcrumbParts()" :key="idx">
+              <span class="flex items-center gap-1">
+                <span class="text-dim">/</span>
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:12px;padding:2px 6px" @click="crumbNavigate(idx)" x-text="part"></button>
+              </span>
+            </template>
+          </div>
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="refresh()">Retry</button>
+          </div>
+          <div x-show="!loading && !loadError">
+            <div class="text-xs text-dim mb-2" x-show="truncated">Listing truncated — only the first 4000 entries are shown.</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Name</th><th>Type</th><th>Size</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="row in entries" :key="row.name">
+                    <tr>
+                      <td class="font-mono text-xs" style="word-break:break-all" x-text="row.name"></td>
+                      <td class="text-xs text-dim" x-text="row.kind"></td>
+                      <td class="text-xs text-dim" x-text="row.size != null ? row.size : '—'"></td>
+                      <td>
+                        <button type="button" class="btn btn-ghost btn-sm" x-show="row.kind === 'dir' || row.kind === 'symlink'" @click="enterDir(row.name)">Open</button>
+                        <button type="button" class="btn btn-primary btn-sm" x-show="row.kind === 'file' || row.kind === 'symlink'" @click="openFile(row.name)">View</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="text-xs text-dim mt-3" x-show="!entries.length">This folder is empty.</p>
+          </div>
+        </div>
+        <div x-show="fileModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeFileModal()">
+          <div class="card" style="max-width:720px;width:92%;max-height:85vh;overflow:auto;display:flex;flex-direction:column;gap:12px" @click.stop>
+            <div class="flex justify-between items-start gap-2">
+              <div>
+                <div class="font-bold" style="font-size:15px">File preview</div>
+                <code class="text-xs text-dim" style="word-break:break-all" x-text="filePath"></code>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" @click="closeFileModal()">Close</button>
+            </div>
+            <div x-show="fileLoading" class="loading-state"><div class="spinner"></div></div>
+            <div x-show="!fileLoading && fileError" class="error-state"><span class="error-icon">!</span><p x-text="fileError"></p></div>
+            <div x-show="!fileLoading && !fileError">
+              <div class="text-xs text-dim mb-1">
+                <span x-text="fileEncoding"></span>
+                <span x-show="fileSize"> · </span>
+                <span x-text="fileSize + ' bytes'" x-show="fileSize"></span>
+                <span x-show="fileEditable" class="badge badge-warn" style="margin-left:8px">Editable</span>
+              </div>
+              <textarea class="input font-mono text-xs" style="width:100%;min-height:240px;resize:vertical" :readonly="!fileEditable || fileEncoding !== 'utf8'" x-model="fileContent" x-show="fileEncoding === 'utf8'"></textarea>
+              <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;max-height:360px;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
+              <div class="flex gap-2 flex-wrap items-center">
+                <button type="button" class="btn btn-primary btn-sm" x-show="fileEditable && fileEncoding === 'utf8'" @click="saveFile()" :disabled="saveBusy" x-text="saveBusy ? 'Saving…' : 'Save'"></button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="copyFileContent()">Copy contents</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

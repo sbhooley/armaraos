@@ -19,6 +19,7 @@ pub mod context_budget;
 pub mod context_overflow;
 pub mod copilot_oauth;
 pub mod docker_sandbox;
+pub mod document_tools;
 pub mod drivers;
 pub mod embedding;
 pub mod graceful_shutdown;

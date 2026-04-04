@@ -10,11 +10,9 @@ use semver::Version;
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri::Manager;
-use tauri_plugin_notification::NotificationExt;
-
-use crate::notification_icon::apply_notification_icon;
 
 use crate::ainl::{venv_dir, venv_python};
+use crate::os_notify;
 
 const PYPI_PACKAGE_JSON: &str = "https://pypi.org/pypi/ainativelang/json";
 
@@ -226,16 +224,13 @@ pub fn spawn_ainl_pypi_notify_check(app_handle: AppHandle) {
                         // Already notified for this PyPI release.
                     } else {
                         let installed = info.installed_version.as_deref().unwrap_or("?");
-                        let _ = apply_notification_icon(
-                            app_handle
-                                .notification()
-                                .builder()
-                                .title("AINL update available")
-                                .body(format!(
-                                    "PyPI has ainativelang v{pypi_ver} (you have v{installed}). Open Settings → AINL to upgrade."
-                                )),
-                        )
-                        .show();
+                        os_notify::post_from_app(
+                            &app_handle,
+                            "AINL update available",
+                            format!(
+                                "PyPI has ainativelang v{pypi_ver} (you have v{installed}). Open Settings → AINL to upgrade."
+                            ),
+                        );
                         state.last_notified_pypi_version = Some(pypi_ver.clone());
                         if let Err(e) = save_ainl_notify_state(&app_handle, &state) {
                             tracing::warn!("Failed to save AINL notify state: {e}");

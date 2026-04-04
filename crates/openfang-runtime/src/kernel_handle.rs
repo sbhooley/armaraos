@@ -37,6 +37,17 @@ pub trait KernelHandle: Send + Sync {
     /// Send a message to another agent and get the response.
     async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String>;
 
+    /// Publish a short preview of an `agent_send` so dashboards can show who messaged whom.
+    async fn notify_inter_agent_message(
+        &self,
+        from_agent_id: &str,
+        to_agent_id: &str,
+        message_preview: &str,
+    ) -> Result<(), String> {
+        let _ = (from_agent_id, to_agent_id, message_preview);
+        Ok(())
+    }
+
     /// List all running agents.
     fn list_agents(&self) -> Vec<AgentInfo>;
 

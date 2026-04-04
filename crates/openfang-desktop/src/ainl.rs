@@ -12,6 +12,10 @@
 //! older Pythons are removed on bootstrap/upgrade so a new venv can be created.
 //! Override PyPI spec with `ARMARAOS_AINL_PYPI_SPEC` (default [`DEFAULT_AINL_PYPI_SPEC`]).
 //!
+//! **`ARMARAOS_AINL_AUTO_PIP_UPGRADE`**: when unset or any value other than `0` / `false`, the healthy
+//! venv path runs `pip install --upgrade` for [`pypi_spec`] at most once every 7 days (see
+//! `.last_auto_pip_upgrade_unix` under the app data `ainl/` dir). Set to `0` to disable.
+//!
 //! Designed to be called from Tauri commands and/or on app startup.
 
 use std::fs;
@@ -25,6 +29,9 @@ use tracing::warn;
 
 /// Default spec for online install; override at runtime with `ARMARAOS_AINL_PYPI_SPEC`.
 const DEFAULT_AINL_PYPI_SPEC: &str = "ainativelang[mcp]>=1.3.0,<2";
+
+/// Throttle for [`maybe_auto_upgrade_ainl_pip`] (marker: `.last_auto_pip_upgrade_unix` in app `ainl/`).
+const AUTO_PIP_UPGRADE_INTERVAL_SECS: u64 = 7 * 24 * 3600;
 
 /// `ainativelang` on PyPI declares `Requires-Python >=3.10` for current 1.3.x lines.
 const MIN_PYTHON_MAJOR: u32 = 3;
@@ -103,6 +110,89 @@ fn write_install_source(app: &AppHandle, source: &str) -> Result<(), String> {
 
 fn pypi_spec() -> String {
     std::env::var("ARMARAOS_AINL_PYPI_SPEC").unwrap_or_else(|_| DEFAULT_AINL_PYPI_SPEC.to_string())
+}
+
+fn auto_pip_upgrade_enabled() -> bool {
+    !std::env::var("ARMARAOS_AINL_AUTO_PIP_UPGRADE")
+        .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+}
+
+fn write_auto_pip_upgrade_marker(app: &AppHandle) -> Result<(), String> {
+    let root = app_ainl_root(app)?;
+    fs::create_dir_all(&root).map_err(|e| format!("Failed to create ainl dir: {e}"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let p = root.join(".last_auto_pip_upgrade_unix");
+    fs::write(&p, format!("{now}\n"))
+        .map_err(|e| format!("Failed to write pip upgrade marker: {e}"))
+}
+
+/// Throttled `pip install --upgrade` so PyPI picks up compiler/runtime fixes without a manual upgrade click.
+fn maybe_auto_upgrade_ainl_pip(app: &AppHandle) {
+    if !auto_pip_upgrade_enabled() {
+        return;
+    }
+    let root = match app_ainl_root(app) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "AINL auto pip upgrade: no app data dir");
+            return;
+        }
+    };
+    let marker = root.join(".last_auto_pip_upgrade_unix");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(s) = fs::read_to_string(&marker) {
+        if let Ok(last) = s.trim().parse::<u64>() {
+            if now.saturating_sub(last) < AUTO_PIP_UPGRADE_INTERVAL_SECS {
+                return;
+            }
+        }
+    }
+    let venv = match venv_dir(app) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "AINL auto pip upgrade: no venv");
+            return;
+        }
+    };
+    let py = venv_python(&venv);
+    if !py.exists() {
+        return;
+    }
+    let spec = pypi_spec();
+    match Command::new(&py)
+        .args(["-m", "pip", "install", "--upgrade"])
+        .arg(&spec)
+        .env("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            if let Err(e) = write_auto_pip_upgrade_marker(app) {
+                warn!(error = %e, "AINL auto pip upgrade: wrote pip ok but marker failed");
+            } else {
+                tracing::info!(spec = %spec, "AINL auto pip upgrade applied");
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!(
+                code = ?out.status.code(),
+                stderr = %stderr.trim(),
+                "AINL auto pip upgrade failed (offline or index unreachable); continuing"
+            );
+        }
+        Err(e) => {
+            warn!(error = %e, "AINL auto pip upgrade could not run pip");
+        }
+    }
 }
 
 /// Rust host triple folder under `resources/python/` (must match `xtask bundle-portable-python --target`).
@@ -549,6 +639,8 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
                 armaraos_host_detail: None,
                 ..st
             };
+            maybe_auto_upgrade_ainl_pip(app);
+            sync_ainl_executable_cache(&venv);
             apply_armaraos_host_bootstrap(app, &mut out);
             crate::ainl_upstream::apply_library_sync(app, &mut out);
             return Ok(out);
@@ -583,6 +675,7 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
             .arg(w))?;
         let _ = write_install_source(app, "bundled_wheel");
         install_detail = "AINL installed from bundled wheel (offline)".to_string();
+        let _ = write_auto_pip_upgrade_marker(app);
     } else {
         let spec = pypi_spec();
         run(
@@ -606,6 +699,7 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
         install_detail = format!(
             "AINL installed from PyPI ({spec}). First-time setup used the network; air-gapped machines should ship with a bundled wheel under resources/ainl/ or set PIP_INDEX_URL / extra index env vars."
         );
+        let _ = write_auto_pip_upgrade_marker(app);
     }
 
     // Smoke: ainl + ainl-mcp entrypoints.
@@ -723,6 +817,7 @@ pub fn upgrade_ainl_pip(app: &AppHandle) -> Result<AinlStatus, String> {
         }
         msg
     })?;
+    let _ = write_auto_pip_upgrade_marker(app);
 
     let mut status = ainl_status(app)?;
     if !status.ok {

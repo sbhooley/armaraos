@@ -16,6 +16,11 @@ function chatPage() {
     slashIdx: 0,
     attachments: [],
     dragOver: false,
+    bookmarkModalOpen: false,
+    bookmarkCategoryId: '',
+    bookmarkNewCategory: '',
+    bookmarkTitle: '',
+    bookmarkMsg: null,
     contextPressure: 'low', // green/yellow/orange/red indicator
     _typingTimeout: null,
     /** When false, streaming updates must not call scrollToBottom() — user scrolled up to read history */
@@ -61,7 +66,8 @@ function chatPage() {
       { cmd: '/exit', desc: 'Disconnect from agent' },
       { cmd: '/budget', desc: 'Show spending limits and current costs' },
       { cmd: '/peers', desc: 'Show OFP peer network status' },
-      { cmd: '/a2a', desc: 'List discovered external A2A agents' }
+      { cmd: '/a2a', desc: 'List discovered external A2A agents' },
+      { cmd: '/bookmarks', desc: 'Open saved Bookmarks' }
     ],
     tokenCount: 0,
 
@@ -335,6 +341,9 @@ function chatPage() {
           break;
         case '/agents':
           location.hash = 'agents';
+          break;
+        case '/bookmarks':
+          location.hash = 'bookmarks';
           break;
         case '/new':
           if (self.currentAgent) {
@@ -924,13 +933,190 @@ function chatPage() {
       return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
     },
 
-    // Copy message text to clipboard
+    /**
+     * Parse scheduler inbox messages from the kernel:
+     * - v2: `<<<ARMARAOS_SCHEDULER_V2>>>` + JSON meta line + `<<<SCHEDULER_OUTPUT>>>` + body
+     * - v1: `[Scheduler] job_name @ ISO8601` then `\\n\\n` + body (legacy)
+     * Returns null for normal chat. See `append_cron_output_to_agent_session` in the kernel.
+     */
+    parseSchedulerEnvelopeV2: function(text) {
+      var prefix = '<<<ARMARAOS_SCHEDULER_V2>>>\n';
+      if (!text || text.indexOf(prefix) !== 0) return null;
+      var rest = text.slice(prefix.length);
+      var outMark = '\n<<<SCHEDULER_OUTPUT>>>\n';
+      var idx = rest.indexOf(outMark);
+      if (idx === -1) return null;
+      var metaLine = rest.slice(0, idx).trim();
+      var output = rest.slice(idx + outMark.length);
+      try {
+        var meta = JSON.parse(metaLine);
+        if (meta.v !== 2) return null;
+        var om = meta.output_mode === 'json' ? 'json' : 'markdown';
+        return {
+          version: 2,
+          jobName: (meta.job_name || '').trim() || 'Scheduled job',
+          atIso: (meta.ran_at || '').trim(),
+          body: output,
+          program: (meta.program || '').trim(),
+          jobId: (meta.job_id || '').trim(),
+          outputMode: om,
+        };
+      } catch (e) {
+        return null;
+      }
+    },
+
+    inferSchedulerV1OutputMode: function(body) {
+      var t = (body || '').trim();
+      if (!t) return 'markdown';
+      var last = t[t.length - 1];
+      if ((t[0] === '{' && last === '}') || (t[0] === '[' && last === ']')) {
+        try {
+          JSON.parse(t);
+          return 'json';
+        } catch (e) {}
+      }
+      return 'markdown';
+    },
+
+    schedulerParts: function(msg) {
+      if (!msg || msg.role !== 'agent' || msg.thinking || msg.isHtml || !msg.text) return null;
+      var t = msg.text.trim();
+      var v2 = this.parseSchedulerEnvelopeV2(t);
+      if (v2) return v2;
+      var sep = t.indexOf('\n\n');
+      var head = sep === -1 ? t : t.slice(0, sep);
+      var body = sep === -1 ? '' : t.slice(sep + 2);
+      var hm = head.match(/^\[Scheduler\]\s+(.+)\s+@\s+(.+)$/);
+      if (!hm) return null;
+      var om = this.inferSchedulerV1OutputMode(body);
+      return {
+        version: 1,
+        jobName: hm[1].trim(),
+        atIso: hm[2].trim(),
+        body: body,
+        program: '',
+        jobId: '',
+        outputMode: om,
+      };
+    },
+
+    formatSchedulerAt: function(iso) {
+      if (!iso) return '';
+      try {
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return iso;
+        return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+      } catch (e) {
+        return iso;
+      }
+    },
+
+    shortSchedulerJobId: function(id) {
+      if (!id) return '';
+      if (id.length <= 14) return id;
+      return id.slice(0, 8) + '…';
+    },
+
+    schedulerBodyHtml: function(msg) {
+      var p = this.schedulerParts(msg);
+      if (!p || !p.body) return '';
+      var mode = p.outputMode || 'markdown';
+      if (mode === 'json') {
+        var pretty = p.body;
+        try {
+          pretty = JSON.stringify(JSON.parse(p.body.trim()), null, 2);
+        } catch (e) {}
+        return '<pre class="message-scheduler-pre">' + escapeHtml(pretty) + '</pre>';
+      }
+      return '<div class="markdown-body message-scheduler-md">' + this.renderMarkdown(p.body) + '</div>';
+    },
+
+    /** Main chat bubble HTML (shared so tool-call turns can render reply below tool cards without duplicating logic). */
+    formatChatMessageHtml: function(msg) {
+      if (!msg || !msg.text) return '';
+      var inner = msg.isHtml ? msg.text : ((msg.role === 'agent' || msg.role === 'system') && !msg.thinking
+        ? this.renderMarkdown(msg.text)
+        : this.escapeHtml(msg.text));
+      return this.highlightSearch(inner);
+    },
+
+    // Copy message text to clipboard (Clipboard API + execCommand fallback for desktop WebView)
     copyMessage: function(msg) {
+      var self = this;
       var text = msg.text || '';
-      navigator.clipboard.writeText(text).then(function() {
+      if (msg.isHtml && text) {
+        var div = document.createElement('div');
+        div.innerHTML = text;
+        text = div.textContent || div.innerText || text;
+      }
+      copyTextToClipboard(text).then(function() {
         msg._copied = true;
-        setTimeout(function() { msg._copied = false; }, 2000);
-      }).catch(function() {});
+        var idx = self.messages.indexOf(msg);
+        if (idx !== -1) self.messages.splice(idx, 1, msg);
+        setTimeout(function() {
+          msg._copied = false;
+          var j = self.messages.indexOf(msg);
+          if (j !== -1) self.messages.splice(j, 1, msg);
+        }, 2000);
+      }).catch(function() {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error('Could not copy — try selecting the message text');
+        }
+      });
+    },
+
+    bookmarkCategoriesSorted: function() {
+      if (typeof ArmaraosBookmarks === 'undefined') return [];
+      var st = ArmaraosBookmarks.load();
+      return st.categories.slice().sort(function(a, b) { return a.order - b.order; });
+    },
+
+    openBookmarkModal: function(msg) {
+      if (typeof ArmaraosBookmarks === 'undefined') {
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Bookmarks unavailable');
+        return;
+      }
+      if (!msg || !msg.text || !msg.text.trim() || msg.thinking || msg.streaming) return;
+      if (msg.role !== 'agent' && msg.role !== 'user') return;
+      this.bookmarkMsg = msg;
+      var sorted = this.bookmarkCategoriesSorted();
+      this.bookmarkCategoryId = sorted[0] ? sorted[0].id : '';
+      this.bookmarkNewCategory = '';
+      var line = (msg.text || '').split('\n')[0].trim();
+      this.bookmarkTitle = line.length > 140 ? line.slice(0, 137) + '...' : line;
+      this.bookmarkModalOpen = true;
+    },
+
+    closeBookmarkModal: function() {
+      this.bookmarkModalOpen = false;
+      this.bookmarkMsg = null;
+    },
+
+    confirmBookmark: function() {
+      if (typeof ArmaraosBookmarks === 'undefined' || !this.bookmarkMsg) return;
+      var catId = (this.bookmarkNewCategory && this.bookmarkNewCategory.trim())
+        ? ArmaraosBookmarks.ensureCategory(this.bookmarkNewCategory.trim())
+        : this.bookmarkCategoryId;
+      if (!catId) {
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Choose or create a category');
+        return;
+      }
+      var agent = this.currentAgent;
+      var tools = (this.bookmarkMsg.tools || []).map(function(t) {
+        return { name: t.name, input: t.input, result: t.result, is_error: t.is_error };
+      });
+      ArmaraosBookmarks.addItem({
+        categoryId: catId,
+        title: this.bookmarkTitle.trim() || 'Bookmark',
+        text: this.bookmarkMsg.text,
+        agentId: agent ? agent.id : null,
+        agentName: agent ? agent.name : null,
+        images: this.bookmarkMsg.images || [],
+        tools: tools
+      });
+      this.closeBookmarkModal();
+      if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('Saved to Bookmarks');
     },
 
     // Process queued messages after current response completes
@@ -1114,22 +1300,33 @@ function chatPage() {
 
     addFiles(files) {
       var self = this;
-      var allowed = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'text/plain', 'application/pdf',
-                      'text/markdown', 'application/json', 'text/csv'];
-      var allowedExts = ['.txt', '.pdf', '.md', '.json', '.csv'];
+      var blockedExt = ['.exe', '.dll', '.bat', '.cmd', '.msi', '.scr', '.com', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.iso'];
+      var extOkList = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.heic', '.heif', '.avif', '.svg',
+        '.pdf', '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.tsv', '.tab', '.xml', '.xsl', '.html', '.htm', '.xhtml',
+        '.css', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.vue', '.svelte', '.php', '.phtml', '.py', '.pyw',
+        '.rs', '.go', '.java', '.kt', '.cs', '.c', '.h', '.cpp', '.hpp', '.rb', '.sql', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+        '.ainl', '.lang', '.graphql', '.gql', '.xlsx', '.xls', '.xlsm', '.ods', '.docx', '.doc', '.odt', '.rtf', '.pptx', '.ppt', '.odp',
+        '.woff', '.woff2', '.ttf', '.otf', '.eot', '.mp3', '.wav', '.ogg', '.oga', '.opus', '.flac', '.m4a', '.aac', '.mp4', '.webm', '.mov', '.mkv', '.m4v'];
+      function attachmentAllowed(file) {
+        var ext = file.name.lastIndexOf('.') !== -1 ? file.name.substring(file.name.lastIndexOf('.')).toLowerCase() : '';
+        if (ext && blockedExt.indexOf(ext) !== -1) return false;
+        var t = (file.type || '').toLowerCase();
+        if (t.startsWith('image/') || t.startsWith('audio/') || t.startsWith('video/') || t.startsWith('text/') || t.startsWith('font/')) return true;
+        if (t.startsWith('application/vnd.openxmlformats') || t.startsWith('application/vnd.oasis') || t.startsWith('application/vnd.ms-')) return true;
+        var appExact = ['application/pdf', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/rtf', 'application/sql', 'application/csv', 'application/graphql', 'application/xhtml+xml', 'application/msword', 'application/ld+json', 'application/x-httpd-php', 'application/x-yaml', 'application/x-sh', 'application/x-shellscript', 'application/toml'];
+        if (appExact.indexOf(t) !== -1) return true;
+        if (ext && extOkList.indexOf(ext) !== -1) return true;
+        if (t === 'application/octet-stream' && ext && extOkList.indexOf(ext) !== -1) return true;
+        return false;
+      }
       for (var i = 0; i < files.length; i++) {
         var file = files[i];
         if (file.size > 10 * 1024 * 1024) {
           OpenFangToast.warn('File "' + file.name + '" exceeds 10MB limit');
           continue;
         }
-        var typeOk = allowed.indexOf(file.type) !== -1;
-        if (!typeOk) {
-          var ext = file.name.lastIndexOf('.') !== -1 ? file.name.substring(file.name.lastIndexOf('.')).toLowerCase() : '';
-          typeOk = allowedExts.indexOf(ext) !== -1 || file.type.startsWith('image/');
-        }
-        if (!typeOk) {
-          OpenFangToast.warn('File type not supported: ' + file.name);
+        if (!attachmentAllowed(file)) {
+          OpenFangToast.warn('File type not supported (or blocked): ' + file.name);
           continue;
         }
         var preview = null;
@@ -1208,7 +1405,14 @@ function chatPage() {
         this.recordingTime = 0;
         this._recordingTimer = setInterval(function() { self.recordingTime++; }, 1000);
       } catch(e) {
-        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Microphone access denied');
+        console.warn('[ArmaraOS chat] getUserMedia failed:', e);
+        var msg = 'Could not use the microphone.';
+        if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
+          msg += ' Allow access in System Settings → Privacy & Security → Microphone (choose ArmaraOS). If ArmaraOS is not listed, install a desktop build that includes the microphone permission, then try again.';
+        } else if (e && e.message) {
+          msg += ' ' + e.message;
+        }
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error(msg);
       }
     },
 

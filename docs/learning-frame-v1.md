@@ -26,6 +26,8 @@ Messages to **`POST /api/agents/:id/message`** whose body starts with the ASCII 
 
 [`programs/skill-mint-stub/skill_mint_stub.ainl`](../programs/skill-mint-stub/skill_mint_stub.ainl) builds a minimal title + episode body for `ainl run --frame-json`; use it for CLI experiments. The canonical rich template is the Rust renderer above.
 
+**Folder names:** In `programs/`, a `-stub` directory is a **minimal but runnable template** (not a no-op). The same policy is documented in [programs/README.md](../programs/README.md). Renaming those folders would require updating curated cron paths and job ids in the kernel (`curated_ainl_cron.json`); we keep the names for stability unless we do a dedicated migration.
+
 ## Required fields
 
 | Field | Type | Notes |

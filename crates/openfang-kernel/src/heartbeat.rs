@@ -12,7 +12,7 @@
 use crate::registry::AgentRegistry;
 use chrono::Utc;
 use dashmap::DashMap;
-use openfang_types::agent::{AgentId, AgentState};
+use openfang_types::agent::{AgentId, AgentState, ScheduleMode};
 use tracing::{debug, warn};
 
 /// Default heartbeat check interval (seconds).
@@ -149,13 +149,31 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
 
         let inactive_secs = (now - entry_ref.last_active).num_seconds();
 
-        // Determine timeout: use agent's autonomous config if set, else default
-        let timeout_secs = entry_ref
+        // Determine timeout: autonomous heartbeat interval is a *polling* hint, not max LLM latency.
+        // Never go below the global default (reactive agents routinely block for minutes on tools/LLM).
+        let mut timeout_secs = entry_ref
             .manifest
             .autonomous
             .as_ref()
             .map(|a| a.heartbeat_interval_secs * UNRESPONSIVE_MULTIPLIER)
             .unwrap_or(config.default_timeout_secs) as i64;
+        timeout_secs = timeout_secs.max(config.default_timeout_secs as i64);
+
+        // Scheduled / proactive agents may be idle a long time between ticks; raise the floor.
+        let schedule_floor: i64 = match &entry_ref.manifest.schedule {
+            ScheduleMode::Reactive => 0,
+            ScheduleMode::Continuous {
+                check_interval_secs,
+            } => (*check_interval_secs as i64)
+                .saturating_mul(2)
+                .saturating_add(120),
+            ScheduleMode::Periodic { .. } | ScheduleMode::Proactive { .. } => {
+                (config.default_timeout_secs as i64)
+                    .saturating_mul(10)
+                    .max(900)
+            }
+        };
+        timeout_secs = timeout_secs.max(schedule_floor);
 
         // --- Skip idle agents that have never genuinely processed a message ---
         //
@@ -372,6 +390,50 @@ mod tests {
         assert!(
             statuses.is_empty(),
             "idle agent should be skipped by heartbeat"
+        );
+    }
+
+    #[test]
+    fn test_autonomous_short_heartbeat_uses_global_idle_floor() {
+        // heartbeat_interval_secs * 2 would be 60s — must not beat the global default (180s).
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let two_min_ago = Utc::now() - Duration::seconds(120);
+        let mut agent = make_entry("auto-floor", AgentState::Running, ten_min_ago, two_min_ago);
+        agent.manifest.autonomous = Some(AutonomousConfig {
+            heartbeat_interval_secs: 30,
+            ..Default::default()
+        });
+        registry.register(agent).unwrap();
+
+        let config = HeartbeatConfig::default();
+        let statuses = check_agents(&registry, &config);
+
+        assert_eq!(statuses.len(), 1);
+        assert!(
+            !statuses[0].unresponsive,
+            "120s idle should stay within the 180s global floor"
+        );
+    }
+
+    #[test]
+    fn test_periodic_schedule_allows_long_idle() {
+        let registry = crate::registry::AgentRegistry::new();
+        let hour_ago = Utc::now() - Duration::seconds(3600);
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let mut agent = make_entry("cronny", AgentState::Running, hour_ago, ten_min_ago);
+        agent.manifest.schedule = ScheduleMode::Periodic {
+            cron: "0 * * * *".to_string(),
+        };
+        registry.register(agent).unwrap();
+
+        let config = HeartbeatConfig::default();
+        let statuses = check_agents(&registry, &config);
+
+        assert_eq!(statuses.len(), 1);
+        assert!(
+            !statuses[0].unresponsive,
+            "periodic agents should tolerate long idle between ticks"
         );
     }
 

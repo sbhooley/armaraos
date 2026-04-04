@@ -1,5 +1,7 @@
 # skill-mint-stub
 
+**Naming:** “stub” here means a **minimal template**—the graph is still fully executable and returns real Markdown from the frame. It is not a no-op placeholder.
+
 Minimal AINL graph: builds `# {intent}` + `## Episode` + `episode` text from the learning frame v1 `in:` keys.
 
 - Full Markdown (Meta, refs, tags): `openfang_kernel::skills_staging::render_skill_draft_markdown` and `POST /api/learning/skill-draft`

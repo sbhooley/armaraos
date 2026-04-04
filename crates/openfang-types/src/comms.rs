@@ -84,6 +84,8 @@ pub enum CommsEventKind {
     TaskClaimed,
     /// A task was completed.
     TaskCompleted,
+    /// Agent loop progress (thinking, using a tool, writing a reply).
+    AgentActivity,
 }
 
 /// Request body for POST /api/comms/send.

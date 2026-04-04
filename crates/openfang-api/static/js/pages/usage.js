@@ -246,6 +246,140 @@ function analyticsPage() {
       if (lower.indexOf('haiku') !== -1 || lower.indexOf('gpt-3.5') !== -1 || lower.indexOf('flash') !== -1 || lower.indexOf('mixtral') !== -1) return 'balanced';
       if (lower.indexOf('llama') !== -1 || lower.indexOf('groq') !== -1 || lower.indexOf('gemma') !== -1) return 'fast';
       return 'balanced';
-    }
+    },
+
+    // ── Summary tab: input vs output tokens (donut) ──
+
+    summaryTokenDonutSegments() {
+      var inTok = this.summary.total_input_tokens || 0;
+      var outTok = this.summary.total_output_tokens || 0;
+      var total = inTok + outTok;
+      if (total === 0) return [];
+      var colors = ['#3B82F6', '#10B981'];
+      var circumference = 2 * Math.PI * 60;
+      var pctIn = inTok / total;
+      var pctOut = outTok / total;
+      var dashIn = pctIn * circumference;
+      var dashOut = pctOut * circumference;
+      return [
+        {
+          label: 'Input',
+          value: inTok,
+          percent: Math.round(pctIn * 100),
+          color: colors[0],
+          dasharray: dashIn + ' ' + (circumference - dashIn),
+          dashoffset: 0,
+          circumference: circumference
+        },
+        {
+          label: 'Output',
+          value: outTok,
+          percent: Math.round(pctOut * 100),
+          color: colors[1],
+          dasharray: dashOut + ' ' + (circumference - dashOut),
+          dashoffset: -dashIn,
+          circumference: circumference
+        }
+      ];
+    },
+
+    // ── Summary tab: API calls vs tool calls (donut) ──
+
+    summaryActivityDonutSegments() {
+      var calls = this.summary.call_count || 0;
+      var tools = this.summary.total_tool_calls || 0;
+      var total = calls + tools;
+      if (total === 0) return [];
+      var colors = ['#FF5C00', '#8B5CF6'];
+      var circumference = 2 * Math.PI * 60;
+      var pctCalls = calls / total;
+      var pctTools = tools / total;
+      var dashCalls = pctCalls * circumference;
+      var dashTools = pctTools * circumference;
+      return [
+        {
+          label: 'API calls',
+          value: calls,
+          percent: Math.round(pctCalls * 100),
+          color: colors[0],
+          dasharray: dashCalls + ' ' + (circumference - dashCalls),
+          dashoffset: 0,
+          circumference: circumference
+        },
+        {
+          label: 'Tool calls',
+          value: tools,
+          percent: Math.round(pctTools * 100),
+          color: colors[1],
+          dasharray: dashTools + ' ' + (circumference - dashTools),
+          dashoffset: -dashCalls,
+          circumference: circumference
+        }
+      ];
+    },
+
+    _truncateLabel(s, maxLen) {
+      if (!s) return '';
+      if (s.length <= maxLen) return s;
+      return s.substring(0, maxLen - 1) + '…';
+    },
+
+    // ── By Model tab: horizontal bar chart (top models by tokens) ──
+
+    modelTokenBars() {
+      var models = this.byModel.slice();
+      var self = this;
+      models.sort(function(a, b) {
+        var ta = (a.total_input_tokens || 0) + (a.total_output_tokens || 0);
+        var tb = (b.total_input_tokens || 0) + (b.total_output_tokens || 0);
+        return tb - ta;
+      });
+      models = models.slice(0, 14);
+      var max = 0;
+      models.forEach(function(m) {
+        var t = (m.total_input_tokens || 0) + (m.total_output_tokens || 0);
+        if (t > max) max = t;
+      });
+      if (max === 0) max = 1;
+      var colors = this._chartColors;
+      return models.map(function(m, i) {
+        var t = (m.total_input_tokens || 0) + (m.total_output_tokens || 0);
+        return {
+          model: m.model,
+          shortLabel: self._truncateLabel(m.model || '', 28),
+          tokens: t,
+          barPct: Math.max(3, Math.round((t / max) * 100)),
+          color: colors[i % colors.length]
+        };
+      });
+    },
+
+    // ── By Agent tab: horizontal bar chart ──
+
+    agentTokenBars() {
+      var agents = this.byAgent.slice();
+      var self = this;
+      agents.sort(function(a, b) { return (b.total_tokens || 0) - (a.total_tokens || 0); });
+      agents = agents.slice(0, 14);
+      var max = 0;
+      agents.forEach(function(a) {
+        var t = a.total_tokens || 0;
+        if (t > max) max = t;
+      });
+      if (max === 0) max = 1;
+      var colors = this._chartColors;
+      return agents.map(function(a, i) {
+        var t = a.total_tokens || 0;
+        var name = a.name || a.agent_id || 'Agent';
+        return {
+          agentId: a.agent_id,
+          shortLabel: self._truncateLabel(name, 24),
+          tokens: t,
+          barPct: Math.max(3, Math.round((t / max) * 100)),
+          color: colors[i % colors.length]
+        };
+      });
+    },
+
   };
 }

@@ -101,9 +101,16 @@ Returns detailed information about a single agent.
     "network": []
   },
   "description": "A friendly greeting agent",
-  "tags": []
+  "tags": [],
+  "scheduled_ainl_host_adapter": {
+    "source": "default_online",
+    "summary": "Default full host-adapter allowlist (agent has network, tools, shell, spawn, or OFP).",
+    "adapter_count": 31
+  }
 }
 ```
+
+`scheduled_ainl_host_adapter` describes how **`AINL_HOST_ADAPTER_ALLOWLIST`** is set for this agent when a **scheduled** `ainl run` job runs: `source` is `none`, `metadata` (includes `allowlist`), or `default_online` (includes `adapter_count`).
 
 ### POST /api/agents
 
@@ -1841,6 +1848,16 @@ Create a new cron job.
 }
 ```
 
+### PUT /api/cron/jobs/{id}
+
+Update an existing cron job in place. Request body matches **POST /api/cron/jobs** (same fields, including `agent_id`, `name`, `schedule`, `action`, `delivery`, `enabled`, and optional `one_shot`). The job ID in the path is preserved.
+
+**Response** `200 OK`:
+
+```json
+{ "status": "updated", "job_id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
 ### DELETE /api/cron/jobs/{id}
 
 Delete a cron job by ID.
@@ -2282,7 +2299,7 @@ The `Retry-After` header indicates the window duration in seconds.
 
 ## Endpoint Summary
 
-**76 endpoints total** across 15 groups.
+**77 endpoints total** across 15 groups.
 
 | Method | Path | Description |
 |--------|------|-------------|

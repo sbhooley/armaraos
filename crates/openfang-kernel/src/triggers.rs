@@ -465,6 +465,21 @@ fn describe_event(event: &Event) -> String {
             } => format!(
                 "Cron job failed: {job_name} ({job_id}) for agent {agent_id}: {error}"
             ),
+            SystemEvent::AgentActivity { phase, detail } => {
+                if let Some(d) = detail {
+                    format!("Agent activity: {phase} ({d})")
+                } else {
+                    format!("Agent activity: {phase}")
+                }
+            }
+            SystemEvent::ApprovalPending {
+                request_id,
+                agent_id,
+                tool_name,
+                action_summary,
+            } => format!(
+                "Approval pending: {tool_name} for agent {agent_id} ({request_id}): {action_summary}"
+            ),
         },
         EventPayload::Custom(data) => {
             format!("Custom event ({} bytes)", data.len())

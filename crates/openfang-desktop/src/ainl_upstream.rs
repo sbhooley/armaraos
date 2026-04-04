@@ -1,8 +1,12 @@
 //! Sync `demo/`, `examples/`, and `intelligence/` from the public `ainativelang` GitHub repo
 //! into app data and mirror to `~/.armaraos/ainl-library/` for CLI/editor access.
 //!
-//! Disable with `ARMARAOS_AINL_LIBRARY_SYNC=0`. Skips re-download when the `main` commit SHA matches
-//! the last successful sync (see `upstream_manifest.json`).
+//! After each sync attempt (or when sync is disabled), `apply_library_sync` also materializes
+//! embedded intelligence overlays from `openfang_kernel::ainl_intelligence_overlays` so tokenizer-safe
+//! copies ship with the app without waiting for a new upstream tag.
+//!
+//! Disable tarball sync with `ARMARAOS_AINL_LIBRARY_SYNC=0` (overlays still apply). Skips re-download
+//! when the tracked ref matches the last successful sync (see `upstream_manifest.json`).
 
 use std::fs;
 use std::io::Read;
@@ -10,6 +14,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use flate2::read::GzDecoder;
+use openfang_kernel::ainl_intelligence_overlays::materialize_intelligence_overlays;
 use openfang_kernel::ainl_library::LIBRARY_SYNC_META_FILENAME;
 use openfang_kernel::config::openfang_home;
 use serde::{Deserialize, Serialize};
@@ -70,6 +75,9 @@ pub fn apply_library_sync(app: &AppHandle, status: &mut AinlStatus) {
     {
         status.library_sync_ok = Some(false);
         status.library_sync_detail = Some("Skipped (ARMARAOS_AINL_LIBRARY_SYNC=0)".to_string());
+        if let Err(e) = materialize_intelligence_overlays(&openfang_home()) {
+            warn!("AINL intelligence overlays (desktop): {e}");
+        }
         return;
     }
 
@@ -84,6 +92,9 @@ pub fn apply_library_sync(app: &AppHandle, status: &mut AinlStatus) {
             status.library_sync_ok = Some(false);
             status.library_sync_detail = Some(e);
         }
+    }
+    if let Err(e) = materialize_intelligence_overlays(&openfang_home()) {
+        warn!("AINL intelligence overlays (desktop): {e}");
     }
 }
 
@@ -166,10 +177,13 @@ fn desired_upstream_ref(app: &AppHandle) -> (String, String, String) {
     if let Ok(r) = std::env::var("ARMARAOS_AINL_LIBRARY_REF") {
         let r = r.trim().to_string();
         if !r.is_empty() && r != "main" {
-            let tag = if r.starts_with('v') { r.clone() } else { format!("v{r}") };
-            let url = format!(
-                "https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}"
-            );
+            let tag = if r.starts_with('v') {
+                r.clone()
+            } else {
+                format!("v{r}")
+            };
+            let url =
+                format!("https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}");
             return (tag.clone(), url, format!("tag:{tag}"));
         }
         return (
@@ -185,9 +199,8 @@ fn desired_upstream_ref(app: &AppHandle) -> (String, String, String) {
         let v = ver.trim();
         if !v.is_empty() {
             let tag = format!("v{v}");
-            let url = format!(
-                "https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}"
-            );
+            let url =
+                format!("https://codeload.github.com/sbhooley/ainativelang/tar.gz/refs/tags/{tag}");
             return (tag.clone(), url, format!("tag:{tag}"));
         }
     }

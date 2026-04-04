@@ -44,6 +44,7 @@ tar = { workspace = true }
 flate2 = { workspace = true }
 walkdir = { workspace = true }
 zip = { workspace = true }
+globset = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

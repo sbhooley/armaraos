@@ -358,6 +358,21 @@ tr:hover td { background: var(--surface2); }
   position: relative;
 }
 
+/* Stack tool cards above the final assistant reply within one turn */
+.message-reply-with-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.message-tools-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
 .message-bubble {
   padding: 10px 14px;
   border-radius: var(--radius-lg);
@@ -377,6 +392,142 @@ tr:hover td { background: var(--surface2); }
   border-bottom-left-radius: var(--radius-sm);
   padding: 10px 14px;
 }
+
+/* Scheduled job inbox cards (kernel scheduler v2 envelope or legacy `[Scheduler]` line + output) */
+.message.agent .message-bubble.message-scheduler-card {
+  background: linear-gradient(145deg, rgba(255, 92, 0, 0.07) 0%, var(--agent-bg) 48%);
+  border: 1px solid rgba(255, 92, 0, 0.22);
+  border-left: 3px solid var(--accent, #ff5c00);
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+.message-scheduler-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+[data-theme="light"] .message-scheduler-top {
+  background: rgba(255, 92, 0, 0.04);
+}
+.message-scheduler-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 92, 0, 0.12);
+  color: var(--accent, #ff5c00);
+}
+.message-scheduler-meta {
+  flex: 1;
+  min-width: 0;
+}
+.message-scheduler-job {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  line-height: 1.3;
+}
+.message-scheduler-ran {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  font-family: var(--font-mono);
+}
+.message-scheduler-program {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  word-break: break-all;
+  line-height: 1.4;
+}
+.message-scheduler-program::before {
+  content: "Program · ";
+  font-family: var(--font-sans, system-ui);
+  font-weight: 600;
+  color: var(--text-dim, var(--text-muted));
+  margin-right: 4px;
+}
+.message-scheduler-jobid {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+}
+.message-scheduler-jobid-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.message-scheduler-jobid-code {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-subtle);
+}
+[data-theme="light"] .message-scheduler-jobid-code {
+  background: rgba(0, 0, 0, 0.05);
+}
+.message-scheduler-pill {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 92, 0, 0.15);
+  color: var(--accent, #ff5c00);
+  border: 1px solid rgba(255, 92, 0, 0.25);
+}
+.message-scheduler-output {
+  padding: 10px 14px 12px;
+}
+.message-scheduler-output .message-scheduler-md {
+  font-size: 13px;
+  line-height: 1.55;
+}
+.message-scheduler-output .message-scheduler-md p {
+  margin: 0 0 0.65em;
+}
+.message-scheduler-output .message-scheduler-md p:last-child {
+  margin-bottom: 0;
+}
+.message-scheduler-output .message-scheduler-md a {
+  color: var(--accent, #ff5c00);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.message-scheduler-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  color: var(--text);
+  max-height: 420px;
+  overflow: auto;
+}
+[data-theme="light"] .message-scheduler-pre {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 .message.system .message-bubble {
   background: var(--surface3);
   border: 1px solid var(--border);
@@ -2150,6 +2301,66 @@ mark.search-highlight {
 .cost-bar:hover {
   opacity: 1 !important;
   filter: brightness(1.15);
+}
+
+/* Analytics: horizontal bar charts (by model / by agent) — HTML rows, works in Tauri/WebKit */
+.analytics-hbar-wrap {
+  padding: 8px 12px 12px;
+  overflow-x: auto;
+}
+
+.analytics-hbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.analytics-hbar-row:last-child {
+  margin-bottom: 0;
+}
+
+.analytics-hbar-label {
+  flex: 0 0 38%;
+  max-width: 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .analytics-hbar-label {
+    flex-basis: 32%;
+    max-width: none;
+  }
+}
+
+.analytics-hbar-track {
+  flex: 1;
+  min-width: 72px;
+  height: 16px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.analytics-hbar-fill {
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px;
+  transition: width 0.25s ease;
+}
+
+.analytics-hbar-value {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  min-width: 3.5rem;
+  text-align: right;
 }
 
 /* ── Browser Viewer ── */

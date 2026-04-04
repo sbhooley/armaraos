@@ -194,7 +194,9 @@ pub async fn check_for_updates(
             let outcome = if info.available {
                 format!(
                     "available v{} (source={}, installable={})",
-                    info.version.clone().unwrap_or_else(|| "unknown".to_string()),
+                    info.version
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
                     info.source,
                     info.installable
                 )
@@ -277,7 +279,9 @@ pub async fn post_support_bundle(port: u16) -> Result<serde_json::Value, String>
 
 /// Generate support bundle via local API (desktop shell menu + dashboard invoke).
 #[tauri::command]
-pub async fn generate_support_bundle(port: tauri::State<'_, PortState>) -> Result<serde_json::Value, String> {
+pub async fn generate_support_bundle(
+    port: tauri::State<'_, PortState>,
+) -> Result<serde_json::Value, String> {
     post_support_bundle(port.0).await
 }
 
@@ -313,6 +317,31 @@ pub fn open_logs_dir() -> Result<(), String> {
     let dir = openfang_home().join("logs");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create logs dir: {e}"))?;
     open::that(&dir).map_err(|e| format!("Failed to open directory: {e}"))
+}
+
+/// Open the OS UI where notification permissions are configured (macOS / Windows).
+#[tauri::command]
+pub fn open_notification_settings(_app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.notifications")
+            .status()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "ms-settings:notifications"])
+            .status()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err("Open your system settings and enable notifications for this application.".to_string())
+    }
 }
 
 /// Open `~/.armaraos/ainl-library/` (mirrored AINL demo/examples/intelligence from upstream).
@@ -433,7 +462,11 @@ pub fn ainl_try_library_file(
         if mode == "run" {
             "run"
         } else {
-            if strict { "validate --strict" } else { "validate" }
+            if strict {
+                "validate --strict"
+            } else {
+                "validate"
+            }
         },
         abs.display()
     );

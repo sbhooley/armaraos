@@ -147,7 +147,7 @@ OpenFang is organized as a Cargo workspace with 14 crates:
 | `openfang-hands` | Hands system (curated autonomous capability packages), 7 bundled hands |
 | `openfang-extensions` | Integration registry (25 bundled MCP templates), AES-256-GCM credential vault, OAuth2 PKCE |
 | `openfang-kernel` | Assembles all subsystems: workflow engine, RBAC auth, heartbeat monitor, cron scheduler, config hot-reload |
-| `openfang-api` | REST/WS/SSE API (Axum 0.8), 76 endpoints, 14-page SPA dashboard, OpenAI-compatible `/v1/chat/completions` |
+| `openfang-api` | REST/WS/SSE API (Axum 0.8), 77 endpoints, 14-page SPA dashboard, OpenAI-compatible `/v1/chat/completions` |
 | `openfang-channels` | 40 channel adapters (Telegram, Discord, Slack, WhatsApp, and 36 more), formatter, rate limiter |
 | `openfang-wire` | OFP (OpenFang Protocol): TCP P2P networking with HMAC-SHA256 mutual authentication |
 | `openfang-cli` | Clap CLI with daemon auto-detect (HTTP mode vs. in-process fallback), MCP server |

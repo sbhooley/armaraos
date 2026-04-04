@@ -21,6 +21,8 @@ function schedulerPage() {
 
     // -- Create Job form --
     showCreateForm: false,
+    /** When set, Save updates this job via PUT /api/cron/jobs/{id} */
+    editingJobId: null,
     newJob: {
       name: '',
       cron: '',
@@ -174,7 +176,8 @@ function schedulerPage() {
           last_run: j.last_run,
           next_run: j.next_run,
           delivery: j.delivery ? j.delivery.kind || '' : '',
-          created_at: j.created_at
+          created_at: j.created_at,
+          rawJob: j
         };
       });
     },
@@ -235,6 +238,7 @@ function schedulerPage() {
     // ── Job CRUD ──
 
     resetNewJobForm() {
+      this.editingJobId = null;
       this.newJob = {
         name: '',
         cron: '',
@@ -249,6 +253,60 @@ function schedulerPage() {
         wfInput: '',
         wfTimeout: ''
       };
+    },
+
+    prefillJobFromRaw(j) {
+      if (!j || !j.schedule) return;
+      this.newJob.name = j.name || '';
+      var sch = j.schedule;
+      if (sch.kind === 'cron') {
+        this.newJob.cron = sch.expr || '';
+      } else {
+        this.newJob.cron = '';
+      }
+      this.newJob.agent_id = j.agent_id || '';
+      this.newJob.enabled = j.enabled !== false;
+      var a = j.action || {};
+      if (a.kind === 'agent_turn') {
+        this.newJob.actionKind = 'agent_turn';
+        this.newJob.message = a.message || '';
+      } else if (a.kind === 'ainl_run') {
+        this.newJob.actionKind = 'ainl_run';
+        this.newJob.ainlPath = a.program_path || '';
+        this.newJob.ainlJsonOutput = !!a.json_output;
+        this.newJob.ainlTimeout = a.timeout_secs != null ? String(a.timeout_secs) : '';
+      } else if (a.kind === 'workflow_run') {
+        this.newJob.actionKind = 'workflow_run';
+        this.newJob.wfId = a.workflow_id || '';
+        this.newJob.wfInput = a.input && typeof a.input === 'string' ? a.input : (a.input ? JSON.stringify(a.input) : '');
+        this.newJob.wfTimeout = a.timeout_secs != null ? String(a.timeout_secs) : '';
+      } else if (a.kind === 'system_event') {
+        this.newJob.actionKind = 'agent_turn';
+        this.newJob.message = a.text || '';
+      }
+    },
+
+    editJob(job) {
+      if (!job.rawJob) {
+        OpenFangToast.warn('Cannot edit: reload jobs or use Duplicate after refresh.');
+        return;
+      }
+      this.resetNewJobForm();
+      this.prefillJobFromRaw(job.rawJob);
+      this.editingJobId = job.id;
+      this.showCreateForm = true;
+    },
+
+    duplicateJob(job) {
+      if (!job.rawJob) {
+        OpenFangToast.warn('Cannot duplicate: reload jobs first.');
+        return;
+      }
+      this.resetNewJobForm();
+      this.prefillJobFromRaw(job.rawJob);
+      this.newJob.name = ((this.newJob.name || 'job').trim() + ' copy').trim();
+      this.editingJobId = null;
+      this.showCreateForm = true;
     },
 
     async createJob() {
@@ -320,13 +378,18 @@ function schedulerPage() {
           delivery: { kind: deliveryKind },
           enabled: this.newJob.enabled
         };
-        await OpenFangAPI.post('/api/cron/jobs', body);
+        if (this.editingJobId) {
+          await OpenFangAPI.put('/api/cron/jobs/' + this.editingJobId, body);
+          OpenFangToast.success('Schedule "' + jobName + '" updated');
+        } else {
+          await OpenFangAPI.post('/api/cron/jobs', body);
+          OpenFangToast.success('Schedule "' + jobName + '" created');
+        }
         this.showCreateForm = false;
         this.resetNewJobForm();
-        OpenFangToast.success('Schedule "' + jobName + '" created');
         await this.loadJobs();
       } catch(e) {
-        OpenFangToast.error('Failed to create schedule: ' + (e.message || e));
+        OpenFangToast.error('Failed to save schedule: ' + (e.message || e));
       }
       this.creating = false;
     },

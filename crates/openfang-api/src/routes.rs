@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use openfang_channels::bridge::channel_command_specs;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
@@ -16,7 +17,9 @@ use openfang_kernel::workflow::{
 use openfang_kernel::OpenFangKernel;
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
+use openfang_runtime::workspace_sandbox::resolve_sandbox_path;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
+use openfang_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
@@ -57,7 +60,8 @@ pub struct AppState {
 
 #[inline]
 fn resolve_request_id(ext: Option<Extension<RequestId>>) -> RequestId {
-    ext.map(|e| e.0).unwrap_or_else(|| RequestId("unknown".to_string()))
+    ext.map(|e| e.0)
+        .unwrap_or_else(|| RequestId("unknown".to_string()))
 }
 
 /// Structured JSON error for dashboard clients (`error`, `detail`, `path`, `request_id`, optional `hint`).
@@ -167,7 +171,8 @@ pub async fn spawn_agent(
                         &rid,
                         "/api/agents",
                         "Signed manifest mismatch",
-                        "Verified signed_manifest content does not match manifest_toml.".to_string(),
+                        "Verified signed_manifest content does not match manifest_toml."
+                            .to_string(),
                         Some("Ensure the TOML you sign is identical to manifest_toml."),
                     );
                 }
@@ -357,6 +362,101 @@ pub fn resolve_attachments(
     blocks
 }
 
+/// Sanitize a client-provided filename for a safe destination basename.
+fn sanitize_upload_filename(name: &str) -> String {
+    let base = FsPath::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload.bin");
+    let s: String = base
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() || s == "." {
+        "file.bin".to_string()
+    } else {
+        s
+    }
+}
+
+/// Copy chat uploads from the temp upload dir into `workspace/uploads/` so
+/// `file_list` / `file_read` can resolve them. Skips **audio** only (handled via
+/// STT transcription). Images are copied too (vision blocks are separate).
+///
+/// Returns text to append to the user message listing workspace-relative paths.
+pub fn workspace_upload_hints(workspace_root: &FsPath, attachments: &[AttachmentRef]) -> String {
+    let upload_dir = std::env::temp_dir().join("openfang_uploads");
+    let dest_dir = workspace_root.join("uploads");
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        tracing::warn!(error = %e, path = %dest_dir.display(), "Failed to create workspace uploads dir");
+        return String::new();
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for att in attachments {
+        if uuid::Uuid::parse_str(&att.file_id).is_err() {
+            continue;
+        }
+
+        let meta = UPLOAD_REGISTRY.get(&att.file_id);
+        let content_type = meta
+            .as_ref()
+            .map(|m| m.content_type.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(att.content_type.as_str());
+
+        if content_type.starts_with("audio/") {
+            continue;
+        }
+
+        let src = upload_dir.join(&att.file_id);
+        if !src.is_file() {
+            tracing::warn!(file_id = %att.file_id, "Upload source missing for workspace materialize");
+            continue;
+        }
+
+        let orig_name = meta
+            .as_ref()
+            .map(|m| m.filename.as_str())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                let f = att.filename.as_str();
+                if f.is_empty() {
+                    None
+                } else {
+                    Some(f)
+                }
+            })
+            .unwrap_or("file");
+
+        let safe = sanitize_upload_filename(orig_name);
+        let dest_name = format!("{}_{}", att.file_id, safe);
+        let rel = format!("uploads/{}", dest_name);
+        let dest = dest_dir.join(&dest_name);
+        if let Err(e) = std::fs::copy(&src, &dest) {
+            tracing::warn!(error = %e, dest = %dest.display(), "Failed to copy upload to workspace");
+            continue;
+        }
+
+        lines.push(format!("- `{}` — original filename: {}", rel, orig_name));
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nThe attached file(s) were copied into your agent workspace. Use **file_read** with the path below (relative to the workspace root), not the display name alone:\n{}",
+            lines.join("\n")
+        )
+    }
+}
+
 /// Pre-insert image attachments into an agent's session so the LLM can see them.
 ///
 /// This injects image content blocks into the session BEFORE the kernel
@@ -456,12 +556,35 @@ pub async fn send_message(
         None
     };
 
+    let mut message_for_agent = req.message.clone();
+    if !req.attachments.is_empty() {
+        if let Some(entry) = state.kernel.registry.get(agent_id) {
+            if let Some(ref ws) = entry.manifest.workspace {
+                let hint = workspace_upload_hints(ws.as_path(), &req.attachments);
+                if !hint.is_empty() {
+                    message_for_agent.push_str(&hint);
+                }
+            }
+        }
+    }
+
+    if message_for_agent.len() > MAX_MESSAGE_SIZE {
+        return api_json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &rid,
+            msg_path,
+            "Message too large",
+            format!("Message exceeds {MAX_MESSAGE_SIZE} bytes after attachments."),
+            Some("Shorten the prompt or split attachments across turns."),
+        );
+    }
+
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     match state
         .kernel
         .send_message_with_handle_and_blocks(
             agent_id,
-            &req.message,
+            &message_for_agent,
             Some(kernel_handle),
             content_blocks,
             req.sender_id,
@@ -541,7 +664,9 @@ pub async fn send_message(
             } else if status == StatusCode::NOT_FOUND {
                 Some("The agent may have been stopped; refresh GET /api/agents.")
             } else {
-                Some("Check provider keys, model availability, and daemon logs for this request_id.")
+                Some(
+                    "Check provider keys, model availability, and daemon logs for this request_id.",
+                )
             };
             api_json_error(
                 status,
@@ -1661,6 +1786,7 @@ pub async fn get_agent(
             "mcp_servers": entry.manifest.mcp_servers,
             "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
             "fallback_models": entry.manifest.fallback_models,
+            "scheduled_ainl_host_adapter": state.kernel.scheduled_ainl_host_adapter_info(agent_id),
         })),
     )
 }
@@ -1720,10 +1846,34 @@ pub async fn send_message_stream(
         .into_response();
     }
 
+    let mut message_for_agent = req.message.clone();
+    if !req.attachments.is_empty() {
+        if let Some(entry) = state.kernel.registry.get(agent_id) {
+            if let Some(ref ws) = entry.manifest.workspace {
+                let hint = workspace_upload_hints(ws.as_path(), &req.attachments);
+                if !hint.is_empty() {
+                    message_for_agent.push_str(&hint);
+                }
+            }
+        }
+    }
+
+    if message_for_agent.len() > MAX_MESSAGE_SIZE {
+        return api_json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &rid,
+            PATH,
+            "Message too large",
+            format!("Message exceeds {MAX_MESSAGE_SIZE} bytes after attachments."),
+            Some("Shorten the prompt or split attachments across turns."),
+        )
+        .into_response();
+    }
+
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     let (rx, _handle) = match state.kernel.send_message_streaming(
         agent_id,
-        &req.message,
+        &message_for_agent,
         Some(kernel_handle),
         req.sender_id,
         req.sender_name,
@@ -5803,6 +5953,595 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 // ---------------------------------------------------------------------------
+// ArmaraOS home directory browser (read-only, confined to config.home_dir)
+// ---------------------------------------------------------------------------
+
+/// Max entries returned per list call (sorted; remainder omitted with `truncated: true`).
+const ARMARAOS_HOME_BROWSER_MAX_ENTRIES: usize = 4000;
+/// Max bytes returned for a single file read (prevents huge memory use).
+const ARMARAOS_HOME_BROWSER_MAX_READ_BYTES: u64 = 512 * 1024;
+
+#[derive(serde::Deserialize)]
+pub struct ArmaraosHomeBrowserQuery {
+    #[serde(default)]
+    pub path: String,
+}
+
+fn normalize_armaraos_home_rel(raw: &str) -> String {
+    raw.trim().trim_start_matches(['/', '\\']).to_string()
+}
+
+fn armaraos_home_rel_join(listing_dir: &str, name: &str) -> String {
+    let d = listing_dir.trim();
+    if d.is_empty() {
+        name.to_string()
+    } else {
+        format!("{d}/{name}")
+    }
+}
+
+/// Paths that are never writable from the dashboard, even if matched by `dashboard.home_editable_globs`.
+fn armaraos_home_edit_path_blocked(rel: &str) -> bool {
+    let n = rel.replace('\\', "/");
+    if n.starts_with("data/") {
+        return true;
+    }
+    matches!(
+        n.as_str(),
+        ".env" | "secrets.env" | "vault.enc" | "config.toml" | "daemon.json"
+    ) || n.starts_with(".env/")
+        || n.ends_with("/.env")
+}
+
+fn armaraos_home_build_edit_globset(
+    dashboard: &openfang_types::config::DashboardConfig,
+) -> Result<Option<GlobSet>, String> {
+    let mut b = GlobSetBuilder::new();
+    let mut any = false;
+    for p in &dashboard.home_editable_globs {
+        let t = p.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let g = Glob::new(t).map_err(|e| format!("Invalid glob {t:?}: {e}"))?;
+        b.add(g);
+        any = true;
+    }
+    if !any {
+        return Ok(None);
+    }
+    b.build().map_err(|e| e.to_string()).map(Some)
+}
+
+fn armaraos_home_rel_matches_edit_globs(rel: &str, set: &GlobSet) -> bool {
+    let n = rel.replace('\\', "/");
+    set.is_match(&n)
+}
+
+/// GET /api/armaraos-home/list?path= — List a directory under the ArmaraOS home folder (~/.armaraos by default).
+pub async fn armaraos_home_list(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Query(q): Query<ArmaraosHomeBrowserQuery>,
+) -> axum::response::Response {
+    use std::cmp::Ordering;
+
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let rel = normalize_armaraos_home_rel(&q.path);
+
+    let resolved = match resolve_sandbox_path(&rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/list",
+                "Invalid path",
+                e,
+                Some("Use paths relative to your ArmaraOS home directory. Path traversal (..) is not allowed."),
+            )
+            .into_response();
+        }
+    };
+
+    let meta = match std::fs::metadata(&resolved) {
+        Ok(m) => m,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                "/api/armaraos-home/list",
+                "Path not found",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if !meta.is_dir() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/list",
+            "Not a directory",
+            format!("{} is not a folder.", rel),
+            Some("Open a directory path, not a file."),
+        )
+        .into_response();
+    }
+
+    let read = match std::fs::read_dir(&resolved) {
+        Ok(r) => r,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::FORBIDDEN,
+                &rid,
+                "/api/armaraos-home/list",
+                "Cannot read directory",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    #[derive(Debug)]
+    struct Row {
+        name: String,
+        kind: &'static str,
+        size: Option<u64>,
+        mtime_ms: Option<i64>,
+        sort_dir: bool,
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+    for item in read.flatten() {
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = resolved.join(&name);
+        let sm = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let is_link = sm.file_type().is_symlink();
+        let kind: &'static str = if is_link {
+            "symlink"
+        } else if sm.is_dir() {
+            "dir"
+        } else {
+            "file"
+        };
+        let sort_dir = !is_link && sm.is_dir();
+        let size = if kind == "file" { Some(sm.len()) } else { None };
+        let mtime_ms = sm.modified().ok().and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_millis() as i64)
+        });
+        rows.push(Row {
+            name,
+            kind,
+            size,
+            mtime_ms,
+            sort_dir,
+        });
+    }
+
+    rows.sort_by(|a, b| match (a.sort_dir, b.sort_dir) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => a
+            .name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.name.cmp(&b.name)),
+    });
+
+    let truncated = rows.len() > ARMARAOS_HOME_BROWSER_MAX_ENTRIES;
+    if truncated {
+        rows.truncate(ARMARAOS_HOME_BROWSER_MAX_ENTRIES);
+    }
+
+    let dash = &state.kernel.config.dashboard;
+    let glob_result = armaraos_home_build_edit_globset(dash);
+    let allowlist_error = glob_result.as_ref().err().cloned();
+    let edit_set = match &glob_result {
+        Ok(Some(gs)) => Some(gs),
+        _ => None,
+    };
+
+    let entries: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            let child_rel = armaraos_home_rel_join(&rel, &r.name);
+            let editable = match &edit_set {
+                Some(gs) => {
+                    (r.kind == "file" || r.kind == "symlink")
+                        && !armaraos_home_edit_path_blocked(&child_rel)
+                        && armaraos_home_rel_matches_edit_globs(&child_rel, gs)
+                }
+                None => false,
+            };
+            serde_json::json!({
+                "name": r.name,
+                "kind": r.kind,
+                "size": r.size,
+                "mtime_ms": r.mtime_ms,
+                "editable": editable,
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "path": rel,
+        "root": home_dir.to_string_lossy(),
+        "entries": entries,
+        "truncated": truncated,
+        "home_edit": {
+            "allowlist_enabled": edit_set.is_some(),
+            "allowlist_error": allowlist_error,
+            "max_bytes": dash.home_edit_max_bytes,
+            "backup": dash.home_edit_backup,
+        },
+    }))
+    .into_response()
+}
+
+/// GET /api/armaraos-home/read?path= — Read a file under the ArmaraOS home folder (size-capped).
+pub async fn armaraos_home_read(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Query(q): Query<ArmaraosHomeBrowserQuery>,
+) -> axum::response::Response {
+    use base64::Engine as _;
+
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let rel = normalize_armaraos_home_rel(&q.path);
+
+    if rel.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/read",
+            "Missing path",
+            "Query parameter `path` must name a file relative to the ArmaraOS home directory."
+                .to_string(),
+            Some("Example: path=config.toml"),
+        )
+        .into_response();
+    }
+
+    let resolved = match resolve_sandbox_path(&rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/read",
+                "Invalid path",
+                e,
+                Some("Use paths relative to your ArmaraOS home directory."),
+            )
+            .into_response();
+        }
+    };
+
+    if !resolved.is_file() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/read",
+            "Not a file",
+            format!("{} is not a regular file.", rel),
+            Some("Pick a file path, not a directory."),
+        )
+        .into_response();
+    }
+
+    let len = match std::fs::metadata(&resolved) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                "/api/armaraos-home/read",
+                "File not found",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if len > ARMARAOS_HOME_BROWSER_MAX_READ_BYTES {
+        return api_json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &rid,
+            "/api/armaraos-home/read",
+            "File too large",
+            format!(
+                "File is {} bytes; maximum allowed is {} bytes.",
+                len, ARMARAOS_HOME_BROWSER_MAX_READ_BYTES
+            ),
+            Some("Open the file in an external editor, or increase limits in a future release."),
+        )
+        .into_response();
+    }
+
+    let data = match std::fs::read(&resolved) {
+        Ok(d) => d,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::FORBIDDEN,
+                &rid,
+                "/api/armaraos-home/read",
+                "Cannot read file",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    let (encoding, content) = match String::from_utf8(data) {
+        Ok(s) => ("utf8", serde_json::Value::String(s)),
+        Err(e) => (
+            "base64",
+            serde_json::Value::String(
+                base64::engine::general_purpose::STANDARD.encode(e.as_bytes()),
+            ),
+        ),
+    };
+
+    let dash = &state.kernel.config.dashboard;
+    let gs_result = armaraos_home_build_edit_globset(dash);
+    let allowlist_error = gs_result.as_ref().err().cloned();
+    let editable = encoding == "utf8"
+        && match &gs_result {
+            Ok(Some(gs)) => {
+                !armaraos_home_edit_path_blocked(&rel)
+                    && armaraos_home_rel_matches_edit_globs(&rel, gs)
+            }
+            _ => false,
+        };
+
+    Json(serde_json::json!({
+        "path": rel,
+        "encoding": encoding,
+        "content": content,
+        "size": len,
+        "editable": editable,
+        "allowlist_error": allowlist_error,
+        "home_edit_max_bytes": dash.home_edit_max_bytes,
+        "home_edit_backup": dash.home_edit_backup,
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArmaraosHomeWriteBody {
+    pub path: String,
+    pub content: String,
+}
+
+/// POST /api/armaraos-home/write — Write a UTF-8 file under the ArmaraOS home directory when allowed by `[dashboard] home_editable_globs`.
+pub async fn armaraos_home_write(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(body): Json<ArmaraosHomeWriteBody>,
+) -> axum::response::Response {
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let rel = normalize_armaraos_home_rel(&body.path);
+
+    if rel.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/write",
+            "Missing path",
+            "Field `path` must name a file relative to the ArmaraOS home directory.".to_string(),
+            Some("Set dashboard.home_editable_globs in config.toml to enable editing."),
+        )
+        .into_response();
+    }
+
+    if armaraos_home_edit_path_blocked(&rel) {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            "/api/armaraos-home/write",
+            "Path not editable",
+            "This path is blocked from dashboard writes (secrets, config, or data directory)."
+                .to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    let dash = &state.kernel.config.dashboard;
+    let max_bytes = dash.home_edit_max_bytes;
+    let content_len = body.content.len();
+    if content_len > max_bytes as usize {
+        return api_json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &rid,
+            "/api/armaraos-home/write",
+            "Content too large",
+            format!("Body is {content_len} bytes; maximum is {max_bytes}."),
+            Some("Raise [dashboard] home_edit_max_bytes if you need larger files."),
+        )
+        .into_response();
+    }
+
+    let gs = match armaraos_home_build_edit_globset(dash) {
+        Ok(Some(gs)) => gs,
+        Ok(None) => {
+            return api_json_error(
+                StatusCode::FORBIDDEN,
+                &rid,
+                "/api/armaraos-home/write",
+                "Editing disabled",
+                "dashboard.home_editable_globs is empty — add glob patterns in config.toml to allow writes.".to_string(),
+                Some(r#"Example: home_editable_globs = ["notes/**"]"#),
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                "/api/armaraos-home/write",
+                "Invalid allowlist",
+                e,
+                Some("Fix dashboard.home_editable_globs in config.toml (glob syntax error)."),
+            )
+            .into_response();
+        }
+    };
+
+    if !armaraos_home_rel_matches_edit_globs(&rel, &gs) {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            "/api/armaraos-home/write",
+            "Path not allowed",
+            format!("Path `{rel}` does not match any entry in dashboard.home_editable_globs."),
+            None,
+        )
+        .into_response();
+    }
+
+    let resolved = match resolve_sandbox_path(&rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/write",
+                "Invalid path",
+                e,
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if resolved.is_dir() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/write",
+            "Not a file",
+            format!("{rel} is a directory."),
+            None,
+        )
+        .into_response();
+    }
+
+    let parent = match resolved.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/write",
+                "Invalid path",
+                "Missing parent directory.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if !parent.is_dir() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/write",
+            "Parent missing",
+            format!("Parent directory does not exist: {}", parent.display()),
+            Some("Create the folder first, then save the file."),
+        )
+        .into_response();
+    }
+
+    if resolved.exists() && dash.home_edit_backup {
+        let bak = format!("{}.bak", resolved.display());
+        if let Err(e) = std::fs::copy(&resolved, &bak) {
+            tracing::warn!(path = %resolved.display(), error = %e, "armaraos-home write: backup copy failed");
+        }
+    }
+
+    let fname = match resolved.file_name().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/write",
+                "Invalid filename",
+                "Non-UTF8 file name.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    let tmp = parent.join(format!(".{fname}.armaraos_write.{}", std::process::id()));
+
+    let bytes = body.content.into_bytes();
+    if let Err(e) = std::fs::write(&tmp, &bytes) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            "/api/armaraos-home/write",
+            "Write failed",
+            e.to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if cfg!(windows) && resolved.exists() {
+        if let Err(e) = std::fs::remove_file(&resolved) {
+            let _ = std::fs::remove_file(&tmp);
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                "/api/armaraos-home/write",
+                "Replace failed",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    }
+
+    if let Err(e) = std::fs::rename(&tmp, &resolved) {
+        let _ = std::fs::remove_file(&tmp);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            "/api/armaraos-home/write",
+            "Commit failed",
+            e.to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    Json(serde_json::json!({
+        "ok": true,
+        "path": rel,
+        "bytes_written": content_len,
+    }))
+    .into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Config endpoint
 // ---------------------------------------------------------------------------
 
@@ -7595,6 +8334,7 @@ pub async fn mcp_http(
         // Execute the tool via the kernel's tool runner
         let kernel_handle: Arc<dyn openfang_runtime::kernel_handle::KernelHandle> =
             state.kernel.clone() as Arc<dyn openfang_runtime::kernel_handle::KernelHandle>;
+        let ainl_library_root = state.kernel.config.home_dir.join("ainl-library");
         let result = openfang_runtime::tool_runner::execute_tool(
             "mcp-http",
             tool_name,
@@ -7608,6 +8348,7 @@ pub async fn mcp_http(
             Some(&state.kernel.browser_ctx),
             None,
             None,
+            Some(ainl_library_root.as_path()),
             Some(&state.kernel.media_engine),
             None, // exec_policy
             if state.kernel.config.tts.enabled {
@@ -9486,7 +10227,8 @@ pub async fn create_schedule(
             &rid,
             PATH,
             "Invalid cron expression",
-            "Cron must have exactly 5 fields (minute hour dom mon dow), space-separated.".to_string(),
+            "Cron must have exactly 5 fields (minute hour dom mon dow), space-separated."
+                .to_string(),
             Some("Example: \"0 9 * * *\" for daily 9:00."),
         );
     }
@@ -9925,8 +10667,10 @@ pub async fn create_diagnostics_bundle(
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
     });
-    if let Err(e) = std::fs::write(&tmp_meta, serde_json::to_vec_pretty(&meta).unwrap_or_default())
-    {
+    if let Err(e) = std::fs::write(
+        &tmp_meta,
+        serde_json::to_vec_pretty(&meta).unwrap_or_default(),
+    ) {
         return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &rid,
@@ -11035,13 +11779,311 @@ static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::new(Da
 /// Maximum upload size: 10 MB.
 const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024;
 
-/// Allowed content type prefixes for upload.
-const ALLOWED_CONTENT_TYPES: &[&str] = &["image/", "text/", "application/pdf", "audio/"];
+fn upload_extension_lower(filename: &str) -> Option<String> {
+    FsPath::new(filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+}
 
-fn is_allowed_content_type(ct: &str) -> bool {
-    ALLOWED_CONTENT_TYPES
-        .iter()
-        .any(|prefix| ct.starts_with(prefix))
+/// Blocked extensions (executables / installers). Uploads are never executed, but we reject these anyway.
+const BLOCKED_UPLOAD_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "com", "scr", "msi", "pif", "cpl", "sys", "drv", "app", "deb", "rpm", "dmg",
+    "pkg", "iso", "bat", "cmd",
+];
+
+/// Allowlisted extensions when MIME is missing or generic (`application/octet-stream`).
+const ALLOWED_UPLOAD_EXTENSIONS: &[&str] = &[
+    "png",
+    "jpg",
+    "jpeg",
+    "jpe",
+    "gif",
+    "webp",
+    "bmp",
+    "ico",
+    "tif",
+    "tiff",
+    "heic",
+    "heif",
+    "avif",
+    "svg",
+    "mp3",
+    "wav",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "m4a",
+    "aac",
+    "wma",
+    "mp4",
+    "webm",
+    "mov",
+    "mkv",
+    "m4v",
+    "pdf",
+    "csv",
+    "tsv",
+    "tab",
+    "txt",
+    "md",
+    "markdown",
+    "json",
+    "jsonl",
+    "json5",
+    "xml",
+    "xsl",
+    "xslt",
+    "html",
+    "htm",
+    "xhtml",
+    "css",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "ts",
+    "tsx",
+    "mts",
+    "cts",
+    "vue",
+    "svelte",
+    "php",
+    "phtml",
+    "py",
+    "pyw",
+    "pyi",
+    "rb",
+    "erb",
+    "java",
+    "kt",
+    "kts",
+    "go",
+    "rs",
+    "c",
+    "h",
+    "cpp",
+    "hpp",
+    "cc",
+    "cxx",
+    "cs",
+    "swift",
+    "scala",
+    "sc",
+    "clj",
+    "cljs",
+    "edn",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "psm1",
+    "psd1",
+    "sql",
+    "ini",
+    "cfg",
+    "conf",
+    "config",
+    "toml",
+    "yaml",
+    "yml",
+    "env",
+    "properties",
+    "ainl",
+    "lang",
+    "graphql",
+    "gql",
+    "r",
+    "lua",
+    "pl",
+    "pm",
+    "dart",
+    "ex",
+    "exs",
+    "hs",
+    "lhs",
+    "ml",
+    "mli",
+    "nim",
+    "zig",
+    "v",
+    "vh",
+    "sv",
+    "tex",
+    "log",
+    "xlsx",
+    "xls",
+    "xlsm",
+    "ods",
+    "docx",
+    "doc",
+    "odt",
+    "rtf",
+    "pptx",
+    "ppt",
+    "odp",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+    "eot",
+];
+
+fn upload_extension_blocked(ext: &str) -> bool {
+    BLOCKED_UPLOAD_EXTENSIONS.contains(&ext)
+}
+
+fn upload_extension_allowlisted(ext: &str) -> bool {
+    ALLOWED_UPLOAD_EXTENSIONS.contains(&ext)
+}
+
+fn infer_mime_from_extension(ext: &str) -> String {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "tif" | "tiff" => "image/tiff",
+        "heic" | "heif" => "image/heic",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" | "aac" => "audio/mp4",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "pdf" => "application/pdf",
+        "json" | "jsonl" | "json5" => "application/json",
+        "csv" | "tsv" | "tab" => "text/csv",
+        "xlsx" | "xlsm" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls" => "application/vnd.ms-excel",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc" => "application/msword",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" | "jsx" | "mjs" | "cjs" => "text/javascript",
+        "ts" | "tsx" | "mts" | "cts" => "text/typescript",
+        "php" | "phtml" => "application/x-httpd-php",
+        "py" | "pyw" | "pyi" => "text/x-python",
+        "rs" => "text/rust",
+        "go" => "text/x-go",
+        "java" => "text/x-java",
+        "rb" | "erb" => "text/x-ruby",
+        "sql" => "application/sql",
+        "xml" | "xsl" | "xslt" => "application/xml",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "graphql" | "gql" => "application/graphql",
+        "ainl" | "lang" => "text/plain",
+        _ => "text/plain",
+    }
+    .to_string()
+}
+
+fn upload_mime_disallowed(ct: &str) -> bool {
+    matches!(
+        ct,
+        "application/wasm"
+            | "application/x-msdownload"
+            | "application/x-msdos-program"
+            | "application/x-executable"
+    ) || ct.starts_with("application/x-dosexec")
+}
+
+fn upload_mime_allowed(ct: &str) -> bool {
+    if upload_mime_disallowed(ct) {
+        return false;
+    }
+    if ct.starts_with("image/")
+        || ct.starts_with("audio/")
+        || ct.starts_with("video/")
+        || ct.starts_with("text/")
+        || ct.starts_with("font/")
+    {
+        return true;
+    }
+    if ct.starts_with("application/vnd.openxmlformats")
+        || ct.starts_with("application/vnd.oasis.opendocument")
+        || ct.starts_with("application/vnd.ms-")
+    {
+        return true;
+    }
+    matches!(
+        ct,
+        "application/pdf"
+            | "application/json"
+            | "application/xml"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "application/ecmascript"
+            | "application/typescript"
+            | "application/rtf"
+            | "application/sql"
+            | "application/csv"
+            | "application/xhtml+xml"
+            | "application/x-httpd-php"
+            | "application/x-php"
+            | "application/x-yaml"
+            | "application/x-sh"
+            | "application/x-shellscript"
+            | "application/toml"
+            | "application/graphql"
+            | "application/ld+json"
+            | "application/msword"
+    )
+}
+
+/// Validate reported MIME + filename; normalize storage type (fixes `application/octet-stream` + `.py`, etc.).
+fn normalize_upload_content_type(filename: &str, reported: &str) -> Result<String, &'static str> {
+    let ext = upload_extension_lower(filename);
+    if let Some(ref e) = ext {
+        if upload_extension_blocked(e) {
+            return Err("This file extension is not allowed for security reasons.");
+        }
+    }
+
+    let r = reported.trim().to_lowercase();
+
+    if r == "application/octet-stream" || r == "binary/octet-stream" || r.is_empty() {
+        let ext = ext
+            .as_ref()
+            .ok_or("Unknown file type: add a known extension or use a supported MIME type.")?;
+        if !upload_extension_allowlisted(ext) {
+            return Err("This file type is not allowed for generic binary uploads.");
+        }
+        return Ok(infer_mime_from_extension(ext));
+    }
+
+    if upload_mime_disallowed(&r) {
+        return Err("This MIME type is not allowed.");
+    }
+
+    if upload_mime_allowed(&r) {
+        return Ok(r);
+    }
+
+    let ext = ext
+        .as_ref()
+        .ok_or("This MIME type is not allowed for this file.")?;
+    if !upload_extension_allowlisted(ext) {
+        return Err("This file type is not allowed.");
+    }
+    Ok(infer_mime_from_extension(ext))
 }
 
 /// POST /api/agents/{id}/upload — Upload a file attachment.
@@ -11120,7 +12162,7 @@ pub async fn upload_file(
         }
     }
 
-    let (filename_attr, content_type, body) = match file_data {
+    let (filename_attr, reported_content_type, body) = match file_data {
         Some(data) => data,
         None => {
             return api_json_error(
@@ -11138,16 +12180,19 @@ pub async fn upload_file(
         .or(filename_attr)
         .unwrap_or_else(|| "upload".to_string());
 
-    if !is_allowed_content_type(&content_type) {
-        return api_json_error(
-            StatusCode::BAD_REQUEST,
-            &rid,
-            PATH,
-            "Unsupported content type",
-            "Allowed: image/*, text/*, audio/*, application/pdf.".to_string(),
-            None,
-        );
-    }
+    let content_type = match normalize_upload_content_type(&filename, &reported_content_type) {
+        Ok(ct) => ct,
+        Err(msg) => {
+            return api_json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                &rid,
+                PATH,
+                "Unsupported file type",
+                msg.to_string(),
+                Some("Use a known extension or supported MIME type (documents, code, images, audio, video, fonts, Office, PDF, CSV, etc.). Executables and installers are blocked."),
+            );
+        }
+    };
 
     // Validate size
     if body.len() > MAX_UPLOAD_SIZE {
@@ -11430,7 +12475,10 @@ pub async fn create_approval(
     // Spawn the request in the background (it will block until resolved or timed out)
     let kernel = Arc::clone(&state.kernel);
     tokio::spawn(async move {
-        kernel.approval_manager.request_approval(approval_req).await;
+        kernel
+            .approval_manager
+            .request_approval(approval_req, Some(&kernel.event_bus))
+            .await;
     });
 
     (
@@ -11949,6 +12997,99 @@ pub async fn create_cron_job(
             "Cron job creation failed",
             e,
             Some("Validate agent_id (UUID), name, schedule, action, and optional delivery against the cron schema."),
+        ),
+    }
+}
+
+fn parse_cron_job_body(body: &serde_json::Value, id: CronJobId) -> Result<CronJob, String> {
+    let name = body["name"]
+        .as_str()
+        .ok_or_else(|| "Missing 'name' field".to_string())?
+        .to_string();
+    let schedule: CronSchedule = serde_json::from_value(body["schedule"].clone())
+        .map_err(|e| format!("Invalid schedule: {e}"))?;
+    let action: CronAction = serde_json::from_value(body["action"].clone())
+        .map_err(|e| format!("Invalid action: {e}"))?;
+    let delivery: CronDelivery = if body["delivery"].is_object() {
+        serde_json::from_value(body["delivery"].clone())
+            .map_err(|e| format!("Invalid delivery: {e}"))?
+    } else {
+        CronDelivery::None
+    };
+    let enabled = body["enabled"].as_bool().unwrap_or(true);
+    let agent_id = AgentId(
+        uuid::Uuid::parse_str(
+            body["agent_id"]
+                .as_str()
+                .ok_or_else(|| "Missing agent_id".to_string())?,
+        )
+        .map_err(|e| format!("Invalid agent ID: {e}"))?,
+    );
+    Ok(CronJob {
+        id,
+        agent_id,
+        name,
+        schedule,
+        action,
+        delivery,
+        enabled,
+        created_at: chrono::Utc::now(),
+        last_run: None,
+        next_run: None,
+    })
+}
+
+/// PUT /api/cron/jobs/{id} — Update an existing cron job (same id).
+pub async fn update_cron_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/cron/jobs/:id";
+    let uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid job ID",
+                "Job id must be a UUID.".to_string(),
+                Some("Use the id from GET /api/cron/jobs."),
+            );
+        }
+    };
+    let job_id = CronJobId(uuid);
+    let job = match parse_cron_job_body(&body, job_id) {
+        Ok(j) => j,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid cron job body",
+                e,
+                Some("Use the same JSON shape as POST /api/cron/jobs."),
+            );
+        }
+    };
+    match state.kernel.cron_scheduler.update_job(job_id, job) {
+        Ok(()) => {
+            let _ = state.kernel.cron_scheduler.persist();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "updated", "job_id": id})),
+            )
+        }
+        Err(e) => api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Cron job update failed",
+            format!("{e}"),
+            None,
         ),
     }
 }
@@ -12558,8 +13699,15 @@ pub async fn pairing_remove_device(
     }
     match state.kernel.pairing.remove_device(&device_id) {
         Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => api_json_error(StatusCode::NOT_FOUND, &rid, PATH, "Device not found", e, None)
-            .into_response(),
+        Err(e) => api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Device not found",
+            e,
+            None,
+        )
+        .into_response(),
     }
 }
 
@@ -12679,9 +13827,7 @@ static COPILOT_FLOWS: LazyLock<DashMap<String, CopilotFlowState>> = LazyLock::ne
 ///
 /// Initiates a GitHub device flow for Copilot authentication.
 /// Returns a user code and verification URI that the user visits in their browser.
-pub async fn copilot_oauth_start(
-    ext: Option<Extension<RequestId>>,
-) -> impl IntoResponse {
+pub async fn copilot_oauth_start(ext: Option<Extension<RequestId>>) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/providers/github-copilot/oauth/start";
     // Clean up expired flows first
@@ -12951,6 +14097,35 @@ fn filter_to_comms_event(
             }),
             _ => None,
         },
+        EventPayload::System(openfang_types::event::SystemEvent::AgentActivity {
+            phase,
+            detail,
+        }) => {
+            let aid = event.source.to_string();
+            let detail_str = match phase.as_str() {
+                "thinking" => "Thinking…".to_string(),
+                "tool_use" => format!("Using tool: {}", detail.as_deref().unwrap_or("tool")),
+                "streaming" => "Writing response…".to_string(),
+                "done" | "error" => return None,
+                _ => {
+                    if let Some(d) = detail {
+                        format!("{phase}: {d}")
+                    } else {
+                        phase.clone()
+                    }
+                }
+            };
+            Some(CommsEvent {
+                id: event.id.to_string(),
+                timestamp: event.timestamp.to_rfc3339(),
+                kind: CommsEventKind::AgentActivity,
+                source_id: aid.clone(),
+                source_name: resolve_name(&aid),
+                target_id: String::new(),
+                target_name: String::new(),
+                detail: detail_str,
+            })
+        }
         _ => None,
     }
 }
@@ -13171,7 +14346,10 @@ pub async fn comms_send(
             &rid,
             PATH,
             "Source agent not found",
-            format!("No agent registered for from_agent_id {}.", req.from_agent_id),
+            format!(
+                "No agent registered for from_agent_id {}.",
+                req.from_agent_id
+            ),
             Some("Use GET /api/agents to list agents."),
         );
     }
@@ -13612,9 +14790,7 @@ pub async fn get_ainl_library(
 }
 
 /// GET /api/ainl/library/curated — Static catalog used for optional cron registration.
-pub async fn get_ainl_library_curated(
-    ext: Option<Extension<RequestId>>,
-) -> impl IntoResponse {
+pub async fn get_ainl_library_curated(ext: Option<Extension<RequestId>>) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/ainl/library/curated";
     match serde_json::from_str::<serde_json::Value>(
@@ -13681,6 +14857,11 @@ pub async fn post_ainl_register_curated(
                 0
             }
         };
+    if let Err(e) = openfang_kernel::embedded_ainl_programs::ensure_ainl_library_pointer_files(
+        &state.kernel.config.home_dir,
+    ) {
+        tracing::warn!("AINL library pointer files (register-curated): {e}");
+    }
 
     match openfang_kernel::ainl_library::register_curated_ainl_cron_jobs(&state.kernel) {
         Ok(n) => {

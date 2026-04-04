@@ -52,9 +52,18 @@ async fn start_test_server_with_provider(
     model: &str,
     api_key_env: &str,
 ) -> TestServer {
+    start_test_server_with_provider_patch(provider, model, api_key_env, |_| {}).await
+}
+
+async fn start_test_server_with_provider_patch(
+    provider: &str,
+    model: &str,
+    api_key_env: &str,
+    patch: impl FnOnce(&mut KernelConfig),
+) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
-    let config = KernelConfig {
+    let mut config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
         default_model: DefaultModelConfig {
@@ -65,6 +74,7 @@ async fn start_test_server_with_provider(
         },
         ..KernelConfig::default()
     };
+    patch(&mut config);
 
     let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
     let kernel = Arc::new(kernel);
@@ -132,6 +142,18 @@ async fn start_test_server_with_provider(
             axum::routing::get(routes::kernel_events_stream),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
+        .route(
+            "/api/armaraos-home/list",
+            axum::routing::get(routes::armaraos_home_list),
+        )
+        .route(
+            "/api/armaraos-home/read",
+            axum::routing::get(routes::armaraos_home_read),
+        )
+        .route(
+            "/api/armaraos-home/write",
+            axum::routing::post(routes::armaraos_home_write),
+        )
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
@@ -223,6 +245,143 @@ async fn test_health_endpoint() {
     // Detailed fields should NOT appear in public health endpoint
     assert!(body["database"].is_null());
     assert!(body["agent_count"].is_null());
+}
+
+#[tokio::test]
+async fn armaraos_home_browser_lists_and_reads_under_home() {
+    let server = start_test_server().await;
+    let home = server.state.kernel.config.home_dir.clone();
+    std::fs::write(home.join("z_browser_test.txt"), b"hello-armaraos-home").unwrap();
+    std::fs::create_dir_all(home.join("z_browser_sub")).unwrap();
+
+    let client = reqwest::Client::new();
+
+    let list_root = client
+        .get(format!("{}/api/armaraos-home/list", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list_root.status(), 200);
+    let j: serde_json::Value = list_root.json().await.unwrap();
+    let names: Vec<&str> = j["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(names.contains(&"z_browser_test.txt"));
+    assert!(names.contains(&"z_browser_sub"));
+
+    let read = client
+        .get(format!(
+            "{}/api/armaraos-home/read?path=z_browser_test.txt",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(read.status(), 200);
+    let body: serde_json::Value = read.json().await.unwrap();
+    assert_eq!(body["encoding"], "utf8");
+    assert_eq!(body["content"], "hello-armaraos-home");
+
+    let trav = client
+        .get(format!(
+            "{}/api/armaraos-home/list?path=../../../etc",
+            server.base_url,
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(trav.status(), 400);
+}
+
+#[tokio::test]
+async fn armaraos_home_write_allowlist_and_blocks() {
+    let server =
+        start_test_server_with_provider_patch("ollama", "test-model", "OLLAMA_API_KEY", |c| {
+            c.dashboard.home_editable_globs = vec!["z_notes/**".to_string()];
+        })
+        .await;
+    let home = server.state.kernel.config.home_dir.clone();
+    std::fs::create_dir_all(home.join("z_notes")).unwrap();
+    std::fs::write(home.join("z_notes").join("editable.txt"), b"orig").unwrap();
+    std::fs::write(home.join(".env"), b"SECRET=1").unwrap();
+
+    let client = reqwest::Client::new();
+
+    let write_ok = client
+        .post(format!("{}/api/armaraos-home/write", server.base_url))
+        .json(&serde_json::json!({
+            "path": "z_notes/editable.txt",
+            "content": "nope",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        write_ok.status(),
+        200,
+        "write under z_notes/** should succeed"
+    );
+
+    let read = client
+        .get(format!(
+            "{}/api/armaraos-home/read?path=z_notes/editable.txt",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(read.status(), 200);
+    let body: serde_json::Value = read.json().await.unwrap();
+    assert_eq!(body["content"], "nope");
+
+    let dotenv = client
+        .post(format!("{}/api/armaraos-home/write", server.base_url))
+        .json(&serde_json::json!({
+            "path": ".env",
+            "content": "x",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dotenv.status(), 403);
+
+    let server_star =
+        start_test_server_with_provider_patch("ollama", "test-model", "OLLAMA_API_KEY", |c| {
+            c.dashboard.home_editable_globs = vec!["**".to_string()];
+        })
+        .await;
+    let home2 = server_star.state.kernel.config.home_dir.clone();
+    std::fs::write(home2.join(".env"), b"y").unwrap();
+    let client2 = reqwest::Client::new();
+    let block_env = client2
+        .post(format!("{}/api/armaraos-home/write", server_star.base_url))
+        .json(&serde_json::json!({
+            "path": ".env",
+            "content": "z",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(block_env.status(), 403);
+}
+
+#[tokio::test]
+async fn armaraos_home_write_disabled_without_globs() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let r = client
+        .post(format!("{}/api/armaraos-home/write", server.base_url))
+        .json(&serde_json::json!({
+            "path": "any.txt",
+            "content": "x",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
 }
 
 #[tokio::test]

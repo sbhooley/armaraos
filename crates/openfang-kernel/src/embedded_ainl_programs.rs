@@ -71,6 +71,49 @@ pub fn materialize_embedded_programs(home_dir: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
+/// Create small pointer files at `~/ainl-library/` so `file_read` matches common agent expectations.
+/// (Upstream overview is `README_ARMARAOS.md`; many models guess `README.md`. Embedded revision
+/// lives under `armaraos-programs/` — we mirror it at the library root for discovery.)
+pub fn ensure_ainl_library_pointer_files(home_dir: &Path) -> Result<(), String> {
+    let lib_root = home_dir.join("ainl-library");
+    fs::create_dir_all(&lib_root).map_err(|e| format!("create {}: {e}", lib_root.display()))?;
+
+    let readme = lib_root.join("README.md");
+    if !readme.exists() {
+        let body = "# AINL library (ArmaraOS)\n\n\
+            **Full overview:** `README_ARMARAOS.md` (same directory).\n\n\
+            - `demo/`, `examples/`, `intelligence/` — upstream examples (after desktop sync)\n\
+            - `armaraos-programs/` — embedded ArmaraOS bundles (canonical `.embedded-revision.txt` for that tree)\n\n\
+            **Tools:** `file_list` a directory before `file_read`; `file_read` only works on files, not folders.\n";
+        fs::write(&readme, body).map_err(|e| format!("write {}: {e}", readme.display()))?;
+    }
+
+    let programs_revision = lib_root
+        .join("armaraos-programs")
+        .join(".embedded-revision.txt");
+    let root_revision = lib_root.join(".embedded-revision.txt");
+    let body = if programs_revision.exists() {
+        fs::read_to_string(&programs_revision)
+            .map_err(|e| format!("read {}: {e}", programs_revision.display()))?
+    } else {
+        format!(
+            "{}\n{}\n",
+            EMBEDDED_PROGRAMS_REVISION,
+            "Embedded ArmaraOS AINL programs (see armaraos-programs/ after kernel materializes them)."
+        )
+    };
+    let write = match fs::read_to_string(&root_revision) {
+        Ok(existing) => existing != body,
+        Err(_) => true,
+    };
+    if write {
+        fs::write(&root_revision, body)
+            .map_err(|e| format!("write {}: {e}", root_revision.display()))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

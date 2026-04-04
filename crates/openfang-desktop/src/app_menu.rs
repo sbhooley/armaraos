@@ -8,6 +8,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
     if let Some(kind) = menu.get(HELP_SUBMENU_ID) {
         if let Some(help) = kind.as_submenu() {
+            let notif = MenuItem::with_id(
+                app,
+                "help_notification_settings",
+                "Notification Settings…",
+                true,
+                None::<&str>,
+            )?;
             let website = MenuItem::with_id(
                 app,
                 "help_ainl_website",
@@ -24,6 +31,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 true,
                 None::<&str>,
             )?;
+            help.append(&notif)?;
             help.append(&website)?;
             help.append(&x_profile)?;
             help.append(&diagnostics)?;

@@ -6,10 +6,9 @@
 //! GitHub’s latest release API so users still see new releases and a download link.
 
 use serde::{Deserialize, Serialize};
-use tauri_plugin_notification::NotificationExt;
 use url::Url;
 
-use crate::notification_icon::apply_notification_icon;
+use crate::os_notify;
 use tauri_plugin_updater::UpdaterExt;
 use tracing::{info, warn};
 
@@ -59,14 +58,11 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
             Ok(info) if info.available && info.installable => {
                 let version = info.version.as_deref().unwrap_or("unknown");
                 info!("Update available: v{version}, installing silently...");
-                let _ = apply_notification_icon(
-                    app_handle
-                        .notification()
-                        .builder()
-                        .title("ArmaraOS Updating...")
-                        .body(format!("Installing v{version}. App will restart shortly.")),
-                )
-                .show();
+                os_notify::post_from_app(
+                    &app_handle,
+                    "ArmaraOS Updating...",
+                    format!("Installing v{version}. App will restart shortly."),
+                );
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 if let Err(e) = download_and_install_update(&app_handle).await {
                     warn!("Auto-update install failed: {e}");
@@ -78,14 +74,11 @@ pub fn spawn_startup_check(app_handle: tauri::AppHandle) {
                     .download_url
                     .clone()
                     .unwrap_or_else(|| "https://github.com/sbhooley/armaraos/releases".to_string());
-                let _ = apply_notification_icon(
-                    app_handle
-                        .notification()
-                        .builder()
-                        .title("ArmaraOS Update Available")
-                        .body(format!("v{version} is available. Download: {url}")),
-                )
-                .show();
+                os_notify::post_from_app(
+                    &app_handle,
+                    "ArmaraOS Update Available",
+                    format!("v{version} is available. Download: {url}"),
+                );
             }
             Ok(_) => info!("No updates available"),
             Err(e) => warn!("Startup update check failed: {e}"),
@@ -202,8 +195,7 @@ async fn github_fallback_check(channel_feed: &str) -> Result<UpdateInfo, String>
     let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|e| format!("current version parse: {e}"))?;
     let tag = rel.tag_name.trim().trim_start_matches('v');
-    let latest =
-        semver::Version::parse(tag).map_err(|e| format!("github version parse: {e}"))?;
+    let latest = semver::Version::parse(tag).map_err(|e| format!("github version parse: {e}"))?;
 
     let available = latest > current;
     Ok(UpdateInfo {

@@ -109,6 +109,7 @@ function commsPage() {
     eventBadgeClass(kind) {
       switch(kind) {
         case 'agent_message': return 'badge badge-info';
+        case 'agent_activity': return 'badge badge-warn';
         case 'agent_spawned': return 'badge badge-success';
         case 'agent_terminated': return 'badge badge-danger';
         case 'task_posted': return 'badge badge-warning';
@@ -121,6 +122,7 @@ function commsPage() {
     eventIcon(kind) {
       switch(kind) {
         case 'agent_message': return '\u2709';
+        case 'agent_activity': return '\u26A1';
         case 'agent_spawned': return '+';
         case 'agent_terminated': return '\u2715';
         case 'task_posted': return '\u2691';
@@ -133,6 +135,7 @@ function commsPage() {
     eventLabel(kind) {
       switch(kind) {
         case 'agent_message': return 'Message';
+        case 'agent_activity': return 'Activity';
         case 'agent_spawned': return 'Spawned';
         case 'agent_terminated': return 'Terminated';
         case 'task_posted': return 'Task Posted';

@@ -299,6 +299,24 @@ pub enum SystemEvent {
         /// Error message (truncated).
         error: String,
     },
+    /// High-level agent loop progress (thinking, tool use, etc.) for dashboards.
+    AgentActivity {
+        /// e.g. `thinking`, `tool_use`, `streaming`
+        phase: String,
+        /// Tool name when `phase` is `tool_use`, optional otherwise.
+        detail: Option<String>,
+    },
+    /// A dangerous tool call is waiting for human approval (dashboard / desktop notify).
+    ApprovalPending {
+        /// Approval request id (matches API).
+        request_id: Uuid,
+        /// Agent that requested approval.
+        agent_id: AgentId,
+        /// Tool name (e.g. `shell_exec`).
+        tool_name: String,
+        /// Short preview of the action (truncated).
+        action_summary: String,
+    },
 }
 
 /// A complete event in the OpenFang event system.

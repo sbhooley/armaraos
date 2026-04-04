@@ -11,6 +11,7 @@ mod ainl_version;
 mod app_menu;
 mod commands;
 mod notification_icon;
+mod os_notify;
 mod server;
 mod shortcuts;
 mod tray;
@@ -19,13 +20,11 @@ mod updater;
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::event::{EventPayload, LifecycleEvent, SystemEvent};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 use tracing::{info, warn};
-
-use crate::notification_icon::apply_notification_icon;
 
 /// Managed state: the port the embedded server listens on.
 pub struct PortState(pub u16);
@@ -70,6 +69,8 @@ pub fn run() {
                     let _ = open::that("https://ainativelang.com/");
                 } else if event.id() == "help_ainl_x" {
                     let _ = open::that("https://x.com/ainativelang");
+                } else if event.id() == "help_notification_settings" {
+                    let _ = crate::commands::open_notification_settings(app.app_handle().clone());
                 } else if event.id() == "help_generate_diagnostics" {
                     let handle = app.app_handle().clone();
                     let port = app.state::<PortState>().0;
@@ -80,25 +81,19 @@ pub fn run() {
                                     .get("bundle_path")
                                     .and_then(|x| x.as_str())
                                     .unwrap_or("(see ~/.armaraos/support/)");
-                                let _ = crate::notification_icon::apply_notification_icon(
-                                    handle
-                                        .notification()
-                                        .builder()
-                                        .title("Diagnostics bundle ready")
-                                        .body(path.to_string()),
-                                )
-                                .show();
+                                crate::os_notify::post_from_app(
+                                    &handle,
+                                    "Diagnostics bundle ready",
+                                    path.to_string(),
+                                );
                             }
                             Err(e) => {
                                 warn!("Diagnostics bundle failed: {e}");
-                                let _ = crate::notification_icon::apply_notification_icon(
-                                    handle
-                                        .notification()
-                                        .builder()
-                                        .title("Diagnostics bundle failed")
-                                        .body(e.clone()),
-                                )
-                                .show();
+                                crate::os_notify::post_from_app(
+                                    &handle,
+                                    "Diagnostics bundle failed",
+                                    e.clone(),
+                                );
                             }
                         }
                     });
@@ -168,6 +163,7 @@ pub fn run() {
             commands::open_external_url,
             commands::open_ainl_library_dir,
             commands::ainl_try_library_file,
+            commands::open_notification_settings,
         ])
         .setup(move |app| {
             // Create the main window pointing directly at the embedded HTTP server.
@@ -213,25 +209,19 @@ pub fn run() {
                         }
                         Ok(st) => {
                             warn!("AINL bootstrap incomplete: {}", st.detail);
-                            let _ = apply_notification_icon(
-                                app_handle_for_ainl
-                                    .notification()
-                                    .builder()
-                                    .title("AINL setup incomplete")
-                                    .body(st.detail),
-                            )
-                            .show();
+                            crate::os_notify::post_from_app(
+                                &app_handle_for_ainl,
+                                "AINL setup incomplete",
+                                st.detail,
+                            );
                         }
                         Err(e) => {
                             warn!("AINL bootstrap failed: {e}");
-                            let _ = apply_notification_icon(
-                                app_handle_for_ainl
-                                    .notification()
-                                    .builder()
-                                    .title("AINL setup failed")
-                                    .body(e),
-                            )
-                            .show();
+                            crate::os_notify::post_from_app(
+                                &app_handle_for_ainl,
+                                "AINL setup failed",
+                                e,
+                            );
                         }
                     }
                 });
@@ -239,17 +229,28 @@ pub fn run() {
                 info!("Skipping AINL auto-bootstrap (ARMARAOS_AINL_AUTO_BOOTSTRAP=0)");
             }
 
-            // Spawn background task to forward critical kernel events as native
-            // OS notifications. Only truly critical events — crashes, hard quota
-            // limits, and kernel shutdown. Health checks and quota warnings are
-            // too noisy for desktop notifications.
+            // Spawn background task to forward kernel events as native OS notifications.
+            // Uses `os_notify` so macOS attributes to this app (not Terminal) in dev builds.
             let app_handle = app.handle().clone();
+            let bundle_id = app_handle.config().identifier.clone();
             let mut event_rx = kernel_for_notifications.event_bus.subscribe_all();
             tauri::async_runtime::spawn(async move {
+                // Suppress duplicate health alerts for the same agent (flapping recovery).
+                const HEALTH_NOTIFY_DEBOUNCE: Duration = Duration::from_secs(15 * 60);
+                let mut last_health_notify: HashMap<openfang_types::agent::AgentId, Instant> =
+                    HashMap::new();
+
                 loop {
                     match event_rx.recv().await {
                         Ok(event) => {
                             let (title, body) = match &event.payload {
+                                EventPayload::Lifecycle(LifecycleEvent::Spawned {
+                                    agent_id,
+                                    name,
+                                }) => (
+                                    "Agent started".to_string(),
+                                    format!("{name} is running ({agent_id})"),
+                                ),
                                 EventPayload::Lifecycle(LifecycleEvent::Crashed {
                                     agent_id,
                                     error,
@@ -284,21 +285,48 @@ pub fn run() {
                                     error,
                                     ..
                                 }) => ("Scheduled job failed".to_string(), format!("{job_name}: {error}")),
-                                // Skip everything else (health checks, spawns, suspends, etc.)
+                                EventPayload::System(SystemEvent::HealthCheckFailed {
+                                    agent_id,
+                                    unresponsive_secs,
+                                }) => {
+                                    // Kernel uses 0 for internal recovery signals; never notify.
+                                    if *unresponsive_secs == 0 {
+                                        continue;
+                                    }
+                                    if let Some(prev) = last_health_notify.get(agent_id) {
+                                        if prev.elapsed() < HEALTH_NOTIFY_DEBOUNCE {
+                                            continue;
+                                        }
+                                    }
+                                    last_health_notify.insert(*agent_id, Instant::now());
+                                    (
+                                        "Agent health check failed".to_string(),
+                                        format!(
+                                            "Agent {agent_id} unresponsive for {unresponsive_secs}s"
+                                        ),
+                                    )
+                                }
+                                EventPayload::System(SystemEvent::ApprovalPending {
+                                    request_id,
+                                    agent_id,
+                                    tool_name,
+                                    action_summary,
+                                }) => (
+                                    "Approval needed".to_string(),
+                                    format!(
+                                        "{tool_name} ({agent_id}) — {action_summary} [id: {request_id}]"
+                                    ),
+                                ),
+                                // Skip everything else (health checks, quota warnings, etc.)
                                 _ => continue,
                             };
 
-                            if let Err(e) = apply_notification_icon(
-                                app_handle
-                                    .notification()
-                                    .builder()
-                                    .title(&title)
-                                    .body(&body),
-                            )
-                            .show()
-                            {
-                                warn!("Failed to send desktop notification: {e}");
-                            }
+                            crate::os_notify::post(
+                                bundle_id.clone(),
+                                title,
+                                body,
+                                crate::notification_icon::notify_icon_path(),
+                            );
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!("Notification listener lagged, skipped {n} events");

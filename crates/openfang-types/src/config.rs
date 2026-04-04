@@ -968,6 +968,35 @@ pub enum TypingMode {
 // Gap 7: Thinking level support
 // ---------------------------------------------------------------------------
 
+/// Dashboard (web UI) options.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct DashboardConfig {
+    /// Glob patterns (relative to [`KernelConfig::home_dir`], use `/`) that allow **editing**
+    /// files from the **Home folder** browser. Syntax matches the `globset` crate, e.g. `notes/**`,
+    /// `scratch.txt`, `editable/**/*.md`. Empty = read-only (default).
+    pub home_editable_globs: Vec<String>,
+    /// When true, overwrite creates a single `*.bak` copy next to the file first.
+    pub home_edit_backup: bool,
+    /// Maximum UTF-8 byte length accepted for one save.
+    #[serde(default = "default_home_edit_max_bytes")]
+    pub home_edit_max_bytes: u64,
+}
+
+fn default_home_edit_max_bytes() -> u64 {
+    512 * 1024
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            home_editable_globs: Vec::new(),
+            home_edit_backup: true,
+            home_edit_max_bytes: default_home_edit_max_bytes(),
+        }
+    }
+}
+
 /// Extended thinking configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1130,6 +1159,54 @@ pub struct KernelConfig {
     /// Heartbeat monitor settings.
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
+    /// Skill capture workspace (ClawHub / editor skills → daily memory digest).
+    /// TOML: `[openclaw_workspace]` or `[skills_workspace]` (same fields).
+    #[serde(default, alias = "skills_workspace")]
+    pub openclaw_workspace: OpenclawWorkspaceConfig,
+    /// Web dashboard options (Home folder editor allowlist, etc.).
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
+}
+
+/// Skill capture workspace (`[openclaw_workspace]` or `[skills_workspace]` in config.toml).
+///
+/// Rolls ClawHub (or other) skill capture from `.learnings/` into `memory/YYYY-MM-DD.md` and
+/// exposes pending counts for the desktop tray. Does not ingest into kernel memory.
+/// **OpenClaw is not required** — point `workspace_path` at any folder you use for capture.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenclawWorkspaceConfig {
+    /// Master switch for export + tray hints.
+    pub enabled: bool,
+    /// Root folder for `.learnings/`, `memory/`, etc. If unset: `OPENCLAW_WORKSPACE`,
+    /// then `ARMARAOS_SKILLS_WORKSPACE`, then [`default_skills_workspace_path`].
+    #[serde(alias = "skills_workspace_path")]
+    pub workspace_path: Option<PathBuf>,
+    /// Run the learnings→daily-memory export once at process startup.
+    pub run_export_on_startup: bool,
+    /// Show total pending count in the desktop tray tooltip (desktop app only).
+    pub show_pending_in_tray: bool,
+}
+
+impl Default for OpenclawWorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            workspace_path: None,
+            run_export_on_startup: true,
+            show_pending_in_tray: true,
+        }
+    }
+}
+
+/// Default folder for skill capture when nothing is configured: `~/.armaraos/skills-workspace`.
+pub fn default_skills_workspace_path() -> PathBuf {
+    openfang_home_dir().join("skills-workspace")
+}
+
+/// Back-compat — same as [`default_skills_workspace_path`].
+pub fn default_openclaw_workspace_path() -> PathBuf {
+    default_skills_workspace_path()
 }
 
 /// Heartbeat monitor settings exposed in `[heartbeat]` config section.
@@ -1367,6 +1444,8 @@ impl Default for KernelConfig {
             auth: AuthConfig::default(),
             workflows_dir: None,
             heartbeat: HeartbeatSettings::default(),
+            openclaw_workspace: OpenclawWorkspaceConfig::default(),
+            dashboard: DashboardConfig::default(),
         }
     }
 }
@@ -1485,6 +1564,13 @@ impl std::fmt::Debug for KernelConfig {
                 &format!("{} mapping(s)", self.provider_api_keys.len()),
             )
             .field("auth", &format!("enabled={}", self.auth.enabled))
+            .field(
+                "dashboard",
+                &format!(
+                    "{} home edit glob(s)",
+                    self.dashboard.home_editable_globs.len()
+                ),
+            )
             .finish()
     }
 }
@@ -3742,6 +3828,29 @@ mod tests {
     }
 
     #[test]
+    fn test_skills_workspace_path_toml_alias() {
+        let toml_str = r#"
+            enabled = true
+            skills_workspace_path = "/tmp/capture-root"
+        "#;
+        let cfg: OpenclawWorkspaceConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            cfg.workspace_path,
+            Some(std::path::PathBuf::from("/tmp/capture-root"))
+        );
+    }
+
+    #[test]
+    fn test_default_skills_workspace_suffix() {
+        let p = default_skills_workspace_path();
+        assert!(
+            p.ends_with("skills-workspace"),
+            "expected …/skills-workspace, got {}",
+            p.display()
+        );
+    }
+
+    #[test]
     fn test_config_serialization() {
         let config = KernelConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -4286,5 +4395,20 @@ mod tests {
         "#;
         let config: KernelConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.heartbeat.default_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_kernel_config_skills_workspace_table_alias() {
+        let toml_str = r#"
+            [skills_workspace]
+            enabled = false
+            workspace_path = "/data/skills"
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.openclaw_workspace.enabled);
+        assert_eq!(
+            config.openclaw_workspace.workspace_path,
+            Some(std::path::PathBuf::from("/data/skills"))
+        );
     }
 }

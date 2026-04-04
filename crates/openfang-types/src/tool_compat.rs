@@ -56,6 +56,8 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
         "file_read"
             | "file_write"
             | "file_list"
+            | "document_extract"
+            | "spreadsheet_build"
             | "shell_exec"
             | "web_search"
             | "web_fetch"
@@ -175,11 +177,13 @@ mod tests {
 
     #[test]
     fn test_is_known_openfang_tool() {
-        // All 23 built-in tools + location_get
+        // Core built-in tools + location_get (not exhaustive vs. full runtime list)
         let known = [
             "file_read",
             "file_write",
             "file_list",
+            "document_extract",
+            "spreadsheet_build",
             "shell_exec",
             "web_search",
             "web_fetch",

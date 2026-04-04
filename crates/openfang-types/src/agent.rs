@@ -318,15 +318,25 @@ impl ToolProfile {
                 "file_read",
                 "file_write",
                 "file_list",
+                "document_extract",
+                "spreadsheet_build",
                 "shell_exec",
                 "web_fetch",
             ],
-            Self::Research => vec!["web_fetch", "web_search", "file_read", "file_write"],
+            Self::Research => vec![
+                "web_fetch",
+                "web_search",
+                "file_read",
+                "file_write",
+                "document_extract",
+            ],
             Self::Messaging => vec!["agent_send", "agent_list", "memory_store", "memory_recall"],
             Self::Automation => vec![
                 "file_read",
                 "file_write",
                 "file_list",
+                "document_extract",
+                "spreadsheet_build",
                 "shell_exec",
                 "web_fetch",
                 "web_search",
@@ -801,9 +811,11 @@ mod tests {
     fn test_tool_profile_coding() {
         let tools = ToolProfile::Coding.tools();
         assert!(tools.contains(&"file_read".to_string()));
+        assert!(tools.contains(&"document_extract".to_string()));
+        assert!(tools.contains(&"spreadsheet_build".to_string()));
         assert!(tools.contains(&"shell_exec".to_string()));
         assert!(tools.contains(&"web_fetch".to_string()));
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
@@ -811,7 +823,8 @@ mod tests {
         let tools = ToolProfile::Research.tools();
         assert!(tools.contains(&"web_fetch".to_string()));
         assert!(tools.contains(&"web_search".to_string()));
-        assert_eq!(tools.len(), 4);
+        assert!(tools.contains(&"document_extract".to_string()));
+        assert_eq!(tools.len(), 5);
     }
 
     #[test]
@@ -825,7 +838,7 @@ mod tests {
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 12);
     }
 
     #[test]
