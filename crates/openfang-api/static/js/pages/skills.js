@@ -8,15 +8,6 @@ function skillsPage() {
     loading: true,
     loadError: '',
 
-    markSkillsOnboardingProgress() {
-      try {
-        localStorage.setItem('of-skill-browsed', 'true');
-      } catch(e) { /* ignore */ }
-      try {
-        window.dispatchEvent(new CustomEvent('armaraos-onboarding-local'));
-      } catch(e2) { /* ignore */ }
-    },
-
     // ClawHub state
     clawhubSearch: '',
     clawhubResults: [],
@@ -134,7 +125,6 @@ function skillsPage() {
 
     async loadData() {
       await this.loadSkills();
-      this.markSkillsOnboardingProgress();
     },
 
     // Debounced search — fires 350ms after user stops typing
@@ -273,12 +263,10 @@ function skillsPage() {
           this.skillDetail.installed = true;
         }
         await this.loadSkills();
-        this.markSkillsOnboardingProgress();
       } catch(e) {
         var msg = e.message || 'Install failed';
         if (msg.includes('already_installed')) {
           OpenFangToast.error('Skill is already installed');
-          this.markSkillsOnboardingProgress();
         } else if (msg.includes('SecurityBlocked')) {
           OpenFangToast.error('Skill blocked by security scan');
         } else {
@@ -314,7 +302,6 @@ function skillsPage() {
         OpenFangToast.success('Skill "' + skill.name + '" created');
         this.tab = 'installed';
         await this.loadSkills();
-        this.markSkillsOnboardingProgress();
       } catch(e) {
         OpenFangToast.error('Failed to create skill: ' + e.message);
       }

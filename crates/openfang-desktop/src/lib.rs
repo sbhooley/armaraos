@@ -64,10 +64,18 @@ pub fn run() {
         builder = builder
             .menu(crate::app_menu::build)
             .on_menu_event(|app, event| {
-                if event.id() == "help_ainl_website" {
+                if event.id() == "help_support_email" {
+                    let _ = open::that(
+                        "mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support",
+                    );
+                } else if event.id() == "help_ainl_website" {
                     let _ = open::that("https://ainativelang.com/");
                 } else if event.id() == "help_ainl_x" {
                     let _ = open::that("https://x.com/ainativelang");
+                } else if event.id() == "help_telegram" {
+                    let _ = open::that("https://t.me/AINL_Portal");
+                } else if event.id() == "help_ainl_github" {
+                    let _ = open::that("https://github.com/sbhooley/ainativelang");
                 } else if event.id() == "help_notification_settings" {
                     let _ = crate::commands::open_notification_settings(app.app_handle().clone());
                 } else if event.id() == "help_generate_diagnostics" {
@@ -148,6 +156,8 @@ pub fn run() {
             commands::check_for_updates,
             commands::install_update,
             commands::generate_support_bundle,
+            commands::copy_diagnostics_to_downloads,
+            commands::compose_support_email,
             commands::get_desktop_updater_prefs,
             commands::set_release_channel,
             commands::report_daemon_update_check,
@@ -159,6 +169,8 @@ pub fn run() {
             commands::ainl_check_versions,
             commands::upgrade_ainl_pip,
             commands::set_dashboard_theme_mode,
+            commands::get_dashboard_bookmarks,
+            commands::set_dashboard_bookmarks,
             commands::open_external_url,
             commands::open_ainl_library_dir,
             commands::ainl_try_library_file,
@@ -181,6 +193,7 @@ pub fn run() {
             .min_inner_size(800.0, 600.0)
             .center()
             .visible(true)
+            .theme(crate::ui_prefs::window_theme_for_mode(&theme_mode))
             .build()?;
 
             // Set up system tray (desktop only)

@@ -28,6 +28,60 @@
     }
   }
 
+  var desktopBookmarksSyncTimer = null;
+
+  function isDesktopBookmarkSyncAvailable() {
+    try {
+      if (typeof ArmaraosDesktopTauriInvoke !== 'function') return false;
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      return !!(core && typeof core.invoke === 'function');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function scheduleSyncBookmarksToDesktop(state) {
+    if (!isDesktopBookmarkSyncAvailable()) return;
+    if (desktopBookmarksSyncTimer) clearTimeout(desktopBookmarksSyncTimer);
+    desktopBookmarksSyncTimer = setTimeout(function () {
+      desktopBookmarksSyncTimer = null;
+      var json = JSON.stringify(state);
+      ArmaraosDesktopTauriInvoke('set_dashboard_bookmarks', { json: json }).catch(function () {});
+    }, 350);
+  }
+
+  function isDefaultEmptyState(st) {
+    if (!st || !Array.isArray(st.categories) || !Array.isArray(st.items)) return true;
+    if (st.items.length > 0) return false;
+    if (st.categories.length !== 1) return false;
+    var c0 = st.categories[0];
+    return !!(c0 && String(c0.name) === 'General');
+  }
+
+  /** Desktop app: merge disk → localStorage on load; seed disk from localStorage if disk is empty. */
+  function pullDesktopBookmarksOnStartup() {
+    if (!isDesktopBookmarkSyncAvailable()) return;
+    ArmaraosDesktopTauriInvoke('get_dashboard_bookmarks', {})
+      .then(function (opt) {
+        if (opt != null && typeof opt === 'string' && opt.length > 2) {
+          try {
+            var d = JSON.parse(opt);
+            if (d && Array.isArray(d.categories) && Array.isArray(d.items)) {
+              localStorage.setItem(STORAGE_KEY, opt);
+              window.dispatchEvent(new CustomEvent('armaraos-bookmarks-changed'));
+              return;
+            }
+          } catch (e1) { /* ignore */ }
+        }
+        var st = load();
+        if (!isDefaultEmptyState(st)) {
+          scheduleSyncBookmarksToDesktop(st);
+        }
+      })
+      .catch(function () {});
+  }
+
   function save(state) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -36,6 +90,7 @@
         OpenFangToast.error('Could not save bookmarks (storage full?)');
       }
     }
+    scheduleSyncBookmarksToDesktop(state);
     try {
       window.dispatchEvent(new CustomEvent('armaraos-bookmarks-changed'));
     } catch (e2) { /* ignore */ }
@@ -64,6 +119,7 @@
     load: load,
     save: save,
     genId: genId,
+    pullDesktopBookmarksOnStartup: pullDesktopBookmarksOnStartup,
 
     ensureCategory: function (name) {
       var st = load();
@@ -216,6 +272,8 @@
       save(st);
     },
   };
+
+  pullDesktopBookmarksOnStartup();
 })();
 
 function bookmarksPage() {
@@ -254,6 +312,17 @@ function bookmarksPage() {
       return this.items.filter(function (x) {
         return x.categoryId === cid;
       });
+    },
+
+    categoryItemCount(catId) {
+      if (!catId) return 0;
+      return this.items.filter(function (x) {
+        return x.categoryId === catId;
+      }).length;
+    },
+
+    get totalBookmarkCount() {
+      return this.items.length;
     },
 
     addCategory() {

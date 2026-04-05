@@ -6,6 +6,8 @@ OpenFang is an open-source Agent Operating System written in Rust (14 crates).
 - Default API: `http://127.0.0.1:4200`
 - CLI binary: `target/release/openfang.exe` (or `target/debug/openfang.exe`)
 
+**Dashboard chat (v0.6.4+):** Unread badges use WebSocket events, kernel SSE, and **`GET /api/agents/{id}/session/digest`** (lightweight counts). Leaving `#agents` may keep the agent WS alive with UI callbacks cleared (`wsClearUiCallbacks`). See **`docs/dashboard-testing.md`** (section *Chat unread badges + session digest*). Live check: `curl -s "$BASE/api/agents/$ID/session/digest"` after resolving `$ID` from `GET /api/agents`.
+
 **Skills / ClawHub capture:** See `docs/openclaw-workspace-bridge.md` — **OpenClaw is not required**; `[skills_workspace]` or `[openclaw_workspace]`, `ARMARAOS_SKILLS_WORKSPACE` / `OPENCLAW_WORKSPACE`, default `~/.armaraos/skills-workspace`. Tray + startup digest only touch files (kernel does not load `.learnings/` into DB memory).
 
 ## Build & Verify Workflow

@@ -2,13 +2,14 @@
 
 use crate::{KernelState, PortState};
 use openfang_kernel::config::openfang_home;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Return AINL bootstrap status (Option A bundling).
 #[tauri::command]
@@ -506,7 +507,23 @@ pub fn ainl_try_library_file(
 /// Persist dashboard theme mode (`light` | `dark` | `system`) for the next app launch.
 #[tauri::command]
 pub fn set_dashboard_theme_mode(app: tauri::AppHandle, mode: String) -> Result<(), String> {
-    crate::ui_prefs::save_theme_mode(&app, &mode)
+    crate::ui_prefs::save_theme_mode(&app, &mode)?;
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_theme(crate::ui_prefs::window_theme_for_mode(&mode));
+    }
+    Ok(())
+}
+
+/// Load chat bookmarks JSON saved on disk (desktop shell; survives random localhost port / WebView storage).
+#[tauri::command]
+pub fn get_dashboard_bookmarks(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    crate::ui_prefs::load_dashboard_bookmarks_json(&app)
+}
+
+/// Persist chat bookmarks JSON (same schema as dashboard `armaraos-bookmarks-v1`).
+#[tauri::command]
+pub fn set_dashboard_bookmarks(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    crate::ui_prefs::save_dashboard_bookmarks_json(&app, &json)
 }
 
 /// Open a whitelisted HTTPS URL in the system default browser (Tauri webview `target=_blank` is unreliable).
@@ -514,6 +531,9 @@ pub fn set_dashboard_theme_mode(app: tauri::AppHandle, mode: String) -> Result<(
 pub fn open_external_url(url: String) -> Result<(), String> {
     if url.len() > 2048 {
         return Err("Invalid URL".to_string());
+    }
+    if url.starts_with("mailto:") && url.contains('@') && url.len() <= 4096 {
+        return open::that(&url).map_err(|e| e.to_string());
     }
     let ok = url == "https://ainativelang.com"
         || url.starts_with("https://ainativelang.com/")
@@ -525,4 +545,160 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         return Err("Invalid URL".to_string());
     }
     open::that(&url).map_err(|e| e.to_string())
+}
+
+/// Ensure `user_path` is a real `.zip` under `openfang_home()/support/`.
+fn validate_support_bundle_path(user_path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(user_path);
+    let meta = std::fs::canonicalize(p).map_err(|e| format!("Invalid bundle path: {e}"))?;
+    let support = openfang_home().join("support");
+    std::fs::create_dir_all(&support).map_err(|e| format!("support dir: {e}"))?;
+    let support_canon = std::fs::canonicalize(&support).unwrap_or(support);
+    if !meta.starts_with(&support_canon) {
+        return Err("Path must be under the ArmaraOS support directory".to_string());
+    }
+    if !meta.is_file() {
+        return Err("Not a file".to_string());
+    }
+    let lossy = meta.to_string_lossy();
+    if !lossy.ends_with(".zip") {
+        return Err("Expected a .zip diagnostics bundle".to_string());
+    }
+    Ok(meta)
+}
+
+/// Copy a generated diagnostics zip into the user Downloads folder (same filename).
+#[tauri::command]
+pub fn copy_diagnostics_to_downloads(bundle_path: String) -> Result<serde_json::Value, String> {
+    let canon = validate_support_bundle_path(&bundle_path)?;
+    let fname = canon
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Bad filename".to_string())?;
+    let dest_dir =
+        dirs::download_dir().ok_or_else(|| "Could not locate Downloads folder".to_string())?;
+    let dest = dest_dir.join(fname);
+    std::fs::copy(&canon, &dest).map_err(|e| format!("Copy to Downloads failed: {e}"))?;
+    Ok(serde_json::json!({
+        "downloads_path": dest.display().to_string(),
+        "bundle_path": canon.display().to_string(),
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn try_compose_mail_macos_attachment(bundle: &std::path::Path) -> Result<(), String> {
+    let path_str = bundle
+        .to_str()
+        .ok_or_else(|| "Invalid path encoding".to_string())?;
+    // Script on stdin: argv[1] is the zip path. Attachment must be created on the outgoing
+    // message (not inside a silent try); Mail.app ignores failed attachments otherwise.
+    // NSAppleEventsUsageDescription is required for Automation permission on modern macOS.
+    const SCRIPT: &[u8] = br#"on run argv
+	set bundlePath to item 1 of argv
+	set theFile to POSIX file bundlePath
+	tell application "Mail"
+		activate
+		set newMessage to make new outgoing message with properties {visible:true, subject:"ArmaraOS Support - Bug Report", content:"Describe the bug here:" & return & return & "Thanks!"}
+		tell newMessage
+			make new to recipient at end of to recipients with properties {address:"ainativelang@gmail.com"}
+			make new attachment with properties {file name:theFile}
+		end tell
+	end tell
+end run
+"#;
+    // Pass the zip path as the sole script argument (not after `--`, or argv[1] becomes `--`).
+    let mut child = Command::new("osascript")
+        .arg("-")
+        .arg(path_str)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start osascript: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| "osascript stdin".to_string())?;
+    stdin
+        .write_all(SCRIPT)
+        .map_err(|e| format!("osascript stdin: {e}"))?;
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("osascript wait: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(target: "openfang_desktop", "Mail AppleScript failed: {}", stderr.trim());
+        Err(format!(
+            "Could not compose in Mail (install Mail, grant Automation in Privacy & Security, or attach the zip manually). {}",
+            stderr.trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn try_compose_mail_linux_attachment(bundle: &std::path::Path) -> Result<(), String> {
+    let p = bundle
+        .to_str()
+        .ok_or_else(|| "Invalid path".to_string())?;
+    let status = Command::new("xdg-email")
+        .args([
+            "--subject",
+            "ArmaraOS Support — Bug Report",
+            "--body",
+            "Describe the bug here. The diagnostics .zip is attached.\n\nThanks!",
+            "--attach",
+            p,
+            "ainativelang@gmail.com",
+        ])
+        .status()
+        .map_err(|e| format!("xdg-email: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("xdg-email failed (install xdg-utils or use Get Help without attachment)".to_string())
+    }
+}
+
+/// Open the default mail client. On macOS/Linux with a valid bundle path, tries to attach the zip (Mail / xdg-email).
+#[tauri::command]
+pub fn compose_support_email(bundle_path: Option<String>) -> Result<serde_json::Value, String> {
+    let body_txt = "Describe the bug here:\n\nIf no file is attached, please attach the armaraos-diagnostics-*.zip from your Downloads folder or from Home folder → support.\n\nThanks!";
+    let mailto = format!(
+        "mailto:ainativelang@gmail.com?subject={}&body={}",
+        urlencoding::encode("ArmaraOS Support — Bug Report"),
+        urlencoding::encode(body_txt)
+    );
+    if let Some(ref raw) = bundle_path {
+        let t = raw.trim();
+        if !t.is_empty() {
+            if let Ok(canon) = validate_support_bundle_path(t) {
+                #[cfg(target_os = "macos")]
+                match try_compose_mail_macos_attachment(&canon) {
+                    Ok(()) => return Ok(serde_json::json!({"mode": "apple_mail"})),
+                    Err(_) => {
+                        open::that(&mailto).map_err(|e| e.to_string())?;
+                        return Ok(serde_json::json!({
+                            "mode": "mailto",
+                            "attach_failed": true,
+                        }));
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                match try_compose_mail_linux_attachment(&canon) {
+                    Ok(()) => return Ok(serde_json::json!({"mode": "xdg_email"})),
+                    Err(_) => {
+                        open::that(&mailto).map_err(|e| e.to_string())?;
+                        return Ok(serde_json::json!({
+                            "mode": "mailto",
+                            "attach_failed": true,
+                        }));
+                    }
+                }
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                let _ = canon;
+            }
+        }
+    }
+    open::that(&mailto).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"mode": "mailto"}))
 }

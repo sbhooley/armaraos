@@ -4,5 +4,7 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>ArmaraOS uses the microphone when you hold the mic button to record a voice message for your agent.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>ArmaraOS uses Mail to compose support messages and attach your diagnostics zip when you choose Get Help.</string>
 </dict>
 </plist>

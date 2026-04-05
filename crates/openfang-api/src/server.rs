@@ -182,6 +182,10 @@ pub async fn build_router(
             axum::routing::post(routes::send_message_stream),
         )
         .route(
+            "/api/agents/{id}/session/digest",
+            axum::routing::get(routes::get_agent_session_digest),
+        )
+        .route(
             "/api/agents/{id}/session",
             axum::routing::get(routes::get_agent_session),
         )
@@ -325,6 +329,10 @@ pub async fn build_router(
         .route(
             "/api/support/diagnostics",
             axum::routing::post(routes::create_diagnostics_bundle),
+        )
+        .route(
+            "/api/support/diagnostics/download",
+            axum::routing::get(routes::download_diagnostics_bundle),
         )
         // Workflow endpoints
         .route(

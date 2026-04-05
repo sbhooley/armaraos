@@ -33,6 +33,8 @@ function agentsPage() {
   return {
     tab: 'agents',
     activeChatAgent: null,
+    /** Collapsed by default: allowlist-probe / offline-cron agent chats */
+    systemChatAgentsExpanded: false,
     // -- Agents state --
     showSpawnModal: false,
     showDetailModal: false,
@@ -149,6 +151,22 @@ function agentsPage() {
     },
 
     get agents() { return Alpine.store('app').agents; },
+
+    /** Kernel-spawned agents for AINL allowlist probe / offline cron (not user-created). */
+    isAutomationProbeChatAgent(agent) {
+      var n = agent && agent.name != null ? String(agent.name) : '';
+      return n.startsWith('allowlist-probe') || n.startsWith('offline-cron');
+    },
+
+    get chatPickerPrimaryAgents() {
+      var self = this;
+      return this.agents.filter(function(a) { return !self.isAutomationProbeChatAgent(a); });
+    },
+
+    get chatPickerSystemAgents() {
+      var self = this;
+      return this.agents.filter(function(a) { return self.isAutomationProbeChatAgent(a); });
+    },
 
     get filteredAgents() {
       var f = this.filterState;
@@ -330,15 +348,25 @@ function agentsPage() {
 
     closeChat() {
       this.activeChatAgent = null;
-      try { Alpine.store('app').pendingAgent = null; } catch(e) { /* ignore */ }
+      try {
+        var st = Alpine.store('app');
+        st.pendingAgent = null;
+        st.agentsPageChatAgentId = null;
+      } catch(e) { /* ignore */ }
       OpenFangAPI.wsDisconnect();
     },
 
-    /** Called before leaving the Agents page (sidebar / hash). Keeps WS from targeting a torn-down chat UI. */
+    /** Called before leaving the Agents page (sidebar / hash). Detach chat handlers but keep WS alive for unread + smooth return. */
     onAgentsPageLeave() {
       this.activeChatAgent = null;
-      try { Alpine.store('app').pendingAgent = null; } catch(e) { /* ignore */ }
-      OpenFangAPI.wsDisconnect();
+      try {
+        var st = Alpine.store('app');
+        st.pendingAgent = null;
+        st.agentsPageChatAgentId = null;
+      } catch(e) { /* ignore */ }
+      try {
+        OpenFangAPI.wsClearUiCallbacks();
+      } catch (e2) { /* ignore */ }
     },
 
     /** Map stored archetype strings onto Config tab select values (lowercase canonical ids). */

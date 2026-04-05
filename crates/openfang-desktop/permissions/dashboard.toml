@@ -1,8 +1,10 @@
 [[permission]]
 identifier = "allow-dashboard-ui-prefs"
-description = "Allows the embedded dashboard to persist theme mode across restarts (random localhost port breaks localStorage)."
+description = "Allows the embedded dashboard to persist theme mode and bookmarks across restarts (random localhost port breaks localStorage)."
 commands.allow = [
   "set_dashboard_theme_mode",
+  "get_dashboard_bookmarks",
+  "set_dashboard_bookmarks",
   "open_external_url",
   "open_ainl_library_dir",
   "check_for_updates",
@@ -11,4 +13,6 @@ commands.allow = [
   "set_release_channel",
   "report_daemon_update_check",
   "generate_support_bundle",
+  "copy_diagnostics_to_downloads",
+  "compose_support_email",
 ]

@@ -24,6 +24,13 @@ function homeFilesPage() {
     saveBusy: false,
 
     init() {
+      try {
+        var pre = sessionStorage.getItem('armaraos-home-prefill-path');
+        if (pre) {
+          sessionStorage.removeItem('armaraos-home-prefill-path');
+          this.currentPath = pre;
+        }
+      } catch (e) { /* ignore */ }
       this.refresh();
     },
 

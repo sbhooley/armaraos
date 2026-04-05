@@ -8,8 +8,12 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
+use tauri::Theme;
 
 const PREFS_FILE: &str = "desktop_ui_prefs.json";
+/// Dashboard chat bookmarks (mirrors `armaraos-bookmarks-v1` in localStorage).
+const BOOKMARKS_FILE: &str = "dashboard_bookmarks.json";
+const BOOKMARKS_MAX_BYTES: usize = 12 * 1024 * 1024;
 
 /// Stable channel (default): Tauri updater JSON on the marketing site.
 pub const STABLE_FEED_URL: &str = "https://ainativelang.com/downloads/armaraos/latest.json";
@@ -104,6 +108,16 @@ pub fn load_theme_mode(app: &AppHandle) -> String {
     normalize_mode(&load_full_prefs(app).theme_mode)
 }
 
+/// Maps dashboard theme to native window chrome (title bar / traffic lights on macOS).
+/// `None` means follow the OS (`system` mode).
+pub fn window_theme_for_mode(mode: &str) -> Option<Theme> {
+    match normalize_mode(mode).as_str() {
+        "dark" => Some(Theme::Dark),
+        "light" => Some(Theme::Light),
+        _ => None,
+    }
+}
+
 /// `stable` or `beta`.
 pub fn load_release_channel(app: &AppHandle) -> String {
     normalize_channel(&load_full_prefs(app).release_channel)
@@ -153,4 +167,54 @@ pub fn save_theme_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
     let mut prefs = load_full_prefs(app);
     prefs.theme_mode = mode;
     save_full_prefs(app, &prefs)
+}
+
+fn bookmarks_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join(BOOKMARKS_FILE))
+}
+
+fn validate_bookmarks_json(json: &str) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let Some(obj) = v.as_object() else {
+        return Err("Bookmarks must be a JSON object".to_string());
+    };
+    if !obj.get("categories").is_some_and(|c| c.is_array()) {
+        return Err("Bookmarks missing categories array".to_string());
+    }
+    if !obj.get("items").is_some_and(|c| c.is_array()) {
+        return Err("Bookmarks missing items array".to_string());
+    }
+    Ok(())
+}
+
+/// Load persisted bookmarks JSON for the embedded dashboard (None if missing).
+pub fn load_dashboard_bookmarks_json(app: &AppHandle) -> Result<Option<String>, String> {
+    let path = bookmarks_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let s = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    validate_bookmarks_json(&s)?;
+    Ok(Some(s))
+}
+
+/// Write bookmarks JSON next to `desktop_ui_prefs.json` (survives port changes / WebView storage resets).
+pub fn save_dashboard_bookmarks_json(app: &AppHandle, json: &str) -> Result<(), String> {
+    if json.len() > BOOKMARKS_MAX_BYTES {
+        return Err(format!(
+            "Bookmarks exceed max size ({} MiB)",
+            BOOKMARKS_MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    validate_bookmarks_json(json)?;
+    let path = bookmarks_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, json).map_err(|e| e.to_string())
 }

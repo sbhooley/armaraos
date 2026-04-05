@@ -43,29 +43,11 @@ function overviewPage() {
     lastRefresh: null,
     _kernelEventHandler: null,
     _kernelDebounce: null,
-    _onboardingLocalHandler: null,
-    /** Bumps when onboarding localStorage flags change so checklist getters re-run */
-    checklistVersion: 0,
-    _checklistLocalSig: '',
-
-    touchChecklistLocalState() {
-      try {
-        var sig = [
-          localStorage.getItem('of-first-msg') || '',
-          localStorage.getItem('of-skill-browsed') || ''
-        ].join('|');
-        if (sig !== this._checklistLocalSig) {
-          this._checklistLocalSig = sig;
-          this.checklistVersion++;
-        }
-      } catch(e) { /* ignore private mode / storage errors */ }
-    },
 
     async loadOverview() {
       this.loading = true;
       clearPageLoadError(this);
       try {
-        this.touchChecklistLocalState();
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
@@ -94,7 +76,6 @@ function overviewPage() {
     // Silent background refresh (no loading spinner)
     async silentRefresh() {
       try {
-        this.touchChecklistLocalState();
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
@@ -115,7 +96,6 @@ function overviewPage() {
       this.stopAutoRefresh();
       this.refreshTimer = setInterval(() => this.silentRefresh(), 30000);
       this.bindKernelEventRefresh();
-      this.bindOnboardingLocalRefresh();
     },
 
     stopAutoRefresh() {
@@ -124,7 +104,6 @@ function overviewPage() {
         this.refreshTimer = null;
       }
       this.unbindKernelEventRefresh();
-      this.unbindOnboardingLocalRefresh();
     },
 
     /** Debounced refresh when kernel SSE emits lifecycle/system events (same tab). */
@@ -154,22 +133,6 @@ function overviewPage() {
       if (this._kernelDebounce) {
         clearTimeout(this._kernelDebounce);
         this._kernelDebounce = null;
-      }
-    },
-
-    bindOnboardingLocalRefresh() {
-      var self = this;
-      if (this._onboardingLocalHandler) return;
-      this._onboardingLocalHandler = function() {
-        self.touchChecklistLocalState();
-      };
-      window.addEventListener('armaraos-onboarding-local', this._onboardingLocalHandler);
-    },
-
-    unbindOnboardingLocalRefresh() {
-      if (this._onboardingLocalHandler) {
-        window.removeEventListener('armaraos-onboarding-local', this._onboardingLocalHandler);
-        this._onboardingLocalHandler = null;
       }
     },
 
@@ -301,26 +264,24 @@ function overviewPage() {
     checklistDismissed: localStorage.getItem('of-checklist-dismissed') === 'true',
 
     get setupChecklist() {
-      void this.checklistVersion;
       return [
         { key: 'provider', label: 'Configure an LLM provider', done: this.configuredProviders.length > 0, action: '#settings' },
         { key: 'agent', label: 'Create your first agent', done: (Alpine.store('app').agents || []).length > 0, action: '#agents' },
         { key: 'schedule', label: 'Create a scheduled job', done: this.scheduleCount > 0, action: '#scheduler' },
         { key: 'channel', label: 'Connect a messaging channel (optional)', done: this.channels.length > 0, action: '#channels' },
-        { key: 'chat', label: 'Send your first message (optional)', done: localStorage.getItem('of-first-msg') === 'true', action: '#agents' },
-        { key: 'skill', label: 'Browse or install a skill (optional)', done: localStorage.getItem('of-skill-browsed') === 'true', action: '#skills' }
+        // Shortcuts only — never marked complete (always show ○ + Go)
+        { key: 'chat', label: 'Send your first message (optional)', done: false, action: '#agents', perpetual: true },
+        { key: 'skill', label: 'Browse or install a skill (optional)', done: false, action: '#skills', perpetual: true }
       ];
     },
 
     get setupChecklistCore() {
-      void this.checklistVersion;
       return this.setupChecklist.filter(function(i) {
         return i.key === 'provider' || i.key === 'agent' || i.key === 'schedule';
       });
     },
 
     get setupChecklistOptional() {
-      void this.checklistVersion;
       return this.setupChecklist.filter(function(i) {
         return i.key === 'channel' || i.key === 'chat' || i.key === 'skill';
       });
@@ -340,8 +301,15 @@ function overviewPage() {
       return (doneReq / required.length) * 100;
     },
 
+    /** Completable rows only (excludes perpetual chat/skill shortcuts). */
     get setupDoneCount() {
-      return this.setupChecklist.filter(function(item) { return item.done; }).length;
+      return this.setupChecklist.filter(function(item) {
+        return !item.perpetual && item.done;
+      }).length;
+    },
+
+    get setupTrackableTotal() {
+      return this.setupChecklist.filter(function(item) { return !item.perpetual; }).length;
     },
 
     get setupCoreDoneCount() {
@@ -355,13 +323,13 @@ function overviewPage() {
     },
 
     get setupOptionalDoneCount() {
-      return this.setupChecklist.filter(function(item) {
-        return (item.key === 'chat' || item.key === 'skill' || item.key === 'channel') && item.done;
-      }).length;
+      var ch = this.setupChecklist.find(function(item) { return item.key === 'channel'; });
+      return ch && ch.done ? 1 : 0;
     },
 
+    /** Only the channel row counts toward optional progress (chat/skill stay perpetual). */
     get setupOptionalTotal() {
-      return 3;
+      return 1;
     },
 
     /** Show checklist until core + optional tasks are done, or user dismisses. */
@@ -372,11 +340,10 @@ function overviewPage() {
     },
 
     get setupChecklistSubtitle() {
-      void this.checklistVersion;
       if (this.setupCoreDoneCount < this.setupCoreTotal) {
-        return this.setupCoreDoneCount + '/' + this.setupCoreTotal + ' core steps · ' + this.setupDoneCount + '/6 tasks completed';
+        return this.setupCoreDoneCount + '/' + this.setupCoreTotal + ' core steps · ' + this.setupDoneCount + '/' + this.setupTrackableTotal + ' completed';
       }
-      return 'Core complete — optional ' + this.setupOptionalDoneCount + '/' + this.setupOptionalTotal + ' (channel + message + skill)';
+      return 'Core complete — optional channel ' + this.setupOptionalDoneCount + '/' + this.setupOptionalTotal + ' · message & skills stay open below';
     },
 
     /** After core steps, drive the bar from optional tasks (0–100%). */
@@ -407,20 +374,35 @@ function overviewPage() {
       return String(n);
     },
 
+    /** Humanize CamelCase event names from SSE payload. */
+    friendlyKernelEventName(name) {
+      if (!name) return '';
+      var s = String(name);
+      var map = {
+        AgentActivity: 'Agent activity',
+        AgentSpawn: 'Agent started',
+        AgentKill: 'Agent stopped',
+        KernelReady: 'Kernel ready',
+        Shutdown: 'Shutting down',
+      };
+      if (map[s]) return map[s];
+      return s.replace(/([A-Z])/g, ' $1').replace(/^\s+/, '').trim();
+    },
+
     /** One-line summary of the latest SSE kernel event (from Alpine.store('kernelEvents').last). */
     formatLastKernelEvent(j) {
       if (!j || !j.payload) return '';
       var p = j.payload;
       var ts = '';
-      if (j.timestamp) ts = this.timeAgo(j.timestamp) + ' — ';
+      if (j.timestamp) ts = this.timeAgo(j.timestamp) + ' · ';
       if (p.type === 'Lifecycle' && p.data && p.data.event) {
-        return ts + 'Lifecycle · ' + p.data.event;
+        return ts + 'Lifecycle · ' + this.friendlyKernelEventName(p.data.event);
       }
       if (p.type === 'System' && p.data && p.data.event) {
-        return ts + 'System · ' + p.data.event;
+        return ts + 'System · ' + this.friendlyKernelEventName(p.data.event);
       }
-      if (p.type) return ts + String(p.type);
-      return ts + 'kernel event';
+      if (p.type) return ts + this.friendlyKernelEventName(p.type);
+      return ts + 'Kernel update';
     },
 
     formatCost(n) {

@@ -85,8 +85,11 @@
       <span class="sidebar-label" x-show="$store.app.booting && !connected" class="conn-reconnecting">Connecting...</span>
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState === 'reconnecting'" class="conn-reconnecting">Reconnecting...</span>
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState !== 'reconnecting'" x-text="'disconnected' + ($store.app.lastError ? ' — ' + $store.app.lastError : '')">disconnected</span>
-      <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" x-text="wsConnected ? 'WS' : 'HTTP'" x-show="connected"></span>
-      <span class="conn-badge sidebar-label sse" title="Kernel events (live)" x-show="connected && $store.kernelEvents && $store.kernelEvents.connected" x-text="'SSE'"></span>
+      <div class="sidebar-conn-badges" x-show="connected">
+        <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" :title="wsConnected ? 'Agent stream: WebSocket' : 'Agent stream: HTTP polling'" x-text="wsConnected ? 'WS' : 'HTTP'"></span>
+        <span class="conn-badge sidebar-label" :class="$store.ainl.sidebarOk ? 'ainl-live' : 'ainl-off'" :title="$store.ainl.sidebarTitle || 'AINL'" x-text="'AINL'"></span>
+        <span class="conn-badge sidebar-label" :class="($store.kernelEvents && $store.kernelEvents.connected) ? 'sse' : 'sse-off'" :title="($store.kernelEvents && $store.kernelEvents.connected) ? 'Kernel events: live' : 'Kernel events: not connected'" x-text="'SSE'"></span>
+      </div>
     </div>
     <div class="sidebar-conn-help" x-show="!$store.app.connected && !$store.app.booting" style="padding:8px 12px;font-size:11px;line-height:1.45;color:var(--text-muted);border-bottom:1px solid var(--border)">
       <p style="margin:0 0 8px" x-show="$store.app.lastErrorHint" x-text="$store.app.lastErrorHint"></p>
@@ -98,21 +101,69 @@
     </div>
 
     <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
-      <!-- Chat — primary action -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Chat">
+      <!-- Get started — dashboard / setup checklist -->
+      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Get started">
         <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Chat</span>
+          <span class="nav-label">Get started</span>
+          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
+        </div>
+        <template x-if="!collapsed">
+          <div x-transition>
+            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigate('overview')" :aria-current="page === 'overview' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
+              <span class="nav-label">Get started</span>
+            </a>
+          </div>
+        </template>
+      </div>
+
+      <!-- Agents — All Agents, bookmarks, quick-open rows, sessions / comms / approvals -->
+      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
+        <div class="nav-section-title" @click="collapsed = !collapsed">
+          <span class="nav-label">Agents</span>
           <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
         </div>
         <template x-if="!collapsed">
           <div x-transition>
             <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents')" :aria-current="page === 'agents' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-              <span class="nav-label">Chat</span>
+              <span class="nav-label">All Agents</span>
+              <span class="nav-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread chat activity"></span>
             </a>
             <a class="nav-item" :class="{ active: page === 'bookmarks' }" @click="navigate('bookmarks')" :aria-current="page === 'bookmarks' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></span>
               <span class="nav-label">Bookmarks</span>
+            </a>
+            <div class="sidebar-agent-list" x-show="!sidebarCollapsed && $store.app.primaryAgentsForSidebar().length > 0">
+              <div class="sidebar-agent-list-label">Quick open</div>
+              <template x-for="agent in $store.app.primaryAgentsForSidebar()" :key="agent.id">
+                <button type="button" class="sidebar-agent-row" @click="$store.app.openAgentChat(agent)" :title="(agent.name || '') + (agent.model_name ? ' · ' + agent.model_name : '') + ($store.app.agentHasChatUnread(agent.id) ? ' — unread messages' : '')">
+                  <div class="sidebar-agent-row-avatar">
+                    <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:16px;line-height:1"></span>
+                    <svg x-show="!agent.identity || !agent.identity.emoji" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span class="sidebar-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                  </div>
+                  <div class="sidebar-agent-row-body">
+                    <span class="sidebar-agent-row-name truncate" x-text="agent.name"></span>
+                    <span class="sidebar-agent-row-model truncate" x-text="agent.model_name"></span>
+                    <span class="sidebar-agent-row-activity truncate" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></span>
+                  </div>
+                  <span class="sidebar-agent-row-dot" :class="(agent.state === 'Running' ? 'sidebar-agent-row-dot--run' : (agent.state === 'Crashed' ? 'sidebar-agent-row-dot--idle' : 'sidebar-agent-row-dot--other'))" :title="agent.state === 'Crashed' ? 'Idle' : (agent.state || 'Unknown')"></span>
+                </button>
+              </template>
+            </div>
+            <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
+              <span class="nav-label">Sessions</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
+              <span class="nav-label">Comms</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
+              <span class="nav-label">Approvals</span>
+              <span class="badge badge-warn" x-show="$store.app.pendingApprovalCount > 0" x-text="$store.app.pendingApprovalCount"></span>
             </a>
           </div>
         </template>
@@ -126,10 +177,6 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigate('overview')" :aria-current="page === 'overview' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
-              <span class="nav-label">Overview</span>
-            </a>
             <a class="nav-item" :class="{ active: page === 'analytics' }" @click="navigate('analytics')" :aria-current="page === 'analytics' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg></span>
               <span class="nav-label">Analytics</span>
@@ -141,31 +188,6 @@
             <a class="nav-item" :class="{ active: page === 'timeline' }" @click="navigate('timeline')" :aria-current="page === 'timeline' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
               <span class="nav-label">Timeline</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Agents -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Agents</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
-              <span class="nav-label">Sessions</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
-              <span class="nav-label">Approvals</span>
-              <span class="badge badge-warn" x-show="$store.app.pendingApprovalCount > 0" x-text="$store.app.pendingApprovalCount"></span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
-              <span class="nav-label">Comms</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'network' }" @click="navigate('network')" :aria-current="page === 'network' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
@@ -253,8 +275,11 @@
         <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
-      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K agents | Ctrl+N new</div>
-      <div style="padding:0 16px 12px;display:flex;flex-direction:column;gap:6px">
+      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K · All Agents | Ctrl+N new</div>
+      <div class="sidebar-footer-desktop-hint text-xs text-dim" style="padding:4px 16px 12px;line-height:1.5" x-show="isDesktopShell()">
+        Support and community links are in the app <strong style="color:var(--text-secondary)">Help</strong> menu.
+      </div>
+      <div class="sidebar-footer-links" style="padding:0 16px 12px;display:flex;flex-direction:column;gap:6px" x-show="!isDesktopShell()">
         <a class="text-xs" href="mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support" style="color:var(--accent);text-decoration:underline">Get Help (Email)</a>
         <a class="text-xs" href="https://x.com/ainativelang" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">X Profile</a>
         <a class="text-xs" href="https://t.me/AINL_Portal" target="_blank" rel="noopener" style="color:var(--text-dim);text-decoration:underline">Telegram</a>
@@ -274,11 +299,11 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
 
-    <!-- Page: Overview -->
+    <!-- Page: Get started (overview route) -->
     <template x-if="page === 'overview'">
-      <div x-data="overviewPage" x-init="loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()">
-        <div class="page-header">
-          <h2>Overview</h2>
+      <div x-data="overviewPage" x-init="loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()" class="overview-page-root">
+        <div class="page-header overview-page-header">
+          <h2>Get started</h2>
           <div class="flex items-center gap-2">
             <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? 'Healthy' : 'Unreachable'"></span>
             <button class="btn btn-ghost btn-sm" @click="silentRefresh()" title="Refresh" style="padding:4px 8px">
@@ -286,20 +311,94 @@
             </button>
           </div>
         </div>
-        <p class="text-xs text-dim" x-show="!loading && !loadError && $store.kernelEvents && $store.kernelEvents.last" style="margin:-6px 0 14px;line-height:1.5">
-          <span class="text-dim">Last kernel event:</span>
-          <span x-text="formatLastKernelEvent($store.kernelEvents.last)"></span>
-        </p>
-        <div class="page-body">
+        <div class="page-body overview-page-body">
+          <!-- Latest kernel SSE — styled strip (not raw header text) -->
+          <div
+            class="overview-live-strip card"
+            x-show="!loading && !loadError && $store.kernelEvents && $store.kernelEvents.last"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 transform -translate-y-1"
+            x-transition:enter-end="opacity-100 transform translate-y-0"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="overview-live-strip-pulse" aria-hidden="true"></div>
+            <div class="overview-live-strip-main">
+              <span class="overview-live-strip-badge">Live</span>
+              <span class="overview-live-strip-text" x-text="formatLastKernelEvent($store.kernelEvents.last)"></span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm overview-live-strip-action" @click="location.hash='timeline'">Timeline</button>
+          </div>
+
+          <!-- Quick actions — top of overview (static links; show unless load failed) -->
+          <div
+            class="card overview-quick-actions"
+            x-show="!loadError && !loading"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 transform -translate-y-1"
+            x-transition:enter-end="opacity-100 transform translate-y-0"
+            role="region"
+            aria-label="Quick actions"
+          >
+            <div class="overview-quick-actions-head">
+              <span class="overview-quick-actions-title">Quick actions</span>
+              <span class="overview-quick-actions-sub text-xs text-dim">Common tasks</span>
+            </div>
+            <div class="overview-quick-actions-grid">
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='agents'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
+                </span>
+                <span class="overview-quick-action-label">New Agent</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='skills'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Browse Skills</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='channels'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Add Channel</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='workflows'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Create Workflow</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='settings'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Settings</span>
+              </button>
+            </div>
+          </div>
+
           <!-- Loading skeleton state -->
           <div x-show="loading" style="animation:fadeIn 0.2s">
+            <div class="card overview-quick-actions overview-quick-actions--skeleton" aria-hidden="true">
+              <div class="overview-quick-actions-head">
+                <div class="skeleton skeleton-text" style="width:96px;height:14px"></div>
+                <div class="skeleton skeleton-text" style="width:72px;height:12px"></div>
+              </div>
+              <div class="overview-quick-actions-grid">
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+              </div>
+            </div>
             <div class="stats-row stats-row-lg" style="margin-bottom:20px">
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:60px;height:28px"></div><div class="skeleton skeleton-text" style="width:100px;height:12px;margin-top:8px"></div></div>
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:40px;height:28px"></div><div class="skeleton skeleton-text" style="width:120px;height:12px;margin-top:8px"></div></div>
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:50px;height:28px"></div><div class="skeleton skeleton-text" style="width:80px;height:12px;margin-top:8px"></div></div>
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:40px;height:28px"></div><div class="skeleton skeleton-text" style="width:60px;height:12px;margin-top:8px"></div></div>
             </div>
-            <div class="card" style="margin-bottom:16px"><div class="skeleton skeleton-text" style="width:120px;margin-bottom:12px"></div><div style="display:flex;gap:8px"><div class="skeleton" style="width:80px;height:24px;border-radius:20px"></div><div class="skeleton" style="width:70px;height:24px;border-radius:20px"></div><div class="skeleton" style="width:90px;height:24px;border-radius:20px"></div></div></div>
             <div class="overview-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div>
           </div>
           <!-- Error state -->
@@ -354,7 +453,7 @@
               </div>
               <div class="setup-checklist-section">
                 <div class="setup-checklist-section-label">Optional</div>
-                <p class="text-xs text-dim" style="margin:0 0 6px;line-height:1.45">Messaging, extra polish — skip if the dashboard is enough.</p>
+                <p class="text-xs text-dim" style="margin:0 0 6px;line-height:1.45">Channel connects external messaging. Chat and skills are quick links — they stay open (not checked off) so you can use them anytime.</p>
                 <template x-for="item in setupChecklistOptional" :key="item.key">
                   <div class="setup-checklist-item">
                     <div class="setup-checklist-icon" :class="{ done: item.done }">
@@ -381,10 +480,10 @@
           <div x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
 
           <!-- Primary stats row with icons + stagger animation -->
-          <div class="stats-row stats-row-lg">
-            <div class="stat-card stat-card-lg animate-entry stagger-1" @click="location.hash='agents'" style="cursor:pointer">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="width:36px;height:36px;border-radius:var(--radius-md);background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <div class="stats-row stats-row-lg overview-hero-stats">
+            <div class="stat-card stat-card-lg overview-hero-stat animate-entry stagger-1" @click="location.hash='agents'" style="cursor:pointer">
+              <div class="overview-stat-row">
+                <div class="overview-stat-icon overview-stat-icon--accent">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 </div>
                 <div>
@@ -393,9 +492,9 @@
                 </div>
               </div>
             </div>
-            <div class="stat-card stat-card-lg animate-entry stagger-2">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="width:36px;height:36px;border-radius:var(--radius-md);background:rgba(96,165,250,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <div class="stat-card stat-card-lg overview-hero-stat animate-entry stagger-2">
+              <div class="overview-stat-row">
+                <div class="overview-stat-icon overview-stat-icon--blue">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
                 </div>
                 <div>
@@ -404,9 +503,9 @@
                 </div>
               </div>
             </div>
-            <div class="stat-card stat-card-lg animate-entry stagger-3">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="width:36px;height:36px;border-radius:var(--radius-md);background:rgba(74,222,128,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <div class="stat-card stat-card-lg overview-hero-stat animate-entry stagger-3">
+              <div class="overview-stat-row">
+                <div class="overview-stat-icon overview-stat-icon--green">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
                 </div>
                 <div>
@@ -415,9 +514,9 @@
                 </div>
               </div>
             </div>
-            <div class="stat-card stat-card-lg animate-entry stagger-4">
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="width:36px;height:36px;border-radius:var(--radius-md);background:rgba(168,85,247,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <div class="stat-card stat-card-lg overview-hero-stat animate-entry stagger-4">
+              <div class="overview-stat-row">
+                <div class="overview-stat-icon overview-stat-icon--purple">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A855F7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 </div>
                 <div>
@@ -429,30 +528,30 @@
           </div>
 
           <!-- Secondary stats row -->
-          <div class="stats-row animate-entry stagger-5" style="margin-bottom:16px">
-            <div class="stat-card" @click="location.hash='channels'" style="cursor:pointer">
+          <div class="stats-row overview-compact-stats animate-entry stagger-5" style="margin-bottom:16px">
+            <div class="stat-card overview-stat-compact" @click="location.hash='channels'" style="cursor:pointer">
               <div class="stat-value" style="font-size:18px" x-text="channels.length"></div>
               <div class="stat-label">Channels</div>
             </div>
-            <div class="stat-card" @click="location.hash='skills'" style="cursor:pointer">
+            <div class="stat-card overview-stat-compact" @click="location.hash='skills'" style="cursor:pointer">
               <div class="stat-value" style="font-size:18px" x-text="skillCount"></div>
               <div class="stat-label">Skills</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card overview-stat-compact">
               <div class="stat-value" style="font-size:18px" x-text="connectedMcp.length"></div>
               <div class="stat-label">MCP Servers</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card overview-stat-compact">
               <div class="stat-value" style="font-size:18px" x-text="formatNumber(usageSummary.total_tools)"></div>
               <div class="stat-label">Tool Calls</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card overview-stat-compact">
               <div class="stat-value" :class="configuredProviders.length > 0 ? 'stat-value-success' : ''" style="font-size:18px" x-text="configuredProviders.length"></div>
               <div class="stat-label">Providers</div>
             </div>
           </div>
 
-          <div class="card mb-4" style="border-left:3px solid #6366f1" x-show="observability && observability.agent_count !== undefined">
+          <div class="card mb-4 overview-snapshot-card" x-show="observability && observability.agent_count !== undefined">
             <div class="card-header" style="margin:0">Operations snapshot</div>
             <div class="text-xs text-dim" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px;line-height:1.5">
               <div><span class="text-dim">Agents:</span> <span x-text="(observability.running_agents != null ? observability.running_agents : '—') + ' / ' + (observability.agent_count != null ? observability.agent_count : '—')"></span> <span class="text-dim">running</span></div>
@@ -466,7 +565,7 @@
           </div>
 
           <!-- Provider status badges with health indicators -->
-          <div class="card mb-4" x-show="providers.length" style="overflow:hidden">
+          <div class="card mb-4 overview-provider-card" x-show="providers.length" style="overflow:hidden">
             <div class="flex justify-between items-center mb-2">
               <div class="card-header" style="margin:0">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
@@ -484,9 +583,9 @@
             </div>
           </div>
 
-          <div class="overview-grid">
+          <div class="overview-grid overview-panel-grid">
             <!-- System Health -->
-            <div class="card">
+            <div class="card overview-panel-card">
               <div class="card-header">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
                 System Health
@@ -500,7 +599,7 @@
             </div>
 
             <!-- Security Systems -->
-            <div class="card">
+            <div class="card overview-panel-card">
               <div class="card-header">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 Security Systems
@@ -520,7 +619,7 @@
             </div>
 
             <!-- Connected Channels -->
-            <div class="card" x-show="channels.length">
+            <div class="card overview-panel-card" x-show="channels.length">
               <div class="card-header">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
                 Connected Channels
@@ -534,7 +633,7 @@
             </div>
 
             <!-- MCP Servers -->
-            <div class="card" x-show="mcpServers.length">
+            <div class="card overview-panel-card" x-show="mcpServers.length">
               <div class="card-header">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><path d="M6 6h.01M6 18h.01"/></svg>
                 MCP Servers
@@ -551,35 +650,8 @@
             </div>
           </div>
 
-          <!-- Quick Actions -->
-          <div class="card mt-4" style="background:var(--bg-elevated)">
-            <div class="card-header" style="margin-bottom:8px">Quick Actions</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <button class="btn btn-ghost btn-sm" @click="location.hash='agents'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
-                New Agent
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='skills'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-                Browse Skills
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='channels'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
-                Add Channel
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='workflows'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
-                Create Workflow
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='settings'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg>
-                Settings
-              </button>
-            </div>
-          </div>
-
           <!-- Recent Activity Feed -->
-          <div class="card mt-4" x-show="recentAudit.length">
+          <div class="card mt-4 overview-activity-card" x-show="recentAudit.length">
             <div class="flex justify-between items-center">
               <div class="card-header" style="margin:0">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -587,27 +659,27 @@
               </div>
               <a class="btn btn-ghost btn-sm" @click="location.hash='logs'" style="font-size:10px;padding:2px 8px">View All</a>
             </div>
-            <div style="margin-top:12px;display:flex;flex-direction:column;gap:1px">
+            <div class="overview-activity-feed">
               <template x-for="(e, idx) in recentAudit" :key="e.seq">
-                <div class="detail-row" style="padding:8px 0;border-bottom:1px solid var(--border-subtle);animation:slideUp 0.2s var(--ease-spring)" :style="'animation-delay:' + (idx * 30) + 'ms'">
-                  <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
-                    <div style="width:24px;height:24px;border-radius:var(--radius-sm);background:var(--surface-2);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--text-dim)" x-html="actionIcon(e.action)"></div>
-                    <div style="min-width:0;flex:1">
-                      <div style="display:flex;align-items:center;gap:6px">
+                <div class="overview-activity-row" style="animation:slideUp 0.2s var(--ease-spring)" :style="'animation-delay:' + (idx * 30) + 'ms'">
+                  <div class="overview-activity-row-main">
+                    <div class="overview-activity-icon" x-html="actionIcon(e.action)"></div>
+                    <div class="overview-activity-text">
+                      <div class="overview-activity-meta">
                         <span class="badge" :class="actionBadgeClass(e.action)" style="font-size:9px;padding:1px 6px" x-text="friendlyAction(e.action)"></span>
-                        <span class="text-xs text-dim truncate" style="max-width:100px" x-text="agentName(e.agent_id)" :title="e.agent_id"></span>
+                        <span class="text-xs text-dim truncate overview-activity-agent" x-text="agentName(e.agent_id)" :title="e.agent_id"></span>
                       </div>
-                      <div class="text-xs text-dim truncate" style="margin-top:2px;max-width:300px" x-show="e.detail" x-text="e.detail" :title="e.detail"></div>
+                      <div class="text-xs text-dim truncate overview-activity-detail" x-show="e.detail" x-text="e.detail" :title="e.detail"></div>
                     </div>
                   </div>
-                  <span class="text-xs text-dim font-mono" style="white-space:nowrap;flex-shrink:0" x-text="timeAgo(e.timestamp)" :title="new Date(e.timestamp).toLocaleString()"></span>
+                  <span class="text-xs text-dim font-mono overview-activity-time" x-text="timeAgo(e.timestamp)" :title="new Date(e.timestamp).toLocaleString()"></span>
                 </div>
               </template>
             </div>
           </div>
 
           <!-- Empty activity state -->
-          <div class="card mt-4" x-show="!recentAudit.length && !loading">
+          <div class="card mt-4 overview-empty-activity" x-show="!recentAudit.length && !loading">
             <div style="text-align:center;padding:24px 16px">
               <div class="empty-state-icon" style="margin:0 auto 8px">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -619,7 +691,7 @@
           </div>
 
           <!-- Quick Actions -->
-          <div class="animate-entry stagger-6" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:12px;margin-top:20px">
+          <div class="animate-entry stagger-6 overview-bottom-actions" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:12px;margin-top:20px">
             <div class="quick-action-card" @click="location.hash='agents'">
               <div class="quick-action-icon" style="background:var(--accent-subtle)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -684,9 +756,9 @@
         <template x-if="activeChatAgent">
           <div x-data="chatPage" class="chat-wrapper">
             <!-- Chat header with back button -->
-            <div class="page-header" x-show="currentAgent">
+            <div class="page-header chat-conversation-header" x-show="currentAgent">
               <div class="flex items-center gap-2" style="min-width:0">
-                <button class="btn btn-ghost btn-sm" @click="$dispatch('close-chat')" title="Back to Agents" style="padding:4px 8px;margin-right:4px">
+                <button class="btn btn-ghost btn-sm" @click="$dispatch('close-chat')" title="Back to Agents" style="padding:6px 10px;margin-right:2px;border-radius:10px">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
                 </button>
                 <span x-show="currentAgent && currentAgent.identity && currentAgent.identity.emoji" x-text="currentAgent && currentAgent.identity && currentAgent.identity.emoji" style="font-size:20px;line-height:1"></span>
@@ -750,10 +822,10 @@
             <div class="messages" id="messages" @scroll.passive="onMessagesScroll()" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
               <!-- Empty state: no agent selected -->
               <template x-if="!currentAgent">
-                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;opacity:0.8">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:0.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <h3 style="margin:0 0 8px;font-size:16px;font-weight:600">Select an agent to start chatting</h3>
-                  <p class="text-dim" style="font-size:13px;max-width:320px">Choose an agent from the sidebar or go to the Agents tab to create a new one.</p>
+                <div class="chat-empty-state">
+                  <svg class="chat-empty-state-icon" width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <h3>Select an agent to start chatting</h3>
+                  <p class="text-dim">Choose an agent from the sidebar or go to the Agents tab to create a new one.</p>
                 </div>
               </template>
               <!-- Message list -->
@@ -874,7 +946,7 @@
                           </div>
                         </template>
                         <!-- Timestamp + meta row -->
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <div class="message-footer-meta" style="display:flex;align-items:center;flex-wrap:wrap">
                           <div class="message-time" x-text="formatTime(msg.ts)" x-show="msg.ts && !msg.thinking"></div>
                           <div class="message-meta" x-text="msg.meta" x-show="msg.meta"></div>
                         </div>
@@ -885,22 +957,22 @@
               </template>
 
               <!-- Drop zone overlay -->
-              <div x-show="dragOver" style="position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--surface);opacity:0.92;border:2px dashed var(--accent);border-radius:8px;pointer-events:none">
-                <span style="font-size:16px;color:var(--accent);font-weight:600">Drop files here</span>
+              <div class="chat-drop-overlay" x-show="dragOver">
+                <span>Drop files here</span>
               </div>
             </div>
 
             <!-- Input area -->
             <div class="input-area" x-show="currentAgent" style="position:relative">
               <!-- Attachment previews -->
-              <div x-show="attachments.length > 0" style="display:flex;gap:8px;flex-wrap:wrap;padding:0 0 8px 0">
+              <div class="chat-attachment-strip" x-show="attachments.length > 0">
                 <template x-for="(att, aidx) in attachments" :key="aidx">
-                  <div style="position:relative;border:1px solid var(--border);border-radius:6px;padding:4px;display:flex;align-items:center;gap:6px;background:var(--surface2);max-width:180px">
-                    <img x-show="att.preview" :src="att.preview" style="width:32px;height:32px;object-fit:cover;border-radius:4px">
+                  <div class="chat-attachment-chip">
+                    <img x-show="att.preview" :src="att.preview" style="width:32px;height:32px;object-fit:cover;border-radius:6px">
                     <span x-show="!att.preview" style="font-size:18px;width:32px;text-align:center">&#128196;</span>
                     <span class="text-xs truncate" style="max-width:100px" x-text="att.file.name"></span>
                     <span x-show="att.uploading" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
-                    <button @click="removeAttachment(aidx)" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--danger);color:#fff;border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1">&times;</button>
+                    <button type="button" class="chat-attachment-chip-remove" @click="removeAttachment(aidx)" aria-label="Remove attachment">&times;</button>
                   </div>
                 </template>
               </div>
@@ -1061,44 +1133,76 @@
         <!-- MODE 2: Agent picker + Templates (no agent chatting) -->
         <div x-show="!activeChatAgent" class="chat-wrapper">
         <div class="page-header">
-          <h2>Chat</h2>
+          <h2 class="chat-page-heading">Chat <span class="chat-page-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread across agents"></span></h2>
           <div class="flex gap-2">
             <button class="btn btn-ghost btn-sm" @click="openSpawnWizard()">+ New Agent</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
           </div>
         </div>
-        <div class="page-body" style="overflow-y:auto;padding:24px">
+        <div class="page-body chat-agents-page-body" style="overflow-y:auto;padding:24px">
 
-          <!-- Running agents — click to chat -->
-          <div x-show="agents.length" style="margin-bottom:28px">
-            <div class="text-sm font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;font-size:11px;text-transform:uppercase">Your Agents</div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px">
-              <template x-for="agent in agents" :key="agent.id">
-                <div class="agent-chip" @click="chatWithAgent(agent)" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);transition:all 0.2s var(--ease-spring, ease);min-width:200px;box-shadow:var(--shadow-xs)" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.transform='translateY(-2px)';$el.style.boxShadow='var(--shadow-md)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.transform='';$el.style.boxShadow='var(--shadow-xs)'">
-                  <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                    <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:18px"></span>
-                    <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <!-- Running agents — click to chat (user agents first; probe/cron agents collapsible below) -->
+          <div class="agents-running-block" x-show="agents.length">
+            <div x-show="chatPickerPrimaryAgents.length">
+              <div class="agents-section-label">Your Agents</div>
+              <div class="agent-picker-grid">
+                <template x-for="agent in chatPickerPrimaryAgents" :key="agent.id">
+                  <div class="agent-card-picker" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
+                    <div class="agent-card-picker-avatar">
+                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                    </div>
+                    <div class="agent-card-picker-body">
+                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
+                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
+                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
+                    </div>
+                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
+                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
                   </div>
-                  <div style="min-width:0;flex:1">
-                    <div class="font-bold" style="font-size:13px" x-text="agent.name"></div>
-                    <div class="text-xs text-dim font-mono" style="font-size:11px" x-text="agent.model_name"></div>
-                    <div class="text-xs truncate" style="font-size:10px;color:var(--accent);max-width:200px;margin-top:2px" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
+                </template>
+              </div>
+            </div>
+
+            <div x-show="chatPickerSystemAgents.length" :style="chatPickerPrimaryAgents.length ? 'margin-top:22px' : ''">
+              <button type="button" class="chat-section-toggle" @click="systemChatAgentsExpanded = !systemChatAgentsExpanded" :aria-expanded="systemChatAgentsExpanded">
+                <span class="chat-section-toggle-chevron" :style="systemChatAgentsExpanded ? 'transform:rotate(90deg)' : ''">&rsaquo;</span>
+                <span>Automation &amp; probe chats</span>
+                <span class="font-mono normal-case" style="font-size:10px;font-weight:500;opacity:0.85" x-text="'(' + chatPickerSystemAgents.length + ')'"></span>
+              </button>
+              <p class="text-xs text-dim" style="margin:-2px 0 12px 22px;line-height:1.45;max-width:520px" x-show="!systemChatAgentsExpanded">Allowlist probe and offline cron sessions — expand to open their chats.</p>
+              <div class="agent-picker-grid" x-show="systemChatAgentsExpanded" x-transition>
+                <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
+                  <div class="agent-card-picker agent-card-picker--muted" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
+                    <div class="agent-card-picker-avatar">
+                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                    </div>
+                    <div class="agent-card-picker-body">
+                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
+                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
+                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
+                    </div>
+                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
+                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
                   </div>
-                  <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px"></span>
-                  <button class="agent-chip-config-btn" @click.stop="showDetail(agent)" title="Agent settings" style="display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:transparent;cursor:pointer;color:var(--text-dim);transition:all 0.15s;flex-shrink:0" @mouseenter="$el.style.borderColor='var(--accent)';$el.style.color='var(--accent)';$el.style.background='var(--surface2)'" @mouseleave="$el.style.borderColor='var(--border)';$el.style.color='var(--text-dim)';$el.style.background='transparent'">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                  </button>
-                </div>
-              </template>
+                </template>
+              </div>
             </div>
           </div>
 
           <!-- Quick-start templates — spawn + chat in one click -->
           <div>
-            <div class="text-sm font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;font-size:11px;text-transform:uppercase" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
+            <div class="agents-section-label" style="margin-bottom:12px" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
             <div class="card-grid">
               <template x-for="t in builtinTemplates" :key="t.name">
-                <div class="card" style="cursor:pointer" @click="t.manifest_toml ? spawnFromTemplate(t) : spawnBuiltin(t)">
+                <div class="card chat-template-card" style="cursor:pointer" @click="t.manifest_toml ? spawnFromTemplate(t) : spawnBuiltin(t)">
                   <div class="flex justify-between items-center mb-1">
                     <div class="card-header" style="margin:0;font-size:14px;font-weight:600" x-text="t.name"></div>
                     <span class="badge badge-dim" x-text="t.category"></span>
@@ -1572,96 +1676,112 @@
 
     <!-- Page: Bookmarks (saved chat outputs — local browser storage) -->
     <template x-if="page === 'bookmarks'">
-      <div x-data="bookmarksPage()" x-init="init()">
-        <div class="page-header">
-          <h2>Bookmarks</h2>
-          <button type="button" class="btn btn-ghost btn-sm" @click="location.hash='agents'">Back to Chat</button>
+      <div class="bookmarks-page-root" x-data="bookmarksPage()" x-init="init()">
+        <div class="page-header bookmarks-page-header">
+          <div class="bookmarks-page-header-text">
+            <h2>Bookmarks</h2>
+            <p class="bookmarks-page-sub text-xs text-dim">Saved from chat with the bookmark icon. In the <strong>desktop app</strong>, bookmarks also sync to your app data folder so they survive updates. In a normal browser tab they stay in localStorage only. Images work while the daemon serves uploads.</p>
+          </div>
+          <div class="bookmarks-page-header-actions">
+            <div class="bookmarks-stat-pill" title="Total saved bookmarks">
+              <span class="bookmarks-stat-pill-value" x-text="totalBookmarkCount"></span>
+              <span class="bookmarks-stat-pill-label">saved</span>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" @click="location.hash='agents'">All Agents</button>
+          </div>
         </div>
-        <div class="page-body" style="display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:16px;align-items:start">
-          <div class="card" style="padding:12px;position:sticky;top:12px">
-            <div class="font-bold" style="font-size:13px;margin-bottom:8px">Categories</div>
-            <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">
+        <div class="page-body bookmarks-layout">
+          <aside class="bookmarks-sidebar card">
+            <div class="bookmarks-sidebar-head">
+              <span class="bookmarks-sidebar-title">Categories</span>
+            </div>
+            <ul class="bookmarks-category-list" role="list">
               <template x-for="c in categories" :key="c.id">
-                <div style="display:flex;align-items:center;gap:4px">
-                  <button type="button" class="btn btn-ghost btn-sm" style="flex:1;text-align:left;justify-content:flex-start;font-size:12px;padding:6px 8px;border-radius:6px"
-                    :style="selectedCategoryId === c.id ? 'background:var(--accent-subtle);border:1px solid var(--accent)' : ''"
-                    @click="selectedCategoryId = c.id" x-text="c.name"></button>
-                  <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" @click="moveCat(c, -1)" title="Move up">↑</button>
-                  <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 4px" @click="moveCat(c, 1)" title="Move down">↓</button>
-                </div>
+                <li class="bookmarks-category-item">
+                  <button type="button" class="bookmarks-category-btn" :class="{ 'bookmarks-category-btn--active': selectedCategoryId === c.id }" @click="selectedCategoryId = c.id">
+                    <span class="bookmarks-category-name truncate" x-text="c.name"></span>
+                    <span class="bookmarks-category-count" x-text="categoryItemCount(c.id)"></span>
+                  </button>
+                  <div class="bookmarks-category-reorder">
+                    <button type="button" class="btn btn-ghost btn-sm bookmarks-icon-btn" @click="moveCat(c, -1)" title="Move up">↑</button>
+                    <button type="button" class="btn btn-ghost btn-sm bookmarks-icon-btn" @click="moveCat(c, 1)" title="Move down">↓</button>
+                  </div>
+                </li>
+              </template>
+            </ul>
+            <div class="bookmarks-sidebar-add">
+              <input class="form-input bookmarks-new-cat-input" x-model="newCategoryName" placeholder="New category" @keydown.enter="addCategory()">
+              <button type="button" class="btn btn-primary btn-sm btn-block" @click="addCategory()">Add category</button>
+              <template x-if="categories.length > 1">
+                <button type="button" class="btn btn-danger btn-sm btn-block bookmarks-delete-cat" @click="removeSelectedCategory()" x-show="selectedCategoryId">Delete category</button>
               </template>
             </div>
-            <div class="form-group" style="margin-bottom:8px">
-              <input class="form-input" style="font-size:12px" x-model="newCategoryName" placeholder="New category" @keydown.enter="addCategory()">
-            </div>
-            <button type="button" class="btn btn-primary btn-sm btn-block" @click="addCategory()">Add category</button>
-            <template x-if="categories.length > 1">
-              <button type="button" class="btn btn-danger btn-sm btn-block mt-2" @click="removeSelectedCategory()" x-show="selectedCategoryId">Delete current category</button>
-            </template>
-          </div>
-          <div style="min-width:0">
-            <p class="text-xs text-dim mb-3" style="line-height:1.5">Saved from chat with the bookmark icon. Data stays in this browser (localStorage). Images use the same upload URLs while your daemon keeps them.</p>
+          </aside>
+          <div class="bookmarks-main">
             <template x-if="!itemsInCategory.length">
-              <div class="empty-state" style="padding:32px">
-                <div class="empty-state-icon">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+              <div class="bookmarks-empty card">
+                <div class="bookmarks-empty-icon">
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
                 </div>
-                <h3>No bookmarks in this category</h3>
-                <p>Open <strong>Chat</strong>, hover a message, and click the bookmark icon.</p>
+                <h3>No bookmarks here</h3>
+                <p class="text-sm text-dim">Open <strong>All Agents</strong>, hover a message, and tap the bookmark icon.</p>
+                <button type="button" class="btn btn-primary btn-sm" @click="location.hash='agents'">Go to All Agents</button>
               </div>
             </template>
-            <template x-for="it in itemsInCategory" :key="it.id">
-              <div class="card mb-3" style="overflow:hidden">
-                <div class="flex justify-between items-start gap-2 mb-2" style="flex-wrap:wrap">
-                  <div style="min-width:0;flex:1">
-                    <div class="font-bold" style="font-size:14px" x-text="it.title || 'Bookmark'"></div>
-                    <div class="text-xs text-dim mt-1">
-                      <span x-text="formatDate(it.createdAt)"></span>
-                      <span x-show="it.agentName"> · <span x-text="it.agentName"></span></span>
-                    </div>
-                  </div>
-                  <div class="flex gap-1 flex-wrap" style="align-items:center">
-                    <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="itemUp(it)" title="Move up">↑</button>
-                    <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="itemDown(it)" title="Move down">↓</button>
-                    <select class="form-select" style="width:auto;max-width:140px;font-size:11px;padding:2px 6px" @change="moveItem(it, $event)">
-                      <template x-for="c in categories" :key="'mv-' + c.id">
-                        <option :value="c.id" :selected="c.id === it.categoryId" x-text="c.name"></option>
-                      </template>
-                    </select>
-                    <button type="button" class="btn btn-danger btn-sm" style="padding:2px 8px" @click="deleteItem(it)">Delete</button>
-                  </div>
-                </div>
-                <template x-if="it.images && it.images.length">
-                  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-                    <template x-for="img in it.images" :key="img.file_id">
-                      <a :href="'/api/uploads/' + img.file_id" target="_blank" rel="noopener">
-                        <img :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'image'" style="max-width:280px;max-height:240px;border-radius:8px;border:1px solid var(--border)" loading="lazy">
-                      </a>
-                    </template>
-                  </div>
-                </template>
-                <div class="markdown-body" style="font-size:13px;line-height:1.55" x-html="renderMarkdown(it.text)"></div>
-                <template x-if="it.tools && it.tools.length">
-                  <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-                    <div class="text-xs font-bold text-dim mb-2">Tool outputs</div>
-                    <template x-for="(t, ti) in it.tools" :key="it.id + '-tool-' + ti">
-                      <div class="tool-card mb-2" :class="{ 'tool-card-error': t.is_error }">
-                        <div class="tool-card-header" @click="toggleToolExpand(it.id, ti)">
-                          <span class="tool-card-name" x-text="t.name"></span>
-                          <span class="text-xs text-dim" x-text="isToolExpanded(it.id, ti) ? 'hide' : 'show'"></span>
-                        </div>
-                        <div x-show="isToolExpanded(it.id, ti)" style="padding:8px 10px;font-size:11px">
-                          <div class="text-dim mb-1">Input</div>
-                          <pre class="text-xs" style="white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;background:var(--surface2);padding:8px;border-radius:6px" x-text="t.input"></pre>
-                          <div class="text-dim mb-1 mt-2">Result</div>
-                          <pre class="text-xs" style="white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto;background:var(--surface2);padding:8px;border-radius:6px" x-text="t.result"></pre>
-                        </div>
+            <div class="bookmarks-feed">
+              <template x-for="it in itemsInCategory" :key="it.id">
+                <article class="bookmark-card card">
+                  <header class="bookmark-card-head">
+                    <div class="bookmark-card-titles">
+                      <h3 class="bookmark-card-title" x-text="it.title || 'Bookmark'"></h3>
+                      <div class="bookmark-card-meta text-xs text-dim">
+                        <span x-text="formatDate(it.createdAt)"></span>
+                        <template x-if="it.agentName"><span> · <span x-text="it.agentName"></span></span></template>
                       </div>
-                    </template>
-                  </div>
-                </template>
-              </div>
-            </template>
+                    </div>
+                    <div class="bookmark-card-toolbar">
+                      <button type="button" class="btn btn-ghost btn-sm bookmarks-icon-btn" @click="itemUp(it)" title="Move up">↑</button>
+                      <button type="button" class="btn btn-ghost btn-sm bookmarks-icon-btn" @click="itemDown(it)" title="Move down">↓</button>
+                      <select class="form-select bookmark-card-move-select" @change="moveItem(it, $event)">
+                        <template x-for="c in categories" :key="'mv-' + c.id">
+                          <option :value="c.id" :selected="c.id === it.categoryId" x-text="c.name"></option>
+                        </template>
+                      </select>
+                      <button type="button" class="btn btn-danger btn-sm" @click="deleteItem(it)">Remove</button>
+                    </div>
+                  </header>
+                  <template x-if="it.images && it.images.length">
+                    <div class="bookmark-card-images">
+                      <template x-for="img in it.images" :key="img.file_id">
+                        <a class="bookmark-card-image-link" :href="'/api/uploads/' + img.file_id" target="_blank" rel="noopener">
+                          <img class="bookmark-card-image" :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'image'" loading="lazy">
+                        </a>
+                      </template>
+                    </div>
+                  </template>
+                  <div class="bookmark-card-body markdown-body" x-html="renderMarkdown(it.text)"></div>
+                  <template x-if="it.tools && it.tools.length">
+                    <footer class="bookmark-card-tools">
+                      <div class="bookmark-card-tools-label">Tool outputs</div>
+                      <template x-for="(t, ti) in it.tools" :key="it.id + '-tool-' + ti">
+                        <div class="tool-card bookmark-tool-card" :class="{ 'tool-card-error': t.is_error }">
+                          <div class="tool-card-header" @click="toggleToolExpand(it.id, ti)">
+                            <span class="tool-card-name" x-text="t.name"></span>
+                            <span class="text-xs text-dim" x-text="isToolExpanded(it.id, ti) ? 'hide' : 'show'"></span>
+                          </div>
+                          <div class="bookmark-tool-expand" x-show="isToolExpanded(it.id, ti)">
+                            <div class="text-dim mb-1 text-xs">Input</div>
+                            <pre class="bookmark-tool-pre" x-text="t.input"></pre>
+                            <div class="text-dim mb-1 mt-2 text-xs">Result</div>
+                            <pre class="bookmark-tool-pre bookmark-tool-pre--tall" x-text="t.result"></pre>
+                          </div>
+                        </div>
+                      </template>
+                    </footer>
+                  </template>
+                </article>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -3990,15 +4110,20 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="card mt-4">
               <div class="card-header">Support</div>
               <div class="card-meta text-dim" style="margin-top:6px">
-                Generate a redacted diagnostics bundle (.zip) you can attach when reporting bugs.
+                Generate a redacted diagnostics bundle (.zip). On desktop we copy it to your <strong>Downloads</strong> folder and keep a copy under <code style="font-size:11px">support/</code> in your ArmaraOS home. In a browser, your download folder is used when the save prompt appears.
               </div>
               <div class="flex items-center gap-2" style="margin-top:10px;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" @click="generateDiagnosticsBundle()" :disabled="diagGenerating">
                   <span x-show="!diagGenerating">Generate diagnostics bundle</span>
                   <span x-show="diagGenerating" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
                 </button>
-                <button class="btn btn-ghost btn-sm" @click="openSupportEmail()">Get Help</button>
-                <span class="text-xs text-dim" x-show="diagBundlePath" style="font-family:var(--font-mono)" x-text="diagBundlePath"></span>
+                <button class="btn btn-ghost btn-sm" @click="openSupportEmail()" :disabled="diagGenerating">Get Help</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="openHomeFolderSupport()">Open Home folder → support</button>
+              </div>
+              <div class="text-xs text-dim" style="margin-top:10px;line-height:1.5" x-show="diagBundlePath">
+                <div x-show="diagDownloadsPath"><strong>Downloads:</strong> <span style="font-family:var(--font-mono)" x-text="diagDownloadsPath"></span></div>
+                <div><strong>Home:</strong> <span style="font-family:var(--font-mono)" x-text="diagBundlePath"></span></div>
+                <div x-show="diagRelativePath" class="mt-1">You can also grab the same file from <a href="#" class="text-accent" style="text-decoration:underline" @click.prevent="openHomeFolderSupport()">Home folder</a> → <code style="font-size:11px" x-text="diagRelativePath"></code></div>
               </div>
               <div class="text-xs" x-show="diagError" style="margin-top:8px;color:var(--error)" x-text="diagError"></div>
             </div>
@@ -4912,75 +5037,103 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <!-- Page: Sessions -->
     <template x-if="page === 'sessions'">
-      <div x-data="sessionsPage">
-        <div class="page-header">
-          <h2>Sessions</h2>
-          <input class="form-input" style="width:200px" placeholder="Filter by agent..." x-model="searchFilter" x-show="tab === 'sessions'">
+      <div class="sessions-page-root" x-data="sessionsPage">
+        <div class="page-header sessions-page-header">
+          <div class="sessions-page-header-text">
+            <h2>Sessions</h2>
+            <p class="sessions-page-sub text-xs text-dim">Conversation history per agent. Open a session to resume in chat, or manage key-value memory on the Memory tab.</p>
+          </div>
+          <div class="sessions-page-header-tools" x-show="tab === 'sessions'">
+            <div class="sessions-search-wrap">
+              <svg class="sessions-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input class="form-input sessions-search-input" type="search" placeholder="Filter by agent name…" x-model="searchFilter" autocomplete="off">
+            </div>
+          </div>
         </div>
-        <div class="tabs">
+        <div class="tabs sessions-tabs">
           <div class="tab" :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">Sessions</div>
           <div class="tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">Memory</div>
         </div>
-        <div class="page-body" x-init="loadSessions()">
+        <div class="page-body sessions-page-body" x-init="loadSessions()">
           <!-- Sessions tab -->
           <div x-show="tab === 'sessions'">
-            <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading sessions...</span></div>
-            <div x-show="!loading && loadError" class="error-state">
+            <div x-show="loading" class="loading-state sessions-loading"><div class="spinner"></div><span>Loading sessions…</span></div>
+            <div x-show="!loading && loadError" class="error-state sessions-error">
               <span class="error-icon">!</span>
               <p x-text="loadError"></p>
               <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
             </div>
             <div x-show="!loading && !loadError">
-            <div class="card mb-4" style="border-left:3px solid var(--accent)">
-              <div class="font-bold" style="font-size:13px;margin-bottom:4px">Conversation Sessions</div>
-              <div class="text-sm text-dim" style="line-height:1.6">
-                Each conversation with an agent creates a session. Sessions store the full message history so you can resume conversations later, or review past interactions.
+            <div class="sessions-stats-row" x-show="sessions.length">
+              <div class="sessions-stat-card stat-card-lg">
+                <div class="stat-value" x-text="searchFilter ? filteredSessions.length + ' / ' + sessions.length : sessions.length"></div>
+                <div class="stat-label" x-text="searchFilter ? 'Sessions (matching / total)' : 'Conversations'"></div>
+              </div>
+              <div class="sessions-stat-card stat-card-lg">
+                <div class="stat-value" x-text="searchFilter ? filteredMessageCount() : totalMessageCount()"></div>
+                <div class="stat-label" x-text="searchFilter ? 'Messages (in filter)' : 'Messages stored'"></div>
               </div>
             </div>
-            <div class="table-wrap" x-show="filteredSessions.length">
-              <table>
-                <thead><tr><th>Session</th><th>Agent</th><th>Messages</th><th>Created</th><th>Actions</th></tr></thead>
-                <tbody>
-                  <template x-for="s in filteredSessions" :key="s.session_id">
-                    <tr>
-                      <td class="text-xs truncate" style="font-family:monospace;max-width:120px" x-text="s.session_id ? s.session_id.substring(0, 8) + '...' : '-'" :title="s.session_id"></td>
-                      <td class="font-bold" x-text="s.agent_name || s.agent_id"></td>
-                      <td x-text="s.message_count"></td>
-                      <td class="text-xs" x-text="s.created_at ? new Date(s.created_at).toLocaleString() : '-'"></td>
-                      <td>
-                        <button class="btn btn-primary btn-sm" @click="openInChat(s)">Chat</button>
-                        <button class="btn btn-danger btn-sm" @click="deleteSession(s.session_id)">Delete</button>
-                      </td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
+            <div class="card sessions-intro-card">
+              <div class="sessions-intro-accent"></div>
+              <div class="sessions-intro-body">
+                <div class="sessions-intro-title">How sessions work</div>
+                <p class="text-sm text-dim sessions-intro-copy">Each chat thread is a session with its own message history. Use <strong>Open</strong> to jump back into that conversation with the same agent.</p>
+              </div>
             </div>
-            <div class="empty-state" x-show="!filteredSessions.length && !searchFilter">
-              <div class="empty-state-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+            <div class="sessions-list" x-show="filteredSessions.length">
+              <template x-for="s in filteredSessions" :key="s.session_id">
+                <div class="session-row-card card">
+                  <div class="session-row-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+                  </div>
+                  <div class="session-row-main">
+                    <div class="session-row-top">
+                      <span class="session-row-agent truncate" x-text="s.agent_name || s.agent_id"></span>
+                      <code class="session-id-chip" x-text="shortSessionId(s.session_id)" :title="s.session_id"></code>
+                    </div>
+                    <div class="session-row-meta">
+                      <span class="session-meta-pill" x-text="(s.message_count != null ? s.message_count : 0) + ' messages'"></span>
+                      <span class="session-row-time text-xs text-dim" x-text="formatSessionDate(s.created_at)"></span>
+                    </div>
+                  </div>
+                  <div class="session-row-actions">
+                    <button type="button" class="btn btn-primary btn-sm" @click="openInChat(s)">Open</button>
+                    <button type="button" class="btn btn-ghost btn-sm session-row-delete" @click="deleteSession(s.session_id)">Delete</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <div class="sessions-empty card" x-show="!filteredSessions.length && !searchFilter">
+              <div class="sessions-empty-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
               </div>
               <h3>No sessions yet</h3>
-              <p>Sessions are created when you chat with agents. Start a conversation to see session history here.</p>
-              <button class="btn btn-primary" @click="location.hash='agents'">Start Chatting</button>
+              <p class="text-sm text-dim">Sessions appear when you chat with agents.</p>
+              <button type="button" class="btn btn-primary btn-sm" @click="location.hash='agents'">Go to All Agents</button>
             </div>
-            <div class="empty-state" x-show="!filteredSessions.length && searchFilter"><p>No sessions match your filter.</p></div>
+            <div class="sessions-filter-empty card" x-show="!filteredSessions.length && searchFilter">
+              <p class="text-sm text-dim" style="margin:0">No sessions match <strong x-text="searchFilter"></strong>. Try another name.</p>
+            </div>
             </div>
           </div>
 
           <!-- Memory tab -->
-          <div x-show="tab === 'memory'">
-            <div class="flex justify-between items-center mb-4">
-              <div class="info-card" style="flex:1;margin-bottom:0">
-                <h4>Agent Memory</h4>
-                <p>Each agent has its own key-value memory store. Agents use memory to persist preferences, notes, and context between conversations.</p>
+          <div class="sessions-memory-panel" x-show="tab === 'memory'">
+            <div class="sessions-memory-toolbar card">
+              <div class="sessions-memory-intro">
+                <h4 class="sessions-memory-title">Agent memory</h4>
+                <p class="text-sm text-dim sessions-memory-desc">Per-agent key-value store for preferences, notes, and context across conversations.</p>
               </div>
-              <select class="form-select" style="width:200px;margin-left:16px" x-model="memAgentId" @change="loadKv()">
-                <option value="">Select agent...</option>
-                <template x-for="a in $store.app.agents" :key="a.id">
-                  <option :value="a.id" x-text="a.name"></option>
-                </template>
-              </select>
+              <div class="sessions-memory-agent-select">
+                <label class="text-xs text-dim sessions-memory-label" for="sessions-mem-agent">Agent</label>
+                <select id="sessions-mem-agent" class="form-select sessions-memory-select" x-model="memAgentId" @change="loadKv()">
+                  <option value="">Choose an agent…</option>
+                  <template x-for="a in $store.app.agents" :key="a.id">
+                    <option :value="a.id" x-text="a.name"></option>
+                  </template>
+                </select>
+              </div>
             </div>
             <div x-show="memLoading" class="loading-state"><div class="spinner"></div><span>Loading memory...</span></div>
             <div x-show="!memLoading && memLoadError" class="error-state">
@@ -4989,11 +5142,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button class="btn btn-ghost btn-sm" @click="loadKv()">Retry</button>
             </div>
             <div x-show="memAgentId && !memLoading && !memLoadError">
-              <div class="flex justify-between items-center mb-4">
-                <span class="text-sm text-dim" x-text="kvPairs.length + ' key(s)'"></span>
-                <button class="btn btn-primary btn-sm" @click="showAdd = true">+ Add Key</button>
+              <div class="sessions-kv-toolbar card">
+                <span class="text-sm font-medium" x-text="kvPairs.length + ' key' + (kvPairs.length === 1 ? '' : 's')"></span>
+                <button type="button" class="btn btn-primary btn-sm" @click="showAdd = true">+ Add key</button>
               </div>
-              <div class="table-wrap" x-show="kvPairs.length">
+              <div class="table-wrap sessions-kv-table card" style="padding:0;overflow:hidden" x-show="kvPairs.length">
                 <table>
                   <thead><tr><th>Key</th><th>Value</th><th style="width:140px">Actions</th></tr></thead>
                   <tbody>
@@ -5025,10 +5178,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </tbody>
                 </table>
               </div>
-              <div class="empty-state" x-show="!kvPairs.length">
-                <h4>No keys stored</h4>
-                <p class="hint">This agent has no memory entries yet. Agents create memory entries automatically during conversations, or you can add them manually.</p>
-                <button class="btn btn-primary mt-4" @click="showAdd = true">+ Add First Key</button>
+              <div class="sessions-memory-empty card" x-show="!kvPairs.length">
+                <h4 style="margin:0 0 6px">No keys yet</h4>
+                <p class="text-sm text-dim" style="margin:0;line-height:1.5">Entries appear when agents persist context, or add one manually.</p>
+                <button type="button" class="btn btn-primary btn-sm" style="margin-top:14px" @click="showAdd = true">Add first key</button>
               </div>
               <template x-if="showAdd">
                 <div class="modal-overlay" @click.self="showAdd = false" @keydown.escape.window="showAdd = false">
@@ -5041,9 +5194,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </template>
             </div>
-            <div class="empty-state" x-show="!memAgentId && !memLoading">
-              <h4>Select an Agent</h4>
-              <p class="hint">Choose an agent from the dropdown above to browse and edit its memory store.</p>
+            <div class="sessions-memory-pick card" x-show="!memAgentId && !memLoading">
+              <h4 style="margin:0 0 6px">Pick an agent</h4>
+              <p class="text-sm text-dim" style="margin:0">Use the dropdown above to load that agent’s memory keys.</p>
             </div>
           </div>
         </div>
@@ -5173,16 +5326,20 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="timelinePage()" x-init="loadTimeline()">
         <div class="page-header">
           <h2>Event timeline</h2>
-          <button class="btn btn-ghost btn-sm" @click="loadTimeline()" :disabled="loading" x-text="loading ? 'Loading…' : 'Refresh'"></button>
+          <div class="flex gap-2 flex-wrap items-center">
+            <button type="button" class="btn btn-ghost btn-sm" x-show="tipHash" @click="copyTipSnippet()" title="Copy full chain tip hash">Copy tip</button>
+            <button class="btn btn-ghost btn-sm" @click="loadTimeline()" :disabled="loading" x-text="loading ? 'Loading…' : 'Refresh'"></button>
+          </div>
         </div>
         <div class="page-body">
-          <div class="card mb-4" style="border-left:3px solid var(--accent)">
-            <p class="text-sm text-dim" style="margin:0;line-height:1.55">Search the tamper-evident audit log (<code class="text-xs">GET /api/audit/recent</code> with optional <code class="text-xs">q</code>). Matches action, detail, outcome, and agent id.</p>
+          <div class="card mb-4" style="border-left:4px solid var(--accent)">
+            <p class="text-sm text-dim" style="margin:0;line-height:1.55">Tamper-evident audit trail from the kernel. Use <strong>search</strong> to match any substring in action, detail, outcome, or agent id. Use <strong>categories</strong> to focus on tools, messages, cron, or security-related rows. Expand a row for full text and entry hash.</p>
           </div>
-          <div class="flex gap-2 flex-wrap mb-4 items-end">
+
+          <div class="flex gap-2 flex-wrap mb-3 items-end">
             <div style="flex:1;min-width:200px">
-              <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Filter (substring)</label>
-              <input class="form-input" type="search" x-model="filterQ" placeholder="e.g. CronJob, tool, agent uuid…" @keydown.enter="loadTimeline()">
+              <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Search</label>
+              <input class="form-input" type="search" x-model="filterQ" placeholder="tool name, uuid, denied, cron…" @keydown.enter="loadTimeline()">
             </div>
             <div>
               <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Limit</label>
@@ -5195,6 +5352,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
             <button class="btn btn-primary btn-sm" @click="loadTimeline()" :disabled="loading">Apply</button>
           </div>
+
+          <div class="flex flex-wrap gap-2 mb-4" style="align-items:center">
+            <span class="text-xs text-dim" style="margin-right:4px">Show:</span>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'all' }" @click="setViewFilter('all')">All <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('all')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'tools' }" @click="setViewFilter('tools')">Tools <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('tools')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'messages' }" @click="setViewFilter('messages')">Messages <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('messages')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'cron' }" @click="setViewFilter('cron')">Cron <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('cron')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'agents' }" @click="setViewFilter('agents')">Agents <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('agents')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'access' }" @click="setViewFilter('access')">Files &amp; memory <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('access')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'security' }" @click="setViewFilter('security')">Security <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('security')"></span></button>
+            <button type="button" class="timeline-filter-chip" :class="{ active: viewFilter === 'system' }" @click="setViewFilter('system')">System <span class="text-dim font-mono" style="font-weight:500" x-text="'· ' + countForFilter('system')"></span></button>
+          </div>
+
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
@@ -5202,27 +5372,72 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <button class="btn btn-ghost btn-sm" @click="loadTimeline()">Retry</button>
           </div>
           <div x-show="!loading && !loadError">
-            <p class="text-xs text-dim mb-2" x-show="tipHash" x-text="'Showing ' + entries.length + ' entries (chain tip ' + tipHash.substring(0, 12) + '…, total ' + totalEntries + ')'"></p>
-            <div class="table-wrap" x-show="entries.length">
-              <table>
-                <thead><tr><th>#</th><th>Time</th><th>Agent</th><th>Action</th><th>Detail</th><th>Outcome</th></tr></thead>
-                <tbody>
-                  <template x-for="e in entries" :key="e.seq">
-                    <tr>
-                      <td class="text-xs text-dim" x-text="e.seq"></td>
-                      <td class="text-xs" style="white-space:nowrap" x-text="formatTime(e.timestamp)"></td>
-                      <td class="text-xs" style="word-break:break-all;max-width:140px" x-text="e.agent_id || '—'"></td>
-                      <td><span class="badge badge-dim text-xs" x-text="e.action"></span></td>
-                      <td class="text-xs text-dim" style="max-width:240px;word-break:break-word" :title="e.detail" x-text="truncate(e.detail, 120)"></td>
-                      <td class="text-xs text-dim" style="max-width:240px;word-break:break-word" :title="e.outcome" x-text="truncate(e.outcome, 120)"></td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
+            <div class="flex flex-wrap gap-3 mb-4 items-baseline" x-show="tipHash || totalEntries">
+              <p class="text-xs text-dim" style="margin:0">
+                <span x-text="'Loaded ' + entries.length + ' · showing ' + displayEntries.length"></span>
+                <span x-show="totalEntries"> · vault total <span class="font-mono" x-text="totalEntries"></span></span>
+              </p>
+              <p class="text-xs font-mono text-dim" style="margin:0;word-break:break-all" x-show="tipHash">
+                Tip <span x-text="tipHash.substring(0, 16)"></span>…
+              </p>
             </div>
+
+            <div x-show="entries.length && !displayEntries.length" class="empty-state">
+              <h4>No events in this category</h4>
+              <p class="hint">Choose <strong>All</strong> or another category, or clear the search and click Apply.</p>
+            </div>
+
+            <div class="audit-timeline-wrap" x-show="displayEntries.length">
+              <template x-for="g in timelineDayGroups" :key="g.dayKey">
+                <div class="mb-6">
+                  <div class="audit-day-sticky" x-text="g.label"></div>
+                  <template x-for="e in g.items" :key="e.seq">
+                    <details class="audit-timeline-card" :style="'border-left: 4px solid ' + actionAccentVar(e.action)">
+                      <summary>
+                        <div class="audit-timeline-seq" style="min-width:36px" x-text="'#' + e.seq"></div>
+                        <div class="audit-timeline-summary-main">
+                          <div class="flex flex-wrap items-center gap-2 mb-1">
+                            <span class="badge badge-dim text-xs" style="text-transform:none;font-weight:600" x-text="actionLabel(e.action)"></span>
+                            <span class="text-xs text-dim font-mono" x-text="e.action"></span>
+                            <span class="badge text-xs" :class="outcomeBadgeClass(e.outcome)" style="text-transform:none" x-text="truncate(e.outcome, 48)"></span>
+                          </div>
+                          <div class="text-sm" style="color:var(--text-secondary);line-height:1.45" x-text="truncate(e.detail, 160)"></div>
+                          <div class="audit-timeline-meta" style="margin-top:8px">
+                            <span :title="formatTime(e.timestamp)">
+                              <span x-text="formatRelative(e.timestamp)"></span>
+                              <span class="text-dim"> · </span>
+                              <span x-text="formatTimeClock(e.timestamp)"></span>
+                            </span>
+                            <span class="text-dim">·</span>
+                            <span x-text="agentLabel(e.agent_id)"></span>
+                          </div>
+                        </div>
+                      </summary>
+                      <div class="audit-timeline-detail">
+                        <div class="flex flex-wrap gap-2 items-center mb-2">
+                          <span class="text-xs text-dim">Agent id</span>
+                          <code class="text-xs" style="word-break:break-all" x-text="e.agent_id || '—'"></code>
+                        </div>
+                        <div class="text-xs text-dim" style="margin-bottom:4px">Detail</div>
+                        <pre x-text="e.detail || '—'"></pre>
+                        <div class="text-xs text-dim" style="margin:12px 0 4px">Outcome</div>
+                        <pre x-text="e.outcome || '—'"></pre>
+                        <div class="flex flex-wrap gap-2 items-center" style="margin-top:12px">
+                          <span class="text-xs text-dim">Entry hash</span>
+                          <code class="text-xs font-mono" style="flex:1;min-width:0;word-break:break-all" x-text="e.hash || '—'"></code>
+                          <button type="button" class="btn btn-ghost btn-sm" x-show="e.hash" @click.stop="copyHash(e.hash)">Copy</button>
+                        </div>
+                        <p class="text-xs text-dim" style="margin:12px 0 0">Recorded <span x-text="formatTime(e.timestamp)"></span> · seq <span x-text="e.seq"></span></p>
+                      </div>
+                    </details>
+                  </template>
+                </div>
+              </template>
+            </div>
+
             <div class="empty-state" x-show="!entries.length">
               <h4>No matching events</h4>
-              <p class="hint">Try a different filter or clear the search to load the most recent entries.</p>
+              <p class="hint">Try a different search, increase the limit, or clear the search and click Apply.</p>
             </div>
           </div>
         </div>

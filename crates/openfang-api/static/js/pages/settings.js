@@ -59,6 +59,9 @@ function settingsPage() {
     // -- Support / diagnostics --
     diagGenerating: false,
     diagBundlePath: '',
+    diagBundleFilename: '',
+    diagRelativePath: '',
+    diagDownloadsPath: '',
     diagError: '',
 
     // -- Dynamic config state --
@@ -495,30 +498,78 @@ function settingsPage() {
       this.updateChecking = false;
     },
 
+    _applyDiagnosticsResult(res) {
+      this.diagBundlePath = (res && res.bundle_path) ? res.bundle_path : '';
+      this.diagBundleFilename = (res && res.bundle_filename) ? res.bundle_filename : '';
+      this.diagRelativePath = (res && res.relative_path) ? res.relative_path : '';
+      if (!this.diagBundleFilename && this.diagBundlePath) {
+        try {
+          var norm = String(this.diagBundlePath).replace(/\\/g, '/');
+          var segs = norm.split('/').filter(Boolean);
+          this.diagBundleFilename = segs.length ? segs[segs.length - 1] : '';
+        } catch (e) { /* ignore */ }
+      }
+      if (!this.diagRelativePath && this.diagBundleFilename) {
+        this.diagRelativePath = 'support/' + this.diagBundleFilename;
+      }
+    },
+
     async generateDiagnosticsBundle() {
       this.diagError = '';
       this.diagBundlePath = '';
+      this.diagBundleFilename = '';
+      this.diagRelativePath = '';
+      this.diagDownloadsPath = '';
       this.diagGenerating = true;
       try {
+        var res = null;
         if (this.isDesktopShell) {
           try {
-            var bundle = await ArmaraosDesktopTauriInvoke('generate_support_bundle');
-            if (bundle && bundle.bundle_path) {
-              this.diagBundlePath = bundle.bundle_path;
-              OpenFangToast && OpenFangToast.success('Diagnostics bundle generated');
-              this.diagGenerating = false;
-              return;
-            }
-          } catch(e0) {
-            /* fall back to HTTP */
+            res = await ArmaraosDesktopTauriInvoke('generate_support_bundle');
+          } catch (e0) {
+            res = null;
           }
         }
-        var res = await OpenFangAPI.post('/api/support/diagnostics', {});
-        this.diagBundlePath = (res && res.bundle_path) ? res.bundle_path : '';
-        if (this.diagBundlePath) {
-          OpenFangToast && OpenFangToast.success('Diagnostics bundle generated');
+        if (!res || !res.bundle_path) {
+          res = await OpenFangAPI.post('/api/support/diagnostics', {});
+        }
+        this._applyDiagnosticsResult(res);
+        if (!this.diagBundlePath) {
+          throw new Error('No bundle path returned');
+        }
+        if (this.isDesktopShell) {
+          try {
+            var copyOut = await ArmaraosDesktopTauriInvoke('copy_diagnostics_to_downloads', {
+              bundle_path: this.diagBundlePath,
+            });
+            if (copyOut && copyOut.downloads_path) {
+              this.diagDownloadsPath = copyOut.downloads_path;
+              OpenFangToast &&
+                OpenFangToast.success('Diagnostics saved to Downloads and home/support folder');
+            } else {
+              OpenFangToast && OpenFangToast.success('Diagnostics bundle created in home/support folder');
+            }
+          } catch (eCopy) {
+            OpenFangToast &&
+              OpenFangToast.warn(
+                'Bundle created, but copy to Downloads failed: ' + (eCopy.message || String(eCopy))
+              );
+          }
+        } else if (this.diagBundleFilename) {
+          try {
+            await OpenFangAPI.downloadDiagnosticsZip(this.diagBundleFilename);
+            OpenFangToast &&
+              OpenFangToast.success('Download started — save completes to your default downloads folder');
+          } catch (eDl) {
+            OpenFangToast &&
+              OpenFangToast.warn(
+                'Bundle created on the server; browser download failed: ' + (eDl.message || String(eDl))
+              );
+            OpenFangToast &&
+              OpenFangToast.info('Open Home folder → support to download the .zip from the dashboard.');
+          }
         } else {
-          OpenFangToast && OpenFangToast.warn('Diagnostics bundle generated (no path returned)');
+          OpenFangToast && OpenFangToast.success('Diagnostics bundle generated');
         }
       } catch (e) {
         this.diagError = e && (e.message || String(e)) || 'Diagnostics bundle failed';
@@ -527,16 +578,56 @@ function settingsPage() {
       this.diagGenerating = false;
     },
 
-    openSupportEmail() {
+    openHomeFolderSupport() {
+      window.location.hash = 'home-files?path=support';
+    },
+
+    async openSupportEmail() {
       var subject = encodeURIComponent('ArmaraOS Support — Bug Report');
-      var body = 'Hi ArmaraOS team,%0D%0A%0D%0A' +
-        'Describe the bug here:%0D%0A%0D%0A' +
-        (this.diagBundlePath ? ('Diagnostics bundle path: ' + this.diagBundlePath + '%0D%0A%0D%0A') : '') +
+      var bodyPlain =
+        'Describe the bug here:\n\n' +
+        (this.diagBundlePath ? 'Bundle on disk: ' + this.diagBundlePath + '\n\n' : '') +
         'Thanks!';
+      if (this.isDesktopShell) {
+        try {
+          var mailOut = await ArmaraosDesktopTauriInvoke('compose_support_email', {
+            bundle_path: this.diagBundlePath || null,
+          });
+          if (mailOut && mailOut.attach_failed) {
+            var hint =
+              'Could not attach the zip automatically. Add the diagnostics .zip manually — ';
+            if (this.diagDownloadsPath) {
+              hint += 'it should be in Downloads, or ';
+            }
+            hint += this.diagBundlePath
+              ? 'open Home folder → support: ' + this.diagBundlePath
+              : 'generate diagnostics first, then try again.';
+            OpenFangToast && OpenFangToast.warn(hint);
+          }
+          return;
+        } catch (e) {
+          try {
+            await ArmaraosDesktopTauriInvoke('open_external_url', {
+              url:
+                'mailto:ainativelang@gmail.com?subject=' +
+                subject +
+                '&body=' +
+                encodeURIComponent(bodyPlain),
+            });
+            return;
+          } catch (e2) {
+            /* fall through */
+          }
+        }
+      }
       try {
-        window.location.href = 'mailto:ainativelang@gmail.com?subject=' + subject + '&body=' + body;
-      } catch (e) {
-        // ignore
+        window.location.href =
+          'mailto:ainativelang@gmail.com?subject=' +
+          subject +
+          '&body=' +
+          encodeURIComponent(bodyPlain);
+      } catch (e3) {
+        /* ignore */
       }
     },
 

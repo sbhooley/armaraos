@@ -44,4 +44,19 @@ echo "HTTP $code"
 head -c 400 /tmp/armaraos-spawn-body.json
 echo ""
 
+echo "-- GET /api/agents/:id/session/digest (first agent, if any)"
+AGENT_JSON="$(curl -sS -m 5 "$BASE/api/agents" || true)"
+AGENT_ID="$(printf '%s' "$AGENT_JSON" | python3 -c "import sys,json; \
+  try: \
+    a=json.load(sys.stdin); \
+    print(a[0]['id'] if isinstance(a,list) and len(a)>0 else '', end=''); \
+  except Exception: \
+    print('', end='')" 2>/dev/null || true)"
+if [[ -n "${AGENT_ID:-}" ]]; then
+  curl -sS -f -m 5 "$BASE/api/agents/$AGENT_ID/session/digest" | head -c 400
+  echo ""
+else
+  echo "(no agents in list — skipped)"
+fi
+
 echo "OK (smoke requests completed)."

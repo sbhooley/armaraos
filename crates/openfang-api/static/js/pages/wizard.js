@@ -218,10 +218,6 @@ function wizardPage() {
       try {
         var res = await OpenFangAPI.post('/api/agents/' + this.createdAgent.id + '/message', { message: text });
         this.tryItMessages.push({ role: 'agent', text: res.response || '(no response)' });
-        localStorage.setItem('of-first-msg', 'true');
-        try {
-          window.dispatchEvent(new CustomEvent('armaraos-onboarding-local'));
-        } catch(e2) { /* ignore */ }
       } catch(e) {
         this.tryItMessages.push({ role: 'agent', text: 'Error: ' + (e.message || 'Could not reach agent') });
       }

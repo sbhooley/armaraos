@@ -33,6 +33,17 @@ if (typeof marked !== 'undefined') {
   });
 }
 
+/** True when the dashboard runs inside the ArmaraOS desktop app (Tauri), not a normal browser tab. */
+function isArmaraosDesktopShell() {
+  try {
+    var w = typeof window !== 'undefined' ? window : null;
+    var core = w && w.__TAURI__ && w.__TAURI__.core;
+    return !!(core && typeof core.invoke === 'function');
+  } catch (e) {
+    return false;
+  }
+}
+
 /** Tauri 2 desktop shell only: invoke Rust commands when `withGlobalTauri` is enabled. */
 function ArmaraosDesktopTauriInvoke(cmd, args) {
   args = args || {};
@@ -49,6 +60,53 @@ function ArmaraosDesktopTauriInvoke(cmd, args) {
       reject(err);
     }
   });
+}
+
+/**
+ * Updates Alpine.store('ainl') fields used by the sidebar WS / AINL / SSE badge row.
+ * Desktop: Tauri `ainl_status` (bundled runtime). Browser: throttled GET /api/ainl/library/curated.
+ */
+async function armaraosRefreshAinlSidebarBadge(connected) {
+  try {
+    var ainl = Alpine.store('ainl');
+    if (!connected) {
+      ainl.sidebarOk = false;
+      ainl.sidebarTitle = 'Connect to the daemon to use AINL';
+      return;
+    }
+    if (isArmaraosDesktopShell()) {
+      if (ainl.bootstrapping) {
+        ainl.sidebarOk = false;
+        ainl.sidebarTitle = 'Installing AINL runtime…';
+        return;
+      }
+      var d = ainl.desktop;
+      if (d && d.ok) {
+        ainl.sidebarOk = true;
+        ainl.sidebarTitle = 'AINL ready (cli + MCP in desktop bundle)';
+        return;
+      }
+      ainl.sidebarOk = false;
+      var det = d && d.detail ? String(d.detail).trim() : '';
+      ainl.sidebarTitle = det ? det.slice(0, 200) : 'AINL not ready — open Settings → Runtime';
+      return;
+    }
+    var now = Date.now();
+    if (ainl.hostLastProbe && now - ainl.hostLastProbe < 25000) {
+      return;
+    }
+    ainl.hostLastProbe = now;
+    try {
+      await OpenFangAPI.get('/api/ainl/library/curated');
+      ainl.hostLibraryOk = true;
+      ainl.sidebarOk = true;
+      ainl.sidebarTitle = 'AINL library API available on this daemon';
+    } catch (e) {
+      ainl.hostLibraryOk = false;
+      ainl.sidebarOk = false;
+      ainl.sidebarTitle = 'AINL library API not reachable';
+    }
+  } catch (e) { /* ignore */ }
 }
 
 /**
@@ -207,6 +265,24 @@ function armaraosEventTargetAgentId(target) {
   return '';
 }
 
+/** After a WS/SSE unread signal, align assistant-count baseline so digest polling does not double-count. */
+var _armaraosDigestSyncTimers = {};
+function armaraosScheduleDigestBaselineSync(agentId) {
+  if (!agentId) return;
+  var id = String(agentId);
+  if (_armaraosDigestSyncTimers[id]) clearTimeout(_armaraosDigestSyncTimers[id]);
+  _armaraosDigestSyncTimers[id] = setTimeout(function() {
+    _armaraosDigestSyncTimers[id] = null;
+    if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) return;
+    OpenFangAPI.get('/api/agents/' + encodeURIComponent(id) + '/session/digest')
+      .then(function(d) {
+        var ac = (d && typeof d.assistant_message_count === 'number') ? d.assistant_message_count : 0;
+        try { Alpine.store('app').setChatAssistantBaseline(id, ac); } catch (e) { /* ignore */ }
+      })
+      .catch(function() {});
+  }, 450);
+}
+
 function armaraosAgentDisplayName(agentId) {
   if (!agentId) return '';
   try {
@@ -242,6 +318,12 @@ document.addEventListener('alpine:init', function() {
     desktop: null,
     /** True until first successful ainl_status reports ok (or user is not on desktop shell) */
     bootstrapping: false,
+    /** Browser-only: last curated-library probe (ms); throttles /api/ainl/library/curated */
+    hostLastProbe: 0,
+    hostLibraryOk: null,
+    /** Sidebar badge: green when AINL is usable on this shell */
+    sidebarOk: false,
+    sidebarTitle: '',
   });
 
   Alpine.store('app', {
@@ -273,6 +355,124 @@ document.addEventListener('alpine:init', function() {
     sessionUser: null,
     /** Per-agent status line from kernel SSE (loop phase + inter-agent sends). */
     agentActivityLines: {},
+    /** Dashboard hash route (mirrors root `page`) for unread / chat visibility. */
+    dashboardPage: 'agents',
+    /** When inline chat is open on #agents, the agent id being viewed (null = picker). */
+    agentsPageChatAgentId: null,
+    /** agentId -> count of unread assistant-side updates (replaced immutably for Alpine). */
+    chatUnreadCounts: {},
+    /** agentId -> last seen assistant_message_count from GET .../session/digest (poll + dedupe). */
+    chatAssistantBaseline: {},
+
+    setChatAssistantBaseline(agentId, count) {
+      if (agentId == null || agentId === '') return;
+      var id = String(agentId);
+      var n = typeof count === 'number' && !isNaN(count) ? Math.max(0, Math.floor(count)) : 0;
+      var prev = this.chatAssistantBaseline || {};
+      var next = Object.assign({}, prev);
+      next[id] = n;
+      this.chatAssistantBaseline = next;
+    },
+
+    /** Call when opening a chat so digest polling does not treat history as new. */
+    primeAssistantBaselineForAgent(agentId) {
+      var self = this;
+      if (agentId == null || agentId === '') return;
+      var id = String(agentId);
+      OpenFangAPI.get('/api/agents/' + encodeURIComponent(id) + '/session/digest')
+        .then(function(d) {
+          var ac = (d && typeof d.assistant_message_count === 'number') ? d.assistant_message_count : 0;
+          self.setChatAssistantBaseline(id, ac);
+        })
+        .catch(function() {});
+    },
+
+    /** Digest poll: bump unread when assistant messages grew while user is not in that chat. */
+    ingestSessionDigestFromPoll(agentId, assistantCount) {
+      var id = String(agentId);
+      var ac = typeof assistantCount === 'number' && !isNaN(assistantCount) ? Math.max(0, Math.floor(assistantCount)) : 0;
+      var base = this.chatAssistantBaseline || {};
+      var prev = base[id];
+      if (prev === undefined) {
+        this.setChatAssistantBaseline(id, ac);
+        return;
+      }
+      if (ac > prev && !this.isChatSurfaceActiveForAgent(id)) {
+        this.bumpAgentChatUnread(id);
+      }
+      this.setChatAssistantBaseline(id, ac);
+    },
+
+    runSessionDigestPollRound() {
+      var self = this;
+      if (!this.connected) return;
+      var agents = this.primaryAgentsForSidebar();
+      var seen = {};
+      agents.forEach(function(a) {
+        if (!a || a.id == null) return;
+        var id = String(a.id);
+        seen[id] = true;
+        if (self.isChatSurfaceActiveForAgent(id)) return;
+        OpenFangAPI.get('/api/agents/' + encodeURIComponent(id) + '/session/digest')
+          .then(function(d) {
+            var ac = (d && typeof d.assistant_message_count === 'number') ? d.assistant_message_count : 0;
+            self.ingestSessionDigestFromPoll(id, ac);
+          })
+          .catch(function() {});
+      });
+      try {
+        var wsId = typeof OpenFangAPI.getWsAgentId === 'function' ? OpenFangAPI.getWsAgentId() : null;
+        if (wsId && !seen[String(wsId)] && !self.isChatSurfaceActiveForAgent(String(wsId))) {
+          var wid = String(wsId);
+          OpenFangAPI.get('/api/agents/' + encodeURIComponent(wid) + '/session/digest')
+            .then(function(d) {
+              var ac = (d && typeof d.assistant_message_count === 'number') ? d.assistant_message_count : 0;
+              self.ingestSessionDigestFromPoll(wid, ac);
+            })
+            .catch(function() {});
+        }
+      } catch (eW) { /* ignore */ }
+    },
+
+    agentHasChatUnread(agentId) {
+      if (!agentId) return false;
+      var c = this.chatUnreadCounts || {};
+      return (c[agentId] || 0) > 0;
+    },
+
+    get chatUnreadTotal() {
+      var c = this.chatUnreadCounts || {};
+      var t = 0;
+      for (var k in c) {
+        if (Object.prototype.hasOwnProperty.call(c, k) && c[k] > 0) t += c[k];
+      }
+      return t;
+    },
+
+    /** True when this agent's inline chat is visible (agents page + chat open + tab focused). */
+    isChatSurfaceActiveForAgent(agentId) {
+      if (!agentId) return false;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
+      if (this.dashboardPage !== 'agents') return false;
+      return this.agentsPageChatAgentId === agentId;
+    },
+
+    bumpAgentChatUnread(agentId) {
+      if (!agentId || this.isChatSurfaceActiveForAgent(agentId)) return;
+      var prev = this.chatUnreadCounts || {};
+      var next = Object.assign({}, prev);
+      next[agentId] = (next[agentId] || 0) + 1;
+      this.chatUnreadCounts = next;
+    },
+
+    clearAgentChatUnread(agentId) {
+      if (!agentId) return;
+      var prev = this.chatUnreadCounts || {};
+      if (!prev[agentId]) return;
+      var next = Object.assign({}, prev);
+      delete next[agentId];
+      this.chatUnreadCounts = next;
+    },
 
     setAgentActivityLine(agentId, text) {
       if (!agentId || !text) return;
@@ -301,6 +501,25 @@ document.addEventListener('alpine:init', function() {
         this.agents = Array.isArray(agents) ? agents : [];
         this.agentCount = this.agents.length;
       } catch(e) { /* silent */ }
+    },
+
+    /** User-facing agents for the sidebar (excludes probe / offline-cron). */
+    primaryAgentsForSidebar() {
+      var agents = this.agents || [];
+      return agents.filter(function(a) {
+        var n = a && a.name != null ? String(a.name) : '';
+        return !n.startsWith('allowlist-probe') && !n.startsWith('offline-cron');
+      });
+    },
+
+    /** Open inline chat for this agent (Agents page) from anywhere (e.g. sidebar). */
+    openAgentChat(agent) {
+      if (!agent) return;
+      this.pendingAgent = agent;
+      var h = (window.location.hash || '').replace(/^#/, '');
+      if (h !== 'agents') {
+        window.location.hash = 'agents';
+      }
     },
 
     async refreshApprovals() {
@@ -591,6 +810,9 @@ document.addEventListener('alpine:init', function() {
 // Main app component
 function app() {
   return {
+    isDesktopShell() {
+      return isArmaraosDesktopShell();
+    },
     page: 'agents',
     themeMode: getStoredThemeMode(),
     theme: (() => {
@@ -646,6 +868,22 @@ function app() {
           return;
         }
         if (validPages.indexOf(pagePart) >= 0) {
+          if (query && pagePart === 'home-files') {
+            try {
+              var paramsHf = new URLSearchParams(query);
+              var hfPath = paramsHf.get('path');
+              if (hfPath) {
+                sessionStorage.setItem('armaraos-home-prefill-path', hfPath);
+              }
+            } catch (eHf1) { /* ignore */ }
+            try {
+              if (window.history && window.history.replaceState) {
+                var uHf = new URL(window.location.href);
+                uHf.hash = 'home-files';
+                window.history.replaceState({}, '', uHf.pathname + uHf.search + uHf.hash);
+              }
+            } catch (eHf2) { /* ignore */ }
+          }
           if (query && pagePart === 'scheduler') {
             try {
               var params = new URLSearchParams(query);
@@ -674,6 +912,11 @@ function app() {
             window.dispatchEvent(new CustomEvent('page-leave'));
           }
           self.page = pagePart;
+          try {
+            var dash = Alpine.store('app');
+            dash.dashboardPage = pagePart;
+            if (pagePart !== 'agents') dash.agentsPageChatAgentId = null;
+          } catch (e1) { /* ignore */ }
         }
       }
       window.addEventListener('hashchange', handleHash);
@@ -717,8 +960,39 @@ function app() {
         Alpine.store('app').refreshApprovals();
       }, 5000);
 
+      setInterval(function() {
+        try { Alpine.store('app').runSessionDigestPollRound(); } catch (eDig) { /* ignore */ }
+      }, 24000);
+
       if (typeof window.ArmaraosKernelSse !== 'undefined' && window.ArmaraosKernelSse.start) {
         window.ArmaraosKernelSse.start();
+      }
+
+      if (!window.__armaraosChatUnreadVisibilityBound) {
+        window.__armaraosChatUnreadVisibilityBound = true;
+        document.addEventListener('visibilitychange', function() {
+          if (document.visibilityState !== 'visible') return;
+          try {
+            var st = Alpine.store('app');
+            var id = st.agentsPageChatAgentId;
+            if (id && st.isChatSurfaceActiveForAgent(id)) st.clearAgentChatUnread(id);
+          } catch (e) { /* ignore */ }
+        });
+      }
+
+      /** Unread badges while away from chat: WS stays connected after leaving #agents; frames still arrive here. */
+      if (!window.__armaraosWsUnreadBound) {
+        window.__armaraosWsUnreadBound = true;
+        window.addEventListener('armaraos-agent-ws', function(ev) {
+          var d = ev && ev.detail;
+          if (!d || !d.data || !d.agentId) return;
+          var t = d.data.type;
+          if (t !== 'response' && t !== 'canvas') return;
+          try {
+            Alpine.store('app').bumpAgentChatUnread(d.agentId);
+            armaraosScheduleDigestBaselineSync(d.agentId);
+          } catch (e2) { /* ignore */ }
+        });
       }
 
       if (!window.__armaraosKernelActivityBound) {
@@ -739,6 +1013,11 @@ function app() {
               var preview = (p.data.content || '').slice(0, 120);
               var toName = armaraosAgentDisplayName(toId);
               if (src) app.setAgentActivityLine(src, '\u2192 ' + toName + ': ' + preview);
+              // Recipient agent gets an unread badge (inter-agent, etc.) when not viewing that chat.
+              if (toId) {
+                app.bumpAgentChatUnread(toId);
+                armaraosScheduleDigestBaselineSync(toId);
+              }
             }
           } catch (e) { /* ignore */ }
         });
@@ -763,6 +1042,7 @@ function app() {
                 Alpine.store('ainl').desktop = st;
                 var done = st && st.ok;
                 Alpine.store('ainl').bootstrapping = !done;
+                armaraosRefreshAinlSidebarBadge(Alpine.store('app').connected);
                 if (done) return;
               } catch (e) { /* ignore */ }
               if (attempts < maxAttempts) {
@@ -774,10 +1054,14 @@ function app() {
               }
             })
             .catch(function () {
+              try {
+                armaraosRefreshAinlSidebarBadge(Alpine.store('app').connected);
+              } catch (e0) { /* ignore */ }
               if (attempts < maxAttempts) setTimeout(tick, delayMs);
               else {
                 try {
                   Alpine.store('ainl').bootstrapping = false;
+                  armaraosRefreshAinlSidebarBadge(Alpine.store('app').connected);
                 } catch (e2) { /* ignore */ }
               }
             });
@@ -791,6 +1075,11 @@ function app() {
         window.dispatchEvent(new CustomEvent('page-leave'));
       }
       this.page = p;
+      try {
+        var dash = Alpine.store('app');
+        dash.dashboardPage = p;
+        if (p !== 'agents') dash.agentsPageChatAgentId = null;
+      } catch (e) { /* ignore */ }
       window.location.hash = p;
       this.mobileMenuOpen = false;
     },
@@ -837,7 +1126,10 @@ function app() {
       this.connected = store.connected;
       this.version = store.version;
       this.agentCount = store.agentCount;
-      this.wsConnected = OpenFangAPI.isWsConnected();
+      var wsLive = OpenFangAPI.isWsConnected();
+      this.wsConnected = wsLive;
+      try { store.wsConnected = wsLive; } catch (eWs) { /* ignore */ }
+      await armaraosRefreshAinlSidebarBadge(store.connected);
       this.maybeOfferFirstRunWizard();
     },
 

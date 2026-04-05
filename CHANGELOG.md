@@ -7,19 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.4] - 2026-04-04
+## [0.6.4] - 2026-04-05
 
 ### Added
 
 - **Setup wizard (dashboard):** After saving an API key, the wizard automatically runs the provider **connection test** and only enables **Next** when it succeeds; entering the provider step with an already-configured key triggers the same check. Inline copy explains verify-before-continue behavior.
 - **Dashboard:** Event timeline experience (`timeline.js` + routing), channels and scheduler UI improvements, agents page polish (spawn defaults, stats), overview and usage tweaks.
 - **Desktop:** Updater and AINL integration refinements (`updater.rs`, `ainl.rs`, `lib.rs`, `ainl_version.rs`).
+- **Dashboard → Chat unread:** Notification-style badges on **All Agents** (nav + Chat heading), **Quick open** sidebar rows, and **agent picker** cards when there is new assistant-side activity; cleared when the user opens that agent’s chat or returns to a visible tab on that conversation.
+- **HTTP API:** `GET /api/agents/{id}/session/digest` returns `message_count`, `assistant_message_count`, and ids only (no full transcript) for lightweight polling.
+- **Dashboard resilience:** Agent WebSocket can stay connected when navigating away from `#agents` (UI callbacks detached via `wsClearUiCallbacks`); global `armaraos-agent-ws` + periodic digest polling (~24s) keep unread accurate when the stream is down or another client updated the session.
 
 ### Changed
 
 - **Default models:** Bundled `agents/*/agent.toml`, TUI templates/wizard, and related surfaces align on **OpenRouter** with **`stepfun/step-3.5-flash:free`** (or provider-appropriate fallbacks) for new-agent defaults.
 - **Hands:** Bundled predictor and other packaged hands metadata updates (`HAND.toml`, `SKILL.md`, `bundled.rs`).
 - **Kernel / runtime / types:** Registry, agent manifest handling, approval/heartbeat hooks, LLM driver and agent-loop adjustments to match the above.
+- **Dashboard static client (`api.js`):** `wsConnect` reuses an existing open socket for the same agent id (callback refresh only); `wsDisconnect` still used when backing out of chat or switching sessions.
+
+### Docs
+
+- **`docs/dashboard-testing.md`:** Chat unread behavior, digest endpoint, and smoke-script note.
+- **`CLAUDE.md`:** Pointers for dashboard chat/unread and `session/digest` live checks.
 
 ### Fixed
 
@@ -259,3 +268,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.4

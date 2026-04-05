@@ -35,3 +35,22 @@ Run the daemon, open the **Dashboard** URL from `openfang start` (default is oft
 
 - On **Overview**, lifecycle/system kernel events trigger a **debounced** refresh (~400ms) via `armaraos-kernel-event`. The page also shows a **Last kernel event** line when `kernelEvents.last` is set.
 - **Page leave:** The overview component registers `@page-leave.window="stopAutoRefresh()"` so timers and kernel listeners are cleared when navigating away. If you add **Playwright** (or similar) later, assert that after switching to another hash/route, `setInterval`-driven refresh is not still firing (e.g. spy on `/api/usage` or equivalent after leaving Overview).
+
+## Chat unread badges + session digest
+
+**Behavior (dashboard static app):**
+
+- **Badges** appear on **All Agents** (sidebar nav count), the **Chat** page title (total), **Quick open** agent rows, and **agent picker** cards when the UI detects new **assistant** activity for an agent while that conversation is not the focused, visible inline chat.
+- **Sources:** (1) WebSocket frames `response` / `canvas` (broadcast as `armaraos-agent-ws`), (2) kernel SSE `Message` events with `role: agent` and an `Agent` target (e.g. inter-agent), (3) **digest polling** every ~24s using `GET /api/agents/{id}/session/digest` so unread still updates if the WS is disconnected or another process appended to the session.
+- **Baseline:** The client keeps a per-agent `assistant_message_count` baseline from the digest to avoid double-counting when combined with WS/SSE; opening a chat **primes** the baseline and clears that agent’s unread.
+- **Navigate away from `#agents`:** The socket may stay open; `OpenFangAPI.wsClearUiCallbacks()` drops Alpine chat handlers so destroyed components are not called. Returning to the same agent reattaches handlers and may **reuse** the connection.
+- **Session switch / new session:** Chat code calls `wsDisconnect()` before reconnect so the server session binding stays correct.
+
+**API smoke (daemon running, replace `AGENT_ID`):**
+
+```bash
+curl -sS "http://127.0.0.1:4200/api/agents/AGENT_ID/session/digest"
+# Expect JSON: session_id, agent_id, message_count, assistant_message_count
+```
+
+`./scripts/verify-dashboard-smoke.sh` calls this automatically when `GET /api/agents` returns at least one agent.

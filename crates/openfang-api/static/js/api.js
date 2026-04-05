@@ -268,12 +268,41 @@ var OpenFangAPI = (function() {
   var _reconnectAttempts = 0;
   var MAX_RECONNECT = 5;
 
+  function noop() {}
+
+  /** Drop chat UI handlers while keeping the socket (e.g. user navigated away from #agents). */
+  function wsClearUiCallbacks() {
+    _wsCallbacks = {
+      onOpen: noop,
+      onMessage: noop,
+      onClose: function() {
+        try { Alpine.store('app').wsConnected = false; } catch (e) { /* ignore */ }
+      },
+      onError: function() {
+        try { Alpine.store('app').wsConnected = false; } catch (e) { /* ignore */ }
+      }
+    };
+  }
+
+  function getWsAgentId() {
+    return _wsAgentId;
+  }
+
   function wsConnect(agentId, callbacks) {
+    callbacks = callbacks || {};
+    var idStr = String(agentId);
+    if (_wsAgentId === idStr && _ws && _ws.readyState === WebSocket.OPEN) {
+      _wsCallbacks = callbacks;
+      _reconnectAttempts = 0;
+      setConnectionState('connected');
+      if (callbacks.onOpen) callbacks.onOpen();
+      return;
+    }
     wsDisconnect();
-    _wsCallbacks = callbacks || {};
-    _wsAgentId = agentId;
+    _wsCallbacks = callbacks;
+    _wsAgentId = idStr;
     _reconnectAttempts = 0;
-    _doConnect(agentId);
+    _doConnect(idStr);
   }
 
   function _doConnect(agentId) {
@@ -289,6 +318,7 @@ var OpenFangAPI = (function() {
         _wsConnected = true;
         _reconnectAttempts = 0;
         setConnectionState('connected');
+        try { Alpine.store('app').wsConnected = true; } catch (eAlp) { /* ignore */ }
         if (_reconnectAttempt > 0) {
           OpenFangToast.success('Reconnected');
           _reconnectAttempt = 0;
@@ -304,6 +334,11 @@ var OpenFangAPI = (function() {
         } catch(parseErr) {
           return; // Ignore malformed JSON frames
         }
+        try {
+          window.dispatchEvent(new CustomEvent('armaraos-agent-ws', {
+            detail: { agentId: _wsAgentId, data: data }
+          }));
+        } catch (evErr) { /* ignore */ }
         // Dispatch outside try/catch so handler errors are not swallowed
         if (_wsCallbacks.onMessage) _wsCallbacks.onMessage(data);
       };
@@ -375,6 +410,48 @@ var OpenFangAPI = (function() {
     return url;
   }
 
+  /** Download a diagnostics zip by filename (GET + Bearer). Triggers browser save (typically Downloads). */
+  function downloadDiagnosticsZip(filename) {
+    if (!filename || typeof filename !== 'string') {
+      return Promise.reject(new Error('Missing bundle filename'));
+    }
+    var path = '/api/support/diagnostics/download?name=' + encodeURIComponent(filename);
+    var opts = { method: 'GET', headers: {} };
+    if (_authToken) opts.headers['Authorization'] = 'Bearer ' + _authToken;
+    return fetch(BASE + path, opts).then(function(r) {
+      if (!r.ok) {
+        return r.text().then(function(text) {
+          var msg = 'Download failed';
+          try {
+            var j = JSON.parse(text);
+            msg = j.error || j.message || msg;
+          } catch (e2) {
+            if (text) msg = text.slice(0, 200);
+          }
+          throw new Error(msg);
+        });
+      }
+      var cd = r.headers.get('Content-Disposition') || '';
+      var name = filename;
+      var m = /filename\*=UTF-8''([^;\s]+)|filename="([^"]+)"|filename=([^;\s]+)/i.exec(cd);
+      if (m) {
+        try {
+          name = decodeURIComponent((m[1] || m[2] || m[3] || '').trim().replace(/^"+|"+$/g, ''));
+        } catch (e3) { /* keep filename */ }
+      }
+      return r.blob().then(function(blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name || filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+      });
+    });
+  }
+
   function upload(agentId, file) {
     var hdrs = {};
     if (_authToken) hdrs['Authorization'] = 'Bearer ' + _authToken;
@@ -402,8 +479,11 @@ var OpenFangAPI = (function() {
     del: del,
     delete: del,
     upload: upload,
+    downloadDiagnosticsZip: downloadDiagnosticsZip,
     wsConnect: wsConnect,
     wsDisconnect: wsDisconnect,
+    wsClearUiCallbacks: wsClearUiCallbacks,
+    getWsAgentId: getWsAgentId,
     wsSend: wsSend,
     isWsConnected: isWsConnected,
     getConnectionState: getConnectionState,

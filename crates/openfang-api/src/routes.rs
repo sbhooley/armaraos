@@ -19,6 +19,7 @@ use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_runtime::workspace_sandbox::resolve_sandbox_path;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
+use openfang_types::message::Role;
 use openfang_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
@@ -908,6 +909,82 @@ pub async fn get_agent_session(
                 &rid,
                 PATH,
                 "Session load failed",
+                format!("{e}"),
+                Some("Check database health and GET /api/health/detail."),
+            )
+        }
+    }
+}
+
+/// GET /api/agents/:id/session/digest — Small JSON for dashboard polling (unread / sync); avoids full history.
+pub async fn get_agent_session_digest(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/session/digest";
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
+            );
+        }
+    };
+
+    let entry = match state.kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Spawn an agent or pick a valid id from GET /api/agents."),
+            );
+        }
+    };
+
+    match state.kernel.memory.get_session(entry.session_id) {
+        Ok(Some(session)) => {
+            let assistant_message_count = session
+                .messages
+                .iter()
+                .filter(|m| m.role == Role::Assistant)
+                .count();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "session_id": session.id.0.to_string(),
+                    "agent_id": session.agent_id.0.to_string(),
+                    "message_count": session.messages.len(),
+                    "assistant_message_count": assistant_message_count,
+                })),
+            )
+        }
+        Ok(None) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "session_id": entry.session_id.0.to_string(),
+                "agent_id": agent_id.to_string(),
+                "message_count": 0usize,
+                "assistant_message_count": 0usize,
+            })),
+        ),
+        Err(e) => {
+            tracing::warn!("Session digest failed for agent {id}: {e}");
+            api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Session digest failed",
                 format!("{e}"),
                 Some("Check database health and GET /api/health/detail."),
             )
@@ -11012,13 +11089,141 @@ pub async fn create_diagnostics_bundle(
     let _ = std::fs::remove_file(&tmp_meta);
     let _ = std::fs::remove_file(&tmp_audit);
 
+    let bundle_filename = out_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("armaraos-diagnostics.zip")
+        .to_string();
+    let relative_path = format!("support/{bundle_filename}");
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "bundle_path": out_path.display().to_string(),
+            "bundle_filename": bundle_filename,
+            "relative_path": relative_path,
         })),
     )
+}
+
+/// True when `name` is exactly `armaraos-diagnostics-YYYYMMDD-HHMMSS.zip` (no path segments).
+fn is_allowed_diagnostics_zip_name(name: &str) -> bool {
+    const PREFIX: &str = "armaraos-diagnostics-";
+    const SUFFIX: &str = ".zip";
+    if !name.starts_with(PREFIX) || !name.ends_with(SUFFIX) {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return false;
+    }
+    let inner = &name[PREFIX.len()..name.len() - SUFFIX.len()];
+    let parts: Vec<&str> = inner.splitn(2, '-').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    if parts[0].len() != 8 || parts[1].len() != 6 {
+        return false;
+    }
+    parts[0].chars().all(|c| c.is_ascii_digit())
+        && parts[1].chars().all(|c| c.is_ascii_digit())
+}
+
+/// GET /api/support/diagnostics/download?name=armaraos-diagnostics-YYYYMMDD-HHMMSS.zip
+///
+/// Streams a diagnostics zip from `~/…/support/` after validating the filename (no path traversal).
+pub async fn download_diagnostics_bundle(
+    ext: Option<Extension<RequestId>>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/support/diagnostics/download";
+    let name = match q.get("name") {
+        Some(n) if !n.trim().is_empty() => n.trim(),
+        _ => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Missing name",
+                "Query parameter `name` is required.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+    if !is_allowed_diagnostics_zip_name(name) {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Invalid bundle name",
+            "Expected armaraos-diagnostics-YYYYMMDD-HHMMSS.zip.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+    let home = openfang_kernel::config::openfang_home();
+    let full = home.join("support").join(name);
+    if !full.is_file() {
+        return api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Bundle not found",
+            "Generate a new bundle from Settings → System.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+    let bytes = match std::fs::read(&full) {
+        Ok(b) => b,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Read failed",
+                format!("{e}"),
+                None,
+            )
+            .into_response();
+        }
+    };
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Response};
+    let cd = format!("attachment; filename=\"{name}\"");
+    let disp = match HeaderValue::from_str(&cd) {
+        Ok(h) => h,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Header build failed",
+                "Invalid filename for Content-Disposition.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(header::CONTENT_DISPOSITION, disp)
+        .body(Body::from(bytes))
+    {
+        Ok(resp) => resp.into_response(),
+        Err(_) => api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Response build failed",
+            "Could not build download response.".to_string(),
+            None,
+        )
+        .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

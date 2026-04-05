@@ -53,6 +53,35 @@ function sessionsPage() {
       });
     },
 
+    totalMessageCount() {
+      return this.sessions.reduce(function(acc, s) {
+        return acc + (Number(s.message_count) || 0);
+      }, 0);
+    },
+
+    filteredMessageCount() {
+      return this.filteredSessions.reduce(function(acc, s) {
+        return acc + (Number(s.message_count) || 0);
+      }, 0);
+    },
+
+    shortSessionId(sid) {
+      if (!sid) return '—';
+      return sid.length > 10 ? sid.substring(0, 8) + '…' : sid;
+    },
+
+    formatSessionDate(iso) {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        });
+      } catch (e) {
+        return String(iso);
+      }
+    },
+
     openInChat(session) {
       var agents = Alpine.store('app').agents;
       var agent = agents.find(function(a) { return a.id === session.agent_id; });

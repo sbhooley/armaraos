@@ -172,6 +172,14 @@ function chatPage() {
 
       // Load session + session list when agent changes
       this.$watch('currentAgent', function(agent) {
+        try {
+          var st = Alpine.store('app');
+          st.agentsPageChatAgentId = agent ? agent.id : null;
+          if (agent) {
+            st.clearAgentChatUnread(agent.id);
+            st.primeAssistantBaselineForAgent(agent.id);
+          }
+        } catch (e) { /* ignore */ }
         if (agent) {
           self.loadSession(agent.id);
           self.loadSessions(agent.id);
@@ -583,6 +591,9 @@ function chatPage() {
         await this.loadSession(this.currentAgent.id);
         this.messages = [];
         this.scrollToBottom(true);
+        this._wsAgent = null;
+        OpenFangAPI.wsDisconnect();
+        this.connectWs(this.currentAgent.id);
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('New session created');
       } catch(e) {
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to create session');
@@ -597,8 +608,9 @@ function chatPage() {
         this.messages = [];
         await this.loadSession(this.currentAgent.id);
         await this.loadSessions(this.currentAgent.id);
-        // Reconnect WebSocket for new session
+        // Reconnect WebSocket for new session (cannot reuse socket: session binding on server)
         this._wsAgent = null;
+        OpenFangAPI.wsDisconnect();
         this.connectWs(this.currentAgent.id);
       } catch(e) {
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to switch session');
@@ -606,11 +618,11 @@ function chatPage() {
     },
 
     connectWs(agentId) {
-      if (this._wsAgent === agentId) return;
-      this._wsAgent = agentId;
       var self = this;
+      var idStr = String(agentId);
+      this._wsAgent = idStr;
 
-      OpenFangAPI.wsConnect(agentId, {
+      OpenFangAPI.wsConnect(idStr, {
         onOpen: function() {
           Alpine.store('app').wsConnected = true;
         },
@@ -1183,10 +1195,6 @@ function chatPage() {
       // Always show user message immediately
       this.messages.push({ id: ++msgId, role: 'user', text: finalText, meta: '', tools: [], images: msgImages, ts: Date.now() });
       this.scrollToBottom(true);
-      localStorage.setItem('of-first-msg', 'true');
-      try {
-        window.dispatchEvent(new CustomEvent('armaraos-onboarding-local'));
-      } catch(e) { /* ignore */ }
 
       // If already streaming, queue this message
       if (this.sending) {
