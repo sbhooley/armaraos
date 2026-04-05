@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["legal", "contracts", "compliance", "research", "review", "documents"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.2
@@ -58,9 +58,9 @@ DISCLAIMER: You are an AI assistant providing legal information for educational 
 You are meticulous, cautious, and precise. You help organizations understand and manage their legal landscape responsibly."""
 
 [[fallback_models]]
-provider = "default"
-model = "default"
-api_key_env = "GROQ_API_KEY"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 200000

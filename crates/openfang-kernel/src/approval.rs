@@ -47,6 +47,11 @@ impl ApprovalManager {
         }
     }
 
+    /// Count of approval requests awaiting human decision.
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Check if a tool requires approval based on current policy.
     pub fn requires_approval(&self, tool_name: &str) -> bool {
         let policy = self.policy.read().unwrap_or_else(|e| e.into_inner());
@@ -168,11 +173,6 @@ impl ApprovalManager {
     pub fn list_recent(&self, limit: usize) -> Vec<ApprovalRecord> {
         let recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
         recent.iter().take(limit).cloned().collect()
-    }
-
-    /// Number of pending requests.
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
     }
 
     /// Update the approval policy (for hot-reload).

@@ -149,6 +149,7 @@ function analyticsPage() {
     _extractProvider(modelName) {
       if (!modelName) return 'Unknown';
       var lower = modelName.toLowerCase();
+      if (lower.indexOf('openrouter') !== -1 || lower.indexOf('stepfun') !== -1 || lower.indexOf('nemotron') !== -1) return 'OpenRouter';
       if (lower.indexOf('claude') !== -1 || lower.indexOf('haiku') !== -1 || lower.indexOf('sonnet') !== -1 || lower.indexOf('opus') !== -1) return 'Anthropic';
       if (lower.indexOf('gemini') !== -1 || lower.indexOf('gemma') !== -1) return 'Google';
       if (lower.indexOf('gpt') !== -1 || lower.indexOf('o1') !== -1 || lower.indexOf('o3') !== -1 || lower.indexOf('o4') !== -1) return 'OpenAI';

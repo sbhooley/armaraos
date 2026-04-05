@@ -7,6 +7,19 @@ runtime: prompt_only
 
 # Forecasting Expert Knowledge
 
+## ArmaraOS tool constraints (Predictor Hand)
+
+When running inside ArmaraOS, `shell_exec` **rejects** any command containing shell metacharacters: **pipes `|`, semicolons `;`, `&&`, `||`, `&`, redirects, subshells, `find ... -exec ... \\;`, `xargs`, etc.** Use a single simple command, or use `file_list` / `file_read` / per-file `grep`. Do not read paths outside the agent workspace; avoid repeating `file_list` with identical arguments.
+
+### Channel notifications (Telegram, Slack, Discord, email, …)
+
+- **Provisioning** is done in **ArmaraOS** (Dashboard → Channels or `config.toml` `[channels.<name>]`). Tokens and default recipients are **not** read from the agent workspace unless the user put them there deliberately.
+- **`channel_send`**: send the message body with `channel` = adapter name (`telegram`, `slack`, `discord`, `email`, …) and `recipient` = chat id / channel / email, or empty if the host config defines `default_chat_id` / equivalent.
+- **Developer workflow**: maintain **`NOTIFICATION_SETUP.md`** in the workspace with step-by-step setup and **placeholder** config only; test with a one-line `channel_send` after the user enables a channel.
+- **`event_publish`**: optional broadcast to other agents (e.g. `prediction_report_ready` with report metadata in `payload`).
+
+---
+
 ## Superforecasting Principles
 
 Based on research by Philip Tetlock and the Good Judgment Project:

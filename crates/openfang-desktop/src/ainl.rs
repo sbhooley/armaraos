@@ -13,8 +13,9 @@
 //! Override PyPI spec with `ARMARAOS_AINL_PYPI_SPEC` (default [`DEFAULT_AINL_PYPI_SPEC`]).
 //!
 //! **`ARMARAOS_AINL_AUTO_PIP_UPGRADE`**: when unset or any value other than `0` / `false`, the healthy
-//! venv path runs `pip install --upgrade` for [`pypi_spec`] at most once every 7 days (see
-//! `.last_auto_pip_upgrade_unix` under the app data `ainl/` dir). Set to `0` to disable.
+//! venv path runs `pip install --upgrade` for [`pypi_spec`] at most once per hour (see
+//! `.last_auto_pip_upgrade_unix` under the app data `ainl/` dir). The hourly PyPI notify loop also
+//! triggers an upgrade when PyPI reports a newer `ainativelang`. Set to `0` to disable.
 //!
 //! Designed to be called from Tauri commands and/or on app startup.
 
@@ -31,7 +32,7 @@ use tracing::warn;
 const DEFAULT_AINL_PYPI_SPEC: &str = "ainativelang[mcp]>=1.3.0,<2";
 
 /// Throttle for [`maybe_auto_upgrade_ainl_pip`] (marker: `.last_auto_pip_upgrade_unix` in app `ainl/`).
-const AUTO_PIP_UPGRADE_INTERVAL_SECS: u64 = 7 * 24 * 3600;
+const AUTO_PIP_UPGRADE_INTERVAL_SECS: u64 = 60 * 60;
 
 /// `ainativelang` on PyPI declares `Requires-Python >=3.10` for current 1.3.x lines.
 const MIN_PYTHON_MAJOR: u32 = 3;
@@ -131,7 +132,7 @@ fn write_auto_pip_upgrade_marker(app: &AppHandle) -> Result<(), String> {
 }
 
 /// Throttled `pip install --upgrade` so PyPI picks up compiler/runtime fixes without a manual upgrade click.
-fn maybe_auto_upgrade_ainl_pip(app: &AppHandle) {
+pub(crate) fn maybe_auto_upgrade_ainl_pip(app: &AppHandle) {
     if !auto_pip_upgrade_enabled() {
         return;
     }

@@ -64,6 +64,26 @@ fn resolve_request_id(ext: Option<Extension<RequestId>>) -> RequestId {
         .unwrap_or_else(|| RequestId("unknown".to_string()))
 }
 
+/// PATCH merge for optional identity strings: absent request keeps `current`; empty string clears.
+#[inline]
+fn patch_merge_identity_opt(req: Option<String>, current: Option<String>) -> Option<String> {
+    match req {
+        None => current,
+        Some(s) if s.is_empty() => None,
+        Some(s) => Some(s),
+    }
+}
+
+/// PATCH merge for color: absent keeps `current`; empty string keeps `current` (invalid client payload).
+#[inline]
+fn patch_merge_color_opt(req: Option<String>, current: Option<String>) -> Option<String> {
+    match req {
+        None => current,
+        Some(s) if s.is_empty() => current,
+        Some(s) => Some(s),
+    }
+}
+
 /// Structured JSON error for dashboard clients (`error`, `detail`, `path`, `request_id`, optional `hint`).
 pub fn api_json_error(
     status: StatusCode,
@@ -299,10 +319,14 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "auth_status": auth_status,
                 "ready": ready,
                 "profile": e.manifest.profile,
+                "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
                     "emoji": e.identity.emoji,
                     "avatar_url": e.identity.avatar_url,
                     "color": e.identity.color,
+                    "archetype": e.identity.archetype,
+                    "vibe": e.identity.vibe,
+                    "greeting_style": e.identity.greeting_style,
                 },
             })
         })
@@ -601,12 +625,16 @@ pub async fn send_message(
             let response = if result.silent {
                 String::new()
             } else if cleaned.trim().is_empty() {
-                format!(
-                    "[The agent completed processing but returned no text response. ({} in / {} out | {} iter)]",
-                    result.total_usage.input_tokens,
-                    result.total_usage.output_tokens,
-                    result.iterations,
-                )
+                if result.total_usage.input_tokens == 0 && result.total_usage.output_tokens == 0 {
+                    "[No assistant text (0 tokens). The model call did not complete — usually a missing or invalid provider API key. For OpenRouter: Settings → Providers, or set OPENROUTER_API_KEY for the daemon. If an error line appears below, that is the real cause.]".to_string()
+                } else {
+                    format!(
+                        "[The agent completed processing but returned no text response. ({} in / {} out | {} iter)]",
+                        result.total_usage.input_tokens,
+                        result.total_usage.output_tokens,
+                        result.iterations,
+                    )
+                }
             } else {
                 cleaned
             };
@@ -646,6 +674,8 @@ pub async fn send_message(
                     output_tokens: result.total_usage.output_tokens,
                     iterations: result.iterations,
                     cost_usd: result.cost_usd,
+                    latency_ms: result.latency_ms,
+                    llm_fallback_note: result.llm_fallback_note.clone(),
                     skill_draft_path,
                 })),
             )
@@ -1756,6 +1786,13 @@ pub async fn get_agent(
         }
     };
 
+    let turn_total = entry.turn_stats.turns_ok + entry.turn_stats.turns_err;
+    let turn_error_rate: serde_json::Value = if turn_total == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(entry.turn_stats.turns_err as f64 / turn_total as f64)
+    };
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -1776,17 +1813,36 @@ pub async fn get_agent(
             },
             "description": entry.manifest.description,
             "tags": entry.manifest.tags,
+            "system_prompt": entry.manifest.model.system_prompt,
             "identity": {
                 "emoji": entry.identity.emoji,
                 "avatar_url": entry.identity.avatar_url,
                 "color": entry.identity.color,
+                "archetype": entry.identity.archetype,
+                "vibe": entry.identity.vibe,
+                "greeting_style": entry.identity.greeting_style,
             },
+            "tool_allowlist": entry.manifest.tool_allowlist,
+            "tool_blocklist": entry.manifest.tool_blocklist,
             "skills": entry.manifest.skills,
             "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
             "mcp_servers": entry.manifest.mcp_servers,
             "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
             "fallback_models": entry.manifest.fallback_models,
             "scheduled_ainl_host_adapter": state.kernel.scheduled_ainl_host_adapter_info(agent_id),
+            "turn_stats": {
+                "last_latency_ms": entry.turn_stats.last_latency_ms,
+                "last_fallback_note": entry.turn_stats.last_fallback_note,
+                "last_turn_at": entry.turn_stats.last_turn_at.map(|t| t.to_rfc3339()),
+                "last_success_at": entry.turn_stats.last_success_at.map(|t| t.to_rfc3339()),
+                "last_error_at": entry.turn_stats.last_error_at.map(|t| t.to_rfc3339()),
+                "last_error_summary": entry.turn_stats.last_error_summary,
+                "turns_ok": entry.turn_stats.turns_ok,
+                "turns_err": entry.turn_stats.turns_err,
+                "last_input_tokens": entry.turn_stats.last_input_tokens,
+                "last_output_tokens": entry.turn_stats.last_output_tokens,
+                "error_rate": turn_error_rate,
+            },
         })),
     )
 }
@@ -5640,9 +5696,23 @@ pub async fn audit_recent(
 
     let entries = state.kernel.audit_log.recent(n);
     let tip = state.kernel.audit_log.tip_hash();
+    let q = params
+        .get("q")
+        .map(|s| s.to_lowercase())
+        .filter(|s| !s.is_empty());
 
     let items: Vec<serde_json::Value> = entries
         .iter()
+        .filter(|e| {
+            q.as_ref().map_or(true, |needle| {
+                let hay = format!(
+                    "{:?} {} {} {}",
+                    e.action, e.detail, e.outcome, e.agent_id
+                )
+                .to_lowercase();
+                hay.contains(needle.as_str())
+            })
+        })
         .map(|e| {
             serde_json::json!({
                 "seq": e.seq,
@@ -5690,6 +5760,86 @@ pub async fn audit_verify(State(state): State<Arc<AppState>>) -> impl IntoRespon
             "entries": entry_count,
         })),
     }
+}
+
+/// GET /api/cron/runs — Recent scheduler audit rows (CronJobRun / Output / Failure).
+pub async fn cron_runs(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    use openfang_runtime::audit::AuditAction;
+    let n: usize = params
+        .get("n")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+        .min(2000);
+    let entries = state.kernel.audit_log.recent(n);
+    let runs: Vec<serde_json::Value> = entries
+        .into_iter()
+        .filter(|e| {
+            matches!(
+                e.action,
+                AuditAction::CronJobRun | AuditAction::CronJobOutput | AuditAction::CronJobFailure
+            )
+        })
+        .map(|e| {
+            serde_json::json!({
+                "seq": e.seq,
+                "timestamp": e.timestamp,
+                "agent_id": e.agent_id,
+                "action": format!("{:?}", e.action),
+                "detail": e.detail,
+                "outcome": e.outcome,
+            })
+        })
+        .collect();
+    let count = runs.len();
+    Json(serde_json::json!({ "runs": runs, "count": count }))
+}
+
+/// GET /api/observability/snapshot — Compact JSON for dashboards (queue depth, agents, channels, cron tick).
+pub async fn observability_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use openfang_types::agent::AgentState;
+
+    let agents = state.kernel.registry.list();
+    let agent_count = agents.len();
+    let running_agents = agents
+        .iter()
+        .filter(|a| matches!(a.state, AgentState::Running))
+        .count();
+
+    let live_channels = state.channels_config.read().await;
+    let mut channels_configured = 0u32;
+    let mut channels_ready = 0u32;
+    for meta in CHANNEL_REGISTRY {
+        let configured = is_channel_configured(&live_channels, meta.name);
+        if configured {
+            channels_configured += 1;
+        }
+        let has_token = meta
+            .fields
+            .iter()
+            .filter(|f| f.required && f.env_var.is_some())
+            .all(|f| {
+                f.env_var
+                    .map(|ev| std::env::var(ev).map(|v| !v.is_empty()).unwrap_or(false))
+                    .unwrap_or(true)
+            });
+        if configured && has_token {
+            channels_ready += 1;
+        }
+    }
+
+    Json(serde_json::json!({
+        "agent_count": agent_count,
+        "running_agents": running_agents,
+        "pending_approvals": state.kernel.approval_manager.pending_count(),
+        "cron_jobs_registered": state.kernel.cron_scheduler.total_jobs(),
+        "last_cron_scheduler_tick": state.kernel.last_cron_scheduler_tick_rfc3339(),
+        "channels_configured": channels_configured,
+        "channels_ready": channels_ready,
+        "uptime_secs": state.started_at.elapsed().as_secs(),
+    }))
 }
 
 /// GET /api/logs/stream — SSE endpoint for real-time audit log streaming.
@@ -6773,6 +6923,17 @@ pub async fn agent_budget_status(
                 "limit": quota.max_llm_tokens_per_hour,
                 "pct": if quota.max_llm_tokens_per_hour > 0 { tokens_used as f64 / quota.max_llm_tokens_per_hour as f64 } else { 0.0 },
             },
+            "turn_stats": {
+                "last_latency_ms": entry.turn_stats.last_latency_ms,
+                "last_fallback_note": entry.turn_stats.last_fallback_note,
+                "last_success_at": entry.turn_stats.last_success_at.map(|t| t.to_rfc3339()),
+                "last_error_at": entry.turn_stats.last_error_at.map(|t| t.to_rfc3339()),
+                "last_error_summary": entry.turn_stats.last_error_summary,
+                "turns_ok": entry.turn_stats.turns_ok,
+                "turns_err": entry.turn_stats.turns_err,
+                "last_input_tokens": entry.turn_stats.last_input_tokens,
+                "last_output_tokens": entry.turn_stats.last_output_tokens,
+            },
         })),
     )
 }
@@ -6780,28 +6941,40 @@ pub async fn agent_budget_status(
 /// GET /api/budget/agents — Per-agent cost ranking (top spenders).
 pub async fn agent_budget_ranking(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let usage_store = openfang_memory::usage::UsageStore::new(state.kernel.memory.usage_conn());
-    let agents: Vec<serde_json::Value> = state
+    let mut agents: Vec<serde_json::Value> = state
         .kernel
         .registry
         .list()
         .iter()
-        .filter_map(|entry| {
+        .map(|entry| {
             let daily = usage_store.query_daily(entry.id).unwrap_or(0.0);
-            if daily > 0.0 {
-                Some(serde_json::json!({
-                    "agent_id": entry.id.to_string(),
-                    "name": entry.name,
-                    "daily_cost_usd": daily,
-                    "hourly_limit": entry.manifest.resources.max_cost_per_hour_usd,
-                    "daily_limit": entry.manifest.resources.max_cost_per_day_usd,
-                    "monthly_limit": entry.manifest.resources.max_cost_per_month_usd,
-                    "max_llm_tokens_per_hour": entry.manifest.resources.max_llm_tokens_per_hour,
-                }))
-            } else {
-                None
-            }
+            let ts = &entry.turn_stats;
+            serde_json::json!({
+                "agent_id": entry.id.to_string(),
+                "name": entry.name,
+                "daily_cost_usd": daily,
+                "hourly_limit": entry.manifest.resources.max_cost_per_hour_usd,
+                "daily_limit": entry.manifest.resources.max_cost_per_day_usd,
+                "monthly_limit": entry.manifest.resources.max_cost_per_month_usd,
+                "max_llm_tokens_per_hour": entry.manifest.resources.max_llm_tokens_per_hour,
+                "turn_stats": {
+                    "last_latency_ms": ts.last_latency_ms,
+                    "last_fallback_note": ts.last_fallback_note,
+                    "last_success_at": ts.last_success_at.map(|t| t.to_rfc3339()),
+                    "last_error_at": ts.last_error_at.map(|t| t.to_rfc3339()),
+                    "turns_ok": ts.turns_ok,
+                    "turns_err": ts.turns_err,
+                    "last_input_tokens": ts.last_input_tokens,
+                    "last_output_tokens": ts.last_output_tokens,
+                },
+            })
         })
         .collect();
+    agents.sort_by(|a, b| {
+        let da = a["daily_cost_usd"].as_f64().unwrap_or(0.0);
+        let db = b["daily_cost_usd"].as_f64().unwrap_or(0.0);
+        db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     Json(serde_json::json!({"agents": agents, "total": agents.len()}))
 }
@@ -10921,13 +11094,19 @@ pub async fn update_agent_identity(
         }
     }
 
+    let current = state
+        .kernel
+        .registry
+        .get(agent_id)
+        .map(|e| e.identity)
+        .unwrap_or_default();
     let identity = AgentIdentity {
-        emoji: req.emoji,
-        avatar_url: req.avatar_url,
-        color: req.color,
-        archetype: req.archetype,
-        vibe: req.vibe,
-        greeting_style: req.greeting_style,
+        emoji: patch_merge_identity_opt(req.emoji, current.emoji),
+        avatar_url: patch_merge_identity_opt(req.avatar_url, current.avatar_url),
+        color: patch_merge_color_opt(req.color, current.color),
+        archetype: patch_merge_identity_opt(req.archetype, current.archetype),
+        vibe: patch_merge_identity_opt(req.vibe, current.vibe),
+        greeting_style: patch_merge_identity_opt(req.greeting_style, current.greeting_style),
     };
 
     match state.kernel.registry.update_identity(agent_id, identity) {
@@ -11092,13 +11271,14 @@ pub async fn patch_agent_config(
         }
     }
 
-    // Update description
+    // Update description (ignore empty strings — dashboard clients used to send "" when the field was unknown)
     if let Some(ref new_desc) = req.description {
-        if state
-            .kernel
-            .registry
-            .update_description(agent_id, new_desc.clone())
-            .is_err()
+        if !new_desc.is_empty()
+            && state
+                .kernel
+                .registry
+                .update_description(agent_id, new_desc.clone())
+                .is_err()
         {
             return api_json_error(
                 StatusCode::NOT_FOUND,
@@ -11111,13 +11291,14 @@ pub async fn patch_agent_config(
         }
     }
 
-    // Update system prompt (hot-swap — takes effect on next message)
+    // Update system prompt (hot-swap — takes effect on next message; skip empty — same client bug)
     if let Some(ref new_prompt) = req.system_prompt {
-        if state
-            .kernel
-            .registry
-            .update_system_prompt(agent_id, new_prompt.clone())
-            .is_err()
+        if !new_prompt.is_empty()
+            && state
+                .kernel
+                .registry
+                .update_system_prompt(agent_id, new_prompt.clone())
+                .is_err()
         {
             return api_json_error(
                 StatusCode::NOT_FOUND,
@@ -11147,12 +11328,12 @@ pub async fn patch_agent_config(
             .map(|e| e.identity)
             .unwrap_or_default();
         let merged = AgentIdentity {
-            emoji: req.emoji.or(current.emoji),
-            avatar_url: req.avatar_url.or(current.avatar_url),
-            color: req.color.or(current.color),
-            archetype: req.archetype.or(current.archetype),
-            vibe: req.vibe.or(current.vibe),
-            greeting_style: req.greeting_style.or(current.greeting_style),
+            emoji: patch_merge_identity_opt(req.emoji, current.emoji),
+            avatar_url: patch_merge_identity_opt(req.avatar_url, current.avatar_url),
+            color: patch_merge_color_opt(req.color, current.color),
+            archetype: patch_merge_identity_opt(req.archetype, current.archetype),
+            vibe: patch_merge_identity_opt(req.vibe, current.vibe),
+            greeting_style: patch_merge_identity_opt(req.greeting_style, current.greeting_style),
         };
         if state
             .kernel
@@ -13510,9 +13691,15 @@ pub async fn add_binding(
     }
 
     state.kernel.add_binding(binding);
+    let reload = crate::channel_bridge::reload_channels_from_disk(&state).await;
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({ "status": "created" })),
+        Json(serde_json::json!({
+            "status": "created",
+            "channels_reloaded": reload.is_ok(),
+            "channels_started": reload.as_ref().unwrap_or(&Vec::new()).clone(),
+            "reload_error": reload.err(),
+        })),
     )
 }
 
@@ -13525,10 +13712,18 @@ pub async fn remove_binding(
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/bindings/:index";
     match state.kernel.remove_binding(index) {
-        Some(_) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "removed" })),
-        ),
+        Some(_) => {
+            let reload = crate::channel_bridge::reload_channels_from_disk(&state).await;
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "removed",
+                    "channels_reloaded": reload.is_ok(),
+                    "channels_started": reload.as_ref().unwrap_or(&Vec::new()).clone(),
+                    "reload_error": reload.err(),
+                })),
+            )
+        }
         None => api_json_error(
             StatusCode::NOT_FOUND,
             &rid,

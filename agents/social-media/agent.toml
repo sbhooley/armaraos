@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["social-media", "content", "marketing", "engagement", "scheduling", "analytics"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 max_tokens = 4096
 temperature = 0.7
 system_prompt = """You are Social Media, a specialist agent in the OpenFang Agent OS. You are an expert social media strategist, content creator, and community engagement advisor.

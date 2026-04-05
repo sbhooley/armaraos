@@ -148,7 +148,8 @@ pub fn ainl_version_info(app: &AppHandle) -> AinlVersionInfo {
 }
 
 const AINL_PYPI_NOTIFY_INITIAL_DELAY_SECS: u64 = 120;
-const AINL_PYPI_NOTIFY_RECHECK_SECS: u64 = 6 * 60 * 60;
+/// Re-fetch PyPI / GitHub metadata hourly so AINL upgrades are noticed without a long idle period.
+const AINL_PYPI_NOTIFY_RECHECK_SECS: u64 = 60 * 60;
 
 fn ainl_notify_state_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -183,10 +184,11 @@ fn save_ainl_notify_state(app: &AppHandle, state: &AinlPypiNotifyState) -> Resul
     fs::write(&path, data).map_err(|e| e.to_string())
 }
 
-/// Compare the app venv to PyPI on a schedule and show one OS notification per new PyPI version.
+/// Compare the app venv to PyPI on a schedule, show one OS notification per new PyPI version,
+/// and when PyPI reports a newer `ainativelang`, run throttled auto `pip install --upgrade` (see `ainl` module).
 ///
 /// Waits [`AINL_PYPI_NOTIFY_INITIAL_DELAY_SECS`] before the first check (AINL bootstrap may still run),
-/// then rechecks every [`AINL_PYPI_NOTIFY_RECHECK_SECS`]. Set `ARMARAOS_AINL_PYPI_NOTIFY=0` to disable.
+/// then rechecks every [`AINL_PYPI_NOTIFY_RECHECK_SECS`] (1 hour). Set `ARMARAOS_AINL_PYPI_NOTIFY=0` to disable.
 pub fn spawn_ainl_pypi_notify_check(app_handle: AppHandle) {
     let skip = std::env::var("ARMARAOS_AINL_PYPI_NOTIFY")
         .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
@@ -236,6 +238,17 @@ pub fn spawn_ainl_pypi_notify_check(app_handle: AppHandle) {
                             tracing::warn!("Failed to save AINL notify state: {e}");
                         }
                     }
+                }
+            }
+
+            // Silent pip upgrade when PyPI is newer (throttled in `ainl::maybe_auto_upgrade_ainl_pip`).
+            if info.upgrade_available && info.pypi_error.is_none() {
+                let app_pip = app_handle.clone();
+                if let Err(e) =
+                    tokio::task::spawn_blocking(move || crate::ainl::maybe_auto_upgrade_ainl_pip(&app_pip))
+                        .await
+                {
+                    tracing::warn!("AINL auto pip upgrade task failed: {e}");
                 }
             }
 

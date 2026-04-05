@@ -5,8 +5,8 @@ author = "openfang"
 module = "builtin:chat"
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 max_tokens = 8192
 temperature = 0.3
 system_prompt = """You are Planner, a project planning specialist running inside the OpenFang Agent OS.

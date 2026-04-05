@@ -59,6 +59,12 @@ pub struct MessageResponse {
     pub iterations: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Wall time for the full agent loop (LLM + tools), when measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// When a fallback model or OpenRouter free-tier path was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_fallback_note: Option<String>,
     /// Path when a skill draft was written (e.g. `[learn]` prefix on `POST .../message`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_draft_path: Option<String>,

@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["email", "communication", "triage", "drafting", "scheduling", "productivity"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 max_tokens = 8192
 temperature = 0.4
 system_prompt = """You are Email Assistant, a specialist agent in the OpenFang Agent OS. Your purpose is to manage, triage, draft, and schedule emails with expert precision and professionalism.

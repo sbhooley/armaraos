@@ -11,6 +11,7 @@ tools = [
     "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
     "schedule_create", "schedule_list", "schedule_delete",
     "file_write", "file_read",
+    "channel_send", "event_publish",
 ]
 
 [[requires]]

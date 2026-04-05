@@ -350,6 +350,46 @@ impl AgentRegistry {
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
+
+    /// Record a successful LLM / agent loop completion (dashboard telemetry).
+    pub fn record_turn_success(
+        &self,
+        id: AgentId,
+        latency_ms: Option<u64>,
+        fallback_note: Option<String>,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        let now = chrono::Utc::now();
+        entry.turn_stats.last_turn_at = Some(now);
+        entry.turn_stats.last_success_at = Some(now);
+        entry.turn_stats.last_latency_ms = latency_ms;
+        entry.turn_stats.last_fallback_note = fallback_note;
+        entry.turn_stats.last_input_tokens = input_tokens;
+        entry.turn_stats.last_output_tokens = output_tokens;
+        entry.turn_stats.turns_ok = entry.turn_stats.turns_ok.saturating_add(1);
+        entry.last_active = now;
+        Ok(())
+    }
+
+    /// Record a failed agent loop (dashboard error rate / last error).
+    pub fn record_turn_failure(&self, id: AgentId, summary: String) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        let now = chrono::Utc::now();
+        entry.turn_stats.last_turn_at = Some(now);
+        entry.turn_stats.last_error_at = Some(now);
+        entry.turn_stats.last_error_summary = Some(summary);
+        entry.turn_stats.turns_err = entry.turn_stats.turns_err.saturating_add(1);
+        entry.last_active = now;
+        Ok(())
+    }
 }
 
 impl Default for AgentRegistry {
@@ -407,6 +447,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: Default::default(),
         }
     }
 

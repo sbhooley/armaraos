@@ -439,6 +439,8 @@ pub fn spawn_daemon_stream(
             cost_usd: None,
             silent: false,
             directives: Default::default(),
+            latency_ms: None,
+            llm_fallback_note: None,
         })));
     });
 }
@@ -475,6 +477,8 @@ fn daemon_fallback(
             cost_usd: body["cost_usd"].as_f64(),
             silent: false,
             directives: Default::default(),
+            latency_ms: body["latency_ms"].as_u64(),
+            llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
         })
     } else {
         Err(body["error"]

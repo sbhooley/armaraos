@@ -32,71 +32,71 @@ const BUILTIN_TEMPLATES: &[(&str, &str, &str, &str, &str)] = &[
         "Armara",
         "Personal assistant powered by AI Native Language (ArmaraOS)",
         "General",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Code Helper",
         "Programming assistant with code review and debugging",
         "Development",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Researcher",
         "Deep research and analysis with web search",
         "Research",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Writer",
         "Creative and technical writing assistant",
         "Writing",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Data Analyst",
         "Data analysis, visualization, and SQL queries",
         "Development",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "DevOps Engineer",
         "Infrastructure, CI/CD, and deployment assistance",
         "Development",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Customer Support",
         "Professional customer service agent",
         "Business",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Tutor",
         "Patient educational assistant for learning any subject",
         "General",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "API Designer",
         "REST/GraphQL API design and documentation",
         "Development",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
     (
         "Meeting Notes",
         "Meeting transcription, summary, and action items",
         "Business",
-        "default",
-        "default",
+        "openrouter",
+        "stepfun/step-3.5-flash:free",
     ),
 ];
 
@@ -182,9 +182,6 @@ impl TemplatesState {
     }
 
     fn provider_configured(&self, provider: &str) -> bool {
-        if provider == "default" {
-            return true;
-        }
         self.providers
             .iter()
             .any(|p| p.name == provider && p.configured)

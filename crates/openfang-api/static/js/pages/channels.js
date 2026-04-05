@@ -10,11 +10,18 @@ function channelsPage() {
     configuring: false,
     testing: {},
     formValues: {},
+    /** Optional Discord channel ID / Slack channel / Telegram chat_id for live test messages */
+    testTargetId: '',
     showAdvanced: false,
     showBusinessApi: false,
     loading: true,
     loadError: '',
     pollTimer: null,
+
+    bindings: [],
+    bindingsLoading: false,
+    bindingForm: { agent: '', channel: '', peer_id: '', guild_id: '', account_id: '' },
+    bindingSaving: false,
 
     // Setup flow step tracking
     setupStep: 1, // 1=Configure, 2=Verify, 3=Ready
@@ -101,7 +108,73 @@ function channelsPage() {
       this.startPolling();
     },
 
-    async loadData() { return this.loadChannels(); },
+    async loadBindings() {
+      this.bindingsLoading = true;
+      try {
+        var data = await OpenFangAPI.get('/api/bindings');
+        this.bindings = data.bindings || [];
+      } catch(e) {
+        this.bindings = [];
+      }
+      this.bindingsLoading = false;
+    },
+
+    async addBinding() {
+      var agent = (this.bindingForm.agent || '').trim();
+      if (!agent) {
+        OpenFangToast.warn('Enter target agent name or UUID');
+        return;
+      }
+      var ch = (this.bindingForm.channel || '').trim();
+      var body = {
+        agent: agent,
+        match_rule: {
+          channel: ch || null,
+          peer_id: (this.bindingForm.peer_id || '').trim() || null,
+          guild_id: (this.bindingForm.guild_id || '').trim() || null,
+          account_id: (this.bindingForm.account_id || '').trim() || null,
+          roles: []
+        }
+      };
+      this.bindingSaving = true;
+      try {
+        await OpenFangAPI.post('/api/bindings', body);
+        OpenFangToast.success('Binding added; channels reloaded');
+        this.bindingForm = { agent: '', channel: '', peer_id: '', guild_id: '', account_id: '' };
+        await this.loadBindings();
+        await this.refreshStatus();
+      } catch(e) {
+        OpenFangToast.error(e.message || 'Failed to add binding');
+      }
+      this.bindingSaving = false;
+    },
+
+    async removeBinding(idx) {
+      var self = this;
+      OpenFangToast.confirm('Remove binding', 'Remove routing rule at index ' + idx + '?', async function() {
+        try {
+          await OpenFangAPI.delete('/api/bindings/' + idx);
+          OpenFangToast.success('Binding removed');
+          await self.loadBindings();
+          await self.refreshStatus();
+        } catch(e) {
+          OpenFangToast.error(e.message || 'Failed');
+        }
+      });
+    },
+
+    testMessagePayload() {
+      var id = (this.testTargetId || '').trim();
+      if (!id) return {};
+      var n = this.setupModal && this.setupModal.name;
+      if (n === 'telegram') return { chat_id: id };
+      return { channel_id: id };
+    },
+
+    async loadData() {
+      await this.loadChannels();
+      await this.loadBindings();
+    },
 
     startPolling() {
       var self = this;
@@ -141,6 +214,7 @@ function channelsPage() {
 
     openSetup(ch) {
       this.setupModal = ch;
+      this.testTargetId = '';
       // Pre-populate form values from saved config (non-secret fields).
       var vals = {};
       if (ch.fields) {
@@ -236,7 +310,7 @@ function channelsPage() {
         this.setupStep = 2;
         // Auto-test after save
         try {
-          var testResult = await OpenFangAPI.post('/api/channels/' + name + '/test', {});
+          var testResult = await OpenFangAPI.post('/api/channels/' + name + '/test', this.testMessagePayload());
           if (testResult.status === 'ok') {
             this.testPassed = true;
             this.setupStep = 3;
@@ -276,7 +350,7 @@ function channelsPage() {
       var name = this.setupModal.name;
       this.testing[name] = true;
       try {
-        var result = await OpenFangAPI.post('/api/channels/' + name + '/test', {});
+        var result = await OpenFangAPI.post('/api/channels/' + name + '/test', this.testMessagePayload());
         if (result.status === 'ok') {
           this.testPassed = true;
           this.setupStep = 3;

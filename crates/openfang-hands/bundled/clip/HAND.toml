@@ -3,7 +3,7 @@ name = "Clip Hand"
 description = "Turns long-form video into viral short clips with captions and thumbnails"
 category = "content"
 icon = "\U0001F3AC"
-tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "memory_store", "memory_recall"]
+tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "memory_store", "memory_recall", "channel_send", "event_publish"]
 
 [[requires]]
 key = "ffmpeg"

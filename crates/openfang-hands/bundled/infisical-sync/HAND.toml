@@ -8,7 +8,7 @@ tools = [
   "schedule_create", "schedule_list", "schedule_delete",
   "memory_store", "memory_recall",
   "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
-  "event_publish",
+  "channel_send", "event_publish",
   # Infisical-specific tools
   "shell_exec",
   "file_read", "file_write",

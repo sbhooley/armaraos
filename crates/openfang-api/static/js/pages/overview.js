@@ -30,6 +30,8 @@ function overviewPage() {
     mcpServers: [],
     skillCount: 0,
     scheduleCount: 0,
+    /** GET /api/observability/snapshot */
+    observability: {},
     loading: true,
     loadError: '',
     loadErrorDetail: '',
@@ -73,7 +75,8 @@ function overviewPage() {
           this.loadSchedules(),
           this.loadProviders(),
           this.loadMcpServers(),
-          this.loadSkills()
+          this.loadSkills(),
+          this.loadObservability()
         ]);
         this.lastRefresh = Date.now();
       } catch(e) {
@@ -101,7 +104,8 @@ function overviewPage() {
           this.loadSchedules(),
           this.loadProviders(),
           this.loadMcpServers(),
-          this.loadSkills()
+          this.loadSkills(),
+          this.loadObservability()
         ]);
         this.lastRefresh = Date.now();
       } catch(e) { /* silent */ }
@@ -244,6 +248,14 @@ function overviewPage() {
         var data = await OpenFangAPI.get('/api/skills');
         this.skillCount = (data.skills || []).length;
       } catch(e) { this.skillCount = 0; }
+    },
+
+    async loadObservability() {
+      try {
+        this.observability = await OpenFangAPI.get('/api/observability/snapshot');
+      } catch(e) {
+        this.observability = {};
+      }
     },
 
     get configuredProviders() {

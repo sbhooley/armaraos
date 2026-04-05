@@ -20,6 +20,12 @@ struct ProviderInfo {
 
 const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
+        name: "openrouter",
+        env_var: "OPENROUTER_API_KEY",
+        default_model: "stepfun/step-3.5-flash:free",
+        needs_key: true,
+    },
+    ProviderInfo {
         name: "groq",
         env_var: "GROQ_API_KEY",
         default_model: "llama-3.3-70b-versatile",
@@ -35,12 +41,6 @@ const PROVIDERS: &[ProviderInfo] = &[
         name: "openai",
         env_var: "OPENAI_API_KEY",
         default_model: "gpt-4o",
-        needs_key: true,
-    },
-    ProviderInfo {
-        name: "openrouter",
-        env_var: "OPENROUTER_API_KEY",
-        default_model: "google/gemini-2.5-flash",
         needs_key: true,
     },
     ProviderInfo {
@@ -498,13 +498,19 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut WizardState) {
 
 fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let chunks = Layout::vertical([
-        Constraint::Length(2), // prompt
+        Constraint::Length(4), // prompt + tip
         Constraint::Min(3),    // list
         Constraint::Length(1), // hints
     ])
     .split(area);
 
-    let prompt = Paragraph::new(Line::from(vec![Span::raw("  Choose your LLM provider:")]));
+    let prompt = Paragraph::new(vec![
+        Line::from(vec![Span::raw("  Choose your LLM provider:")]),
+        Line::from(vec![Span::styled(
+            "  Tip: OpenRouter first — free key at openrouter.com; default free model stepfun/step-3.5-flash:free.",
+            theme::dim_style(),
+        )]),
+    ]);
     f.render_widget(prompt, chunks[0]);
 
     let items: Vec<ListItem> = state

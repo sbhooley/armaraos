@@ -85,6 +85,21 @@ mod tests {
     }
 
     #[test]
+    fn all_bundled_hands_have_channel_send_and_event_publish() {
+        for (id, toml_content, skill_content) in bundled_hands() {
+            let def = parse_bundled(id, toml_content, skill_content).unwrap();
+            assert!(
+                def.tools.contains(&"channel_send".to_string()),
+                "hand '{id}' must include channel_send for outbound notifications"
+            );
+            assert!(
+                def.tools.contains(&"event_publish".to_string()),
+                "hand '{id}' must include event_publish for fleet / proactive hooks"
+            );
+        }
+    }
+
+    #[test]
     fn parse_clip_hand() {
         let hands = bundled_hands();
         let (id, toml_content, skill_content) = hands[0];

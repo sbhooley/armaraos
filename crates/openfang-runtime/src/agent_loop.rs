@@ -164,6 +164,10 @@ pub struct AgentLoopResult {
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
     pub directives: openfang_types::message::ReplyDirectives,
+    /// Wall time for the full agent loop (LLM + tools), for dashboard latency.
+    pub latency_ms: Option<u64>,
+    /// When a fallback model or OpenRouter free-tier path was used instead of the primary.
+    pub llm_fallback_note: Option<String>,
 }
 
 /// Run the agent execution loop for a single user message.
@@ -376,6 +380,8 @@ pub async fn run_agent_loop(
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
+    let loop_t0 = std::time::Instant::now();
+    let mut llm_fallback_note: Option<String> = None;
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Agent loop iteration");
@@ -422,7 +428,7 @@ pub async fn run_agent_loop(
 
         // Call LLM with retry, error classification, and circuit breaker
         let provider_name = manifest.model.provider.as_str();
-        let mut response = call_with_retry(
+        let (mut response, fb_note) = call_with_retry(
             &*driver,
             request,
             Some(provider_name),
@@ -430,6 +436,9 @@ pub async fn run_agent_loop(
             &manifest.fallback_models,
         )
         .await?;
+        if fb_note.is_some() {
+            llm_fallback_note = fb_note;
+        }
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -495,6 +504,8 @@ pub async fn run_agent_loop(
                             current_thread: parsed_directives.current_thread,
                             silent: true,
                         },
+                        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                        llm_fallback_note: llm_fallback_note.clone(),
                     });
                 }
 
@@ -654,6 +665,8 @@ pub async fn run_agent_loop(
                     cost_usd: None,
                     silent: false,
                     directives: Default::default(),
+                    latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                    llm_fallback_note: llm_fallback_note.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -937,6 +950,8 @@ pub async fn run_agent_loop(
                         cost_usd: None,
                         silent: false,
                         directives: Default::default(),
+                        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                        llm_fallback_note: llm_fallback_note.clone(),
                     });
                 }
                 // Model hit token limit — add partial response and continue
@@ -985,7 +1000,8 @@ async fn call_with_retry(
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
-) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
+    const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     // Check circuit breaker before calling
     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
         match cooldown.check(provider) {
@@ -1013,7 +1029,7 @@ async fn call_with_retry(
                 if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                     cooldown.record_success(provider);
                 }
-                return Ok(response);
+                return Ok((response, None));
             }
             Err(LlmError::RateLimited { retry_after_ms }) => {
                 if attempt == MAX_RETRIES {
@@ -1023,7 +1039,7 @@ async fn call_with_retry(
                     // Final attempt hit a retryable throttling error — try OpenRouter free-model
                     // fallbacks to keep UX flowing even when the primary provider is rate limited.
                     if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
-                        return Ok(resp);
+                        return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
@@ -1045,7 +1061,7 @@ async fn call_with_retry(
                         cooldown.record_failure(provider, false);
                     }
                     if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
-                        return Ok(resp);
+                        return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -1131,7 +1147,11 @@ async fn call_with_retry(
                                     model = %fb.model,
                                     "Fallback model succeeded"
                                 );
-                                return Ok(response);
+                                let note = format!(
+                                    "Fallback {}/{} (primary model not found)",
+                                    fb.provider, fb.model
+                                );
+                                return Ok((response, Some(note)));
                             }
                             Err(fb_err) => {
                                 warn!(
@@ -1217,7 +1237,8 @@ async fn stream_with_retry(
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
-) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
+    const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     // Check circuit breaker before calling
     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
         match cooldown.check(provider) {
@@ -1247,7 +1268,7 @@ async fn stream_with_retry(
                 if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                     cooldown.record_success(provider);
                 }
-                return Ok(response);
+                return Ok((response, None));
             }
             Err(LlmError::RateLimited { retry_after_ms }) => {
                 if attempt == MAX_RETRIES {
@@ -1257,7 +1278,7 @@ async fn stream_with_retry(
                     if let Ok(resp) =
                         try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
                     {
-                        return Ok(resp);
+                        return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
@@ -1281,7 +1302,7 @@ async fn stream_with_retry(
                     if let Ok(resp) =
                         try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
                     {
-                        return Ok(resp);
+                        return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -1364,7 +1385,11 @@ async fn stream_with_retry(
                                     model = %fb.model,
                                     "Fallback model succeeded (stream)"
                                 );
-                                return Ok(response);
+                                let note = format!(
+                                    "Fallback {}/{} (primary model not found)",
+                                    fb.provider, fb.model
+                                );
+                                return Ok((response, Some(note)));
                             }
                             Err(fb_err) => {
                                 warn!(
@@ -1652,6 +1677,8 @@ pub async fn run_agent_loop_streaming(
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
+    let loop_t0 = std::time::Instant::now();
+    let mut llm_fallback_note: Option<String> = None;
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -1716,7 +1743,7 @@ pub async fn run_agent_loop_streaming(
 
         // Stream LLM call with retry, error classification, and circuit breaker
         let provider_name = manifest.model.provider.as_str();
-        let mut response = stream_with_retry(
+        let (mut response, fb_note) = stream_with_retry(
             &*driver,
             request,
             stream_tx.clone(),
@@ -1725,6 +1752,9 @@ pub async fn run_agent_loop_streaming(
             &manifest.fallback_models,
         )
         .await?;
+        if fb_note.is_some() {
+            llm_fallback_note = fb_note;
+        }
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
@@ -1787,6 +1817,8 @@ pub async fn run_agent_loop_streaming(
                             current_thread: parsed_directives_s.current_thread,
                             silent: true,
                         },
+                        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                        llm_fallback_note: llm_fallback_note.clone(),
                     });
                 }
 
@@ -1925,6 +1957,8 @@ pub async fn run_agent_loop_streaming(
                     cost_usd: None,
                     silent: false,
                     directives: Default::default(),
+                    latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                    llm_fallback_note: llm_fallback_note.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -2216,6 +2250,8 @@ pub async fn run_agent_loop_streaming(
                         cost_usd: None,
                         silent: false,
                         directives: Default::default(),
+                        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                        llm_fallback_note: llm_fallback_note.clone(),
                     });
                 }
                 let text = response.text();

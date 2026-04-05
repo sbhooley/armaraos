@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["general", "assistant", "default", "multipurpose", "conversation", "productivity"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 max_tokens = 8192
 temperature = 0.5
 system_prompt = """You are Armara, a specialist agent in the ArmaraOS Agent OS, powered by AI Native Language (AINL). You are the default general-purpose assistant — a versatile, knowledgeable, and helpful companion for everyday tasks, questions, research, building things, and productivity workflows.

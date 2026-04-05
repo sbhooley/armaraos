@@ -16,6 +16,19 @@ function tomlBasicEscape(s) {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
 }
 
+var SPAWN_DEFAULT_PROVIDER = 'openrouter';
+var SPAWN_DEFAULT_MODEL = 'stepfun/step-3.5-flash:free';
+
+function spawnModelFromManifestToml(toml) {
+  var provider = '?';
+  var model = '?';
+  var mp = toml.match(/provider\s*=\s*"([^"]*)"/);
+  var mm = toml.match(/model\s*=\s*"([^"]*)"/);
+  if (mp) provider = mp[1];
+  if (mm) model = mm[1];
+  return { provider: provider, model: model };
+}
+
 function agentsPage() {
   return {
     tab: 'agents',
@@ -37,8 +50,8 @@ function agentsPage() {
     loadErrorServerPath: '',
     spawnForm: {
       name: '',
-      provider: 'groq',
-      model: 'llama-3.3-70b-versatile',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
       systemPrompt: 'You are a helpful assistant.',
       profile: 'full',
       caps: { memory_read: true, memory_write: true, network: false, shell: false, agent_spawn: false }
@@ -244,61 +257,61 @@ function agentsPage() {
             name: 'Armara',
             description: 'Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
             category: 'General',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'full',
             system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.',
-            manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
+            manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
           },
           {
             name: 'Code Helper',
             description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
             category: 'Development',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'coding',
             system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.',
-            manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
+            manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
           },
           {
             name: 'Researcher',
             description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
             category: 'Research',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'research',
             system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.',
-            manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
+            manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
           },
           {
             name: 'Writer',
             description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
             category: 'Writing',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'full',
             system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.',
-            manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
+            manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
           },
           {
             name: 'Data Analyst',
             description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
             category: 'Development',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'coding',
             system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.',
-            manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
+            manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
           },
           {
             name: 'DevOps Engineer',
             description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
             category: 'Development',
-            provider: 'groq',
-            model: 'llama-3.3-70b-versatile',
+            provider: SPAWN_DEFAULT_PROVIDER,
+            model: SPAWN_DEFAULT_MODEL,
             profile: 'automation',
             system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.',
-            manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "groq"\nmodel = "llama-3.3-70b-versatile"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
+            manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
           },
           ...results[0].templates || []
         ];
@@ -328,31 +341,96 @@ function agentsPage() {
       OpenFangAPI.wsDisconnect();
     },
 
-    async showDetail(agent) {
-      this.detailAgent = agent;
+    /** Map stored archetype strings onto Config tab select values (lowercase canonical ids). */
+    normalizeArchetypeForUi(raw) {
+      if (raw == null || raw === '') return '';
+      var lower = String(raw).trim().toLowerCase();
+      if (!lower) return '';
+      var canonical = ['assistant', 'researcher', 'coder', 'writer', 'devops', 'support', 'analyst'];
+      if (canonical.indexOf(lower) >= 0) return lower;
+      return lower;
+    },
+
+    applyAgentDetailFromListAgent(agent) {
+      if (!this.detailAgent) return;
       this.detailAgent._fallbacks = [];
+      this.detailAgent.turn_stats = null;
       this.detailAgent.scheduled_ainl_host_adapter = null;
+      var idn = (agent && agent.identity) || {};
+      this.configForm = {
+        name: (agent && agent.name) || '',
+        system_prompt: agent && agent.system_prompt != null ? agent.system_prompt : '',
+        emoji: idn.emoji || '',
+        color: idn.color || '#FF5C00',
+        archetype: this.normalizeArchetypeForUi(idn.archetype),
+        vibe: idn.vibe || ''
+      };
+      this.toolFilters = { tool_allowlist: [], tool_blocklist: [] };
+    },
+
+    /** Apply GET /api/agents/:id payload into detail view, config form, and tool filters. */
+    applyAgentDetail(full) {
+      if (!full || !full.id) return;
+      var idn = full.identity || {};
+      var m = full.model || {};
+      this.detailAgent = Object.assign({}, this.detailAgent || {}, {
+        id: full.id,
+        name: full.name,
+        state: full.state,
+        mode: full.mode,
+        model_provider: m.provider,
+        model_name: m.model,
+        profile: full.profile,
+        identity: full.identity,
+        system_prompt: full.system_prompt
+      });
+      this.detailAgent._fallbacks = full.fallback_models || [];
+      this.detailAgent.turn_stats = full.turn_stats || null;
+      this.detailAgent.scheduled_ainl_host_adapter = full.scheduled_ainl_host_adapter || null;
+      this.configForm = {
+        name: full.name || '',
+        system_prompt: full.system_prompt != null ? String(full.system_prompt) : '',
+        emoji: idn.emoji || '',
+        color: idn.color || '#FF5C00',
+        archetype: this.normalizeArchetypeForUi(idn.archetype),
+        vibe: idn.vibe || ''
+      };
+      this.toolFilters = {
+        tool_allowlist: (full.tool_allowlist || []).slice(),
+        tool_blocklist: (full.tool_blocklist || []).slice()
+      };
+    },
+
+    formatTurnErrorRate(ts) {
+      if (!ts || ts.error_rate == null) return '—';
+      if (typeof ts.error_rate === 'number' && !isNaN(ts.error_rate)) {
+        return (ts.error_rate * 100).toFixed(1) + '%';
+      }
+      return String(ts.error_rate);
+    },
+
+    formatIsoTime(iso) {
+      if (!iso) return '—';
+      try {
+        var d = new Date(iso);
+        return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+      } catch(e) { return String(iso); }
+    },
+
+    async showDetail(agent) {
+      this.detailAgent = Object.assign({}, agent);
       this.detailTab = 'info';
       this.agentFiles = [];
       this.editingFile = null;
       this.fileContent = '';
       this.editingFallback = false;
       this.newFallbackValue = '';
-      this.configForm = {
-        name: agent.name || '',
-        system_prompt: agent.system_prompt || '',
-        emoji: (agent.identity && agent.identity.emoji) || '',
-        color: (agent.identity && agent.identity.color) || '#FF5C00',
-        archetype: (agent.identity && agent.identity.archetype) || '',
-        vibe: (agent.identity && agent.identity.vibe) || ''
-      };
+      this.applyAgentDetailFromListAgent(agent);
       this.showDetailModal = true;
-      // Fetch full agent detail to get fallback_models
       try {
         var full = await OpenFangAPI.get('/api/agents/' + agent.id);
-        this.detailAgent._fallbacks = full.fallback_models || [];
-        this.detailAgent.scheduled_ainl_host_adapter = full.scheduled_ainl_host_adapter || null;
-      } catch(e) { /* ignore */ }
+        this.applyAgentDetail(full);
+      } catch (e) { /* keep list-based fallback */ }
     },
 
     killAgent(agent) {
@@ -397,21 +475,13 @@ function agentsPage() {
       this.selectedPreset = '';
       this.soulContent = '';
       this.spawnForm.name = '';
-      this.spawnForm.provider = 'groq';
-      this.spawnForm.model = 'llama-3.3-70b-versatile';
+      this.spawnForm.provider = SPAWN_DEFAULT_PROVIDER;
+      this.spawnForm.model = SPAWN_DEFAULT_MODEL;
       this.spawnForm.systemPrompt = 'You are a helpful assistant.';
       this.spawnForm.profile = 'full';
-      // Fetch status defaults and dynamic provider list concurrently
       this.spawnProvidersLoading = true;
       try {
-        var results = await Promise.all([
-          OpenFangAPI.get('/api/status').catch(function() { return {}; }),
-          OpenFangAPI.get('/api/providers').catch(function() { return { providers: [] }; })
-        ]);
-        var status = results[0];
-        var provData = results[1];
-        if (status.default_provider) this.spawnForm.provider = status.default_provider;
-        if (status.default_model) this.spawnForm.model = status.default_model;
+        var provData = await OpenFangAPI.get('/api/providers').catch(function() { return { providers: [] }; });
         this.spawnProviders = provData.providers || [];
       } catch(e) {
         this.spawnProviders = [];
@@ -475,6 +545,7 @@ function agentsPage() {
     async spawnAgent() {
       this.spawning = true;
       var toml = this.spawnMode === 'wizard' ? this.generateToml() : this.spawnToml;
+      var chatModel = spawnModelFromManifestToml(toml);
       if (!toml.trim()) {
         this.spawning = false;
         OpenFangToast.warn('Manifest is empty \u2014 enter agent config first');
@@ -504,7 +575,12 @@ function agentsPage() {
           this.spawnStep = 1;
           OpenFangToast.success('Agent "' + (res.name || 'new') + '" spawned');
           await Alpine.store('app').refreshAgents();
-          this.chatWithAgent({ id: res.agent_id, name: res.name, model_provider: '?', model_name: '?' });
+          this.chatWithAgent({
+            id: res.agent_id,
+            name: res.name,
+            model_provider: chatModel.provider,
+            model_name: chatModel.model
+          });
         } else {
           OpenFangToast.error('Spawn failed: ' + (res.error || 'Unknown error'));
         }
@@ -569,6 +645,10 @@ function agentsPage() {
       try {
         await OpenFangAPI.patch('/api/agents/' + this.detailAgent.id + '/config', this.configForm);
         OpenFangToast.success('Config updated');
+        try {
+          var full = await OpenFangAPI.get('/api/agents/' + this.detailAgent.id);
+          this.applyAgentDetail(full);
+        } catch (e2) { /* ignore */ }
         await Alpine.store('app').refreshAgents();
       } catch(e) {
         OpenFangToast.error('Failed to save config: ' + e.message);
@@ -603,9 +683,15 @@ function agentsPage() {
         if (manifestToml) {
           var res = await OpenFangAPI.post('/api/agents', { manifest_toml: manifestToml });
           if (res.agent_id) {
+            var mm = spawnModelFromManifestToml(manifestToml);
             OpenFangToast.success('Agent "' + (res.name || template.name) + '" spawned from template');
             await Alpine.store('app').refreshAgents();
-            this.chatWithAgent({ id: res.agent_id, name: res.name || template.name, model_provider: '?', model_name: '?' });
+            this.chatWithAgent({
+              id: res.agent_id,
+              name: res.name || template.name,
+              model_provider: mm.provider,
+              model_name: mm.model
+            });
           }
         }
       } catch(e) {
@@ -749,6 +835,22 @@ function agentsPage() {
       } catch(e) {
         OpenFangToast.error('Failed to update tool filters: ' + e.message);
       }
+    },
+
+    /** Add channel_send + event_publish: append to allowlist when restricting tools; always unblock. */
+    ensureMessagingTools() {
+      var allow = this.toolFilters.tool_allowlist || [];
+      var block = (this.toolFilters.tool_blocklist || []).filter(function(t) {
+        return t !== 'channel_send' && t !== 'event_publish';
+      });
+      if (allow.length > 0) {
+        ['channel_send', 'event_publish'].forEach(function(t) {
+          if (allow.indexOf(t) === -1) allow.push(t);
+        });
+      }
+      this.toolFilters.tool_allowlist = allow;
+      this.toolFilters.tool_blocklist = block;
+      this.saveToolFilters();
     },
 
     async spawnBuiltin(t) {

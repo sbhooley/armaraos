@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-04
+
+### Added
+
+- **Setup wizard (dashboard):** After saving an API key, the wizard automatically runs the provider **connection test** and only enables **Next** when it succeeds; entering the provider step with an already-configured key triggers the same check. Inline copy explains verify-before-continue behavior.
+- **Dashboard:** Event timeline experience (`timeline.js` + routing), channels and scheduler UI improvements, agents page polish (spawn defaults, stats), overview and usage tweaks.
+- **Desktop:** Updater and AINL integration refinements (`updater.rs`, `ainl.rs`, `lib.rs`, `ainl_version.rs`).
+
+### Changed
+
+- **Default models:** Bundled `agents/*/agent.toml`, TUI templates/wizard, and related surfaces align on **OpenRouter** with **`stepfun/step-3.5-flash:free`** (or provider-appropriate fallbacks) for new-agent defaults.
+- **Hands:** Bundled predictor and other packaged hands metadata updates (`HAND.toml`, `SKILL.md`, `bundled.rs`).
+- **Kernel / runtime / types:** Registry, agent manifest handling, approval/heartbeat hooks, LLM driver and agent-loop adjustments to match the above.
+
+### Fixed
+
+- **Chat (HTTP + WebSocket):** When the assistant produces **no text** and **token usage is 0**, the UI message now points users at **missing or invalid provider API keys** (e.g. OpenRouter / `OPENROUTER_API_KEY`) instead of a generic empty reply.
+- **Setup wizard:** The **selected** provider must be configured and **verified** before continuing; the progress bar can no longer skip ahead without meeting that bar (avoids OpenRouter 401s after “completing” setup with another provider’s key only).
+
 ## [0.6.3] - 2026-04-04
 
 ### Added

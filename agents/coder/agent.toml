@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["coding", "implementation", "rust", "python"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.3
@@ -33,9 +33,9 @@ RESEARCH:
 AINL: For ArmaraOS automation and integrations, default to **AI Native Language** (`.ainl` graphs) when the task is orchestration or adapter-bound rather than low-level Rust. Materialized examples live under `~/.armaraos/ainl-library/armaraos-programs/`; use `ainl validate --strict` before committing graphs. See `docs/ootb-ainl.md` in the ArmaraOS repo."""
 
 [[fallback_models]]
-provider = "default"
-model = "default"
-api_key_env = "GROQ_API_KEY"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 200000

@@ -20,12 +20,17 @@ function wizardPage() {
 
     // Step 2: Provider setup
     providers: [],
-    selectedProvider: '',
+    /** Default selection before/after load — OpenRouter is the recommended path */
+    selectedProvider: 'openrouter',
     apiKeyInput: '',
     testingProvider: false,
     testResult: null,
     savingKey: false,
     keySaved: false,
+    /** For providers that use an API key: true only after a successful /test in this flow (blocks Next until verified). */
+    step2ConnectionVerified: false,
+    /** Bumped when the user switches provider or starts a new save, so stale /test responses are ignored. */
+    providerVerifyToken: 0,
 
     // Step 3: Agent creation
     templates: [
@@ -35,8 +40,8 @@ function wizardPage() {
         description: 'Your personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
         icon: 'GA',
         category: 'General',
-        provider: 'deepseek',
-        model: 'deepseek-chat',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'balanced',
         system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.'
       },
@@ -46,8 +51,8 @@ function wizardPage() {
         description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
         icon: 'CH',
         category: 'Development',
-        provider: 'deepseek',
-        model: 'deepseek-chat',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'precise',
         system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.'
       },
@@ -68,8 +73,8 @@ function wizardPage() {
         description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
         icon: 'WR',
         category: 'Writing',
-        provider: 'deepseek',
-        model: 'deepseek-chat',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'creative',
         system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.'
       },
@@ -90,8 +95,8 @@ function wizardPage() {
         description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
         icon: 'DO',
         category: 'Development',
-        provider: 'deepseek',
-        model: 'deepseek-chat',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'precise',
         system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.'
       },
@@ -101,8 +106,8 @@ function wizardPage() {
         description: 'A professional, empathetic agent for handling customer inquiries and resolving issues.',
         icon: 'CS',
         category: 'Business',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'balanced',
         system_prompt: 'You are a professional customer support representative. Be empathetic, patient, and solution-oriented. Acknowledge concerns before offering solutions. Escalate complex issues appropriately.'
       },
@@ -112,8 +117,8 @@ function wizardPage() {
         description: 'A patient educational agent that explains concepts step-by-step and adapts to the learner\'s level.',
         icon: 'TU',
         category: 'General',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'balanced',
         system_prompt: 'You are a patient and encouraging tutor. Explain concepts step by step, starting from fundamentals. Use analogies and examples. Check understanding before moving on. Adapt to the learner\'s pace.'
       },
@@ -123,8 +128,8 @@ function wizardPage() {
         description: 'An agent specialized in RESTful API design, OpenAPI specs, and integration architecture.',
         icon: 'AD',
         category: 'Development',
-        provider: 'deepseek',
-        model: 'deepseek-chat',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'precise',
         system_prompt: 'You are an API design expert. Help users design clean, consistent RESTful APIs following best practices. Cover endpoint naming, request/response schemas, error handling, and versioning.'
       },
@@ -134,8 +139,8 @@ function wizardPage() {
         description: 'Summarizes meeting transcripts into structured notes with action items and key decisions.',
         icon: 'MN',
         category: 'Business',
-        provider: 'groq',
-        model: 'llama-3.3-70b-versatile',
+        provider: 'openrouter',
+        model: 'stepfun/step-3.5-flash:free',
         profile: 'precise',
         system_prompt: 'You are a meeting summarizer. When given a meeting transcript or notes, produce a structured summary with: key decisions, action items (with owners), discussion highlights, and follow-up questions.'
       }
@@ -276,29 +281,46 @@ function wizardPage() {
       this.error = '';
       try {
         await this.loadProviders();
-        // Pre-select first unconfigured provider, or first one
-        var unconfigured = this.providers.filter(function(p) {
-          return p.auth_status !== 'configured' && p.api_key_env;
-        });
-        if (unconfigured.length > 0) {
-          this.selectedProvider = unconfigured[0].id;
-        } else if (this.providers.length > 0) {
-          this.selectedProvider = this.providers[0].id;
+        // Always select OpenRouter when the catalog includes it (recommended default on wizard entry).
+        var providers = this.providers;
+        var hasOpenRouter = providers.some(function(p) { return p.id === 'openrouter'; });
+        if (hasOpenRouter) {
+          this.selectedProvider = 'openrouter';
+        } else {
+          var unconfigured = providers.filter(function(p) {
+            return p.auth_status !== 'configured' && p.api_key_env;
+          });
+          if (unconfigured.length > 0) {
+            this.selectedProvider = unconfigured[0].id;
+          } else if (providers.length > 0) {
+            this.selectedProvider = providers[0].id;
+          } else {
+            this.selectedProvider = '';
+          }
         }
       } catch(e) {
         this.error = e.message || 'Could not load setup data.';
       }
       this.loading = false;
+      if (this.step === 2) {
+        var self = this;
+        queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+      }
     },
 
     // ── Navigation ──
 
     nextStep() {
+      if (this.step === 2 && !this.wizardProviderReady) return;
       if (this.step === 3 && !this.createdAgent) {
         // Skip "Try It" if no agent was created
         this.step = 5;
       } else if (this.step < this.totalSteps) {
         this.step++;
+      }
+      if (this.step === 2) {
+        var self = this;
+        queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
       }
     },
 
@@ -309,12 +331,22 @@ function wizardPage() {
       } else if (this.step > 1) {
         this.step--;
       }
+      if (this.step === 2) {
+        var self = this;
+        queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+      }
     },
 
     goToStep(n) {
       if (n >= 1 && n <= this.totalSteps) {
         if (n === 4 && !this.createdAgent) return; // Can't go to Try It without agent
+        // Do not allow skipping the provider step via the progress bar (must match Next button rules).
+        if (n > 2 && !this.wizardProviderReady) return;
         this.step = n;
+        if (n === 2) {
+          var self = this;
+          queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+        }
       }
     },
 
@@ -323,10 +355,32 @@ function wizardPage() {
       return labels[n - 1] || '';
     },
 
+    /** True when the currently selected LLM provider is ready (same rule used for progress-bar jumps). */
+    get wizardProviderReady() {
+      var p = this.selectedProviderObj;
+      if (!p) return false;
+      if (this.selectedProvider === 'claude-code') {
+        return this.claudeCodeDetected || this.providerIsConfigured(p);
+      }
+      if (!p.api_key_env) {
+        return this.providerIsConfigured(p);
+      }
+      return this.providerIsConfigured(p) && this.step2ConnectionVerified;
+    },
+
     get canGoNext() {
-      if (this.step === 2) return this.keySaved || this.hasConfiguredProvider || this.claudeCodeDetected;
+      if (this.step === 2) return this.wizardProviderReady;
       if (this.step === 3) return this.agentName.trim().length > 0;
       return true;
+    },
+
+    /** Primary label for step 2 forward button (never implies "skip" when disabled). */
+    get wizardStep2ContinueLabel() {
+      if (this.wizardProviderReady) return 'Next';
+      if (this.step === 2 && this.savingKey) return 'Saving and verifying…';
+      if (this.step === 2 && this.testingProvider) return 'Verifying connection…';
+      if (this.selectedProvider === 'claude-code') return 'Detect Claude Code to continue';
+      return 'Save API key to continue';
     },
 
     claudeCodeDetected: false,
@@ -354,7 +408,7 @@ function wizardPage() {
     },
 
     get popularProviders() {
-      var popular = ['anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'openrouter', 'claude-code'];
+      var popular = ['openrouter', 'anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'claude-code'];
       return this.providers.filter(function(p) {
         return popular.indexOf(p.id) >= 0;
       }).sort(function(a, b) {
@@ -363,17 +417,47 @@ function wizardPage() {
     },
 
     get otherProviders() {
-      var popular = ['anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'openrouter', 'claude-code'];
+      var popular = ['openrouter', 'anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'claude-code'];
       return this.providers.filter(function(p) {
         return popular.indexOf(p.id) < 0;
       });
     },
 
     selectProvider(id) {
+      this.providerVerifyToken++;
       this.selectedProvider = id;
       this.apiKeyInput = '';
       this.testResult = null;
-      this.keySaved = false;
+      this.step2ConnectionVerified = false;
+      var match = this.providers.filter(function(p) { return p.id === id; });
+      var p = match.length > 0 ? match[0] : null;
+      if (!p || !this.providerIsConfigured(p)) {
+        this.keySaved = false;
+      }
+      var self = this;
+      queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+    },
+
+    /**
+     * If the selected provider already has a key on the daemon, run a connection test automatically
+     * so the user does not advance (or think they are ready) without a working outbound call.
+     */
+    async maybeAutoVerifyStep2Provider() {
+      if (this.step !== 2) return;
+      var p = this.selectedProviderObj;
+      if (!p || this.selectedProvider === 'claude-code') return;
+      if (!p.api_key_env) {
+        this.step2ConnectionVerified = this.providerIsConfigured(p);
+        return;
+      }
+      if (!this.providerIsConfigured(p)) {
+        this.step2ConnectionVerified = false;
+        return;
+      }
+      await this.runProviderConnectionTest({
+        successToast: false,
+        errorToast: true,
+      });
     },
 
     providerHelp: function(id) {
@@ -383,7 +467,7 @@ function wizardPage() {
         gemini: { url: 'https://aistudio.google.com/apikey', text: 'Get your key from Google AI Studio' },
         groq: { url: 'https://console.groq.com/keys', text: 'Get your key from the Groq Console (free tier available)' },
         deepseek: { url: 'https://platform.deepseek.com/api_keys', text: 'Get your key from the DeepSeek Platform (very affordable)' },
-        openrouter: { url: 'https://openrouter.ai/keys', text: 'Get your key from OpenRouter (access 100+ models with one key)' },
+        openrouter: { url: 'https://openrouter.com', text: 'Get a free API key at openrouter.com (then create a key in the dashboard). ArmaraOS defaults to the free model stepfun/step-3.5-flash:free unless you pick a paid model or another provider.' },
         mistral: { url: 'https://console.mistral.ai/api-keys', text: 'Get your key from the Mistral Console' },
         together: { url: 'https://api.together.xyz/settings/api-keys', text: 'Get your key from Together AI' },
         fireworks: { url: 'https://fireworks.ai/account/api-keys', text: 'Get your key from Fireworks AI' },
@@ -408,39 +492,92 @@ function wizardPage() {
         return;
       }
       this.savingKey = true;
+      this.step2ConnectionVerified = false;
       try {
         await OpenFangAPI.post('/api/providers/' + encodeURIComponent(provider.id) + '/key', { key: key });
-        this.apiKeyInput = '';
-        this.keySaved = true;
-        this.setupSummary.provider = provider.display_name;
-        OpenFangToast.success('API key saved for ' + provider.display_name);
+        this.providerVerifyToken++;
         await this.loadProviders();
-        // Auto-test after saving
-        await this.testKey();
+        var ok = await this.runProviderConnectionTest({
+          successToast: false,
+          errorToast: false,
+        });
+        if (ok) {
+          this.apiKeyInput = '';
+          this.keySaved = true;
+          this.setupSummary.provider = provider.display_name;
+          var ms = this.testResult && this.testResult.latency_ms != null ? this.testResult.latency_ms : '?';
+          OpenFangToast.success(provider.display_name + ' key saved and verified (' + ms + 'ms)');
+        } else {
+          this.keySaved = false;
+          var detail =
+            (this.testResult && this.testResult.error) ||
+            (this.testResult && this.testResult.status !== 'ok' ? 'connection test failed' : '') ||
+            'connection test failed';
+          OpenFangToast.error(
+            provider.display_name + ' key was saved, but verification failed: ' + detail + '. Fix the key or click Test connection, then continue.'
+          );
+        }
       } catch(e) {
         OpenFangToast.error('Failed to save key: ' + e.message);
+        this.step2ConnectionVerified = false;
+        this.testingProvider = false;
       }
       this.savingKey = false;
     },
 
-    async testKey() {
+    /**
+     * POST /api/providers/:id/test and update step2ConnectionVerified + testResult.
+     * @param {{ successToast?: boolean, errorToast?: boolean }} options
+     * @returns {Promise<boolean>}
+     */
+    async runProviderConnectionTest(options) {
+      options = options || {};
+      var successToast = options.successToast !== false;
+      var errorToast = options.errorToast !== false;
       var provider = this.selectedProviderObj;
-      if (!provider) return;
+      if (!provider) return false;
+      var tokenAtStart = this.providerVerifyToken;
       this.testingProvider = true;
       this.testResult = null;
+      var ok = false;
       try {
         var result = await OpenFangAPI.post('/api/providers/' + encodeURIComponent(provider.id) + '/test', {});
+        if (tokenAtStart !== this.providerVerifyToken) {
+          return false;
+        }
         this.testResult = result;
-        if (result.status === 'ok') {
-          OpenFangToast.success(provider.display_name + ' connected (' + (result.latency_ms || '?') + 'ms)');
+        ok = result.status === 'ok';
+        if (ok) {
+          this.step2ConnectionVerified = true;
+          if (successToast) {
+            OpenFangToast.success(provider.display_name + ' connected (' + (result.latency_ms || '?') + 'ms)');
+          }
         } else {
-          OpenFangToast.error(provider.display_name + ': ' + (result.error || 'Connection failed'));
+          this.step2ConnectionVerified = false;
+          if (errorToast) {
+            OpenFangToast.error(provider.display_name + ': ' + (result.error || 'Connection failed'));
+          }
         }
       } catch(e) {
+        if (tokenAtStart !== this.providerVerifyToken) {
+          return false;
+        }
         this.testResult = { status: 'error', error: e.message };
-        OpenFangToast.error('Test failed: ' + e.message);
+        this.step2ConnectionVerified = false;
+        if (errorToast) {
+          OpenFangToast.error('Connection test failed: ' + e.message);
+        }
+        ok = false;
+      } finally {
+        if (tokenAtStart === this.providerVerifyToken) {
+          this.testingProvider = false;
+        }
       }
-      this.testingProvider = false;
+      return ok;
+    },
+
+    async testKey() {
+      await this.runProviderConnectionTest({ successToast: true, errorToast: true });
     },
 
     async detectClaudeCode() {
@@ -452,13 +589,16 @@ function wizardPage() {
         if (result.status === 'ok') {
           this.claudeCodeDetected = true;
           this.keySaved = true;
+          this.step2ConnectionVerified = true;
           this.setupSummary.provider = 'Claude Code';
           OpenFangToast.success('Claude Code detected (' + (result.latency_ms || '?') + 'ms)');
         } else {
+          this.step2ConnectionVerified = false;
           this.testResult = { status: 'error', error: 'Claude Code CLI not detected' };
           OpenFangToast.error('Claude Code CLI not detected. Make sure you\'ve run: npm install -g @anthropic-ai/claude-code && claude auth');
         }
       } catch(e) {
+        this.step2ConnectionVerified = false;
         this.testResult = { status: 'error', error: e.message };
         OpenFangToast.error('Claude Code CLI not detected. Make sure you\'ve run: npm install -g @anthropic-ai/claude-code && claude auth');
       }

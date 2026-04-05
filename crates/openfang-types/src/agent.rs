@@ -313,7 +313,12 @@ impl ToolProfile {
     /// Expand profile to tool name list.
     pub fn tools(&self) -> Vec<String> {
         match self {
-            Self::Minimal => vec!["file_read", "file_list"],
+            Self::Minimal => vec![
+                "file_read",
+                "file_list",
+                "channel_send",
+                "event_publish",
+            ],
             Self::Coding => vec![
                 "file_read",
                 "file_write",
@@ -322,6 +327,8 @@ impl ToolProfile {
                 "spreadsheet_build",
                 "shell_exec",
                 "web_fetch",
+                "channel_send",
+                "event_publish",
             ],
             Self::Research => vec![
                 "web_fetch",
@@ -329,8 +336,17 @@ impl ToolProfile {
                 "file_read",
                 "file_write",
                 "document_extract",
+                "channel_send",
+                "event_publish",
             ],
-            Self::Messaging => vec!["agent_send", "agent_list", "memory_store", "memory_recall"],
+            Self::Messaging => vec![
+                "agent_send",
+                "agent_list",
+                "memory_store",
+                "memory_recall",
+                "channel_send",
+                "event_publish",
+            ],
             Self::Automation => vec![
                 "file_read",
                 "file_write",
@@ -344,6 +360,8 @@ impl ToolProfile {
                 "agent_list",
                 "memory_store",
                 "memory_recall",
+                "channel_send",
+                "event_publish",
             ],
             Self::Full | Self::Custom => vec!["*"],
         }
@@ -607,6 +625,25 @@ impl std::fmt::Display for SessionLabel {
     }
 }
 
+/// Rolling telemetry from the last LLM turns (in-memory; not persisted in SQLite `agents` row).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentTurnStats {
+    /// Wall time for the last completed agent loop (LLM + tools), if known.
+    pub last_latency_ms: Option<u64>,
+    /// When a fallback model or OpenRouter free-tier path was used on the last turn.
+    pub last_fallback_note: Option<String>,
+    /// When any message turn last finished (success or error).
+    pub last_turn_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_error_at: Option<DateTime<Utc>>,
+    pub last_error_summary: Option<String>,
+    pub turns_ok: u64,
+    pub turns_err: u64,
+    pub last_input_tokens: u64,
+    pub last_output_tokens: u64,
+}
+
 /// Visual identity for an agent — emoji, avatar, color, personality.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -660,6 +697,9 @@ pub struct AgentEntry {
     /// When onboarding was completed.
     #[serde(default)]
     pub onboarding_completed_at: Option<DateTime<Utc>>,
+    /// Last-turn latency, token counts, and fallback notes (runtime only).
+    #[serde(default)]
+    pub turn_stats: AgentTurnStats,
 }
 
 #[cfg(test)]
@@ -804,7 +844,11 @@ mod tests {
     #[test]
     fn test_tool_profile_minimal() {
         let tools = ToolProfile::Minimal.tools();
-        assert_eq!(tools, vec!["file_read", "file_list"]);
+        assert!(tools.contains(&"file_read".to_string()));
+        assert!(tools.contains(&"file_list".to_string()));
+        assert!(tools.contains(&"channel_send".to_string()));
+        assert!(tools.contains(&"event_publish".to_string()));
+        assert_eq!(tools.len(), 4);
     }
 
     #[test]
@@ -815,7 +859,9 @@ mod tests {
         assert!(tools.contains(&"spreadsheet_build".to_string()));
         assert!(tools.contains(&"shell_exec".to_string()));
         assert!(tools.contains(&"web_fetch".to_string()));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&"channel_send".to_string()));
+        assert!(tools.contains(&"event_publish".to_string()));
+        assert_eq!(tools.len(), 9);
     }
 
     #[test]
@@ -824,7 +870,8 @@ mod tests {
         assert!(tools.contains(&"web_fetch".to_string()));
         assert!(tools.contains(&"web_search".to_string()));
         assert!(tools.contains(&"document_extract".to_string()));
-        assert_eq!(tools.len(), 5);
+        assert!(tools.contains(&"channel_send".to_string()));
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
@@ -832,13 +879,14 @@ mod tests {
         let tools = ToolProfile::Messaging.tools();
         assert!(tools.contains(&"agent_send".to_string()));
         assert!(tools.contains(&"memory_recall".to_string()));
-        assert_eq!(tools.len(), 4);
+        assert!(tools.contains(&"channel_send".to_string()));
+        assert_eq!(tools.len(), 6);
     }
 
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]
@@ -1027,6 +1075,7 @@ mod tests {
             identity: AgentIdentity::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: AgentTurnStats::default(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();
@@ -1089,6 +1138,7 @@ mod tests {
             },
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: AgentTurnStats::default(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();

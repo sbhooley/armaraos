@@ -37,6 +37,7 @@ use openfang_types::tool::ToolDefinition;
 
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{debug, info, trace, warn};
 
@@ -257,6 +258,8 @@ pub struct OpenFangKernel {
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenFangKernel>>,
+    /// Unix millis when the cron scheduler loop last woke (0 = never).
+    last_cron_scheduler_tick_ms: AtomicU64,
 }
 
 /// Bounded in-memory delivery receipt tracker.
@@ -1187,6 +1190,7 @@ impl OpenFangKernel {
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
+            last_cron_scheduler_tick_ms: AtomicU64::new(0),
         };
 
         // Restore persisted agents from SQLite
@@ -1565,6 +1569,7 @@ impl OpenFangKernel {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: Default::default(),
         };
         self.registry
             .register(entry.clone())
@@ -1769,6 +1774,14 @@ impl OpenFangKernel {
                 // Update last active time
                 let _ = self.registry.set_state(agent_id, AgentState::Running);
 
+                let _ = self.registry.record_turn_success(
+                    agent_id,
+                    result.latency_ms,
+                    result.llm_fallback_note.clone(),
+                    result.total_usage.input_tokens,
+                    result.total_usage.output_tokens,
+                );
+
                 // SECURITY: Record successful message in audit trail
                 self.audit_log.record(
                     agent_id.to_string(),
@@ -1783,6 +1796,7 @@ impl OpenFangKernel {
                 Ok(result)
             }
             Err(e) => {
+                let _ = self.registry.record_turn_failure(agent_id, format!("{e}"));
                 // SECURITY: Record failed message in audit trail
                 self.audit_log.record(
                     agent_id.to_string(),
@@ -1869,9 +1883,32 @@ impl OpenFangKernel {
                         let _ = kernel_clone
                             .registry
                             .set_state(agent_id, AgentState::Running);
+                        let _ = kernel_clone.registry.record_turn_success(
+                            agent_id,
+                            result.latency_ms,
+                            result.llm_fallback_note.clone(),
+                            result.total_usage.input_tokens,
+                            result.total_usage.output_tokens,
+                        );
+                        kernel_clone.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::AgentMessage,
+                            format!(
+                                "tokens_in={}, tokens_out={}",
+                                result.total_usage.input_tokens, result.total_usage.output_tokens
+                            ),
+                            "ok",
+                        );
                         Ok(result)
                     }
                     Err(e) => {
+                        let _ = kernel_clone.registry.record_turn_failure(agent_id, format!("{e}"));
+                        kernel_clone.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::AgentMessage,
+                            "agent loop failed",
+                            format!("error: {e}"),
+                        );
                         kernel_clone.supervisor.record_panic();
                         warn!(agent_id = %agent_id, error = %e, "Non-LLM agent failed");
                         Err(e)
@@ -2271,6 +2308,23 @@ impl OpenFangKernel {
                         .registry
                         .set_state(agent_id, AgentState::Running);
 
+                    let _ = kernel_clone.registry.record_turn_success(
+                        agent_id,
+                        result.latency_ms,
+                        result.llm_fallback_note.clone(),
+                        result.total_usage.input_tokens,
+                        result.total_usage.output_tokens,
+                    );
+                    kernel_clone.audit_log.record(
+                        agent_id.to_string(),
+                        openfang_runtime::audit::AuditAction::AgentMessage,
+                        format!(
+                            "tokens_in={}, tokens_out={}",
+                            result.total_usage.input_tokens, result.total_usage.output_tokens
+                        ),
+                        "ok",
+                    );
+
                     // Post-loop compaction check: if session now exceeds token threshold,
                     // trigger compaction in background for the next call.
                     {
@@ -2293,6 +2347,13 @@ impl OpenFangKernel {
                     Ok(result)
                 }
                 Err(e) => {
+                    let _ = kernel_clone.registry.record_turn_failure(agent_id, format!("{e}"));
+                    kernel_clone.audit_log.record(
+                        agent_id.to_string(),
+                        openfang_runtime::audit::AuditAction::AgentMessage,
+                        "agent loop failed (streaming)",
+                        format!("error: {e}"),
+                    );
                     kernel_clone.supervisor.record_panic();
                     warn!(agent_id = %agent_id, error = %e, "Streaming agent loop failed");
                     Err(KernelError::OpenFang(e))
@@ -2389,6 +2450,8 @@ impl OpenFangKernel {
             cost_usd: None,
             silent: false,
             directives: Default::default(),
+            latency_ms: None,
+            llm_fallback_note: None,
         })
     }
 
@@ -2449,6 +2512,8 @@ impl OpenFangKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
+            latency_ms: None,
+            llm_fallback_note: None,
         })
     }
 
@@ -3773,6 +3838,17 @@ impl OpenFangKernel {
         }
     }
 
+    /// RFC3339 time of the last cron scheduler wake (background 15s loop), if any.
+    pub fn last_cron_scheduler_tick_rfc3339(&self) -> Option<String> {
+        let ms = self
+            .last_cron_scheduler_tick_ms
+            .load(Ordering::Relaxed);
+        if ms == 0 {
+            return None;
+        }
+        chrono::DateTime::from_timestamp_millis(ms as i64).map(|d| d.to_rfc3339())
+    }
+
     /// Reload configuration: read the config file, diff against current, and
     /// apply hot-reloadable actions. Returns the reload plan for API response.
     pub fn reload_config(&self) -> Result<crate::config_reload::ReloadPlan, String> {
@@ -4301,6 +4377,11 @@ impl OpenFangKernel {
                         let _ = kernel.cron_scheduler.persist();
                         break;
                     }
+
+                    kernel.last_cron_scheduler_tick_ms.store(
+                        chrono::Utc::now().timestamp_millis() as u64,
+                        Ordering::Relaxed,
+                    );
 
                     let due = kernel.cron_scheduler.due_jobs();
                     for job in due {
@@ -5789,11 +5870,12 @@ impl OpenFangKernel {
                         {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
+                                let preview = openfang_types::truncate_str(result.response.trim(), 400);
                                 self.audit_log.record(
                                     agent_id.to_string(),
                                     openfang_runtime::audit::AuditAction::CronJobOutput,
                                     format!("job={job_name}, id={job_id}"),
-                                    "ok",
+                                    preview.to_string(),
                                 );
                                 Ok(result.response)
                             }
@@ -7386,6 +7468,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: Default::default(),
         };
         registry.register(entry).unwrap();
 
@@ -7423,6 +7506,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: Default::default(),
         };
         registry.register(e1).unwrap();
 
@@ -7446,6 +7530,7 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
+            turn_stats: Default::default(),
         };
         registry.register(e2).unwrap();
 

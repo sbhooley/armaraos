@@ -449,6 +449,14 @@ pub async fn build_router(
             "/api/audit/verify",
             axum::routing::get(routes::audit_verify),
         )
+        .route(
+            "/api/cron/runs",
+            axum::routing::get(routes::cron_runs),
+        )
+        .route(
+            "/api/observability/snapshot",
+            axum::routing::get(routes::observability_snapshot),
+        )
         // Live log streaming (SSE)
         .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
         // Kernel event bus (SSE)

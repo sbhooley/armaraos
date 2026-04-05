@@ -759,6 +759,9 @@ mod tests {
     #[test]
     fn test_nvidia_provider_no_key_errors() {
         // NVIDIA NIM provider with no API key should error.
+        // Clear env for this check so the test is not flaky when the host has NVIDIA_API_KEY set.
+        let prev_nvidia_key = std::env::var_os("NVIDIA_API_KEY");
+        std::env::remove_var("NVIDIA_API_KEY");
         let config = DriverConfig {
             provider: "nvidia".to_string(),
             api_key: None,
@@ -766,7 +769,15 @@ mod tests {
             skip_permissions: true,
         };
         let driver = create_driver(&config);
-        assert!(driver.is_err());
+        let err_without_key = driver.is_err();
+        match prev_nvidia_key {
+            Some(v) => std::env::set_var("NVIDIA_API_KEY", v),
+            None => std::env::remove_var("NVIDIA_API_KEY"),
+        }
+        assert!(
+            err_without_key,
+            "NVIDIA provider without API key should error"
+        );
     }
 
     #[test]

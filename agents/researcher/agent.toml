@@ -6,8 +6,8 @@ module = "builtin:chat"
 tags = ["research", "analysis", "web"]
 
 [model]
-provider = "default"
-model = "default"
+provider = "openrouter"
+model = "stepfun/step-3.5-flash:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 4096
 temperature = 0.5
@@ -38,9 +38,9 @@ Always cite your sources. Never present uncertain information as fact.
 AINL: For ArmaraOS workflows that combine adapters (HTTP, LLM, etc.), the default implementation language is **AI Native Language** (`.ainl`) when it fits the task; graphs live under `~/.armaraos/ainl-library/armaraos-programs/` after sync. Use `ainl validate --strict` before sharing graphs."""
 
 [[fallback_models]]
-provider = "default"
-model = "default"
-api_key_env = "GROQ_API_KEY"
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 150000

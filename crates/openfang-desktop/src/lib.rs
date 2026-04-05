@@ -20,9 +20,8 @@ mod updater;
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::event::{EventPayload, LifecycleEvent, SystemEvent};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 
@@ -235,11 +234,6 @@ pub fn run() {
             let bundle_id = app_handle.config().identifier.clone();
             let mut event_rx = kernel_for_notifications.event_bus.subscribe_all();
             tauri::async_runtime::spawn(async move {
-                // Suppress duplicate health alerts for the same agent (flapping recovery).
-                const HEALTH_NOTIFY_DEBOUNCE: Duration = Duration::from_secs(15 * 60);
-                let mut last_health_notify: HashMap<openfang_types::agent::AgentId, Instant> =
-                    HashMap::new();
-
                 loop {
                     match event_rx.recv().await {
                         Ok(event) => {
@@ -285,26 +279,9 @@ pub fn run() {
                                     error,
                                     ..
                                 }) => ("Scheduled job failed".to_string(), format!("{job_name}: {error}")),
-                                EventPayload::System(SystemEvent::HealthCheckFailed {
-                                    agent_id,
-                                    unresponsive_secs,
-                                }) => {
-                                    // Kernel uses 0 for internal recovery signals; never notify.
-                                    if *unresponsive_secs == 0 {
-                                        continue;
-                                    }
-                                    if let Some(prev) = last_health_notify.get(agent_id) {
-                                        if prev.elapsed() < HEALTH_NOTIFY_DEBOUNCE {
-                                            continue;
-                                        }
-                                    }
-                                    last_health_notify.insert(*agent_id, Instant::now());
-                                    (
-                                        "Agent health check failed".to_string(),
-                                        format!(
-                                            "Agent {agent_id} unresponsive for {unresponsive_secs}s"
-                                        ),
-                                    )
+                                // Health check failures are too noisy for OS toasts; use logs / WebUI.
+                                EventPayload::System(SystemEvent::HealthCheckFailed { .. }) => {
+                                    continue;
                                 }
                                 EventPayload::System(SystemEvent::ApprovalPending {
                                     request_id,
@@ -342,6 +319,8 @@ pub fn run() {
             // Spawn startup update check (desktop only, after event forwarding is set up)
             #[cfg(desktop)]
             updater::spawn_startup_check(app.handle().clone());
+            #[cfg(desktop)]
+            updater::spawn_periodic_update_check(app.handle().clone());
 
             // PyPI vs venv check: notify when ainativelang has a newer release (desktop only)
             #[cfg(desktop)]

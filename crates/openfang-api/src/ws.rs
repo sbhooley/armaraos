@@ -768,10 +768,14 @@ async fn handle_text_message(
                             let cleaned = strip_think_tags(&accumulated_text);
 
                             let response_text = if cleaned.trim().is_empty() {
-                                format!(
-                                    "[The agent completed processing but returned no text response. ({} in / {} out)]",
-                                    usage.input_tokens, usage.output_tokens,
-                                )
+                                if usage.input_tokens == 0 && usage.output_tokens == 0 {
+                                    "[No assistant text (0 tokens). The model call did not complete — usually a missing or invalid provider API key. For OpenRouter: Settings → Providers, or set OPENROUTER_API_KEY for the daemon. If an error line appears below, that is the real cause.]".to_string()
+                                } else {
+                                    format!(
+                                        "[The agent completed processing but returned no text response. ({} in / {} out)]",
+                                        usage.input_tokens, usage.output_tokens,
+                                    )
+                                }
                             } else {
                                 cleaned
                             };

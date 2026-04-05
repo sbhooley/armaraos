@@ -198,41 +198,34 @@ function schedulerPage() {
     async loadHistory() {
       this.historyLoading = true;
       try {
-        var historyItems = [];
-        var jobs = this.jobs || [];
-        for (var i = 0; i < jobs.length; i++) {
-          var job = jobs[i];
-          if (job.last_run) {
-            historyItems.push({
-              timestamp: job.last_run,
-              name: job.name || '(unnamed)',
-              type: 'schedule',
-              status: 'completed',
-              run_count: 0
-            });
-          }
-        }
-        var triggers = this.triggers || [];
-        for (var j = 0; j < triggers.length; j++) {
-          var t = triggers[j];
-          if (t.fire_count > 0) {
-            historyItems.push({
-              timestamp: t.created_at,
-              name: 'Trigger: ' + this.triggerType(t.pattern),
-              type: 'trigger',
-              status: 'fired',
-              run_count: t.fire_count
-            });
-          }
-        }
-        historyItems.sort(function(a, b) {
-          return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+        var data = await OpenFangAPI.get('/api/cron/runs?n=200');
+        var runs = data.runs || [];
+        this.history = runs.map(function(r) {
+          var act = String(r.action || '');
+          var failed = act.indexOf('CronJobFailure') >= 0;
+          var output = act.indexOf('CronJobOutput') >= 0;
+          return {
+            seq: r.seq,
+            timestamp: r.timestamp,
+            action: act,
+            agent_id: r.agent_id || '',
+            detail: r.detail || '',
+            outcome: r.outcome || '',
+            statusLabel: failed ? 'Failed' : (output ? 'Output' : 'Run'),
+            statusClass: failed ? 'badge-crashed' : (output ? 'badge-created' : 'badge-success')
+          };
         });
-        this.history = historyItems;
       } catch(e) {
         this.history = [];
       }
       this.historyLoading = false;
+    },
+
+    truncateAuditText(s, maxLen) {
+      if (s == null || s === '') return '—';
+      var t = String(s);
+      if (t.length <= maxLen) return t;
+      return t.slice(0, maxLen) + '…';
     },
 
     // ── Job CRUD ──

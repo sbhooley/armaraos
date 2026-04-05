@@ -138,6 +138,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg></span>
               <span class="nav-label">Logs</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'timeline' }" @click="navigate('timeline')" :aria-current="page === 'timeline' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+              <span class="nav-label">Timeline</span>
+            </a>
           </div>
         </template>
       </div>
@@ -446,6 +450,19 @@
               <div class="stat-value" :class="configuredProviders.length > 0 ? 'stat-value-success' : ''" style="font-size:18px" x-text="configuredProviders.length"></div>
               <div class="stat-label">Providers</div>
             </div>
+          </div>
+
+          <div class="card mb-4" style="border-left:3px solid #6366f1" x-show="observability && observability.agent_count !== undefined">
+            <div class="card-header" style="margin:0">Operations snapshot</div>
+            <div class="text-xs text-dim" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px;line-height:1.5">
+              <div><span class="text-dim">Agents:</span> <span x-text="(observability.running_agents != null ? observability.running_agents : '—') + ' / ' + (observability.agent_count != null ? observability.agent_count : '—')"></span> <span class="text-dim">running</span></div>
+              <div><span class="text-dim">Pending approvals:</span> <span x-text="observability.pending_approvals != null ? observability.pending_approvals : '—'"></span></div>
+              <div><span class="text-dim">Cron jobs:</span> <span x-text="observability.cron_jobs_registered != null ? observability.cron_jobs_registered : '—'"></span></div>
+              <div style="grid-column:span 2;min-width:0"><span class="text-dim">Last scheduler tick:</span> <span x-text="observability.last_cron_scheduler_tick || '—'" style="word-break:break-all"></span></div>
+              <div><span class="text-dim">Channels ready:</span> <span x-text="observability.channels_ready != null ? observability.channels_ready : '—'"></span> <span class="text-dim">/</span> <span x-text="observability.channels_configured != null ? observability.channels_configured : '—'"></span></div>
+              <div><span class="text-dim">Daemon uptime:</span> <span x-text="observability.uptime_secs != null ? formatUptime(observability.uptime_secs) : '—'"></span></div>
+            </div>
+            <p class="text-xs text-dim mt-2" style="margin:0">JSON: <code style="font-size:10px">GET /api/observability/snapshot</code></p>
           </div>
 
           <!-- Provider status badges with health indicators -->
@@ -1046,7 +1063,7 @@
         <div class="page-header">
           <h2>Chat</h2>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" x-show="agents.length" @click="openSpawnWizard()">+ New Agent</button>
+            <button class="btn btn-ghost btn-sm" @click="openSpawnWizard()">+ New Agent</button>
             <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
           </div>
         </div>
@@ -1158,6 +1175,23 @@
                       </template>
                     </div>
                     <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value" x-text="detailAgent.created_at ? new Date(detailAgent.created_at).toLocaleString() : '-'"></span></div>
+                    <div class="detail-row" style="align-items:flex-start" x-show="detailAgent.turn_stats">
+                      <span class="detail-label">Turn telemetry</span>
+                      <div class="detail-value text-xs text-dim" style="flex:1;min-width:0;line-height:1.55">
+                        <div><span class="text-dim">OK / err:</span> <span x-text="(detailAgent.turn_stats.turns_ok || 0) + ' / ' + (detailAgent.turn_stats.turns_err || 0)"></span>
+                          <span class="text-dim"> · error rate:</span> <span x-text="formatTurnErrorRate(detailAgent.turn_stats)"></span></div>
+                        <div x-show="detailAgent.turn_stats.last_latency_ms != null"><span class="text-dim">Last latency:</span> <span x-text="detailAgent.turn_stats.last_latency_ms + ' ms'"></span></div>
+                        <div x-show="detailAgent.turn_stats.last_input_tokens != null || detailAgent.turn_stats.last_output_tokens != null">
+                          <span class="text-dim">Last tokens:</span>
+                          <span x-text="(detailAgent.turn_stats.last_input_tokens != null ? detailAgent.turn_stats.last_input_tokens : '—') + ' in / ' + (detailAgent.turn_stats.last_output_tokens != null ? detailAgent.turn_stats.last_output_tokens : '—') + ' out'"></span>
+                        </div>
+                        <div x-show="detailAgent.turn_stats.last_fallback_note"><span class="text-dim">Fallback:</span> <span x-text="detailAgent.turn_stats.last_fallback_note"></span></div>
+                        <div><span class="text-dim">Last success:</span> <span x-text="formatIsoTime(detailAgent.turn_stats.last_success_at)"></span></div>
+                        <div x-show="detailAgent.turn_stats.last_error_at"><span class="text-dim">Last error:</span> <span x-text="formatIsoTime(detailAgent.turn_stats.last_error_at)"></span></div>
+                        <div x-show="detailAgent.turn_stats.last_error_summary" style="word-break:break-word"><span class="text-dim">Error summary:</span> <span x-text="detailAgent.turn_stats.last_error_summary"></span></div>
+                        <p class="text-dim" style="margin:6px 0 0;font-size:10px;line-height:1.4">In-memory since daemon start; refreshes when you reopen this agent.</p>
+                      </div>
+                    </div>
                     <div class="detail-row" style="align-items:flex-start" x-show="detailAgent.scheduled_ainl_host_adapter && detailAgent.scheduled_ainl_host_adapter.summary">
                       <span class="detail-label">Scheduled AINL</span>
                       <div class="detail-value text-xs text-dim" style="flex:1;min-width:0;word-break:break-word;line-height:1.45" x-text="detailAgent.scheduled_ainl_host_adapter.summary"></div>
@@ -1262,6 +1296,8 @@
                   <div class="mt-4" style="border-top:1px solid var(--border);padding-top:16px">
                     <h4 style="margin-bottom:8px;font-size:13px">Tool Filters</h4>
                     <p class="text-xs text-dim" style="margin-bottom:12px">Allowlist: only these tools available (empty = all). Blocklist: these tools excluded.</p>
+                    <p class="text-xs text-dim" style="margin-bottom:8px">Alerts / channels: add <span class="font-mono">channel_send</span> and <span class="font-mono">event_publish</span> when you use a non-empty allowlist, or remove them from the blocklist.</p>
+                    <button type="button" class="btn btn-ghost btn-sm mb-2" @click="ensureMessagingTools()">Add messaging tools</button>
                     <div class="form-group">
                       <label style="font-size:12px">Allowlist <span class="text-dim" x-text="'(' + toolFilters.tool_allowlist.length + ')'"></span></label>
                       <div class="flex flex-wrap gap-1 mb-1">
@@ -1311,7 +1347,7 @@
                 <div x-show="spawnMode === 'toml'">
                   <div class="form-group">
                     <label>Agent Manifest (TOML)</label>
-                    <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "groq"&#10;model = "llama-3.3-70b-versatile"&#10;system_prompt = "You are helpful."'></textarea>
+                    <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "openrouter"&#10;model = "stepfun/step-3.5-flash:free"&#10;system_prompt = "You are helpful."'></textarea>
                   </div>
                   <button class="btn btn-primary btn-block mt-4" @click="spawnAgent()" :disabled="spawning">
                     <span x-show="!spawning">Spawn Agent</span><span x-show="spawning">Spawning...</span>
@@ -1385,7 +1421,7 @@
                     </div>
                     <div class="form-group">
                       <label>Model</label>
-                      <input class="form-input" x-model="spawnForm.model" placeholder="e.g. llama-3.3-70b-versatile">
+                      <input class="form-input" x-model="spawnForm.model" placeholder="e.g. stepfun/step-3.5-flash:free">
                     </div>
                     <div class="form-group">
                       <label>System Prompt</label>
@@ -2265,28 +2301,28 @@
               <div class="card mb-4" style="border-left:3px solid var(--accent)">
                 <div class="font-bold" style="font-size:13px;margin-bottom:4px">Run History</div>
                 <div class="text-sm text-dim" style="line-height:1.6">
-                  Recent executions of scheduled jobs and event trigger fires. History is aggregated from schedule run counts and trigger fire counts.
+                  Recent cron scheduler audit events (<code class="text-xs">CronJobRun</code>, <code class="text-xs">CronJobOutput</code>, <code class="text-xs">CronJobFailure</code>) from <code class="text-xs">GET /api/cron/runs</code>.
                 </div>
               </div>
               <div class="table-wrap" x-show="history.length">
                 <table>
-                  <thead><tr><th>Time</th><th>Name</th><th>Type</th><th>Status</th><th>Total Runs</th></tr></thead>
+                  <thead><tr><th>Time</th><th>Action</th><th>Agent</th><th>Detail</th><th>Outcome</th></tr></thead>
                   <tbody>
-                    <template x-for="(h, idx) in history" :key="idx">
+                    <template x-for="h in history" :key="h.seq">
                       <tr>
                         <td class="text-xs" style="white-space:nowrap" x-text="formatTime(h.timestamp)"></td>
-                        <td class="font-bold" x-text="h.name"></td>
-                        <td><span class="badge" :class="h.type === 'schedule' ? 'badge-created' : 'badge-dim'" x-text="h.type === 'schedule' ? 'Cron Job' : 'Trigger'"></span></td>
-                        <td><span class="badge badge-success" x-text="h.status"></span></td>
-                        <td x-text="h.run_count"></td>
+                        <td><span class="badge text-xs" :class="h.statusClass" x-text="h.statusLabel"></span></td>
+                        <td class="text-xs" style="word-break:break-all;max-width:140px" x-text="h.agent_id || '—'"></td>
+                        <td class="text-xs text-dim" style="max-width:220px;word-break:break-word" :title="h.detail" x-text="truncateAuditText(h.detail, 80)"></td>
+                        <td class="text-xs text-dim" style="max-width:220px;word-break:break-word" :title="h.outcome" x-text="truncateAuditText(h.outcome, 80)"></td>
                       </tr>
                     </template>
                   </tbody>
                 </table>
               </div>
               <div class="empty-state" x-show="!history.length">
-                <h4>No run history yet</h4>
-                <p class="hint">Run history will appear here after scheduled jobs or triggers execute.</p>
+                <h4>No cron run history yet</h4>
+                <p class="hint">Entries appear when the scheduler runs jobs or records output or failures.</p>
               </div>
             </div>
           </div>
@@ -2297,11 +2333,11 @@
 
     <!-- Page: Channels -->
     <template x-if="page === 'channels'">
-      <div x-data="channelsPage">
+      <div x-data="channelsPage()">
         <div class="page-header">
           <h2>Channels <span class="badge badge-muted" x-text="configuredCount + '/' + allChannels.length + ' configured'"></span></h2>
         </div>
-        <div class="page-body" x-init="loadChannels()">
+        <div class="page-body" x-init="loadData()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading channels...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
@@ -2349,6 +2385,58 @@
 
           <div x-show="filteredChannels.length === 0" class="text-dim mt-4" style="text-align:center">
             <p>No channels match your search.</p>
+          </div>
+
+          <div class="card mb-4" style="border-left:3px solid var(--accent)">
+            <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
+              <div class="card-header" style="margin:0">Agent bindings</div>
+              <button class="btn btn-ghost btn-sm" @click="loadBindings()" :disabled="bindingsLoading" x-text="bindingsLoading ? 'Loading…' : 'Refresh'"></button>
+            </div>
+            <p class="text-xs text-dim mb-3" style="line-height:1.5">Route incoming messages to agents by channel, guild, peer, or account. Changes apply immediately after save.</p>
+            <div class="table-wrap mb-3" x-show="bindings.length">
+              <table>
+                <thead><tr><th>#</th><th>Agent</th><th>Channel</th><th>Peer</th><th>Guild</th><th>Account</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="(b, idx) in bindings" :key="idx">
+                    <tr>
+                      <td class="text-xs text-dim" x-text="idx"></td>
+                      <td class="font-bold text-xs" x-text="b.agent || '—'"></td>
+                      <td class="text-xs" x-text="(b.match_rule && b.match_rule.channel) || '—'"></td>
+                      <td class="text-xs" style="word-break:break-all;max-width:120px" x-text="(b.match_rule && b.match_rule.peer_id) || '—'"></td>
+                      <td class="text-xs" style="word-break:break-all;max-width:120px" x-text="(b.match_rule && b.match_rule.guild_id) || '—'"></td>
+                      <td class="text-xs" style="word-break:break-all;max-width:120px" x-text="(b.match_rule && b.match_rule.account_id) || '—'"></td>
+                      <td><button type="button" class="btn btn-ghost btn-sm" style="color:var(--red,#ef4444)" @click="removeBinding(idx)">Remove</button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <div class="text-xs text-dim mb-3" x-show="!bindings.length && !bindingsLoading">No bindings yet. Add one below.</div>
+            <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(140px,1fr));align-items:end">
+              <div>
+                <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Agent (name or UUID)</label>
+                <input class="form-input" type="text" x-model="bindingForm.agent" placeholder="e.g. assistant">
+              </div>
+              <div>
+                <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Channel</label>
+                <input class="form-input" type="text" x-model="bindingForm.channel" placeholder="discord, slack, telegram…">
+              </div>
+              <div>
+                <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Peer ID</label>
+                <input class="form-input" type="text" x-model="bindingForm.peer_id" placeholder="optional">
+              </div>
+              <div>
+                <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Guild ID</label>
+                <input class="form-input" type="text" x-model="bindingForm.guild_id" placeholder="optional">
+              </div>
+              <div>
+                <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Account ID</label>
+                <input class="form-input" type="text" x-model="bindingForm.account_id" placeholder="optional">
+              </div>
+              <div>
+                <button type="button" class="btn btn-primary btn-sm" style="width:100%" @click="addBinding()" :disabled="bindingSaving" x-text="bindingSaving ? 'Saving…' : 'Add binding'"></button>
+              </div>
+            </div>
           </div>
 
           </div>
@@ -2453,6 +2541,11 @@
                       Have a Meta Business account? <button class="btn-link" @click="showBusinessApi = true" style="font-size:inherit;text-decoration:underline;cursor:pointer;background:none;border:none;color:var(--accent,#818cf8);padding:0">Use Business API instead</button>
                     </div>
 
+                    <div class="mb-3 px-1" x-show="setupModal && setupModal.configured" style="max-width:400px;margin-left:auto;margin-right:auto">
+                      <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Optional test destination</label>
+                      <input class="form-input" type="text" x-model="testTargetId" placeholder="Channel ID / chat_id for live test message">
+                    </div>
+
                     <!-- Action buttons for QR mode -->
                     <div class="flex gap-2 mt-4" style="flex-wrap:wrap;justify-content:center" x-show="!qr.loading">
                       <button class="btn btn-ghost" x-show="qr.available && !qr.connected && !qr.expired" @click="startQR()">Refresh QR</button>
@@ -2541,6 +2634,12 @@
                         </template>
                       </div>
                     </template>
+
+                    <div class="mb-3" x-show="setupModal && setupModal.configured">
+                      <label class="text-sm text-dim" style="display:block;margin-bottom:0.25rem">Optional test destination</label>
+                      <input class="form-input" type="text" x-model="testTargetId" placeholder="Discord/Slack channel ID or Telegram chat_id">
+                      <p class="text-xs text-dim mt-1" style="margin:0;line-height:1.45">Leave blank for a default connectivity check; set to target a real chat when testing.</p>
+                    </div>
 
                     <!-- Action buttons -->
                     <div class="flex gap-2 mt-4" style="flex-wrap:wrap">
@@ -5069,6 +5168,67 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       </div>
     </template>
 
+    <!-- Page: Timeline (audit search) -->
+    <template x-if="page === 'timeline'">
+      <div x-data="timelinePage()" x-init="loadTimeline()">
+        <div class="page-header">
+          <h2>Event timeline</h2>
+          <button class="btn btn-ghost btn-sm" @click="loadTimeline()" :disabled="loading" x-text="loading ? 'Loading…' : 'Refresh'"></button>
+        </div>
+        <div class="page-body">
+          <div class="card mb-4" style="border-left:3px solid var(--accent)">
+            <p class="text-sm text-dim" style="margin:0;line-height:1.55">Search the tamper-evident audit log (<code class="text-xs">GET /api/audit/recent</code> with optional <code class="text-xs">q</code>). Matches action, detail, outcome, and agent id.</p>
+          </div>
+          <div class="flex gap-2 flex-wrap mb-4 items-end">
+            <div style="flex:1;min-width:200px">
+              <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Filter (substring)</label>
+              <input class="form-input" type="search" x-model="filterQ" placeholder="e.g. CronJob, tool, agent uuid…" @keydown.enter="loadTimeline()">
+            </div>
+            <div>
+              <label class="text-xs text-dim" style="display:block;margin-bottom:4px">Limit</label>
+              <select class="form-select" style="width:100px" x-model.number="limitN">
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+            </div>
+            <button class="btn btn-primary btn-sm" @click="loadTimeline()" :disabled="loading">Apply</button>
+          </div>
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+          <div x-show="!loading && loadError" class="error-state">
+            <span class="error-icon">!</span>
+            <p x-text="loadError"></p>
+            <button class="btn btn-ghost btn-sm" @click="loadTimeline()">Retry</button>
+          </div>
+          <div x-show="!loading && !loadError">
+            <p class="text-xs text-dim mb-2" x-show="tipHash" x-text="'Showing ' + entries.length + ' entries (chain tip ' + tipHash.substring(0, 12) + '…, total ' + totalEntries + ')'"></p>
+            <div class="table-wrap" x-show="entries.length">
+              <table>
+                <thead><tr><th>#</th><th>Time</th><th>Agent</th><th>Action</th><th>Detail</th><th>Outcome</th></tr></thead>
+                <tbody>
+                  <template x-for="e in entries" :key="e.seq">
+                    <tr>
+                      <td class="text-xs text-dim" x-text="e.seq"></td>
+                      <td class="text-xs" style="white-space:nowrap" x-text="formatTime(e.timestamp)"></td>
+                      <td class="text-xs" style="word-break:break-all;max-width:140px" x-text="e.agent_id || '—'"></td>
+                      <td><span class="badge badge-dim text-xs" x-text="e.action"></span></td>
+                      <td class="text-xs text-dim" style="max-width:240px;word-break:break-word" :title="e.detail" x-text="truncate(e.detail, 120)"></td>
+                      <td class="text-xs text-dim" style="max-width:240px;word-break:break-word" :title="e.outcome" x-text="truncate(e.outcome, 120)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <div class="empty-state" x-show="!entries.length">
+              <h4>No matching events</h4>
+              <p class="hint">Try a different filter or clear the search to load the most recent entries.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- Page: Comms -->
     <template x-if="page === 'comms'">
       <div x-data="commsPage" x-init="loadData()" @page-leave.window="stopSSE()">
@@ -5351,7 +5511,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <!-- Page: Setup Wizard -->
     <template x-if="page === 'wizard'">
-      <div x-data="wizardPage">
+      <div x-data="wizardPage()">
         <div class="page-header">
           <h2>Setup Wizard</h2>
           <button class="btn btn-ghost btn-sm" @click="finishAndDismiss()">Skip Setup</button>
@@ -5389,12 +5549,18 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <p style="font-size:13px;color:var(--text-dim);line-height:1.8;max-width:480px;margin:0 auto 24px">
                 ArmaraOS is an open-source Agent Operating System. Run agents with full visibility in this dashboard &mdash; chat, tools, memory, scheduled jobs, and logs. Messaging apps (Telegram, Discord, Slack) are optional add-ons if you want the same agent in those places too.
               </p>
+              <div class="card" style="text-align:left;margin-bottom:16px;border-left:3px solid var(--accent);max-width:520px;margin-left:auto;margin-right:auto">
+                <div class="card-header">Recommended: OpenRouter (free to start)</div>
+                <p style="font-size:12px;color:var(--text-dim);line-height:1.65;margin:0">
+                  We recommend <strong>OpenRouter</strong>: visit <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> for a <strong>free API key</strong>. ArmaraOS is pre-configured to use the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> by default. You can switch to any other model or a paid provider anytime in Settings or when creating agents.
+                </p>
+              </div>
               <div class="card" style="text-align:left;margin-bottom:20px">
                 <div class="card-header">This wizard will help you:</div>
                 <div style="margin-top:8px">
                   <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
                     <span class="badge badge-info" style="min-width:20px;justify-content:center">1</span>
-                    <span style="font-size:12px">Connect an LLM provider (Anthropic, OpenAI, Gemini, etc.)</span>
+                    <span style="font-size:12px">Connect an LLM provider (we suggest OpenRouter + free key; others optional)</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
                     <span class="badge badge-info" style="min-width:20px;justify-content:center">2</span>
@@ -5426,13 +5592,16 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div class="wizard-step" x-show="step === 2">
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Connect an LLM Provider</h3>
-              <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">
-                ArmaraOS needs at least one LLM provider to power your agents. Select a provider and enter your API key.
+              <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;line-height:1.6">
+                ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> (create a key in the OpenRouter dashboard). This app defaults to the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> for new agents unless you configure a different provider or model later.
+              </p>
+              <p style="font-size:11px;color:var(--text-muted);margin-bottom:16px;line-height:1.5">
+                Prefer Anthropic, OpenAI, Groq, or others? Pick them below instead; paid keys are only required if you choose paid models.
               </p>
 
-              <div class="info-card" x-show="hasConfiguredProvider" style="border-left-color:var(--success)">
-                <h4 style="color:var(--success)">Provider Already Configured</h4>
-                <p>You already have at least one provider set up. You can continue to the next step or configure additional providers.</p>
+              <div class="info-card" x-show="hasConfiguredProvider && wizardProviderReady" style="border-left-color:var(--success)">
+                <h4 style="color:var(--success)">Selected provider is ready</h4>
+                <p>The provider highlighted below is configured. You can continue or switch providers to add another key.</p>
               </div>
 
               <div style="margin-bottom:16px">
@@ -5498,10 +5667,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                   <div class="form-group">
                     <label>API Key</label>
+                    <p class="text-xs text-dim mb-2" style="line-height:1.5;margin-top:4px">
+                      After you save, we automatically verify the key with the provider. You can go to the next step only when the check succeeds.
+                    </p>
                     <div class="key-input-group">
                       <input type="password" :placeholder="'Enter your ' + selectedProviderObj.display_name + ' API key'" x-model="apiKeyInput" @keydown.enter="saveKey()">
-                      <button class="btn btn-primary btn-sm" @click="saveKey()" :disabled="savingKey || !apiKeyInput.trim()">
-                        <span x-show="!savingKey">Save &amp; Test</span>
+                      <button class="btn btn-primary btn-sm" @click="saveKey()" :disabled="savingKey || testingProvider || !apiKeyInput.trim()">
+                        <span x-show="!savingKey">Save &amp; verify</span>
                         <span x-show="savingKey" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
                       </button>
                     </div>
@@ -5519,12 +5691,16 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <span style="color:var(--success);font-size:18px">&#10003;</span>
                     <div>
                       <div class="font-bold" style="font-size:13px" x-text="selectedProviderObj.display_name + ' is configured and ready'"></div>
-                      <div class="text-xs text-dim">You can test the connection or continue to the next step.</div>
+                      <div class="text-xs text-dim" x-show="!testingProvider">We run a quick connection check when you open this step; use Test connection if you change your key.</div>
+                      <div class="text-xs text-dim flex items-center gap-2" x-show="testingProvider">
+                        <span class="spinner" style="width:10px;height:10px;border-width:2px"></span>
+                        Verifying connection with the provider…
+                      </div>
                     </div>
                   </div>
                   <div class="flex gap-2 mt-2">
                     <button class="btn btn-ghost btn-sm" @click="testKey()" :disabled="testingProvider">
-                      <span x-show="!testingProvider">Test Connection</span>
+                      <span x-show="!testingProvider">Test connection</span>
                       <span x-show="testingProvider" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
                     </button>
                   </div>
@@ -5537,7 +5713,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
             <div class="wizard-nav">
               <button class="btn btn-ghost" @click="prevStep()">Back</button>
-              <button class="btn btn-primary" @click="nextStep()" :disabled="!canGoNext"><span x-text="hasConfiguredProvider || keySaved ? 'Next' : 'Skip'"></span></button>
+              <button class="btn btn-primary" @click="nextStep()" :disabled="!canGoNext"><span x-text="wizardStep2ContinueLabel"></span></button>
             </div>
           </div>
 
@@ -5546,6 +5722,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Create Your First Agent</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Pick a template to get started quickly. You can customize the agent later or create more from the Agents page.</p>
+              <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 16px;line-height:1.5">
+                Templates use <strong>OpenRouter</strong> with the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
+              </p>
 
               <!-- Category filter pills -->
               <div class="wizard-category-pills">
