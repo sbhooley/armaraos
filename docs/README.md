@@ -1,6 +1,6 @@
 # OpenFang Documentation
 
-Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operating System -- 14 Rust crates, 40 channels, 60 skills, 20 LLM providers, 77 API endpoints, and 16 security systems in a single binary.
+Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operating System -- 14 Rust crates, 40 channels, 60 skills, 20 LLM providers, 80+ HTTP/WebSocket/SSE endpoints (see [API Reference](api-reference.md)), and 16 security systems in a single binary.
 
 ---
 
@@ -37,7 +37,7 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 | Guide | Description |
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
-| [API Reference](api-reference.md) | All 77 REST/WS/SSE endpoints with request/response examples |
+| [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
 
 ## Release & Operations
@@ -46,9 +46,11 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 |-------|-------------|
 | [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
 | [Production Checklist](production-checklist.md) | Every step before tagging v0.1.0 -- signing keys, secrets, verification |
-| [Desktop release smoke](release-desktop.md) | Tauri build, updater, AINL tab, SSE badge, API tests |
+| [Desktop release smoke](release-desktop.md) | Tauri build, updater, AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |
-| [Dashboard testing](dashboard-testing.md) | Kernel SSE smoke, Overview refresh, future Playwright notes |
+| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download), Home folder preview vs download, chat unread + digest, kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions QA, **Agents → Config** (identity, prompt, tool filters) QA, Playwright notes |
+| [Dashboard Home folder](dashboard-home-folder.md) | Home browser API + **dashboard UI** (row/modal Download, symlinks, large files when preview hits 512 KiB cap) |
+| [Dashboard Get started UI](dashboard-overview-ui.md) | `#overview` landing: layout, **Quick actions**, setup checklist (core / channel / perpetual shortcuts), skeleton, CSS and source map |
 | [Scheduled AINL](scheduled-ainl.md) | Cron `ainl run`, `~/.armaraos/.env`, `AINL_HOST_ADAPTER_ALLOWLIST`, editing jobs |
 
 ## Additional Resources

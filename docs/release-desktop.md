@@ -23,11 +23,13 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 2. Rewrites every `url` in the manifest to `https://ainativelang.com/downloads/armaraos/<filename>`.
 3. Commits into **`sbhooley/ainativelangweb`** at `public/downloads/armaraos/` so Amplify deploys static files.
 
+**Marketing site installers:** The **ainativelang.com** homepage (`/`) and **`/download`** page render an **ArmaraOS desktop** block that prefers `https://ainativelang.com/downloads/armaraos/latest.json` (same manifest as the Tauri updater). If that file is missing, the site falls back to **GitHub release** assets for the tag set in **`config/site.ts`** → `latestArmaraosReleaseTag` (keep in sync when you ship a new stable desktop tag). See **`lib/armaraos-desktop-downloads.ts`** and **`components/home/ArmaraosDesktopSection.tsx`** in **ainativelangweb**.
+
 ### Stable vs prerelease tags
 
 | Tag shape | Example | Website behavior |
 |-----------|---------|------------------|
-| **Stable** (no semver pre-release segment) | `v0.6.4` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
+| **Stable** (no semver pre-release segment) | `v0.6.5` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
 | **Prerelease** (semver pre-release after `-`) | `v0.7.0-beta.1` | Updates **`beta.json`** and copies new binaries; **does not** delete or overwrite **`latest.json`**, so stable users stay on the previous stable until you ship a stable tag. |
 
 **One-time setup (armaraos repo secrets):** add **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with **Contents: Read and write** on repository **`sbhooley/ainativelangweb`** only. Without this secret, the sync job fails (desktop builds and GitHub Release still succeed).
@@ -66,9 +68,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 1. **Tauri updater** — Install the previous build, launch, confirm an update is offered and applies (manifest at ainativelang.com after the first successful sync job).
 2. **AINL** — **Settings → AINL** (desktop shell): **Check versions** runs; **Last checked** updates; upgrade path if you ship pip upgrades.
-3. **Kernel SSE** — Sidebar **SSE** badge shows when connected; Overview **Last kernel event** updates when agents spawn or system events fire (optional spot-check).
-4. **Core flows** — Spawn an agent, send a message, open Logs/Scheduler as needed for your release.
-5. **Dashboard errors** — Disconnect daemon or force a 401; on **Overview**, **Chat (agents)**, and **Settings**, confirm structured error text, **Retry**, **Copy debug info**, and **Generate + copy bundle** behave as expected.
+3. **Kernel SSE** — Sidebar **SSE** badge shows when connected; **Get started** page **Last kernel event** updates when agents spawn or system events fire (optional spot-check).
+4. **Core flows** — Spawn an agent, send a message, open **Logs** (**Live** audit stream, **Daemon** tracing file when the daemon was started via CLI, **Audit Trail**), and Scheduler as needed for your release.
+5. **Dashboard errors** — Disconnect daemon or force a 401; on **Get started** (`#overview`), **Chat (agents)**, and **Settings**, confirm structured error text, **Retry**, **Copy debug info**, and **Generate + copy bundle** behave as expected.
 
 ## API tests (non-desktop)
 

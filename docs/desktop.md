@@ -137,21 +137,25 @@ To actually quit, use the **"Quit OpenFang"** option in the system tray menu.
 
 ### Native OS Notifications
 
-The app subscribes to the kernel's event bus and forwards critical events as native desktop notifications using `tauri-plugin-notification`:
+The app subscribes to the kernel's event bus and forwards selected events as native desktop notifications. Posts go through **`notify-rust`** with the app bundle id from Tauri config (see **`crates/openfang-desktop/src/os_notify.rs`**) so notifications attribute to **ArmaraOS** in release builds instead of Terminal in dev. On **macOS**, Notification Center uses the **app bundle icon** (`icon.icns`); regenerate tray/app icons from `public/assets/armaraos-logo.png` with **`crates/openfang-desktop/scripts/regen_icons_from_logo.py`** if you change the logo.
 
 | Event | Notification Title | Body |
 |-------|-------------------|------|
 | `LifecycleEvent::Crashed` | "Agent Crashed" | `Agent {id} crashed: {error}` |
 | `LifecycleEvent::Spawned` | "Agent Started" | `Agent "{name}" is now running` |
-| `SystemEvent::HealthCheckFailed` | "Health Check Failed" | `Agent {id} unresponsive for {secs}s` |
+| `SystemEvent::QuotaEnforced` | (spend / limit summary) | Per-agent quota message |
+| `SystemEvent::CronJobCompleted` / `CronJobFailed` | Scheduled job status | Job name + preview or error |
+| `SystemEvent::ApprovalPending` | "Approval needed" | Tool / agent / summary |
 
-All other events are silently skipped. The notification listener runs as an async task spawned via `tauri::async_runtime::spawn` and handles broadcast lag gracefully (logs a warning and continues).
+**Not toasted:** `SystemEvent::HealthCheckFailed` is intentionally **skipped** (too noisy during recovery); use logs and the Web UI for health issues. Most other bus events are also skipped.
+
+The notification listener runs as an async task spawned via `tauri::async_runtime::spawn` and handles broadcast lag gracefully (logs a warning and continues).
 
 ---
 
 ## IPC Commands
 
-Eleven Tauri IPC commands are registered, callable from the WebView frontend via `invoke()`:
+Tauri IPC commands are registered in `crates/openfang-desktop/src/lib.rs` (`invoke_handler!`) and callable from the WebView via `invoke()` (camelCase argument names). The list below is not exhaustive — see the crate for the full set (AINL bootstrap, bookmarks, updater, etc.).
 
 ### `get_port`
 
@@ -218,6 +222,32 @@ await invoke("install_update"); // App restarts if update succeeds
 
 Opens `~/.armaraos/` or `~/.armaraos/logs/` in the OS file manager.
 
+### `generate_support_bundle`
+
+Calls the embedded API **`POST /api/support/diagnostics`** on loopback (no separate auth). Returns the same JSON as the HTTP route (`bundle_path`, `bundle_filename`, `relative_path`, …). Used from the Help menu and from the dashboard when generating a bundle from the shell.
+
+### `copy_diagnostics_to_downloads`
+
+Copies a diagnostics `.zip` into the user’s **Downloads** folder (same filename).
+
+**Arguments (object):** **`bundlePath`** (string, required) — use the absolute `bundle_path` from `generate_support_bundle` / `POST /api/support/diagnostics`. Tauri’s schema expects this **camelCase** key; do not pass a nested shape the codegen does not recognize.
+
+The implementation resolves `support/<filename>` when needed so copy succeeds even if path canonicalization is finicky. On failure, the dashboard may fall back to **`GET /api/support/diagnostics/download`** (fetch + save).
+
+### `copy_home_file_to_downloads`
+
+Copies **any file under the ArmaraOS home directory** into Downloads.
+
+**Arguments:** **`relativePath`** — path relative to home, e.g. `support/armaraos-diagnostics-20260405-120000.zip`. Used by **Home folder** → row **Download** on desktop (browser clients use **`GET /api/armaraos-home/download`** instead).
+
+Permissions for dashboard-invoked commands are listed in `crates/openfang-desktop/permissions/dashboard.toml` and mirrored in generated ACL manifests.
+
+### `compose_support_email`
+
+Opens the system mail client with support addressing; on macOS/Linux may attach a validated diagnostics zip path when provided.
+
+**Further reading:** [Dashboard testing — Support diagnostics bundle](dashboard-testing.md#support-diagnostics-bundle-create-download-desktop), [Home folder browser](dashboard-home-folder.md).
+
 ---
 
 ## Window Configuration
@@ -249,6 +279,8 @@ The app checks for updates 10 seconds after startup. If an update is available, 
 - `plugins.updater.windows.installMode` — `"passive"` (install without full UI)
 
 **Website-hosted feeds:** Production builds also support updater JSON mirrored to the marketing site: stable **`https://ainativelang.com/downloads/armaraos/latest.json`**, beta channel **`.../beta.json`** (see `crates/openfang-desktop/src/ui_prefs.rs` — `STABLE_FEED_URL` / `BETA_FEED_URL`). CI copies manifests there on each tag; prerelease tags update `beta.json` without overwriting stable `latest.json` (see `docs/release-desktop.md`). The app checks that feed first for **signed** auto-install; it also compares your version to **GitHub’s latest release** when the feed says “up to date” (stale mirror) or when the feed request fails, so you still get a notification and release-page link even if ainativelang.com lags.
+
+**Marketing site (browser downloads):** **[ainativelang.com](https://ainativelang.com)** and **`/download`** surface the same installer set when `latest.json` is present under **`/downloads/armaraos/`**; otherwise they fall back to GitHub release assets (tag pinned in **ainativelangweb** `config/site.ts`). Details in **`docs/release-desktop.md`** (Marketing site installers).
 
 **Signing:** Every release bundle is signed with `TAURI_SIGNING_PRIVATE_KEY` (GitHub Secret). The `tauri-action` generates `latest.json` containing download URLs and signatures for each platform.
 

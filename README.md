@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.6.4-green?style=flat-square" alt="v0.6.4" />
+  <img src="https://img.shields.io/badge/version-0.6.5-green?style=flat-square" alt="v0.6.5" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -63,6 +63,8 @@ armaraos start
 
 **Config and local data** default to **`~/.armaraos/`** (overrides: **`ARMARAOS_HOME`**, legacy **`OPENFANG_HOME`**; older **`~/.openfang/`** is migrated automatically when possible). Details: [`docs/data-directory.md`](docs/data-directory.md).
 
+**Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)).
+
 ---
 
 ## AINL program library & cron
@@ -82,15 +84,16 @@ See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/o
 
 ### Dashboard: kernel SSE (live events)
 
-The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for the kernel event bus. Each message updates `Alpine.store('kernelEvents').last` and dispatches a window event **`armaraos-kernel-event`**. The **Overview** page listens for lifecycle/system events and **debounces** a silent data refresh (~400ms) so stats stay current after spawns, crashes, quota events, etc., without a full reload.
+The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for the kernel event bus. Each message updates `Alpine.store('kernelEvents').last` and dispatches a window event **`armaraos-kernel-event`**. The **Get started** page (sidebar label; internal route/hash **`#overview`**) listens for lifecycle/system events and **debounces** a silent data refresh (~400ms) so stats stay current after spawns, crashes, quota events, etc., without a full reload.
 
 **Auth:** If `api_key` is set in config, clients on **loopback** (127.0.0.1 / ::1) may connect to the stream without a token (embedded UI). **Non-loopback** clients must use the same authentication as the rest of the API (`Authorization: Bearer` with the configured key, or a `token` query parameter). See [`docs/dashboard-testing.md`](docs/dashboard-testing.md) for manual checks; [`docs/release-desktop.md`](docs/release-desktop.md) for desktop smoke (Tauri + SSE badge).
 
 ### Dashboard: diagnostics bundle (support)
 
 - **`POST /api/support/diagnostics`** generates a **redacted `.zip`** under `~/.armaraos/support/` (includes `config.toml`, redacted `secrets.env`, `audit.json`, SQLite DB + WAL/SHM when present, recent logs, and `meta.json`).
-- **Loopback-only access** is allowed for this endpoint (so the embedded UI / desktop shell can fetch a bundle without fighting API-key auth); remote clients should use normal API authentication.
-- The dashboard can **generate + copy** a single pasteable block (bundle path + connection context). You can also use **Settings → System Info → Support** (or the desktop Help menu) for the same archive.
+- **`GET /api/support/diagnostics/download?name=…`** streams that zip for save/export; on **loopback**, both POST and GET work without Bearer when `api_key` is set (same idea as SSE — embedded local UI).
+- **Home folder:** **`GET /api/armaraos-home/download?path=…`** streams any home-relative file up to **256 MiB** (large zips); **`GET /api/armaraos-home/read`** remains a **512 KiB** preview only.
+- The dashboard can **generate + copy** a single pasteable block (bundle path + connection context). **Settings → System Info → Support** (or the desktop Help menu) creates the archive; **desktop** copies to **Downloads** via Tauri; **Home folder → support** offers **Download** when you need the full file after a failed preview.
 
 ### JSON error shape (REST integrators)
 

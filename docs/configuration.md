@@ -14,6 +14,7 @@ Complete reference for `config.toml`, covering every configurable field in the O
   - [\[default\_model\]](#default_model)
   - [\[memory\]](#memory)
   - [\[network\]](#network)
+  - [\[dashboard\]](#dashboard)
   - [\[web\]](#web)
   - [\[channels\]](#channels)
   - [\[\[mcp\_servers\]\]](#mcp_servers)
@@ -228,7 +229,7 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 |-------|------|---------|-------------|
 | `home_dir` | path | `~/.armaraos` | OpenFang home directory. Stores config, agents, skills. |
 | `data_dir` | path | `~/.armaraos/data` | Directory for SQLite databases and persistent data. |
-| `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. |
+| `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. Persisted in `config.toml` and used when the CLI daemon initializes `tracing`. **Changing this value at runtime** (e.g. via the dashboard **Logs → Daemon** save or `POST /api/config/set`) updates the file and reloads config, but **already-running tracing does not re-subscribe** — **restart the daemon** for new verbosity to apply. `RUST_LOG` still overrides the filter when set. |
 | `api_listen` | string | `"127.0.0.1:50051"` | Bind address for the HTTP/WebSocket/SSE API server. |
 | `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |
 | `api_key` | string | `""` (empty) | API authentication key. When set, all endpoints except `/api/health` require `Authorization: Bearer <key>`. Empty means unauthenticated (local development only). |
@@ -348,6 +349,28 @@ openfang auth hash-password
 This prompts for a password and outputs an Argon2id PHC string to paste into `config.toml`.
 
 > **Breaking change (v0.5.0):** Password hashes must be in Argon2id format. Older SHA256 hex hashes from versions prior to v0.5.0 are no longer accepted. Re-run `openfang auth hash-password` to generate a new hash.
+
+---
+
+### `[dashboard]`
+
+Controls optional **embedded dashboard** behavior for the **Home folder** browser (`#home-files`): glob-based **write** allowlists for `POST /api/armaraos-home/write`. Listing and reading the home directory do not require this section.
+
+```toml
+[dashboard]
+# Patterns use forward slashes, relative to home_dir (e.g. ~/.armaraos). Empty = no writes from UI.
+home_editable_globs = ["notes/**", "scratch.txt"]
+home_edit_backup = true
+home_edit_max_bytes = 524288
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `home_editable_globs` | list of strings | `[]` | [globset](https://docs.rs/globset/latest/globset/) patterns for paths that may be **saved** from the dashboard. Empty disables all writes via the API/UI. |
+| `home_edit_backup` | bool | `true` | If true, before overwrite the server writes the previous contents to a sibling `*.bak` file once. |
+| `home_edit_max_bytes` | u64 | `524288` (512 KiB) | Maximum UTF-8 byte length accepted by `POST /api/armaraos-home/write`. |
+
+**Hot reload:** Changes under `[dashboard]` apply on the next config reload (no full kernel restart). See [dashboard-home-folder.md](dashboard-home-folder.md) for blocklisted paths, UI behavior (View vs Download), and [api-reference.md](api-reference.md#armaraos-home-browser-endpoints) for HTTP details.
 
 ---
 
