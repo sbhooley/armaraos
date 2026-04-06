@@ -9,6 +9,8 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/agents/` | Agent manifests and per-agent data |
 | `~/.armaraos/daemon.json` | Daemon PID and port when `armaraos` / `openfang start` is running |
+| `~/.armaraos/logs/daemon.log` | **CLI daemon** (`openfang start` / `openfang gateway start`): `tracing` output mirrored here and on stderr (created with the `logs/` directory when the daemon starts). The dashboard **Logs → Daemon** tab reads this file via the API. |
+| `~/.armaraos/tui.log` | **TUI / `openfang chat`** sessions: tracing is written here so the terminal UI is not corrupted. If `daemon.log` is absent, the daemon log API falls back to this file when present. |
 | `~/.armaraos/.env`, `~/.armaraos/secrets.env` | Optional API keys (loaded by CLI and desktop; not committed) |
 
 ## Overrides

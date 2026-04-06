@@ -42,6 +42,10 @@ Entries may include a validated **`frame`** object (see [learning-frame-v1.md](l
 
 The `ainl` CLI supports `ainl emit --target <t>` (e.g. `cron`, `ir`, `langgraph`). Use it to generate sidecar artifacts from `.ainl` sources when you want manifests or exports **outside** the kernel’s built-in cron JSON. ArmaraOS does not auto-import emit output; it is a developer workflow documented here for parity with the AINL toolchain.
 
+## Scheduled runs and adapter policy
+
+Scheduled **`ainl run`** jobs and the **desktop** embedded server set **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** by default so typical graphs (`web`, `http`, …) work without users exporting host-adapter env vars. Per-agent opt-out and interaction with **`AINL_HOST_ADAPTER_ALLOWLIST`** are documented in **[scheduled-ainl.md](scheduled-ainl.md)**.
+
 ## MCP and agents
 
 When the desktop app or `ainl install armaraos` configures **`ainl-mcp`**, agents with MCP access can validate, compile, and run graphs against `~/.armaraos/ainl-library/`. Prefer **AINL** for new automation unless a concrete constraint requires another language ([ainl-first-language.md](ainl-first-language.md)).
@@ -49,5 +53,7 @@ When the desktop app or `ainl install armaraos` configures **`ainl-mcp`**, agent
 ## Dashboard
 
 `GET /api/ainl/library` lists `.ainl` / `.lang` files under `ainl-library`, with **`armaraos-programs`** grouped first when present.
+
+In the embedded dashboard, the **App Store** page (`#ainl-library`) surfaces the same tree; the collapsible on-disk catalog section is labeled **AI Native Lang Programs Available**. UI layout notes: [dashboard-overview-ui.md](dashboard-overview-ui.md) (Get started quick action + cross-link), [dashboard-testing.md](dashboard-testing.md) (manual check).
 
 Manual checklist: [ootb-ainl-smoke.md](ootb-ainl-smoke.md).

@@ -5,15 +5,29 @@
 //! for longer than 2x its heartbeat interval, a `HealthCheckFailed` event is
 //! published to the event bus.
 //!
+//! **Reactive** agents (default schedule: wake on message) are **excluded** from
+//! inactivity-based unresponsiveness unless `[heartbeat] reactive_idle_timeout_secs`
+//! is set. Idle between turns is otherwise expected.
+//!
+//! **Turn watchdog** (`[turn_watchdog]`): while a turn is in progress, wall time in
+//! `Thinking`, `ToolUse`, or `Streaming` is capped; exceeding it marks the agent
+//! unresponsive (covers hung LLM / stuck tools) for **all** schedules including reactive.
+//! WASM agents report `ToolUse` (`wasm_sandbox`) and Python module agents `python_agent` for
+//! the duration of sandbox/subprocess execution (`tool_use_secs`).
+//!
 //! Crashed agents are tracked for auto-recovery: the heartbeat will attempt to
 //! reset crashed agents back to Running up to `max_recovery_attempts` times.
 //! After exhausting attempts, agents are marked as Terminated (dead).
 
 use crate::registry::AgentRegistry;
 use chrono::Utc;
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use openfang_types::agent::{AgentId, AgentState, ScheduleMode};
-use tracing::{debug, warn};
+use openfang_types::config::TurnWatchdogSettings;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::debug;
 
 /// Default heartbeat check interval (seconds).
 const DEFAULT_CHECK_INTERVAL_SECS: u64 = 30;
@@ -43,6 +57,21 @@ pub struct HeartbeatStatus {
     pub state: AgentState,
 }
 
+/// Phase of the agent loop subject to [`TurnWatchdogSettings`] wall limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MonitoredLoopPhase {
+    Thinking,
+    ToolUse,
+    Streaming,
+}
+
+/// Last reported busy phase for an agent turn (updated from `LoopPhase` callbacks).
+#[derive(Debug, Clone)]
+pub struct AgentLoopPhaseState {
+    pub kind: MonitoredLoopPhase,
+    pub since: chrono::DateTime<Utc>,
+}
+
 /// Heartbeat monitor configuration.
 #[derive(Debug, Clone)]
 pub struct HeartbeatConfig {
@@ -55,6 +84,8 @@ pub struct HeartbeatConfig {
     pub max_recovery_attempts: u32,
     /// Minimum seconds between recovery attempts for the same agent.
     pub recovery_cooldown_secs: u64,
+    /// Opt-in idle limit for reactive agents (seconds between turns). `None` = off.
+    pub reactive_idle_timeout_secs: Option<u64>,
 }
 
 impl Default for HeartbeatConfig {
@@ -65,7 +96,32 @@ impl Default for HeartbeatConfig {
             default_timeout_secs: 180,
             max_recovery_attempts: DEFAULT_MAX_RECOVERY_ATTEMPTS,
             recovery_cooldown_secs: DEFAULT_RECOVERY_COOLDOWN_SECS,
+            reactive_idle_timeout_secs: None,
         }
+    }
+}
+
+/// If the agent has exceeded the configured wall time for its current loop phase, return elapsed secs.
+pub fn turn_phase_stall_secs(
+    turn_phases: &DashMap<AgentId, AgentLoopPhaseState>,
+    tw: &TurnWatchdogSettings,
+    agent_id: AgentId,
+    now: chrono::DateTime<Utc>,
+) -> Option<i64> {
+    if !tw.enabled {
+        return None;
+    }
+    let st = turn_phases.get(&agent_id)?;
+    let limit = match st.kind {
+        MonitoredLoopPhase::Thinking => tw.thinking_secs,
+        MonitoredLoopPhase::ToolUse => tw.tool_use_secs,
+        MonitoredLoopPhase::Streaming => tw.streaming_secs,
+    };
+    let elapsed = (now - st.since).num_seconds();
+    if elapsed > limit as i64 {
+        Some(elapsed)
+    } else {
+        None
     }
 }
 
@@ -126,6 +182,59 @@ impl Default for RecoveryTracker {
     }
 }
 
+/// Coalesces user-facing heartbeat failure logs and `HealthCheckFailed` events per agent.
+///
+/// Without this, the 30s heartbeat loop can re-announce the same incident across ticks and
+/// auto-recovery cycles. Cleared when an agent returns to a responsive `Running` state.
+#[derive(Debug)]
+pub struct FailureNotifyGate {
+    last_notify_epoch_secs: DashMap<AgentId, u64>,
+    pub min_interval_secs: u64,
+}
+
+impl FailureNotifyGate {
+    /// Default gap between failure notifications for the same agent (5 minutes).
+    pub const DEFAULT_MIN_INTERVAL_SECS: u64 = 300;
+
+    pub fn new(min_interval_secs: u64) -> Arc<Self> {
+        Arc::new(Self {
+            last_notify_epoch_secs: DashMap::new(),
+            min_interval_secs,
+        })
+    }
+
+    fn now_epoch_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    /// Drop suppression so the next failure for this agent can surface immediately.
+    pub fn clear(&self, agent_id: AgentId) {
+        self.last_notify_epoch_secs.remove(&agent_id);
+    }
+
+    /// Returns `true` if the caller should emit a `warn!` / `HealthCheckFailed` for this agent.
+    pub fn allow_notify(&self, agent_id: AgentId) -> bool {
+        let now = Self::now_epoch_secs();
+        match self.last_notify_epoch_secs.entry(agent_id) {
+            Entry::Occupied(mut o) => {
+                if now.saturating_sub(*o.get()) >= self.min_interval_secs {
+                    *o.get_mut() = now;
+                    true
+                } else {
+                    false
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(now);
+                true
+            }
+        }
+    }
+}
+
 /// Grace period (seconds): if an agent's `last_active` is within this window
 /// of `created_at`, it has never genuinely processed a message and should not
 /// be flagged as unresponsive.  This covers the small gap between registration
@@ -136,9 +245,21 @@ const IDLE_GRACE_SECS: i64 = 10;
 ///
 /// This is a pure function — it doesn't start a background task.
 /// The caller (kernel) can run this periodically or in a background task.
-pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<HeartbeatStatus> {
+pub fn check_agents(
+    registry: &AgentRegistry,
+    config: &HeartbeatConfig,
+    turn_phases: &DashMap<AgentId, AgentLoopPhaseState>,
+    turn_watchdog: &TurnWatchdogSettings,
+) -> Vec<HeartbeatStatus> {
     let now = Utc::now();
     let mut statuses = Vec::new();
+
+    // Drop phase tracking for agents that are not actively Running.
+    turn_phases.retain(|id, _| {
+        registry
+            .get(*id)
+            .is_some_and(|e| e.state == AgentState::Running)
+    });
 
     for entry_ref in registry.list() {
         // Check Running agents (for unresponsiveness) and Crashed agents (for recovery)
@@ -148,6 +269,78 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
         }
 
         let inactive_secs = (now - entry_ref.last_active).num_seconds();
+
+        // --- Stuck mid-turn (applies to Running + reactive and non-reactive) ---
+        if entry_ref.state == AgentState::Running {
+            if let Some(stall_secs) =
+                turn_phase_stall_secs(turn_phases, turn_watchdog, entry_ref.id, now)
+            {
+                debug!(
+                    agent = %entry_ref.name,
+                    stall_secs,
+                    "Agent stuck in loop phase — exceeds turn_watchdog limit"
+                );
+                statuses.push(HeartbeatStatus {
+                    agent_id: entry_ref.id,
+                    name: entry_ref.name.clone(),
+                    inactive_secs: stall_secs,
+                    unresponsive: true,
+                    state: entry_ref.state,
+                });
+                continue;
+            }
+        }
+
+        // --- Reactive: optional idle-between-turns monitoring ---
+        if entry_ref.state == AgentState::Running
+            && matches!(entry_ref.manifest.schedule, ScheduleMode::Reactive)
+        {
+            match config.reactive_idle_timeout_secs {
+                None => {
+                    debug!(
+                        agent = %entry_ref.name,
+                        "Skipping heartbeat inactivity check — reactive schedule (no reactive_idle_timeout_secs)"
+                    );
+                    continue;
+                }
+                Some(timeout_secs) => {
+                    let never_active = (entry_ref.last_active - entry_ref.created_at).num_seconds()
+                        <= IDLE_GRACE_SECS;
+                    if never_active {
+                        debug!(
+                            agent = %entry_ref.name,
+                            inactive_secs,
+                            "Skipping idle reactive agent — never received a message"
+                        );
+                        continue;
+                    }
+                    let timeout_i = timeout_secs as i64;
+                    let unresponsive = inactive_secs > timeout_i;
+                    if unresponsive {
+                        debug!(
+                            agent = %entry_ref.name,
+                            inactive_secs,
+                            timeout_secs,
+                            "Reactive agent idle beyond reactive_idle_timeout_secs"
+                        );
+                    } else {
+                        debug!(
+                            agent = %entry_ref.name,
+                            inactive_secs,
+                            "Reactive agent heartbeat OK (opt-in idle limit)"
+                        );
+                    }
+                    statuses.push(HeartbeatStatus {
+                        agent_id: entry_ref.id,
+                        name: entry_ref.name.clone(),
+                        inactive_secs,
+                        unresponsive,
+                        state: entry_ref.state,
+                    });
+                    continue;
+                }
+            }
+        }
 
         // Determine timeout: autonomous heartbeat interval is a *polling* hint, not max LLM latency.
         // Never go below the global default (reactive agents routinely block for minutes on tools/LLM).
@@ -200,17 +393,29 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
         }
 
         // Crashed agents are always considered unresponsive
-        let unresponsive = entry_ref.state == AgentState::Crashed || inactive_secs > timeout_secs;
+        let mut unresponsive =
+            entry_ref.state == AgentState::Crashed || inactive_secs > timeout_secs;
+
+        // Mid-turn: `last_active` is stamped once per loop iteration (before the LLM call).
+        // Long single turns can exceed the schedule-based inactivity floor while still healthy.
+        // Stall detection for those turns is handled by `turn_phase_stall_secs` above.
+        if unresponsive
+            && entry_ref.state == AgentState::Running
+            && turn_watchdog.enabled
+            && turn_phases.contains_key(&entry_ref.id)
+        {
+            unresponsive = false;
+        }
 
         if unresponsive && entry_ref.state == AgentState::Running {
-            warn!(
+            debug!(
                 agent = %entry_ref.name,
                 inactive_secs,
                 timeout_secs,
-                "Agent is unresponsive"
+                "Agent is unresponsive (last_active heuristic)"
             );
         } else if entry_ref.state == AgentState::Crashed {
-            warn!(
+            debug!(
                 agent = %entry_ref.name,
                 inactive_secs,
                 "Agent is crashed — eligible for recovery"
@@ -315,7 +520,17 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use openfang_types::agent::*;
+    use openfang_types::config::TurnWatchdogSettings;
     use std::collections::HashMap;
+
+    fn check_agents_no_phases(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<HeartbeatStatus> {
+        let phases = DashMap::new();
+        let tw = TurnWatchdogSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        check_agents(registry, config, &phases, &tw)
+    }
 
     /// Helper: build a minimal AgentEntry for heartbeat tests.
     fn make_entry(
@@ -385,7 +600,7 @@ mod tests {
         registry.register(idle_agent).unwrap();
 
         let config = HeartbeatConfig::default(); // timeout = 180s
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         // The idle agent should be skipped entirely
         assert!(
@@ -401,6 +616,9 @@ mod tests {
         let ten_min_ago = Utc::now() - Duration::seconds(600);
         let two_min_ago = Utc::now() - Duration::seconds(120);
         let mut agent = make_entry("auto-floor", AgentState::Running, ten_min_ago, two_min_ago);
+        agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
         agent.manifest.autonomous = Some(AutonomousConfig {
             heartbeat_interval_secs: 30,
             ..Default::default()
@@ -408,12 +626,35 @@ mod tests {
         registry.register(agent).unwrap();
 
         let config = HeartbeatConfig::default();
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
         assert!(
             !statuses[0].unresponsive,
             "120s idle should stay within the 180s global floor"
+        );
+    }
+
+    #[test]
+    fn test_reactive_running_idle_not_flagged() {
+        // Default schedule is Reactive: after real activity, long idle is still OK.
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let five_min_ago = Utc::now() - Duration::seconds(300);
+        let agent = make_entry(
+            "reactive-chat",
+            AgentState::Running,
+            ten_min_ago,
+            five_min_ago,
+        );
+        registry.register(agent).unwrap();
+
+        let config = HeartbeatConfig::default();
+        let statuses = check_agents_no_phases(&registry, &config);
+
+        assert!(
+            statuses.is_empty(),
+            "reactive agent must not be checked on idle time"
         );
     }
 
@@ -429,7 +670,7 @@ mod tests {
         registry.register(agent).unwrap();
 
         let config = HeartbeatConfig::default();
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
         assert!(
@@ -445,16 +686,19 @@ mod tests {
         let registry = crate::registry::AgentRegistry::new();
         let ten_min_ago = Utc::now() - Duration::seconds(600);
         let five_min_ago = Utc::now() - Duration::seconds(300);
-        let active_agent = make_entry(
+        let mut active_agent = make_entry(
             "active-agent",
             AgentState::Running,
             ten_min_ago,
             five_min_ago,
         );
+        active_agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
         registry.register(active_agent).unwrap();
 
         let config = HeartbeatConfig::default(); // timeout = 180s, inactive = ~300s
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
         assert!(
@@ -469,11 +713,15 @@ mod tests {
         let registry = crate::registry::AgentRegistry::new();
         let ten_min_ago = Utc::now() - Duration::seconds(600);
         let just_now = Utc::now() - Duration::seconds(10);
-        let healthy_agent = make_entry("healthy-agent", AgentState::Running, ten_min_ago, just_now);
+        let mut healthy_agent =
+            make_entry("healthy-agent", AgentState::Running, ten_min_ago, just_now);
+        healthy_agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
         registry.register(healthy_agent).unwrap();
 
         let config = HeartbeatConfig::default(); // timeout = 180s
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
         assert!(
@@ -497,13 +745,109 @@ mod tests {
         registry.register(crashed_agent).unwrap();
 
         let config = HeartbeatConfig::default();
-        let statuses = check_agents(&registry, &config);
+        let statuses = check_agents_no_phases(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
         assert!(
             statuses[0].unresponsive,
             "crashed agent should be marked unresponsive"
         );
+    }
+
+    #[test]
+    fn test_turn_watchdog_stall_triggers() {
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let mut agent = make_entry("stally", AgentState::Running, ten_min_ago, ten_min_ago);
+        agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
+        let id = agent.id;
+        registry.register(agent).unwrap();
+
+        let phases = DashMap::new();
+        phases.insert(
+            id,
+            AgentLoopPhaseState {
+                kind: MonitoredLoopPhase::Thinking,
+                since: Utc::now() - Duration::seconds(500),
+            },
+        );
+
+        let config = HeartbeatConfig::default();
+        let tw = TurnWatchdogSettings {
+            enabled: true,
+            thinking_secs: 60,
+            tool_use_secs: 7200,
+            streaming_secs: 1800,
+        };
+        let statuses = check_agents(&registry, &config, &phases, &tw);
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].unresponsive);
+    }
+
+    #[test]
+    fn test_turn_watchdog_disabled_ignores_stall() {
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let just_now = Utc::now() - Duration::seconds(5);
+        let mut agent = make_entry("no-tw", AgentState::Running, ten_min_ago, just_now);
+        agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
+        let id = agent.id;
+        registry.register(agent).unwrap();
+
+        let phases = DashMap::new();
+        phases.insert(
+            id,
+            AgentLoopPhaseState {
+                kind: MonitoredLoopPhase::Thinking,
+                since: Utc::now() - Duration::seconds(500),
+            },
+        );
+
+        let config = HeartbeatConfig::default();
+        let tw = TurnWatchdogSettings {
+            enabled: false,
+            thinking_secs: 60,
+            tool_use_secs: 7200,
+            streaming_secs: 1800,
+        };
+        let statuses = check_agents(&registry, &config, &phases, &tw);
+        assert_eq!(statuses.len(), 1);
+        assert!(
+            !statuses[0].unresponsive,
+            "disabled turn_watchdog must not flag stall"
+        );
+    }
+
+    #[test]
+    fn test_reactive_idle_opt_in_unresponsive() {
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let five_min_ago = Utc::now() - Duration::seconds(300);
+        let agent = make_entry(
+            "react-opt",
+            AgentState::Running,
+            ten_min_ago,
+            five_min_ago,
+        );
+        registry.register(agent).unwrap();
+
+        let config = HeartbeatConfig {
+            reactive_idle_timeout_secs: Some(120),
+            ..Default::default()
+        };
+
+        let phases = DashMap::new();
+        let tw = TurnWatchdogSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        let statuses = check_agents(&registry, &config, &phases, &tw);
+        assert_eq!(statuses.len(), 1);
+        assert!(statuses[0].unresponsive);
     }
 
     #[test]
@@ -581,6 +925,51 @@ mod tests {
         assert_eq!(config.default_timeout_secs, 600);
         assert_eq!(config.check_interval_secs, DEFAULT_CHECK_INTERVAL_SECS);
         assert_eq!(config.max_recovery_attempts, DEFAULT_MAX_RECOVERY_ATTEMPTS);
+    }
+
+    #[test]
+    fn test_mid_turn_inactivity_ignored_when_watchdog_enabled() {
+        let registry = crate::registry::AgentRegistry::new();
+        let ten_min_ago = Utc::now() - Duration::seconds(600);
+        let last_active = Utc::now() - Duration::seconds(400);
+        let mut agent = make_entry("mid-turn", AgentState::Running, ten_min_ago, last_active);
+        agent.manifest.schedule = ScheduleMode::Continuous {
+            check_interval_secs: 120,
+        };
+        let id = agent.id;
+        registry.register(agent).unwrap();
+
+        let phases = DashMap::new();
+        phases.insert(
+            id,
+            AgentLoopPhaseState {
+                kind: MonitoredLoopPhase::Thinking,
+                since: Utc::now() - Duration::seconds(400),
+            },
+        );
+
+        let config = HeartbeatConfig::default();
+        let tw = TurnWatchdogSettings {
+            enabled: true,
+            thinking_secs: 900,
+            ..Default::default()
+        };
+        let statuses = check_agents(&registry, &config, &phases, &tw);
+        assert_eq!(statuses.len(), 1);
+        assert!(
+            !statuses[0].unresponsive,
+            "long in-LLM wall time must not use last_active while Thinking and under turn_watchdog"
+        );
+    }
+
+    #[test]
+    fn test_failure_notify_gate_coalesces() {
+        let gate = FailureNotifyGate::new(60);
+        let id = AgentId::new();
+        assert!(gate.allow_notify(id));
+        assert!(!gate.allow_notify(id));
+        gate.clear(id);
+        assert!(gate.allow_notify(id));
     }
 
     #[test]

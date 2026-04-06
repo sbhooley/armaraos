@@ -1159,6 +1159,9 @@ pub struct KernelConfig {
     /// Heartbeat monitor settings.
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
+    /// Per-phase wall-clock limits while an agent turn is in progress (Thinking / tools / streaming).
+    #[serde(default)]
+    pub turn_watchdog: TurnWatchdogSettings,
     /// Skill capture workspace (ClawHub / editor skills → daily memory digest).
     /// TOML: `[openclaw_workspace]` or `[skills_workspace]` (same fields).
     #[serde(default, alias = "skills_workspace")]
@@ -1211,11 +1214,17 @@ pub fn default_openclaw_workspace_path() -> PathBuf {
 
 /// Heartbeat monitor settings exposed in `[heartbeat]` config section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HeartbeatSettings {
-    /// Seconds of inactivity before a reactive agent is marked as unresponsive.
-    /// Default: 180. Set higher to prevent idle hands from being marked as crashed.
+    /// Seconds of inactivity before a **non-reactive** (scheduled/continuous/proactive)
+    /// running agent is treated as unresponsive. Reactive agents are not judged on idle time
+    /// unless [`Self::reactive_idle_timeout_secs`] is set.
     #[serde(default = "default_heartbeat_timeout")]
     pub default_timeout_secs: u64,
+    /// When set, reactive (`schedule = "reactive"`) **Running** agents are also marked
+    /// unresponsive after this many seconds **between** turns (no LLM work). Omit for default
+    /// (reactive idle is not monitored).
+    pub reactive_idle_timeout_secs: Option<u64>,
 }
 
 fn default_heartbeat_timeout() -> u64 {
@@ -1226,6 +1235,42 @@ impl Default for HeartbeatSettings {
     fn default() -> Self {
         Self {
             default_timeout_secs: default_heartbeat_timeout(),
+            reactive_idle_timeout_secs: None,
+        }
+    }
+}
+
+/// Stall detection for a single agent **turn** (LLM call, tool run, or token stream).
+///
+/// Configure in `config.toml`:
+/// ```toml
+/// [turn_watchdog]
+/// enabled = true
+/// thinking_secs = 900
+/// tool_use_secs = 7200
+/// streaming_secs = 1800
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TurnWatchdogSettings {
+    /// When false, phase timestamps are cleared on Done/Error but no stall alerts fire.
+    pub enabled: bool,
+    /// Max wall seconds in **Thinking** (single LLM request) before the agent is treated as stuck.
+    pub thinking_secs: u64,
+    /// Max wall seconds in **ToolUse** (single tool execution, WASM `wasm_sandbox`, Python
+    /// `python_agent`, or LLM tool calls) before treated as stuck.
+    pub tool_use_secs: u64,
+    /// Max wall seconds in **Streaming** before treated as stuck.
+    pub streaming_secs: u64,
+}
+
+impl Default for TurnWatchdogSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            thinking_secs: 900,
+            tool_use_secs: 7200,
+            streaming_secs: 1800,
         }
     }
 }
@@ -1444,6 +1489,7 @@ impl Default for KernelConfig {
             auth: AuthConfig::default(),
             workflows_dir: None,
             heartbeat: HeartbeatSettings::default(),
+            turn_watchdog: TurnWatchdogSettings::default(),
             openclaw_workspace: OpenclawWorkspaceConfig::default(),
             dashboard: DashboardConfig::default(),
         }
@@ -4395,6 +4441,26 @@ mod tests {
         "#;
         let config: KernelConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.heartbeat.default_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_heartbeat_reactive_idle_and_turn_watchdog_toml() {
+        let toml_str = r#"
+            [heartbeat]
+            reactive_idle_timeout_secs = 600
+
+            [turn_watchdog]
+            enabled = true
+            thinking_secs = 120
+            tool_use_secs = 3600
+            streaming_secs = 900
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.heartbeat.reactive_idle_timeout_secs, Some(600));
+        assert!(config.turn_watchdog.enabled);
+        assert_eq!(config.turn_watchdog.thinking_secs, 120);
+        assert_eq!(config.turn_watchdog.tool_use_secs, 3600);
+        assert_eq!(config.turn_watchdog.streaming_secs, 900);
     }
 
     #[test]

@@ -11,8 +11,9 @@ use chrono::{Duration, Utc};
 use dashmap::DashMap;
 use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
-use openfang_types::scheduler::{CronJob, CronJobId, CronSchedule};
+use openfang_types::scheduler::{CronAction, CronJob, CronJobId, CronSchedule};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, info, warn};
@@ -253,6 +254,167 @@ impl CronScheduler {
     /// List all jobs across all agents.
     pub fn list_all_jobs(&self) -> Vec<CronJob> {
         self.jobs.iter().map(|r| r.value().job.clone()).collect()
+    }
+
+    /// First job id with the given display name (stable for dedupe / upsert).
+    pub fn find_first_job_id_by_name(&self, name: &str) -> Option<CronJobId> {
+        self.jobs
+            .iter()
+            .find(|r| r.value().job.name == name)
+            .map(|r| *r.key())
+    }
+
+    /// Point cron jobs at `fallback` when their `agent_id` is not in `alive`.
+    ///
+    /// Used after agent restore / GC so persisted jobs do not reference deleted agents.
+    pub fn reassign_jobs_from_missing_agents(
+        &self,
+        alive: &HashSet<AgentId>,
+        fallback: AgentId,
+    ) -> usize {
+        if !alive.contains(&fallback) {
+            return 0;
+        }
+        let mut count = 0;
+        for mut entry in self.jobs.iter_mut() {
+            if alive.contains(&entry.value().job.agent_id) {
+                continue;
+            }
+            entry.value_mut().job.agent_id = fallback;
+            entry.value_mut().consecutive_errors = 0;
+            entry.value_mut().job.next_run = Some(compute_next_run(&entry.value().job.schedule));
+            if !entry.value().job.enabled
+                && entry
+                    .value()
+                    .last_status
+                    .as_deref()
+                    .is_some_and(|s| s.contains("not found") || s.contains("No such agent"))
+            {
+                entry.value_mut().job.enabled = true;
+            }
+            count += 1;
+        }
+        if count > 0 {
+            info!(
+                count,
+                fallback = %fallback,
+                "Reassigned cron jobs from missing agents to default target"
+            );
+        }
+        count
+    }
+
+    /// Remove duplicate jobs that share the same `name`, keeping a single survivor (lowest id).
+    pub fn dedupe_jobs_by_name(&self) -> usize {
+        let mut by_name: HashMap<String, Vec<CronJobId>> = HashMap::new();
+        for r in self.jobs.iter() {
+            by_name
+                .entry(r.value().job.name.clone())
+                .or_default()
+                .push(*r.key());
+        }
+        let mut removed = 0usize;
+        for mut ids in by_name.into_values() {
+            if ids.len() <= 1 {
+                continue;
+            }
+            ids.sort_by_key(|id| id.0);
+            ids.remove(0);
+            for id in ids {
+                self.jobs.remove(&id);
+                removed += 1;
+            }
+        }
+        if removed > 0 {
+            info!(removed, "Removed duplicate cron jobs (same name)");
+        }
+        removed
+    }
+
+    /// Remove extra `AinlRun` jobs on the same agent when schedule + program + options match.
+    ///
+    /// Catches duplicates that use **different job names** (e.g. repeated registration).
+    pub fn dedupe_ainl_run_jobs_same_signature(&self) -> usize {
+        fn bucket(job: &CronJob) -> Option<(AgentId, String)> {
+            let CronAction::AinlRun {
+                program_path,
+                cwd,
+                ainl_binary,
+                timeout_secs,
+                json_output,
+                frame,
+            } = &job.action
+            else {
+                return None;
+            };
+            let sched = match &job.schedule {
+                CronSchedule::Cron { expr, tz } => format!("c:{expr}:{tz:?}"),
+                CronSchedule::Every { every_secs } => format!("e:{every_secs}"),
+                CronSchedule::At { at } => format!("a:{}", at.to_rfc3339()),
+            };
+            let frame_s = frame
+                .as_ref()
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
+            let sig = format!(
+                "{sched}|{program_path}|{cwd:?}|{ainl_binary:?}|{timeout_secs:?}|{json_output}|{frame_s}"
+            );
+            Some((job.agent_id, sig))
+        }
+
+        let mut groups: HashMap<(AgentId, String), Vec<CronJobId>> = HashMap::new();
+        for r in self.jobs.iter() {
+            if let Some(k) = bucket(&r.value().job) {
+                groups.entry(k).or_default().push(*r.key());
+            }
+        }
+        let mut removed = 0usize;
+        for mut ids in groups.into_values() {
+            if ids.len() <= 1 {
+                continue;
+            }
+            ids.sort_by_key(|id| id.0);
+            ids.remove(0);
+            for id in ids {
+                self.jobs.remove(&id);
+                removed += 1;
+            }
+        }
+        if removed > 0 {
+            info!(
+                removed,
+                "Removed duplicate AinlRun cron jobs (same agent, schedule, program)"
+            );
+        }
+        removed
+    }
+
+    /// Drop bundled curated AINL jobs whose names are no longer in the embedded catalog.
+    ///
+    /// Only targets `AinlRun` jobs with `armaraos-*` / `ainl-upstream-*` prefixes so user-named
+    /// jobs are not removed.
+    pub fn remove_discontinued_curated_ainl_jobs(&self, curated_names: &HashSet<String>) -> usize {
+        let ids: Vec<CronJobId> = self
+            .jobs
+            .iter()
+            .filter(|r| {
+                let j = &r.value().job;
+                if !matches!(&j.action, CronAction::AinlRun { .. }) {
+                    return false;
+                }
+                let legacy = j.name.starts_with("armaraos-") || j.name.starts_with("ainl-upstream-");
+                legacy && !curated_names.contains(&j.name)
+            })
+            .map(|r| *r.key())
+            .collect();
+        let n = ids.len();
+        for id in ids {
+            self.jobs.remove(&id);
+        }
+        if n > 0 {
+            info!(n, "Removed discontinued bundled curated AINL cron job(s)");
+        }
+        n
     }
 
     /// Reassign all cron jobs from `old_agent_id` to `new_agent_id`.
@@ -522,6 +684,7 @@ mod tests {
     use chrono::{Duration, Timelike};
     use openfang_types::error::OpenFangError;
     use openfang_types::scheduler::{CronAction, CronDelivery, CronJobId};
+    use std::collections::HashSet;
 
     /// Build a minimal valid `CronJob` with an `Every` schedule.
     fn make_job(agent_id: AgentId) -> CronJob {
@@ -549,6 +712,106 @@ mod tests {
     }
 
     // -- test_add_job_and_list ----------------------------------------------
+
+    #[test]
+    fn test_reassign_jobs_from_missing_agents() {
+        let (sched, _tmp) = make_scheduler(100);
+        let alive_id = AgentId::new();
+        let ghost_id = AgentId::new();
+        let mut j1 = make_job(ghost_id);
+        j1.name = "orphan-target".into();
+        let mut j2 = make_job(alive_id);
+        j2.name = "ok-job".into();
+        sched.add_job(j1, false).unwrap();
+        sched.add_job(j2, false).unwrap();
+
+        let mut alive = HashSet::new();
+        alive.insert(alive_id);
+
+        let n = sched.reassign_jobs_from_missing_agents(&alive, alive_id);
+        assert_eq!(n, 1);
+        let jobs = sched.list_jobs(alive_id);
+        assert_eq!(jobs.len(), 2);
+    }
+
+    #[test]
+    fn test_dedupe_jobs_by_name() {
+        let (sched, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let mut a = make_job(agent);
+        a.name = "dup".into();
+        let mut b = make_job(agent);
+        b.name = "dup".into();
+        sched.add_job(a, false).unwrap();
+        sched.add_job(b, false).unwrap();
+        assert_eq!(sched.total_jobs(), 2);
+
+        let removed = sched.dedupe_jobs_by_name();
+        assert_eq!(removed, 1);
+        assert_eq!(sched.total_jobs(), 1);
+        assert_eq!(sched.list_all_jobs()[0].name, "dup");
+    }
+
+    #[test]
+    fn test_dedupe_ainl_run_same_signature_different_names() {
+        let (sched, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let mk = |name: &str| CronJob {
+            id: CronJobId::new(),
+            agent_id: agent,
+            name: name.into(),
+            enabled: true,
+            schedule: CronSchedule::Cron {
+                expr: "0 0 * * *".into(),
+                tz: None,
+            },
+            action: CronAction::AinlRun {
+                program_path: "examples/x.ainl".into(),
+                cwd: None,
+                ainl_binary: None,
+                timeout_secs: Some(60),
+                json_output: true,
+                frame: None,
+            },
+            delivery: CronDelivery::None,
+            created_at: Utc::now(),
+            last_run: None,
+            next_run: None,
+        };
+        sched.add_job(mk("job-a"), false).unwrap();
+        sched.add_job(mk("job-b"), false).unwrap();
+        assert_eq!(sched.total_jobs(), 2);
+        assert_eq!(sched.dedupe_ainl_run_jobs_same_signature(), 1);
+        assert_eq!(sched.total_jobs(), 1);
+    }
+
+    #[test]
+    fn test_remove_discontinued_curated_ainl_jobs() {
+        let (sched, _tmp) = make_scheduler(100);
+        let agent = AgentId::new();
+        let mut legacy = make_job(agent);
+        legacy.name = "armaraos-removed-from-catalog".into();
+        legacy.action = CronAction::AinlRun {
+            program_path: "x.ainl".into(),
+            cwd: None,
+            ainl_binary: None,
+            timeout_secs: Some(60),
+            json_output: false,
+            frame: None,
+        };
+        legacy.schedule = CronSchedule::Cron {
+            expr: "0 0 * * *".into(),
+            tz: None,
+        };
+        sched.add_job(legacy, false).unwrap();
+
+        let mut names = HashSet::new();
+        names.insert("armaraos-ainl-health-weekly".into());
+
+        let n = sched.remove_discontinued_curated_ainl_jobs(&names);
+        assert_eq!(n, 1);
+        assert_eq!(sched.total_jobs(), 0);
+    }
 
     #[test]
     fn test_add_job_and_list() {

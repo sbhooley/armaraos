@@ -2,6 +2,9 @@
 # Smoke-check a running ArmaraOS / OpenFang API.
 # Default base URL is http://127.0.0.1:4200 — use the URL printed by `openfang start`
 # (e.g. http://127.0.0.1:50051) if your config binds a different port.
+# Covers health, status, schedules, support zip + downloads, spawn error shape, session digest,
+# GET /api/version/github-latest (dashboard “vs GitHub” compare), and GET /api/logs/daemon/recent
+# (empty lines OK until daemon.log exists).
 # Usage: ./scripts/verify-dashboard-smoke.sh [BASE_URL]
 set -euo pipefail
 
@@ -26,6 +29,14 @@ echo "-- GET /api/schedules (expect 200 JSON)"
 curl -sS -f "$BASE/api/schedules" | head -c 400
 echo ""
 
+echo "-- GET /api/version/github-latest (200 JSON; server-side GitHub fetch for dashboard)"
+curl -sS -f -m 15 "$BASE/api/version/github-latest" | head -c 500
+echo ""
+
+echo "-- GET /api/logs/daemon/recent?lines=5 (200 JSON; lines may be empty if no log file yet)"
+curl -sS -f -m 5 "$BASE/api/logs/daemon/recent?lines=5" | head -c 400
+echo ""
+
 echo "-- POST /api/support/diagnostics (loopback only; writes ~/.armaraos/support/*.zip)"
 RID="$(curl -sS -D - -o /tmp/armaraos-diag-body.json -X POST "$BASE/api/support/diagnostics" \
   -H 'Content-Type: application/json' \
@@ -35,6 +46,18 @@ if [[ -n "${RID:-}" ]]; then
 fi
 head -c 300 /tmp/armaraos-diag-body.json
 echo ""
+
+BUNDLE_FN="$(python3 -c "import json; d=json.load(open('/tmp/armaraos-diag-body.json')); print(d.get('bundle_filename') or '', end='')" 2>/dev/null || true)"
+if [[ -n "${BUNDLE_FN:-}" ]]; then
+  echo "-- GET /api/support/diagnostics/download?name=$BUNDLE_FN"
+  curl -sS -f -o /dev/null -G "$BASE/api/support/diagnostics/download" --data-urlencode "name=$BUNDLE_FN"
+  echo "OK (diag zip streamed)"
+  echo "-- GET /api/armaraos-home/download?path=support/... (same file)"
+  curl -sS -f -o /dev/null -G "$BASE/api/armaraos-home/download" --data-urlencode "path=support/$BUNDLE_FN"
+  echo "OK (home download streamed)"
+else
+  echo "(no bundle_filename in diagnostics response — download checks skipped)"
+fi
 
 echo "-- POST /api/agents (expect 401 or structured 4xx when API key required)"
 code="$(curl -sS -o /tmp/armaraos-spawn-body.json -w '%{http_code}' -X POST "$BASE/api/agents" \

@@ -1,0 +1,19 @@
+# Paste under your agent manifest.toml (same file as [model], [capabilities], …).
+# Use for the agent that owns scheduled `ainl run` jobs targeting
+# `intelligence/intelligence_digest.lang` (or similar OpenClaw-style graphs).
+#
+# Current ArmaraOS: the kernel already injects AINL_ALLOW_IR_DECLARED_ADAPTERS=1 on
+# scheduled children; you usually only need this block to FORCE "1" after turning
+# it off, or when pinning older behavior.
+#
+# Option A — explicit relax (same as kernel default on modern ArmaraOS).
+[metadata]
+ainl_allow_ir_declared_adapters = "1"
+
+# Option B — explicit allowlist (matches daemon default online list; use if manifest
+# sets ainl_allow_ir_declared_adapters off and you enumerate adapters).
+# [metadata]
+# ainl_host_adapter_allowlist = "core,ext,http,bridge,sqlite,postgres,mysql,redis,dynamodb,airtable,supabase,fs,tools,db,api,cache,queue,txn,auth,wasm,memory,vector_memory,embedding_memory,code_context,tool_registry,langchain_tool,llm,llm_query,fanout,web,tiktok"
+
+# Remove or avoid a *narrow* ainl_host_adapter_allowlist (e.g. only "core") on this
+# agent unless you include web, tiktok, cache, queue, and memory.

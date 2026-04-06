@@ -34,6 +34,8 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 
 **One-time setup (armaraos repo secrets):** add **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with **Contents: Read and write** on repository **`sbhooley/ainativelangweb`** only. Without this secret, the sync job fails (desktop builds and GitHub Release still succeed).
 
+**Optional — PostHog (install analytics):** add repository secret **`ARMARAOS_POSTHOG_KEY`** (PostHog project API key, same family as the marketing site’s public key). The **Build and bundle Tauri desktop app** step passes it as a compile-time env var so release binaries embed the key; omit it and builds still succeed (no automatic ping). Optional **`ARMARAOS_POSTHOG_HOST`** (e.g. `https://eu.i.posthog.com`) overrides the default US ingest URL.
+
 ### Why “Publish updater to ainativelang.com” is skipped or red
 
 | Symptom | Cause |
@@ -69,8 +71,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 1. **Tauri updater** — Install the previous build, launch, confirm an update is offered and applies (manifest at ainativelang.com after the first successful sync job).
 2. **AINL** — **Settings → AINL** (desktop shell): **Check versions** runs; **Last checked** updates; upgrade path if you ship pip upgrades.
 3. **Kernel SSE** — Sidebar **SSE** badge shows when connected; **Get started** page **Last kernel event** updates when agents spawn or system events fire (optional spot-check).
-4. **Core flows** — Spawn an agent, send a message, open **Logs** (**Live** audit stream, **Daemon** tracing file when the daemon was started via CLI, **Audit Trail**), and Scheduler as needed for your release.
-5. **Dashboard errors** — Disconnect daemon or force a 401; on **Get started** (`#overview`), **Chat (agents)**, and **Settings**, confirm structured error text, **Retry**, **Copy debug info**, and **Generate + copy bundle** behave as expected.
+4. **Get started + Settings + Runtime** — **Quick actions** include **App Store** → `#ainl-library`; with **`openfang-onboarded`** set, confirm **Setup Wizard** is hidden until **Run setup again** or a second sidebar **Get started** click; **Settings** shows subtitle + rounded tab toolbar; **Runtime** shows subtitle + wrapping stat tiles and panel styling (see **[dashboard-overview-ui.md](dashboard-overview-ui.md)**, **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)**).
+5. **Core flows** — Spawn an agent, send a message, open **Logs** (**Live** audit stream, **Daemon** tracing file when the daemon was started via CLI, **Audit Trail**), and Scheduler as needed for your release.
+6. **Dashboard errors** — Disconnect daemon or force a 401; on **Get started** (`#overview`), **Chat (agents)**, and **Settings**, confirm structured error text, **Retry**, **Copy debug info**, and **Generate + copy bundle** behave as expected.
 
 ## API tests (non-desktop)
 

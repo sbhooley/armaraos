@@ -72,9 +72,9 @@ const PROVIDERS: &[ProviderInfo] = &[
         name: "openrouter",
         display: "OpenRouter",
         env_var: "OPENROUTER_API_KEY",
-        default_model: "openrouter/google/gemini-2.5-flash",
+        default_model: "stepfun/step-3.5-flash:free",
         needs_key: true,
-        hint: "",
+        hint: "free tier",
     },
     ProviderInfo {
         name: "together",

@@ -109,7 +109,7 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigate('overview')" :aria-current="page === 'overview' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigateOverview()" :aria-current="page === 'overview' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
               <span class="nav-label">Get started</span>
             </a>
@@ -117,7 +117,7 @@
         </template>
       </div>
 
-      <!-- Agents — All Agents, bookmarks, quick-open rows, sessions / comms / approvals -->
+      <!-- Agents — All Agents, bookmarks, quick-open rows, sessions / approvals -->
       <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
         <div class="nav-section-title" @click="collapsed = !collapsed">
           <span class="nav-label">Agents</span>
@@ -156,10 +156,6 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
               <span class="nav-label">Sessions</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
-              <span class="nav-label">Comms</span>
-            </a>
             <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
               <span class="nav-label">Approvals</span>
@@ -189,9 +185,33 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
               <span class="nav-label">Timeline</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
+              <span class="nav-label">Comms</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'network' }" @click="navigate('network')" :aria-current="page === 'network' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
               <span class="nav-label">Network</span>
+            </a>
+          </div>
+        </template>
+      </div>
+
+      <!-- Apps & skills (AINL App Store + ClawHub skills) -->
+      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Apps and skills">
+        <div class="nav-section-title" @click="collapsed = !collapsed">
+          <span class="nav-label">Apps &amp; skills</span>
+          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
+        </div>
+        <template x-if="!collapsed">
+          <div x-transition>
+            <a class="nav-item" :class="{ active: page === 'ainl-library' }" @click="navigate('ainl-library')" :aria-current="page === 'ainl-library' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
+              <span class="nav-label">App Store</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
+              <span class="nav-label">Skills</span>
             </a>
           </div>
         </template>
@@ -229,17 +249,9 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
               <span class="nav-label">Channels</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
-              <span class="nav-label">Skills</span>
-            </a>
             <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg></span>
               <span class="nav-label">Hands</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'ainl-library' }" @click="navigate('ainl-library')" :aria-current="page === 'ainl-library' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8"/><path d="M8 11h8"/></svg></span>
-              <span class="nav-label">AINL Library</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'home-files' }" @click="navigate('home-files')" :aria-current="page === 'home-files' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
@@ -301,14 +313,18 @@
 
     <!-- Page: Get started (overview route) -->
     <template x-if="page === 'overview'">
-      <div x-data="overviewPage" x-init="loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()" class="overview-page-root">
+      <div x-data="overviewPage" x-init="initOverviewWizardCta(); loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()" @openfang-overview-nav-same-page.window="onOverviewNavSamePage()" class="overview-page-root">
         <div class="page-header overview-page-header">
-          <h2>Get started</h2>
-          <div class="flex items-center gap-2">
-            <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? 'Healthy' : 'Unreachable'"></span>
-            <button class="btn btn-ghost btn-sm" @click="silentRefresh()" title="Refresh" style="padding:4px 8px">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
-            </button>
+          <div class="overview-page-header-row">
+            <h2>Get started</h2>
+            <div class="flex items-center gap-2 flex-wrap overview-page-header-actions">
+              <button type="button" class="btn btn-primary btn-sm" x-show="overviewWizardCtaVisible && !loading && !loadError" @click="location.hash='wizard'">Setup Wizard</button>
+              <button type="button" class="btn btn-ghost btn-sm" x-show="onboarded && !overviewWizardCtaVisible && !loading && !loadError" @click="revealSetupWizardCta()" title="Show Setup Wizard again">Run setup again</button>
+              <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? 'Healthy' : 'Unreachable'"></span>
+              <button class="btn btn-ghost btn-sm" @click="silentRefresh()" title="Refresh" style="padding:4px 8px">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+              </button>
+            </div>
           </div>
         </div>
         <div class="page-body overview-page-body">
@@ -357,6 +373,12 @@
                 </span>
                 <span class="overview-quick-action-label">Browse Skills</span>
               </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='ainl-library'">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+                </span>
+                <span class="overview-quick-action-label">App Store</span>
+              </button>
               <button type="button" class="overview-quick-action-tile" @click="location.hash='channels'">
                 <span class="overview-quick-action-icon" aria-hidden="true">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
@@ -375,6 +397,12 @@
                 </span>
                 <span class="overview-quick-action-label">Settings</span>
               </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='runtime'" title="Reload config, channels, or shut down the daemon">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="m16.24 16.24 2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="m16.24 7.76 2.83-2.83"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Daemon &amp; runtime</span>
+              </button>
             </div>
           </div>
 
@@ -386,6 +414,8 @@
                 <div class="skeleton skeleton-text" style="width:72px;height:12px"></div>
               </div>
               <div class="overview-quick-actions-grid">
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
                 <div class="skeleton overview-quick-action-skel"></div>
                 <div class="skeleton overview-quick-action-skel"></div>
                 <div class="skeleton overview-quick-action-skel"></div>
@@ -431,7 +461,7 @@
                   <div class="text-xs text-dim" x-text="setupChecklistSubtitle"></div>
                 </div>
                 <div class="flex gap-2">
-                  <button class="btn btn-primary btn-sm" @click="location.hash='wizard'">Setup Wizard</button>
+                  <button type="button" class="btn btn-primary btn-sm" x-show="overviewWizardCtaVisible" @click="location.hash='wizard'">Setup Wizard</button>
                   <button class="btn btn-ghost btn-sm" @click="dismissChecklist()">Dismiss</button>
                 </div>
               </div>
@@ -1173,7 +1203,7 @@
                 <span>Automation &amp; probe chats</span>
                 <span class="font-mono normal-case" style="font-size:10px;font-weight:500;opacity:0.85" x-text="'(' + chatPickerSystemAgents.length + ')'"></span>
               </button>
-              <p class="text-xs text-dim" style="margin:-2px 0 12px 22px;line-height:1.45;max-width:520px" x-show="!systemChatAgentsExpanded">Allowlist probe and offline cron sessions — expand to open their chats.</p>
+              <p class="text-xs text-dim" style="margin:-2px 0 12px 22px;line-height:1.45;max-width:520px" x-show="!systemChatAgentsExpanded">Allowlist probe, offline cron, and IR-off allow sessions — expand to open their chats.</p>
               <div class="agent-picker-grid" x-show="systemChatAgentsExpanded" x-transition>
                 <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
                   <div class="agent-card-picker agent-card-picker--muted" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
@@ -2454,10 +2484,13 @@
     <!-- Page: Channels -->
     <template x-if="page === 'channels'">
       <div x-data="channelsPage()">
-        <div class="page-header">
-          <h2>Channels <span class="badge badge-muted" x-text="configuredCount + '/' + allChannels.length + ' configured'"></span></h2>
+        <div class="page-header dashboard-page-header-polish">
+          <div class="dashboard-page-header-row">
+            <h2>Channels <span class="badge badge-muted" x-text="configuredCount + '/' + allChannels.length + ' configured'"></span></h2>
+          </div>
+          <p class="dashboard-page-header-sub">Connect messaging platforms, enable adapters, and open setup for each channel from the grid below.</p>
         </div>
-        <div class="page-body" x-init="loadData()">
+        <div class="page-body dashboard-page-body-polish" x-init="loadData()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading channels...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
@@ -2466,8 +2499,9 @@
           </div>
           <div x-show="!loading && !loadError">
 
+          <div class="dashboard-inline-filters">
           <!-- Category tabs -->
-          <div class="flex gap-2 mb-4" style="flex-wrap:wrap">
+          <div class="flex gap-2 mb-3" style="flex-wrap:wrap">
             <template x-for="cat in categories" :key="cat.key">
               <button class="btn btn-sm"
                       :class="categoryFilter === cat.key ? 'btn-primary' : 'btn-ghost'"
@@ -2478,9 +2512,10 @@
           </div>
 
           <!-- Search bar -->
-          <div class="mb-4">
+          <div>
             <input class="form-input" type="text" placeholder="Search channels..."
                    x-model="searchQuery" style="max-width:400px">
+          </div>
           </div>
 
           <!-- Channel card grid -->
@@ -2784,8 +2819,11 @@
     <!-- Page: Skills -->
     <template x-if="page === 'skills'">
       <div x-data="skillsPage">
-        <div class="page-header"><h2>Skills</h2></div>
-        <div class="page-body" x-init="loadSkills()">
+        <div class="page-header dashboard-page-header-polish">
+          <h2>Skills</h2>
+          <p class="dashboard-page-header-sub">Installed tools, ClawHub browse, MCP servers, and quick-start templates — all in one place.</p>
+        </div>
+        <div class="page-body dashboard-page-body-polish" x-init="loadSkills()">
           <div class="info-card">
             <h4>Skills &amp; Ecosystem</h4>
             <p>Skills extend your agents with new capabilities. ArmaraOS supports the <strong>OpenClaw/ClawHub</strong> ecosystem (3,000+ community skills) plus local skills.</p>
@@ -2804,7 +2842,7 @@
           <div x-show="!loading && !loadError">
 
           <!-- Main tabs -->
-          <div class="tabs" role="tablist">
+          <div class="tabs dashboard-toolbar-tabs" role="tablist">
             <div class="tab" role="tab" :class="{ active: tab === 'installed' }" @click="tab = 'installed'">
               Installed <span class="badge badge-dim" x-show="skills.length" x-text="skills.length" style="margin-left:4px"></span>
             </div>
@@ -3118,8 +3156,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     <!-- Page: Hands -->
     <template x-if="page === 'hands'">
       <div x-data="handsPage">
-        <div class="page-header"><h2>Hands</h2></div>
-        <div class="page-body" x-init="loadData()">
+        <div class="page-header dashboard-page-header-polish">
+          <h2>Hands</h2>
+          <p class="dashboard-page-header-sub">Curated autonomous capability packages with prompts, tools, and dashboards — spawn ready-made specialist agents.</p>
+        </div>
+        <div class="page-body dashboard-page-body-polish" x-init="loadData()">
           <div class="info-card">
             <h4>Hands &mdash; Curated Autonomous Capability Packages</h4>
             <p>Hands are pre-configured AI agents that autonomously handle specific tasks. Each hand includes a tuned system prompt, required tools, and a dashboard for tracking work.</p>
@@ -3134,7 +3175,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
           <div x-show="!loading && !loadError">
             <!-- Tabs -->
-            <div class="tabs">
+            <div class="tabs dashboard-toolbar-tabs">
               <div class="tab" :class="{ active: tab === 'available' }" @click="tab = 'available'">
                 Available <span class="badge badge-dim" x-show="hands.length" x-text="hands.length" style="margin-left:4px"></span>
               </div>
@@ -3798,9 +3839,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <!-- Page: Settings -->
     <template x-if="page === 'settings'">
-      <div x-data="settingsPage">
-        <div class="page-header"><h2>Settings</h2></div>
-        <div class="page-body" x-init="loadSettings()">
+      <div x-data="settingsPage" class="settings-page-root">
+        <div class="page-header settings-page-header">
+          <h2>Settings</h2>
+          <p class="settings-page-header-sub">Providers, models, configuration, tools, and system preferences for this ArmaraOS instance.</p>
+        </div>
+        <div class="page-body settings-page-body" x-init="loadSettings()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading settings...</span></div>
           <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s">
             <span class="error-icon">!</span>
@@ -3821,7 +3865,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <p class="text-xs text-dim" style="margin-top:10px;line-height:1.5">You can also use Settings → System Info → Support for the same redacted diagnostics .zip.</p>
           </div>
           <div x-show="!loading && !loadError">
-          <div class="tabs" role="tablist">
+          <div class="tabs settings-page-tabs" role="tablist">
             <div class="tab" role="tab" :class="{ active: tab === 'providers' }" @click="tab = 'providers'">Providers</div>
             <div class="tab" role="tab" :class="{ active: tab === 'models' }" @click="tab = 'models'">Models</div>
             <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; if (!configSchema) loadConfigSchema()">Config</div>
@@ -4100,6 +4144,27 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="text-xs" style="margin-top:8px;color:var(--error)" x-show="daemonUpdateInfo && daemonUpdateInfo.error" x-text="daemonUpdateInfo.error"></div>
               <div class="flex gap-2 mt-2" x-show="daemonUpdateInfo && daemonUpdateInfo.url && !daemonUpdateInfo.error">
                 <a class="btn btn-ghost btn-sm" :href="daemonUpdateInfo.url" target="_blank" rel="noopener noreferrer">Open releases</a>
+              </div>
+              <div class="card-meta text-dim" style="margin-top:14px;border-top:1px solid var(--border-subtle, rgba(255,255,255,0.08));padding-top:12px;line-height:1.5">
+                Hot reload applies disk config without a full process restart where supported. <strong>Reload channels</strong> reconnects messaging bridges (gateways). <strong>Shut down</strong> stops this daemon; start it again from the desktop app, CLI, or your supervisor.
+              </div>
+              <div class="flex flex-wrap items-center gap-2" style="margin-top:10px">
+                <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadConfig()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">
+                  <span x-show="!daemonCtlLoading.config">Reload config</span>
+                  <span x-show="daemonCtlLoading.config" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadChannels()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">
+                  <span x-show="!daemonCtlLoading.channels">Reload channels</span>
+                  <span x-show="daemonCtlLoading.channels" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadIntegrations()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">
+                  <span x-show="!daemonCtlLoading.integrations">Reload integrations</span>
+                  <span x-show="daemonCtlLoading.integrations" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" @click="daemonPromptShutdown()" :disabled="daemonCtlLoading.shutdown">
+                  <span x-show="!daemonCtlLoading.shutdown">Shut down daemon</span>
+                  <span x-show="daemonCtlLoading.shutdown" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
               </div>
               <div class="text-xs text-dim" style="margin-top:8px" x-show="isDesktopShell && updaterPrefs && updaterPrefs.daemon_update_last_check_at">
                 Last daemon check recorded: <span x-text="updaterPrefs.daemon_update_last_check_at"></span>
@@ -4685,7 +4750,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <button class="btn btn-ghost btn-sm" @click="retryAinlBootstrap()" :disabled="ainlDesktopLoading">Bootstrap AINL</button>
                 <button class="btn btn-ghost btn-sm" @click="retryAinlHostOnly()" :disabled="ainlDesktopLoading">Update host config only</button>
                 <button class="btn btn-ghost btn-sm" @click="openAinlLibraryFolder()" :disabled="ainlDesktopLoading">Open ~/ainl-library</button>
-                <button type="button" class="btn btn-primary btn-sm" @click="location.hash='ainl-library'">Browse AINL Library</button>
+                <button type="button" class="btn btn-primary btn-sm" @click="location.hash='ainl-library'">Browse App Store</button>
               </div>
             </div>
           </div>
@@ -4698,8 +4763,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     <!-- Page: Analytics -->
     <template x-if="page === 'analytics'">
       <div x-data="analyticsPage">
-        <div class="page-header"><h2>Analytics</h2></div>
-        <div class="page-body" x-init="loadUsage()">
+        <div class="page-header dashboard-page-header-polish">
+          <h2>Analytics</h2>
+          <p class="dashboard-page-header-sub">Token usage, estimated cost, API and tool calls — by model, agent, and time range.</p>
+        </div>
+        <div class="page-body dashboard-page-body-polish" x-init="loadUsage()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading usage data...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
@@ -4707,13 +4775,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
           </div>
           <div x-show="!loading && !loadError">
-          <div class="stats-row">
-            <div class="stat-card"><div class="stat-value" x-text="formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))"></div><div class="stat-label">Total Tokens</div></div>
-            <div class="stat-card"><div class="stat-value" x-text="formatCost(summary.total_cost_usd)"></div><div class="stat-label">Estimated Cost</div></div>
-            <div class="stat-card"><div class="stat-value" x-text="summary.call_count || 0"></div><div class="stat-label">API Calls</div></div>
-            <div class="stat-card"><div class="stat-value" x-text="summary.total_tool_calls || 0"></div><div class="stat-label">Tool Calls</div></div>
+          <div class="dashboard-stats-grid">
+            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))"></div><div class="stat-label">Total Tokens</div></div>
+            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="formatCost(summary.total_cost_usd)"></div><div class="stat-label">Estimated Cost</div></div>
+            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="summary.call_count || 0"></div><div class="stat-label">API Calls</div></div>
+            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="summary.total_tool_calls || 0"></div><div class="stat-label">Tool Calls</div></div>
           </div>
-          <div class="tabs mt-4">
+          <div class="tabs dashboard-toolbar-tabs mt-4">
             <div class="tab" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">Summary</div>
             <div class="tab" :class="{ active: tab === 'by-model' }" @click="tab = 'by-model'">By Model</div>
             <div class="tab" :class="{ active: tab === 'by-agent' }" @click="tab = 'by-agent'">By Agent</div>
@@ -5208,12 +5276,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="logsPage">
         <div class="page-header">
           <h2>Logs</h2>
-          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'live'">
-            <!-- Connection status indicator -->
-            <span class="live-indicator" :class="connectionClass">
+          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'live' || tab === 'daemon'">
+            <span class="live-indicator" :class="headerConnectionClass">
               <span class="live-dot"></span>
-              <span x-text="connectionLabel"></span>
+              <span x-text="headerConnectionLabel"></span>
             </span>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'live'">
             <select class="form-select" style="width:100px" x-model="levelFilter">
               <option value="">All</option>
               <option value="info">INFO</option>
@@ -5227,16 +5296,46 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="toggle" :class="{ active: autoRefresh }" @click="autoRefresh = !autoRefresh" title="Auto-scroll"></div>
             <span class="text-xs text-dim" x-text="autoRefresh ? 'Auto-scroll' : 'Scroll locked'"></span>
           </div>
+          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'daemon'">
+            <select class="form-select" style="width:110px" x-model="daemonLevelFilter">
+              <option value="">All levels</option>
+              <option value="trace">TRACE</option>
+              <option value="debug">DEBUG</option>
+              <option value="info">INFO</option>
+              <option value="warn">WARN</option>
+              <option value="error">ERROR</option>
+            </select>
+            <input class="form-input" style="width:180px" placeholder="Search lines..." x-model="daemonTextFilter">
+            <button class="btn btn-ghost btn-sm" @click="toggleDaemonPause()" x-text="streamPausedDaemon ? 'Resume' : 'Pause'"></button>
+            <button class="btn btn-ghost btn-sm" @click="clearDaemonLogs()">Clear</button>
+            <button class="btn btn-ghost btn-sm" @click="exportDaemonLogs()">Export</button>
+            <div class="toggle" :class="{ active: autoRefresh }" @click="autoRefresh = !autoRefresh" title="Auto-scroll"></div>
+            <span class="text-xs text-dim" x-text="autoRefresh ? 'Auto-scroll' : 'Scroll locked'"></span>
+            <span class="text-xs text-dim" x-show="daemonPath" x-text="'File: ~/' + daemonPath"></span>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'daemon'">
+            <span class="text-xs text-dim">Config log level (restart daemon to apply)</span>
+            <select class="form-select" style="width:100px" x-model="logLevelDraft">
+              <option value="trace">trace</option>
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+            <button class="btn btn-primary btn-sm" @click="saveLogLevel()">Save</button>
+            <span class="text-xs text-dim" x-text="'Saved: ' + savedLogLevel"></span>
+          </div>
           <div class="flex gap-2 items-center" x-show="tab === 'audit'">
             <button class="btn btn-ghost btn-sm" @click="verifyChain()">Verify Chain</button>
             <span class="badge" :class="chainValid === true ? 'badge-running' : chainValid === false ? 'badge-crashed' : ''" x-text="chainValid === true ? 'VALID' : chainValid === false ? 'BROKEN' : ''" x-show="chainValid !== null"></span>
           </div>
         </div>
         <div class="tabs">
-          <div class="tab" :class="{ active: tab === 'live' }" @click="tab = 'live'">Live</div>
-          <div class="tab" :class="{ active: tab === 'audit' }" @click="tab = 'audit'; if (!auditEntries.length && !auditLoading) loadAudit()">Audit Trail</div>
+          <div class="tab" :class="{ active: tab === 'live' }" @click="onLogsTab('live')">Live</div>
+          <div class="tab" :class="{ active: tab === 'daemon' }" @click="onLogsTab('daemon')">Daemon</div>
+          <div class="tab" :class="{ active: tab === 'audit' }" @click="onLogsTab('audit')">Audit Trail</div>
         </div>
-        <div class="page-body" x-init="startStreaming()">
+        <div class="page-body" x-init="initPage()">
           <!-- Live logs tab -->
           <div x-show="tab === 'live'">
             <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Connecting to log stream...</span></div>
@@ -5258,6 +5357,33 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="empty-state" x-show="!filteredEntries.length" style="padding:20px">
                 <h4>No log entries yet</h4>
                 <p class="hint">Activity will appear here as agents run.</p>
+              </div>
+            </div>
+            </div>
+          </div>
+
+          <!-- Daemon tracing log -->
+          <div x-show="tab === 'daemon'">
+            <div x-show="daemonLoading" class="loading-state"><div class="spinner"></div><span>Loading daemon log…</span></div>
+            <div x-show="!daemonLoading && daemonLoadError" class="error-state">
+              <span class="error-icon">!</span>
+              <p x-text="daemonLoadError"></p>
+              <button class="btn btn-ghost btn-sm" @click="loadDaemonTab()">Retry</button>
+            </div>
+            <div x-show="!daemonLoading && !daemonLoadError">
+            <div class="card text-sm text-dim mb-2" style="line-height:1.5">
+              Lines come from the CLI daemon tracing file (<code>logs/daemon.log</code> after <code>openfang start</code>). TUI sessions may use <code>tui.log</code> instead. Changing log level updates config; restart the daemon for new verbosity.
+            </div>
+            <div class="card" style="font-family:monospace;max-height:60vh;overflow-y:auto" id="daemon-log-container" @mouseenter="hoveringDaemon = true" @mouseleave="hoveringDaemon = false">
+              <template x-for="(entry, dIdx) in daemonEntries" :key="dIdx">
+                <div class="log-entry">
+                  <span class="log-level" :class="'log-level-' + classifyDaemonLineLevel(entry.line)" x-text="classifyDaemonLineLevel(entry.line).toUpperCase()"></span>
+                  <span class="text-xs" x-text="entry.line"></span>
+                </div>
+              </template>
+              <div class="empty-state" x-show="!daemonEntries.length" style="padding:20px">
+                <h4>No daemon log file yet</h4>
+                <p class="hint">Start the daemon with <code>openfang start</code> (or gateway start). Logs are written under your ArmaraOS home directory.</p>
               </div>
             </div>
             </div>
@@ -5795,6 +5921,14 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                 </div>
               </div>
+              <div class="card" style="text-align:left;margin-bottom:16px;max-width:520px;margin-left:auto;margin-right:auto" x-show="typeof ArmaraosDesktopTauriInvoke === 'function'">
+                <label style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+                  <input type="checkbox" x-model="wizardProductAnalyticsAllow" @change="applyDesktopProductAnalyticsConsent(false)" style="margin-top:3px" />
+                  <span style="font-size:12px;line-height:1.55;color:var(--text-dim)">
+                    <strong style="color:var(--text)">Anonymous usage</strong> &mdash; one-time install statistics (app version and OS) via PostHog to measure adoption. No prompts or account data. Uncheck to opt out; the desktop app will not contact analytics servers.
+                  </span>
+                </label>
+              </div>
               <p style="font-size:11px;color:var(--text-muted)">Takes about 2 minutes. External channels are never required &mdash; web chat and scheduled jobs are enough for many users.</p>
             </div>
             <div class="wizard-nav">
@@ -6144,19 +6278,22 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     <!-- ─── ArmaraOS home folder ─── -->
     <template x-if="page === 'home-files'">
       <div x-data="homeFilesPage()" x-init="init()">
-        <div class="page-header">
-          <h2>Home folder</h2>
-          <div class="flex items-center gap-2 flex-wrap">
-            <button type="button" class="btn btn-ghost btn-sm" @click="refresh()" :disabled="loading">Refresh</button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="goUp()" :disabled="loading || !currentPath">Up</button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="goRoot()" :disabled="loading">Root</button>
+        <div class="page-header dashboard-page-header-polish">
+          <div class="dashboard-page-header-row">
+            <h2>Home folder</h2>
+            <div class="dashboard-page-header-actions">
+              <button type="button" class="btn btn-ghost btn-sm" @click="refresh()" :disabled="loading">Refresh</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="goUp()" :disabled="loading || !currentPath">Up</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="goRoot()" :disabled="loading">Root</button>
+            </div>
           </div>
+          <p class="dashboard-page-header-sub">Sandboxed browser for the daemon data directory — preview capped at 512&nbsp;KiB; use Download or desktop copy for full files.</p>
         </div>
-        <div class="page-body">
-          <div class="card mb-4" style="border-left:3px solid var(--accent)">
+        <div class="page-body dashboard-page-body-polish">
+          <div class="card mb-4 dashboard-home-intro-panel">
             <p class="text-sm text-dim" style="line-height:1.7;margin:0">
               Browse the daemon <strong>ArmaraOS home</strong> (typically <code style="font-size:11px">~/.armaraos</code> / <code style="font-size:11px">ARMARAOS_HOME</code>).
-              Paths are validated server-side; <code style="font-size:11px">..</code> and symlinks that escape this tree are blocked. Opens are capped at 512&nbsp;KiB.
+              Paths are validated server-side; <code style="font-size:11px">..</code> and symlinks that escape this tree are blocked. <strong>View</strong> previews are capped at 512&nbsp;KiB; use <strong>Download</strong> for the full file (up to 256&nbsp;MiB), or on desktop use <strong>Copy to Downloads</strong>.
             </p>
             <p class="text-sm text-dim mt-2 mb-0" style="line-height:1.6">
               <strong>Editing</strong> is off by default. Add <code style="font-size:11px">[dashboard]</code> with <code style="font-size:11px">home_editable_globs</code> in <code style="font-size:11px">config.toml</code> (globset syntax, e.g. <code style="font-size:11px">notes/**</code>), then reload config. Secrets and core files (<code style="font-size:11px">.env</code>, <code style="font-size:11px">config.toml</code>, <code style="font-size:11px">data/</code>, …) stay blocked regardless.
@@ -6186,16 +6323,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="text-xs text-dim mb-2" x-show="truncated">Listing truncated — only the first 4000 entries are shown.</div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Name</th><th>Type</th><th>Size</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Actions</th></tr></thead>
                 <tbody>
                   <template x-for="row in entries" :key="row.name">
                     <tr>
                       <td class="font-mono text-xs" style="word-break:break-all" x-text="row.name"></td>
                       <td class="text-xs text-dim" x-text="row.kind"></td>
                       <td class="text-xs text-dim" x-text="row.size != null ? row.size : '—'"></td>
-                      <td>
+                      <td style="vertical-align:middle">
+                        <div class="flex flex-wrap gap-1" style="min-width:9rem">
                         <button type="button" class="btn btn-ghost btn-sm" x-show="row.kind === 'dir' || row.kind === 'symlink'" @click="enterDir(row.name)">Open</button>
                         <button type="button" class="btn btn-primary btn-sm" x-show="row.kind === 'file' || row.kind === 'symlink'" @click="openFile(row.name)">View</button>
+                        <button type="button" class="btn btn-success btn-sm" x-show="row.kind === 'file' || row.kind === 'symlink'" @click="downloadFile(row.name)" :disabled="downloadBusy" title="Save full file (works for large zips)">Download</button>
+                        </div>
                       </td>
                     </tr>
                   </template>
@@ -6207,15 +6347,25 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         </div>
         <div x-show="fileModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeFileModal()">
           <div class="card" style="max-width:720px;width:92%;max-height:85vh;overflow:auto;display:flex;flex-direction:column;gap:12px" @click.stop>
-            <div class="flex justify-between items-start gap-2">
-              <div>
+            <div class="flex justify-between items-start gap-2 flex-wrap">
+              <div class="min-w-0 flex-1">
                 <div class="font-bold" style="font-size:15px">File preview</div>
                 <code class="text-xs text-dim" style="word-break:break-all" x-text="filePath"></code>
               </div>
-              <button type="button" class="btn btn-ghost btn-sm" @click="closeFileModal()">Close</button>
+              <div class="flex flex-wrap gap-1 items-center shrink-0">
+                <button type="button" class="btn btn-success btn-sm" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy || fileLoading" title="Works even when preview fails (large .zip, etc.)">Download</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="closeFileModal()">Close</button>
+              </div>
             </div>
             <div x-show="fileLoading" class="loading-state"><div class="spinner"></div></div>
-            <div x-show="!fileLoading && fileError" class="error-state"><span class="error-icon">!</span><p x-text="fileError"></p></div>
+            <div x-show="!fileLoading && fileError" class="error-state">
+              <span class="error-icon">!</span>
+              <div class="flex flex-col gap-2" style="flex:1;min-width:0">
+                <p class="m-0" x-text="fileError"></p>
+                <p class="text-xs text-dim m-0">Large binaries (e.g. diagnostics .zip) exceed the preview limit — use Download to save the full file.</p>
+                <button type="button" class="btn btn-success btn-sm self-start" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy">Download file</button>
+              </div>
+            </div>
             <div x-show="!fileLoading && !fileError">
               <div class="text-xs text-dim mb-1">
                 <span x-text="fileEncoding"></span>
@@ -6227,7 +6377,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;max-height:360px;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
               <div class="flex gap-2 flex-wrap items-center">
                 <button type="button" class="btn btn-primary btn-sm" x-show="fileEditable && fileEncoding === 'utf8'" @click="saveFile()" :disabled="saveBusy" x-text="saveBusy ? 'Saving…' : 'Save'"></button>
-                <button type="button" class="btn btn-ghost btn-sm" @click="copyFileContent()">Copy contents</button>
+                <button type="button" class="btn btn-success btn-sm" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy" title="Save full file (not limited to preview size)">Download full file</button>
+                <button type="button" class="btn btn-ghost btn-sm" x-show="fileEncoding === 'utf8' && fileContent" @click="copyFileContent()">Copy contents</button>
               </div>
             </div>
           </div>
@@ -6235,110 +6386,186 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       </div>
     </template>
 
-    <!-- ─── AINL Library ─── -->
+    <!-- ─── App Store (route: ainl-library) ─── -->
     <template x-if="page === 'ainl-library'">
-      <div x-data="ainlLibraryPage" x-init="loadLibrary()">
-        <div class="page-header">
-          <h2>AINL Library</h2>
+      <div x-data="ainlLibraryPage" x-init="loadLibrary()" class="app-store-page-root">
+        <div class="page-header app-store-page-header">
+          <div>
+            <h2>App Store</h2>
+            <p class="app-store-page-sub text-xs text-dim" style="margin:4px 0 0;line-height:1.5">Free AINL programs from your synced library. Paid listings will appear here later.</p>
+          </div>
           <div class="flex items-center gap-2 flex-wrap">
-            <button type="button" class="btn btn-ghost btn-sm" @click="loadLibrary()" :disabled="loading">Refresh</button>
-            <button type="button" class="btn btn-ghost btn-sm" @click="openFolder()">Open folder</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="loadLibrary()" :disabled="loading" title="Reload catalog">Refresh</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="openFolder()">Open library folder</button>
           </div>
         </div>
-        <div class="page-body">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading library…</span></div>
+        <div class="page-body app-store-page-body">
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading App Store…</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
             <p x-text="loadError"></p>
             <button class="btn btn-ghost btn-sm" @click="loadLibrary()">Retry</button>
           </div>
           <div x-show="!loading && !loadError">
-            <div class="card mb-4" style="border-left:3px solid var(--accent)">
-              <div class="font-bold" style="font-size:14px;margin-bottom:6px">Synced library</div>
-              <p class="text-sm text-dim" style="line-height:1.7;margin:0">
-                <strong>armaraos-programs/</strong> — first-party graphs materialized from the ArmaraOS build (health ping, learning-frame samples, stubs). Separate from the public-repo mirror:
-                <code style="font-size:11px">demo/</code>, <code style="font-size:11px">examples/</code>, <code style="font-size:11px">intelligence/</code> under <code style="font-size:11px" x-text="root || '~/.armaraos/ainl-library'"></code>.
-                Use <strong>Copy command</strong> for your terminal, or <strong>Try validate</strong> (desktop) to run the bundled <code style="font-size:11px">ainl</code> CLI.
-              </p>
-              <div class="text-sm mt-3 space-y-1" x-show="sync">
-                <div x-show="sync && sync.commit_sha"><span class="text-dim">Upstream commit:</span> <code style="font-size:11px" x-text="sync.commit_sha"></code></div>
-                <div x-show="sync && sync.branch"><span class="text-dim">Branch:</span> <span x-text="sync.branch"></span></div>
-                <div x-show="sync && sync.synced_at_unix"><span class="text-dim">Synced:</span> <span x-text="formatSyncTime(sync.synced_at_unix)"></span></div>
-              </div>
-              <div class="text-sm mt-3" x-show="!libraryPresent || total === 0">
-                <span class="badge badge-warn" x-show="!libraryPresent">Library folder not found</span>
-                <span class="text-dim ml-2" x-show="!libraryPresent || total === 0">Run desktop bootstrap once (needs network) or open</span>
-                <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()" x-show="isDesktopShell">Settings → AINL</button>
-              </div>
-              <div class="text-xs text-dim mt-2" x-show="ainlDesktop && ainlDesktop.library_sync_ok === false">
-                <span x-text="ainlDesktop.library_sync_detail || 'Upstream library sync did not complete.'"></span>
-                <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()">Fix in Settings → AINL</button>
-              </div>
+            <div class="app-store-tabs" role="tablist" aria-label="Store catalog">
+              <button type="button" role="tab" :aria-selected="storeTab === 'free'" class="app-store-tab" :class="{ 'app-store-tab--active': storeTab === 'free' }" @click="storeTab = 'free'">Free</button>
+              <button type="button" role="tab" :aria-selected="storeTab === 'paid'" class="app-store-tab" :class="{ 'app-store-tab--active': storeTab === 'paid' }" @click="storeTab = 'paid'">Paid <span class="app-store-tab-badge">Soon</span></button>
             </div>
 
-            <div class="card mb-4" x-show="curated && curated.length">
-              <div class="card-header">Suggested samples</div>
-              <p class="text-xs text-dim mb-2">Curated catalog paths for cron / scheduler. The default enabled job is the weekly core-only health ping; others (e.g. learning-frame echo) are registered paused—enable in <a href="#scheduler" style="color:var(--accent)">Scheduler</a> when ready.</p>
-              <div class="text-sm space-y-2">
-                <template x-for="c in curated" :key="c.name">
-                  <div class="flex flex-wrap items-center justify-between gap-2 p-2 rounded" style="background:var(--bg-elevated,#1a1a24);border:1px solid var(--border,#333)">
-                    <div>
-                      <div class="font-medium" x-text="c.name"></div>
-                      <code class="text-xs text-dim" x-text="c.relative_path"></code>
-                    </div>
-                    <div class="flex gap-2 flex-wrap">
-                      <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand({ path: c.relative_path, absolute: buildAbsolute(c.relative_path) })">Copy</button>
-                      <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(c.relative_path)" title="Open Scheduler with this path">Use in Scheduler</button>
-                      <button type="button" class="btn btn-ghost btn-sm" @click="copySchedulerDeepLink(c.relative_path)" title="Copy link that opens Scheduler with this path">Copy scheduler link</button>
-                      <button type="button" class="btn btn-primary btn-sm" @click="trySample({ path: c.relative_path }, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Try validate</button>
-                    </div>
+            <template x-if="storeTab === 'paid'">
+              <div class="app-store-paid-placeholder card">
+                <div class="app-store-paid-hero">
+                  <div class="app-store-paid-icon" aria-hidden="true">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M7 8V6a5 5 0 0 1 10 0v2"/></svg>
                   </div>
-                </template>
-              </div>
-            </div>
-
-            <div class="mb-4 flex flex-wrap items-center gap-3">
-              <input type="search" class="input" style="max-width:420px" placeholder="Filter by path, filename, or hint…" x-model="search">
-              <label class="text-sm text-dim flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" x-model="loadHints" @change="loadLibrary()">
-                Load comment hints (first <code class="text-xs">#</code> line; capped server-side)
-              </label>
-              <label class="text-sm text-dim flex items-center gap-2 cursor-pointer" x-show="isDesktopShell">
-                <input type="checkbox" x-model="strictValidation">
-                Strict validation (<code class="text-xs">--strict</code>)
-              </label>
-            </div>
-            <div class="text-xs text-dim mb-2" x-show="loadHints && hintsTruncated">Hints truncated — only the first <span x-text="maxHintsApplied"></span> files include a hint (see <code class="text-xs">max_hints</code> API).</div>
-
-            <div class="text-sm text-dim mb-2" x-text="total + ' programs'"></div>
-
-            <template x-for="cat in filteredCategories()" :key="cat.id">
-              <div class="card mb-4">
-                <div class="card-header" x-text="cat.label + ' (' + (cat.programs ? cat.programs.length : 0) + ')'"></div>
-                <div class="table-wrap mt-2">
-                  <table>
-                    <thead><tr><th>File</th><th>Path</th><th x-show="loadHints">Hint</th><th style="min-width:300px">Actions</th></tr></thead>
-                    <tbody>
-                      <template x-for="p in cat.programs" :key="p.path">
-                        <tr>
-                          <td class="font-mono text-xs" x-text="p.name"></td>
-                          <td class="font-mono text-xs text-dim" style="word-break:break-all" x-text="p.path"></td>
-                          <td class="text-xs text-dim" style="max-width:220px" x-show="loadHints" x-text="p.hint || '—'"></td>
-                          <td>
-                            <div class="flex flex-wrap gap-1">
-                              <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand(p)">Copy</button>
-                              <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(p.path)">Scheduler</button>
-                              <button type="button" class="btn btn-primary btn-sm" @click="trySample(p, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Try validate</button>
-                              <button type="button" class="btn btn-ghost btn-sm" @click="trySample(p, 'run')" :disabled="tryBusy" x-show="isDesktopShell" title="Runs ainl run (may execute adapters)">Try run</button>
-                            </div>
-                          </td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
+                  <div>
+                    <div class="card-header" style="margin:0">Paid programs — coming soon</div>
+                    <p class="text-sm text-dim" style="margin:8px 0 0;line-height:1.65">Premium AINL bundles and paid graphs will show up here when the marketplace is connected. For now, everything in the <strong>Free</strong> tab is included with ArmaraOS.</p>
+                  </div>
+                </div>
+                <div class="app-store-paid-grid">
+                  <div class="app-store-paid-teaser"><span class="skeleton" style="display:block;height:44px;border-radius:12px;margin-bottom:10px"></span><span class="skeleton skeleton-text" style="width:70%"></span></div>
+                  <div class="app-store-paid-teaser"><span class="skeleton" style="display:block;height:44px;border-radius:12px;margin-bottom:10px"></span><span class="skeleton skeleton-text" style="width:55%"></span></div>
+                  <div class="app-store-paid-teaser"><span class="skeleton" style="display:block;height:44px;border-radius:12px;margin-bottom:10px"></span><span class="skeleton skeleton-text" style="width:62%"></span></div>
                 </div>
               </div>
             </template>
+
+            <div x-show="storeTab === 'free'">
+              <div class="card app-store-hero mb-4">
+                <button type="button" class="app-store-section-toggle app-store-section-toggle--hero" @click="toggleSection('hero')" :aria-expanded="isSectionOpen('hero')">
+                  <span class="app-store-section-chevron" :class="{ 'app-store-section-chevron--open': isSectionOpen('hero') }" aria-hidden="true">&rsaquo;</span>
+                  <span class="app-store-section-toggle-main">
+                    <span class="app-store-hero-title app-store-section-toggle-title">AI Native Lang Programs Available</span>
+                    <span class="text-xs text-dim app-store-section-toggle-meta" x-text="total + ' programs'"></span>
+                  </span>
+                </button>
+                <div class="app-store-section-panel" x-show="isSectionOpen('hero')" x-transition>
+                  <div class="app-store-hero-row app-store-hero-row--body">
+                    <div class="app-store-hero-copy">
+                      <p class="text-sm text-dim app-store-hero-text" style="margin-top:0"><strong>armaraos-programs/</strong> ships with the app. <code class="text-xs">demo/</code>, <code class="text-xs">examples/</code>, and <code class="text-xs">intelligence/</code> mirror from the upstream repo into <code class="text-xs" x-text="root || '~/.armaraos/ainl-library'"></code>. Use <strong>Validate</strong> on desktop or <strong>Copy</strong> for your terminal.</p>
+                      <div class="app-store-hero-chips">
+                        <span class="app-store-chip"><span class="app-store-chip-dot app-store-chip-dot--free"></span> <span x-text="total + ' programs'"></span></span>
+                        <span class="app-store-chip text-dim" x-show="sync && sync.branch">Branch <span x-text="sync.branch"></span></span>
+                        <span class="app-store-chip text-dim" x-show="sync && sync.synced_at_unix">Synced <span x-text="formatSyncTime(sync.synced_at_unix)"></span></span>
+                      </div>
+                    </div>
+                    <div class="app-store-hero-meta text-xs text-dim" x-show="sync && sync.commit_sha">
+                      <span class="text-dim">Upstream</span>
+                      <code class="app-store-commit" x-text="sync.commit_sha"></code>
+                    </div>
+                  </div>
+                  <div class="app-store-hero-warn flex flex-wrap items-center gap-2 mt-3" x-show="!libraryPresent || total === 0">
+                    <span class="badge badge-warn" x-show="!libraryPresent">Library folder missing</span>
+                    <span class="text-dim" x-show="!libraryPresent || total === 0">Bootstrap the desktop app (network) or open</span>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()" x-show="isDesktopShell">Settings → AINL</button>
+                  </div>
+                  <div class="text-xs text-dim mt-2 flex flex-wrap items-center gap-2" x-show="ainlDesktop && ainlDesktop.library_sync_ok === false">
+                    <span x-text="ainlDesktop.library_sync_detail || 'Upstream library sync did not complete.'"></span>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="openSettingsAinl()">Fix in Settings</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="app-store-search-card card mb-4">
+                <label class="app-store-search-label text-xs text-dim" for="app-store-search-input">Search programs</label>
+                <div class="app-store-search-wrap">
+                  <span class="app-store-search-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                  </span>
+                  <input id="app-store-search-input" type="search" class="app-store-search-input" placeholder="Search by name, path, or hint…" x-model="search" autocomplete="off" aria-describedby="app-store-search-hint">
+                </div>
+                <p id="app-store-search-hint" class="text-xs text-dim mt-2 mb-0" style="line-height:1.5">Filters <strong>Featured picks</strong> and the catalog below. Clear the field to show everything.</p>
+                <div class="app-store-toolbar flex flex-wrap items-center gap-3 mt-3 pt-3" style="border-top:1px solid var(--border-subtle)">
+                  <label class="text-sm text-dim flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" x-model="loadHints" @change="loadLibrary()">
+                    Load <code class="text-xs">#</code> comment hints <span class="text-xs">(capped)</span>
+                  </label>
+                  <label class="text-sm text-dim flex items-center gap-2 cursor-pointer" x-show="isDesktopShell">
+                    <input type="checkbox" x-model="strictValidation">
+                    Strict <code class="text-xs">--strict</code>
+                  </label>
+                  <span class="text-xs text-dim ml-auto flex flex-wrap gap-2">
+                    <a class="btn btn-ghost btn-sm" href="/api/ainl/library" target="_blank" rel="noopener noreferrer">Library JSON</a>
+                    <a class="btn btn-ghost btn-sm" href="/api/ainl/library/curated" target="_blank" rel="noopener noreferrer">Curated JSON</a>
+                  </span>
+                </div>
+                <div class="text-xs text-dim mt-2" x-show="loadHints && hintsTruncated">Hints truncated — first <span x-text="maxHintsApplied"></span> files only.</div>
+              </div>
+
+              <div class="card mb-4 app-store-section-card" x-show="filteredCurated.length">
+                <button type="button" class="app-store-section-toggle app-store-section-toggle--card" @click="toggleSection('featured')" :aria-expanded="isSectionOpen('featured')">
+                  <span class="app-store-section-chevron" :class="{ 'app-store-section-chevron--open': isSectionOpen('featured') }" aria-hidden="true">&rsaquo;</span>
+                  <span class="app-store-section-toggle-main">
+                    <span class="app-store-section-toggle-title">Featured picks</span>
+                    <span class="text-xs text-dim app-store-section-toggle-meta" x-text="filteredCurated.length + ' curated'"></span>
+                  </span>
+                </button>
+                <div class="app-store-section-panel app-store-section-panel--pad" x-show="isSectionOpen('featured')" x-transition>
+                  <p class="text-xs text-dim mb-3" style="margin-top:0;line-height:1.5">Curated for Scheduler / cron. Default weekly health job is on; others often start paused — enable in <a href="#scheduler" style="color:var(--accent)">Scheduler</a>.</p>
+                  <div class="app-store-featured-grid">
+                    <template x-for="c in filteredCurated" :key="c.name">
+                      <div class="app-store-featured-card">
+                        <div class="app-store-featured-top">
+                          <span class="badge badge-success" style="font-size:9px">Free</span>
+                          <span class="app-store-featured-crown" title="Featured" aria-hidden="true">&#9733;</span>
+                        </div>
+                        <div class="app-store-featured-name" x-text="c.name"></div>
+                        <code class="app-store-featured-path" x-text="c.relative_path"></code>
+                        <div class="app-store-featured-actions">
+                          <button type="button" class="btn btn-primary btn-sm" @click="trySample({ path: c.relative_path }, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Validate</button>
+                          <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(c.relative_path)">Scheduler</button>
+                          <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand({ path: c.relative_path, absolute: buildAbsolute(c.relative_path) })">Copy CLI</button>
+                          <button type="button" class="btn btn-ghost btn-sm" @click="copySchedulerDeepLink(c.relative_path)">Copy link</button>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card mb-4 app-store-section-card">
+                <button type="button" class="app-store-section-toggle app-store-section-toggle--card" @click="toggleSection('catalog')" :aria-expanded="isSectionOpen('catalog')">
+                  <span class="app-store-section-chevron" :class="{ 'app-store-section-chevron--open': isSectionOpen('catalog') }" aria-hidden="true">&rsaquo;</span>
+                  <span class="app-store-section-toggle-main">
+                    <span class="app-store-section-toggle-title">All programs</span>
+                    <span class="text-xs text-dim app-store-section-toggle-meta" x-text="totalFilteredPrograms() + ' shown'"></span>
+                  </span>
+                </button>
+                <div class="app-store-section-panel app-store-section-panel--pad" x-show="isSectionOpen('catalog')" x-transition>
+                  <div x-show="search.trim() && totalFilteredPrograms() === 0 && !filteredCurated.length" class="app-store-empty app-store-empty--inline mb-4">
+                    <p class="text-sm text-dim mb-0" style="line-height:1.6">No programs match <strong x-text="search"></strong>. Try another keyword or clear the search.</p>
+                  </div>
+                  <template x-for="cat in filteredCategories()" :key="cat.id">
+                    <div class="app-store-category-card mb-4">
+                      <button type="button" class="app-store-category-head app-store-category-head--toggle" @click="toggleSection(sectionCategoryKey(cat))" :aria-expanded="isSectionOpen(sectionCategoryKey(cat))">
+                        <span class="app-store-section-chevron app-store-section-chevron--sm" :class="{ 'app-store-section-chevron--open': isSectionOpen(sectionCategoryKey(cat)) }" aria-hidden="true">&rsaquo;</span>
+                        <span class="app-store-category-title" x-text="cat.label"></span>
+                        <span class="text-xs text-dim app-store-category-count" x-text="(cat.programs ? cat.programs.length : 0) + ' items'"></span>
+                      </button>
+                      <div class="app-store-program-grid" x-show="isSectionOpen(sectionCategoryKey(cat))" x-transition>
+                        <template x-for="p in cat.programs" :key="p.path">
+                          <div class="app-store-program-card">
+                            <div class="app-store-program-card-head">
+                              <span class="badge badge-success app-store-program-badge">Free</span>
+                              <span class="app-store-program-title font-mono text-sm" x-text="p.name"></span>
+                            </div>
+                            <code class="app-store-program-path" x-text="p.path"></code>
+                            <p class="app-store-program-hint text-xs text-dim" x-show="loadHints" x-text="p.hint || '—'"></p>
+                            <div class="app-store-program-actions">
+                              <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand(p)">Copy CLI</button>
+                              <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(p.path)">Scheduler</button>
+                              <button type="button" class="btn btn-primary btn-sm" @click="trySample(p, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Validate</button>
+                              <button type="button" class="btn btn-ghost btn-sm" @click="trySample(p, 'run')" :disabled="tryBusy" x-show="isDesktopShell" title="Runs ainl run">Run</button>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -6359,32 +6586,35 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <!-- ─── Runtime page ─── -->
     <template x-if="page === 'runtime'">
-      <div x-data="runtimePage">
-        <div class="page-header"><h2>Runtime</h2></div>
-        <div class="page-body" x-init="loadData()">
+      <div x-data="runtimePage" class="runtime-page-root">
+        <div class="page-header runtime-page-header">
+          <h2>Runtime</h2>
+          <p class="runtime-page-header-sub">Live daemon status, platform, API listen address, and provider connectivity.</p>
+        </div>
+        <div class="page-body runtime-page-body" x-init="loadData()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading runtime info...</span></div>
           <div x-show="!loading">
-            <div class="grid grid-cols-4 gap-4 mb-6">
-              <div class="card stat-card">
+            <div class="runtime-stats-grid">
+              <div class="card stat-card runtime-stat-card">
                 <div class="stat-label">Uptime</div>
                 <div class="stat-value" x-text="uptime"></div>
               </div>
-              <div class="card stat-card">
+              <div class="card stat-card runtime-stat-card">
                 <div class="stat-label">Agents</div>
                 <div class="stat-value" x-text="agentCount"></div>
               </div>
-              <div class="card stat-card">
+              <div class="card stat-card runtime-stat-card">
                 <div class="stat-label">Version</div>
                 <div class="stat-value" x-text="version"></div>
               </div>
-              <div class="card stat-card">
+              <div class="card stat-card runtime-stat-card">
                 <div class="stat-label">Default Model</div>
-                <div class="stat-value" style="font-size:13px" x-text="defaultModel"></div>
+                <div class="stat-value runtime-stat-value-sm" x-text="defaultModel"></div>
               </div>
             </div>
 
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-header">System</div>
+            <div class="card runtime-panel">
+              <div class="card-header runtime-panel-title">System</div>
               <table class="table" style="margin-top:8px">
                 <tbody>
                   <tr><td style="width:180px;font-weight:500">Platform</td><td x-text="platform"></td></tr>
@@ -6433,9 +6663,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </table>
             </div>
 
-            <div class="card" style="margin-bottom:16px">
-              <div class="card-header">Providers</div>
-              <table class="table" style="margin-top:8px">
+            <div class="card runtime-panel">
+              <div class="card-header runtime-panel-title">Providers</div>
+              <table class="table runtime-panel-table" style="margin-top:8px">
                 <thead><tr><th>Provider</th><th>Status</th><th>Models</th><th>Latency</th></tr></thead>
                 <tbody>
                   <template x-for="p in providers" :key="p.id">
@@ -6450,8 +6680,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </table>
             </div>
 
-            <div class="flex gap-2">
-              <button class="btn btn-ghost btn-sm" @click="loadData()">Refresh</button>
+            <div class="runtime-page-footer flex flex-wrap items-center gap-2">
+              <button type="button" class="btn btn-ghost btn-sm" @click="loadData()">Refresh</button>
+              <span class="text-xs text-dim hidden sm:inline">·</span>
+              <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadConfig()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload config</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadChannels()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload channels</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadIntegrations()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload integrations</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" @click="daemonPromptShutdown()" :disabled="daemonCtlLoading.shutdown">Shut down</button>
             </div>
           </div>
         </div>

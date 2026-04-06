@@ -60,7 +60,9 @@ var OpenFangToast = (function() {
   function info(msg, duration) { return toast(msg, 'info', duration); }
 
   // Styled confirmation modal — replaces native confirm()
-  function confirm(title, message, onConfirm) {
+  // opts: { confirmLabel?, danger? } — danger defaults true (destructive styling).
+  function confirm(title, message, onConfirm, opts) {
+    opts = opts || {};
     var overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
 
@@ -86,8 +88,8 @@ var OpenFangToast = (function() {
     actions.appendChild(cancelBtn);
 
     var okBtn = document.createElement('button');
-    okBtn.className = 'btn btn-danger confirm-ok';
-    okBtn.textContent = 'Confirm';
+    okBtn.className = opts.danger === false ? 'btn btn-primary confirm-ok' : 'btn btn-danger confirm-ok';
+    okBtn.textContent = opts.confirmLabel || 'Confirm';
     actions.appendChild(okBtn);
 
     modal.appendChild(actions);
@@ -410,13 +412,59 @@ var OpenFangAPI = (function() {
     return url;
   }
 
+  /** Download a home-relative file (GET + Bearer / ?token=). Saves via blob link. */
+  function downloadArmaraosHomeFile(relPath) {
+    if (!relPath || typeof relPath !== 'string') {
+      return Promise.reject(new Error('Missing path'));
+    }
+    var path =
+      '/api/armaraos-home/download?path=' + encodeURIComponent(relPath);
+    if (_authToken) path += '&token=' + encodeURIComponent(_authToken);
+    var opts = { method: 'GET', headers: {}, credentials: 'same-origin' };
+    if (_authToken) opts.headers['Authorization'] = 'Bearer ' + _authToken;
+    var fallbackName = relPath.split('/').pop() || 'download';
+    return fetch(BASE + path, opts).then(function(r) {
+      if (!r.ok) {
+        return r.text().then(function(text) {
+          var msg = 'Download failed';
+          try {
+            var j = JSON.parse(text);
+            msg = j.error || j.message || msg;
+          } catch (e2) {
+            if (text) msg = text.slice(0, 200);
+          }
+          throw new Error(msg);
+        });
+      }
+      var cd = r.headers.get('Content-Disposition') || '';
+      var name = fallbackName;
+      var m = /filename\*=UTF-8''([^;\s]+)|filename="([^"]+)"|filename=([^;\s]+)/i.exec(cd);
+      if (m) {
+        try {
+          name = decodeURIComponent((m[1] || m[2] || m[3] || '').trim().replace(/^"+|"+$/g, ''));
+        } catch (e3) { /* keep */ }
+      }
+      return r.blob().then(function(blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name || fallbackName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+      });
+    });
+  }
+
   /** Download a diagnostics zip by filename (GET + Bearer). Triggers browser save (typically Downloads). */
   function downloadDiagnosticsZip(filename) {
     if (!filename || typeof filename !== 'string') {
       return Promise.reject(new Error('Missing bundle filename'));
     }
     var path = '/api/support/diagnostics/download?name=' + encodeURIComponent(filename);
-    var opts = { method: 'GET', headers: {} };
+    if (_authToken) path += '&token=' + encodeURIComponent(_authToken);
+    var opts = { method: 'GET', headers: {}, credentials: 'same-origin' };
     if (_authToken) opts.headers['Authorization'] = 'Bearer ' + _authToken;
     return fetch(BASE + path, opts).then(function(r) {
       if (!r.ok) {
@@ -480,6 +528,7 @@ var OpenFangAPI = (function() {
     delete: del,
     upload: upload,
     downloadDiagnosticsZip: downloadDiagnosticsZip,
+    downloadArmaraosHomeFile: downloadArmaraosHomeFile,
     wsConnect: wsConnect,
     wsDisconnect: wsDisconnect,
     wsClearUiCallbacks: wsClearUiCallbacks,

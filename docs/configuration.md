@@ -370,7 +370,7 @@ home_edit_max_bytes = 524288
 | `home_edit_backup` | bool | `true` | If true, before overwrite the server writes the previous contents to a sibling `*.bak` file once. |
 | `home_edit_max_bytes` | u64 | `524288` (512 KiB) | Maximum UTF-8 byte length accepted by `POST /api/armaraos-home/write`. |
 
-**Hot reload:** Changes under `[dashboard]` apply on the next config reload (no full kernel restart). See [dashboard-home-folder.md](dashboard-home-folder.md) for blocklisted paths, UI behavior (View vs Download), and [api-reference.md](api-reference.md#armaraos-home-browser-endpoints) for HTTP details.
+**Hot reload:** Changes under `[dashboard]` apply on the next config reload (no full kernel restart). From the embedded UI you can trigger **`POST /api/config/reload`** via **Settings → System Info → Daemon / API** or **Monitor → Runtime** (**Reload config**); see [dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md). See [dashboard-home-folder.md](dashboard-home-folder.md) for blocklisted paths, UI behavior (View vs Download), and [api-reference.md](api-reference.md#armaraos-home-browser-endpoints) for HTTP details.
 
 ---
 

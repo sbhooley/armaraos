@@ -72,6 +72,12 @@ pub fn start_server() -> Result<ServerHandle, Box<dyn std::error::Error>> {
     // the kernel's provider detection and credential resolver.
     load_dotenv_files();
 
+    // AINL: if unset, allow IR-declared adapters without requiring users to export host env.
+    // `~/.armaraos/.env` or the system environment can still set this explicitly (load_dotenv does not override).
+    if std::env::var("AINL_ALLOW_IR_DECLARED_ADAPTERS").is_err() {
+        std::env::set_var("AINL_ALLOW_IR_DECLARED_ADAPTERS", "1");
+    }
+
     // Boot kernel (sync — no tokio needed)
     let mut config = load_config(None);
     if !default_config_path().exists() {

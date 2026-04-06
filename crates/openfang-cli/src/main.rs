@@ -835,6 +835,49 @@ fn init_tracing_stderr() {
         .init();
 }
 
+/// Daemon (`openfang start`): mirror tracing to stderr and `~/.armaraos/logs/daemon.log` for the dashboard.
+fn init_tracing_daemon() {
+    use tracing_subscriber::fmt;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, Registry};
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(config_log_level()));
+
+    let log_dir = cli_openfang_home().join("logs");
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        init_tracing_stderr();
+        return;
+    }
+    let log_path = log_dir.join("daemon.log");
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => f,
+        Err(_) => {
+            init_tracing_stderr();
+            return;
+        }
+    };
+
+    if Registry::default()
+        .with(filter)
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(
+            fmt::layer()
+                .with_writer(std::sync::Mutex::new(file))
+                .with_ansi(false),
+        )
+        .try_init()
+        .is_err()
+    {
+        init_tracing_stderr();
+    }
+}
+
 /// ArmaraOS data directory (same resolution as the kernel: migrate/create `~/.armaraos` when needed).
 fn cli_openfang_home() -> std::path::PathBuf {
     openfang_kernel::config::openfang_home()
@@ -901,13 +944,22 @@ fn main() {
             Some(Commands::Agent(AgentCommands::Chat { .. }))
         );
 
+    let is_daemon_start = matches!(
+        cli.command,
+        Some(Commands::Start { .. }) | Some(Commands::Gateway(GatewayCommands::Start))
+    );
+
     if is_tui_mode {
         init_tracing_file();
     } else {
         // CLI subcommands: install Ctrl+C handler for clean interrupt of
         // blocking read_line calls, and trace to stderr.
         install_ctrlc_handler();
-        init_tracing_stderr();
+        if is_daemon_start {
+            init_tracing_daemon();
+        } else {
+            init_tracing_stderr();
+        }
     }
 
     match cli.command {
@@ -1449,7 +1501,7 @@ fn provider_list() -> Vec<(&'static str, &'static str, &'static str, &'static st
         (
             "openrouter",
             "OPENROUTER_API_KEY",
-            "openrouter/google/gemini-2.5-flash",
+            "stepfun/step-3.5-flash:free",
             "OpenRouter",
         ),
     ]

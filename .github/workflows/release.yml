@@ -16,7 +16,7 @@ env:
 
 jobs:
   # ── Tauri Desktop App (Windows + macOS + Linux) ───────────────────────────
-  # Produces: .msi, .exe (Windows) | .dmg, .app (macOS) | .AppImage, .deb (Linux)
+  # Produces: .msi, .exe (Windows) | .dmg, .app (macOS) | .deb, .rpm (Linux; AppImage skipped on CI — linuxdeploy is flaky on runners)
   # Also generates and uploads latest.json (the auto-updater manifest)
   desktop:
     name: Desktop / ${{ matrix.platform.name }}
@@ -26,7 +26,8 @@ jobs:
         platform:
           - name: Linux x86_64
             os: ubuntu-22.04
-            args: "--target x86_64-unknown-linux-gnu"
+            # Omit AppImage: `linuxdeploy` often fails on GitHub-hosted runners (FUSE / tooling); deb+rpm are enough for Linux distribution + updater.
+            args: "--target x86_64-unknown-linux-gnu --bundles deb --bundles rpm"
             rust_target: x86_64-unknown-linux-gnu
 
           - name: macOS x86_64
@@ -150,8 +151,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          # Avoid AppImage tooling failures on CI runners where FUSE mounting is restricted.
-          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Baked into the binary (option_env!) — same PostHog project as ainativelang.com when set.
+          ARMARAOS_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY }}
+          ARMARAOS_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ArmaraOS ${{ github.ref_name }}"
@@ -190,7 +192,8 @@ jobs:
   sync-desktop-updates-to-website:
     name: Publish updater to ainativelang.com
     needs: [desktop]
-    if: startsWith(github.ref, 'refs/tags/v') && always()
+    # Require a successful desktop matrix (all platforms). `always()` caused this job to run after a Linux failure and error on missing `latest.json`.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Check deploy token

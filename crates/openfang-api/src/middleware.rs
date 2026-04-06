@@ -102,6 +102,32 @@ pub async fn auth(
         }
     }
 
+    // Stream a generated zip from ~/support/ — same loopback-only rule as POST diagnostics.
+    // Without this, the SPA fetch GET is rejected when api_key is set (Bearer not always
+    // applied consistently in embedded WebViews), so users cannot save the bundle.
+    if path == "/api/support/diagnostics/download" && method == axum::http::Method::GET {
+        let is_loopback_dl = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().is_loopback())
+            .unwrap_or(false);
+        if is_loopback_dl {
+            return next.run(request).await;
+        }
+    }
+
+    // Stream arbitrary home files (e.g. support/*.zip) without forcing Bearer in embedded WebView.
+    if path == "/api/armaraos-home/download" && method == axum::http::Method::GET {
+        let is_loopback_home_dl = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip().is_loopback())
+            .unwrap_or(false);
+        if is_loopback_home_dl {
+            return next.run(request).await;
+        }
+    }
+
     // Public endpoints that don't require auth (dashboard needs these).
     // SECURITY: /api/agents is GET-only (listing). POST (spawn) requires auth.
     // SECURITY: Public endpoints are GET-only unless explicitly noted.
@@ -116,7 +142,12 @@ pub async fn auth(
 
     // SSE: allow without credentials only from loopback (embedded dashboard). Remote clients
     // must send the same Bearer / ?token= as other protected routes when api_key is set.
-    if is_get && (path == "/api/logs/stream" || path == "/api/events/stream") && is_loopback {
+    if is_get
+        && (path == "/api/logs/stream"
+            || path == "/api/logs/daemon/stream"
+            || path == "/api/events/stream")
+        && is_loopback
+    {
         return next.run(request).await;
     }
 
@@ -130,6 +161,7 @@ pub async fn auth(
         || path == "/api/health/detail"
         || path == "/api/status"
         || path == "/api/version"
+        || path == "/api/version/github-latest"
         || (path == "/api/agents" && is_get)
         || (path == "/api/profiles" && is_get)
         || (path == "/api/config" && is_get)
@@ -157,7 +189,7 @@ pub async fn auth(
         || (path == "/api/integrations/available" && is_get)
         || (path == "/api/integrations/health" && is_get)
         || (path == "/api/workflows" && is_get)
-        // /api/logs/stream and /api/events/stream: loopback bypass above; remote needs auth
+        // /api/logs/stream, /api/logs/daemon/stream, /api/events/stream: loopback bypass above; remote needs auth
         || (path.starts_with("/api/cron/") && is_get)
         || (path.starts_with("/api/ainl/library") && is_get)
         || path.starts_with("/api/providers/github-copilot/oauth/")

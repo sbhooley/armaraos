@@ -17,6 +17,7 @@ mod shortcuts;
 mod tray;
 mod ui_prefs;
 mod updater;
+mod product_analytics;
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::event::{EventPayload, LifecycleEvent, SystemEvent};
@@ -157,6 +158,7 @@ pub fn run() {
             commands::install_update,
             commands::generate_support_bundle,
             commands::copy_diagnostics_to_downloads,
+            commands::copy_home_file_to_downloads,
             commands::compose_support_email,
             commands::get_desktop_updater_prefs,
             commands::set_release_channel,
@@ -175,6 +177,8 @@ pub fn run() {
             commands::open_ainl_library_dir,
             commands::ainl_try_library_file,
             commands::open_notification_settings,
+            commands::get_desktop_product_analytics_prefs,
+            commands::set_desktop_product_analytics_prefs,
         ])
         .setup(move |app| {
             // Create the main window pointing directly at the embedded HTTP server.
@@ -340,6 +344,10 @@ pub fn run() {
             crate::ainl_version::spawn_ainl_pypi_notify_check(app.handle().clone());
 
             info!("ArmaraOS Desktop window created");
+
+            #[cfg(desktop)]
+            product_analytics::spawn_first_open_worker(app.handle());
+
             Ok(())
         })
         .on_window_event(|window, event| {

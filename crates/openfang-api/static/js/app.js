@@ -19,6 +19,16 @@ function effectiveThemeFromMode(mode) {
   return mode;
 }
 
+/** Kernel-spawned internal chat agents (hidden from sidebar; grouped under Chat → Automation & probe). */
+function isInternalAutomationProbeChatAgentName(name) {
+  var n = name != null ? String(name) : '';
+  return (
+    n.startsWith('allowlist-probe') ||
+    n.startsWith('offline-cron') ||
+    n.startsWith('allow-ir-off')
+  );
+}
+
 // Marked.js configuration
 if (typeof marked !== 'undefined') {
   marked.setOptions({
@@ -503,12 +513,11 @@ document.addEventListener('alpine:init', function() {
       } catch(e) { /* silent */ }
     },
 
-    /** User-facing agents for the sidebar (excludes probe / offline-cron). */
+    /** User-facing agents for the sidebar (excludes internal automation / probe chats). */
     primaryAgentsForSidebar() {
       var agents = this.agents || [];
       return agents.filter(function(a) {
-        var n = a && a.name != null ? String(a.name) : '';
-        return !n.startsWith('allowlist-probe') && !n.startsWith('offline-cron');
+        return !isInternalAutomationProbeChatAgentName(a && a.name);
       });
     },
 
@@ -730,6 +739,8 @@ document.addEventListener('alpine:init', function() {
   /** Subscribe to GET /api/events/stream (kernel bus). Started from app().init. */
   window.ArmaraosKernelSse = (function() {
     var _es = null;
+    /** Debounce repeated HealthCheckFailed per agent (recovery loops, SSE reconnects). */
+    var _healthFailToastAt = {};
     function maybeToast(ev) {
       if (typeof OpenFangToast === 'undefined' || !ev || !ev.payload) return;
       // Always show in-app toasts for kernel SSE events. Native OS notifications
@@ -744,7 +755,16 @@ document.addEventListener('alpine:init', function() {
       } else if (p.type === 'System' && p.data && p.data.event === 'QuotaEnforced') {
         OpenFangToast.warn('Quota enforced for an agent', 6000);
       } else if (p.type === 'System' && p.data && p.data.event === 'HealthCheckFailed') {
-        OpenFangToast.warn('Agent health check failed', 6000);
+        var aid = String((p.data.agent_id != null) ? p.data.agent_id : 'unknown');
+        var nowMs = Date.now();
+        var prev = _healthFailToastAt[aid] || 0;
+        if (nowMs - prev < 90000) {
+          return;
+        }
+        _healthFailToastAt[aid] = nowMs;
+        var uSecs = p.data.unresponsive_secs;
+        var detail = (typeof uSecs === 'number') ? (' (~' + uSecs + 's since activity)') : '';
+        OpenFangToast.warn('Agent health check failed' + detail, 7000);
       } else if (p.type === 'System' && p.data && p.data.event === 'CronJobCompleted') {
         var name = p.data.job_name || 'Scheduled job';
         var out = (p.data.output_preview || '').slice(0, 180);
@@ -851,7 +871,8 @@ function app() {
         'peers': 'settings',
         'migration': 'settings',
         'usage': 'analytics',
-        'approval': 'approvals'
+        'approval': 'approvals',
+        'app-store': 'ainl-library'
       };
       function handleHash() {
         var raw = window.location.hash.replace(/^#/, '') || 'agents';
@@ -1082,6 +1103,15 @@ function app() {
       } catch (e) { /* ignore */ }
       window.location.hash = p;
       this.mobileMenuOpen = false;
+    },
+
+    /** Get started nav: re-click while on overview reveals Setup Wizard for onboarded users. */
+    navigateOverview() {
+      if (this.page === 'overview') {
+        window.dispatchEvent(new CustomEvent('openfang-overview-nav-same-page'));
+      } else {
+        this.navigate('overview');
+      }
     },
 
     setTheme(mode) {

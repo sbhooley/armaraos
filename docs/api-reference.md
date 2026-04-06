@@ -24,6 +24,8 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Migration Endpoints](#migration-endpoints)
 - [Session Management Endpoints](#session-management-endpoints)
 - [Cron/Scheduler Endpoints](#cronscheduler-endpoints)
+- [Support diagnostics bundle](#support-diagnostics-redacted-bundle)
+- [ArmaraOS Home Browser Endpoints](#armaraos-home-browser-endpoints)
 - [WebSocket Protocol](#websocket-protocol)
 - [SSE Streaming](#sse-streaming)
 - [OpenAI-Compatible API](#openai-compatible-api)
@@ -64,6 +66,8 @@ If `api_key` is empty or not set, the API is accessible without authentication. 
 
 List all running agents.
 
+Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avatar_url`, `color`, `archetype`, `vibe`, `greeting_style`) so dashboards can populate edit forms without a second round-trip. Other fields (`model_tier`, `auth_status`, `ready`, `last_active`, `mode`, `profile`) reflect runtime and catalog state.
+
 **Response** `200 OK`:
 
 ```json
@@ -72,9 +76,24 @@ List all running agents.
     "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "hello-world",
     "state": "Running",
+    "mode": "Normal",
     "created_at": "2025-01-15T10:30:00Z",
+    "last_active": "2025-01-15T11:00:00Z",
     "model_provider": "groq",
-    "model_name": "llama-3.3-70b-versatile"
+    "model_name": "llama-3.3-70b-versatile",
+    "model_tier": "free",
+    "auth_status": "configured",
+    "ready": true,
+    "profile": "full",
+    "system_prompt": "You are a helpful assistant.",
+    "identity": {
+      "emoji": "🤖",
+      "avatar_url": null,
+      "color": "#FF5C00",
+      "archetype": "assistant",
+      "vibe": "professional",
+      "greeting_style": null
+    }
   }
 ]
 ```
@@ -83,6 +102,8 @@ List all running agents.
 
 Returns detailed information about a single agent.
 
+Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / **`tool_blocklist`**, **`fallback_models`**, and related fields on top of the list payload shape (without `model_tier` / `ready` enrichment).
+
 **Response** `200 OK`:
 
 ```json
@@ -90,6 +111,8 @@ Returns detailed information about a single agent.
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "hello-world",
   "state": "Running",
+  "mode": "Normal",
+  "profile": "full",
   "created_at": "2025-01-15T10:30:00Z",
   "session_id": "s1b2c3d4-...",
   "model": {
@@ -102,15 +125,32 @@ Returns detailed information about a single agent.
   },
   "description": "A friendly greeting agent",
   "tags": [],
+  "system_prompt": "You are a helpful assistant.",
+  "identity": {
+    "emoji": "🤖",
+    "avatar_url": null,
+    "color": "#FF5C00",
+    "archetype": "assistant",
+    "vibe": "professional",
+    "greeting_style": null
+  },
+  "skills": [],
+  "skills_mode": "all",
+  "mcp_servers": [],
+  "mcp_servers_mode": "all",
+  "fallback_models": [],
+  "tool_allowlist": [],
+  "tool_blocklist": [],
   "scheduled_ainl_host_adapter": {
     "source": "default_online",
     "summary": "Default full host-adapter allowlist (agent has network, tools, shell, spawn, or OFP).",
-    "adapter_count": 31
+    "adapter_count": 31,
+    "ainl_allow_ir_declared_adapters": "1"
   }
 }
 ```
 
-`scheduled_ainl_host_adapter` describes how **`AINL_HOST_ADAPTER_ALLOWLIST`** is set for this agent when a **scheduled** `ainl run` job runs: `source` is `none`, `metadata` (includes `allowlist`), or `default_online` (includes `adapter_count`).
+`scheduled_ainl_host_adapter` describes scheduled **`ainl run`** env for this agent: **`AINL_HOST_ADAPTER_ALLOWLIST`** (`source` is `none`, `metadata` with `allowlist`, or `default_online` with `adapter_count`) and **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** via **`ainl_allow_ir_declared_adapters`** (`"1"` = ignore env allowlist in AINL Python, `"0"` = do not). See **`docs/scheduled-ainl.md`**.
 
 ### POST /api/agents
 
@@ -175,6 +215,92 @@ Set an agent's operating mode. `Stable` mode pins the current model and freezes 
   "status": "updated",
   "mode": "Stable",
   "agent_id": "a1b2c3d4-..."
+}
+```
+
+### PATCH /api/agents/{id}/config
+
+Hot-update name, description, system prompt, visual identity, model, provider, and fallback model chain. Omitted JSON keys leave those fields unchanged.
+
+**Merge semantics (important for API clients):**
+
+- **`description`**, **`system_prompt`**: if the key is present but the string is **empty**, the server **does not** apply the update (avoids accidental wipes from clients that used to send `""` when they did not have the real value).
+- **Identity** (`emoji`, `avatar_url`, `archetype`, `vibe`, `greeting_style`): **absent** key → keep current; **empty string** → clear to `null`; **non-empty** → set. **`color`**: empty string keeps the current color (invalid payloads are ignored).
+
+The updated agent row is persisted to SQLite after a successful patch.
+
+**Request body** (all fields optional):
+
+```json
+{
+  "name": "my-agent",
+  "description": "Updated description",
+  "system_prompt": "You are a specialized assistant.",
+  "emoji": "🤖",
+  "avatar_url": "https://example.com/avatar.png",
+  "color": "#FF5C00",
+  "archetype": "coder",
+  "vibe": "technical",
+  "greeting_style": "warm",
+  "model": "llama-3.3-70b-versatile",
+  "provider": "groq",
+  "fallback_models": [{ "provider": "groq", "model": "llama-3.1-8b-instant" }]
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "ok",
+  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+### PATCH /api/agents/{id}/identity
+
+Update visual / personality identity only. Uses the **same merge rules** as the identity fields on `PATCH …/config`: omitted keys keep existing values; empty strings clear optional strings; empty `color` keeps the previous color.
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "ok",
+  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+### GET /api/agents/{id}/tools
+
+Returns the agent’s explicit tool **allowlist** and **blocklist** (manifest fields). An empty allowlist means “no extra restriction” — effective tools come from the agent’s named **profile** and capabilities.
+
+**Response** `200 OK`:
+
+```json
+{
+  "tool_allowlist": ["file_read", "channel_send"],
+  "tool_blocklist": []
+}
+```
+
+### PUT /api/agents/{id}/tools
+
+Replace allowlist and/or blocklist. Supply at least one of `tool_allowlist` or `tool_blocklist` (arrays of tool name strings). Omitted key means that list is left unchanged on the server. Changes are persisted to SQLite.
+
+**Request body**:
+
+```json
+{
+  "tool_allowlist": ["file_read", "web_fetch", "channel_send", "event_publish"],
+  "tool_blocklist": []
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "ok"
 }
 ```
 
@@ -570,6 +696,21 @@ List configured channel adapters and their status. Supports 40 channel adapters 
 }
 ```
 
+### POST /api/channels/reload
+
+Stop the current channel bridge, re-read config and **`secrets.env`** from disk, and start bridges again. Use after editing channel definitions or tokens.
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "ok",
+  "started": ["discord", "telegram"]
+}
+```
+
+`started` is the list of channel names that were started. **Dashboard:** **Reload channels** (same locations as config reload). **Auth:** same as other POST routes when `api_key` is set.
+
 ---
 
 ## Template Endpoints
@@ -628,6 +769,117 @@ Get a specific template's manifest and raw TOML.
 ---
 
 ## System Endpoints
+
+### Support diagnostics (redacted bundle)
+
+Generate and download a **redacted** support archive under **`support/`** in the ArmaraOS home directory (same tree as [ArmaraOS Home Browser](#armaraos-home-browser-endpoints)).
+
+**Loopback:** When the client address is **127.0.0.1** / **::1**, both routes below may be used **without** `Authorization: Bearer` even if `api_key` is set — so the embedded dashboard and desktop shell can create and save zips locally. **Non-loopback** callers must use normal API authentication. See [troubleshooting.md](troubleshooting.md#remote-access-vs-loopback-diagnostics).
+
+#### POST /api/support/diagnostics
+
+**Body:** JSON object (may be `{}`).
+
+**Response** `200 OK` (illustrative):
+
+```json
+{
+  "status": "ok",
+  "bundle_path": "/Users/you/.armaraos/support/armaraos-diagnostics-20260405-120000.zip",
+  "bundle_filename": "armaraos-diagnostics-20260405-120000.zip",
+  "relative_path": "support/armaraos-diagnostics-20260405-120000.zip"
+}
+```
+
+Typical zip contents: `config.toml`, redacted `secrets.env`, recent `audit` export, SQLite DB + WAL/SHM when present, recent logs, `meta.json`.
+
+#### GET /api/support/diagnostics/download
+
+**Query:** `name` — must be exactly `armaraos-diagnostics-YYYYMMDD-HHMMSS.zip` (no `/`, `\\`, or `..`).
+
+Streams the zip with `Content-Disposition: attachment`. Use `bundle_filename` from the POST response.
+
+---
+
+### ArmaraOS Home Browser Endpoints
+
+Browse files under the configured ArmaraOS **`home_dir`** (typically `~/.armaraos`). All `path` values are **relative** to that root; `..` and absolute paths are rejected. Requires the same authentication as other API routes when `api_key` is set (except **loopback** may omit Bearer on **`/download`** when `api_key` is set — same policy as [support diagnostics](#support-diagnostics-redacted-bundle)).
+
+Dashboard UI: **Home folder** (`#home-files`) — preview vs full-file **Download** behavior is documented in [dashboard-home-folder.md](dashboard-home-folder.md) and [dashboard-testing.md](dashboard-testing.md#home-folder-browser--preview-vs-download). Configuration: **`[dashboard]`** in `config.toml` — see [dashboard-home-folder.md](dashboard-home-folder.md) and [configuration.md](configuration.md#dashboard).
+
+#### GET /api/armaraos-home/list
+
+List a single directory.
+
+**Query:** `path` — directory relative to home (empty = home root).
+
+**Response** `200 OK` (illustrative):
+
+```json
+{
+  "path": "",
+  "root": "/Users/you/.armaraos",
+  "entries": [
+    {
+      "name": "config.toml",
+      "kind": "file",
+      "size": 1204,
+      "mtime_ms": 1710000000000,
+      "editable": false
+    }
+  ],
+  "truncated": false,
+  "home_edit": {
+    "allowlist_enabled": false,
+    "allowlist_error": null,
+    "max_bytes": 524288,
+    "backup": true
+  }
+}
+```
+
+`kind` is `dir`, `file`, or `symlink`. `editable` is true only for files/symlinks that match **`home_editable_globs`** and are not **blocklisted** (see dashboard doc). If glob patterns in config are invalid, `allowlist_error` is a string and the list still returns.
+
+Large directories are capped at **4000** entries; `truncated` is true if rows were cut.
+
+#### GET /api/armaraos-home/read
+
+Read a **file** (not a directory). Max **512 KiB** per file.
+
+**Query:** `path` — file relative to home (required).
+
+**Response** `200 OK`:
+
+- `encoding`: `"utf8"` with string `content`, or `"base64"` for binary.
+- `editable`: whether the dashboard may offer save (UTF-8 only, allowlist + not blocklisted).
+- `allowlist_error`, `home_edit_max_bytes`, `home_edit_backup` mirror config / validation state.
+
+#### GET /api/armaraos-home/download
+
+Stream a file with a **larger** limit (**256 MiB**) for artifacts such as diagnostics zips under `support/`. Same sandbox rules as `read`.
+
+**Query:** `path` — file relative to home (required).
+
+Returns raw bytes with `Content-Type: application/octet-stream` and `Content-Disposition: attachment` when successful.
+
+**Loopback:** Same rule as [support diagnostics](#support-diagnostics-redacted-bundle) — from **127.0.0.1** / **::1**, the request may succeed without Bearer when `api_key` is set (embedded UI). Remote clients must authenticate.
+
+#### POST /api/armaraos-home/write
+
+Write **UTF-8** body to a file when **`home_editable_globs`** is non-empty and the path matches and is not blocklisted.
+
+**Body** (JSON):
+
+```json
+{
+  "path": "notes/readme.txt",
+  "content": "hello"
+}
+```
+
+Errors include **403** when editing is disabled, path blocked, or not matched by globs; **413** when content exceeds `home_edit_max_bytes`.
+
+---
 
 ### GET /api/health
 
@@ -709,9 +961,27 @@ Build and version information.
 }
 ```
 
+### GET /api/version/github-latest
+
+**Public read (GET-only):** Latest **GitHub release** metadata for the ArmaraOS repo, fetched **server-side** (so the dashboard does not call `api.github.com` from the browser/WebView).
+
+**Response** `200 OK` (shape follows GitHub’s releases API; commonly includes `tag_name`, `html_url`, `published_at`):
+
+```json
+{
+  "tag_name": "v0.6.5",
+  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.6.5",
+  "published_at": "2026-01-01T12:00:00Z"
+}
+```
+
+Errors from GitHub are surfaced as non-200 JSON from this route (dashboard shows a toast / inline error).
+
 ### POST /api/shutdown
 
-Initiate graceful shutdown. Agent states are preserved to SQLite for restore on next boot.
+Initiate **graceful shutdown** of the HTTP server and kernel. Agent states are preserved to SQLite for restore on next boot.
+
+**Security:** Requests from **loopback** (127.0.0.1 / ::1) may reach this handler **without** `Authorization: Bearer` even when `api_key` is set (same pattern as diagnostics loopback bypass). **Non-loopback** clients must authenticate like other POST routes.
 
 **Response** `200 OK`:
 
@@ -720,6 +990,8 @@ Initiate graceful shutdown. Agent states are preserved to SQLite for restore on 
   "status": "shutting_down"
 }
 ```
+
+The connection may drop before the client parses JSON; that is expected.
 
 ### GET /api/profiles
 
@@ -784,6 +1056,41 @@ Retrieve current kernel configuration (secrets are redacted).
   "mcp_servers": 1
 }
 ```
+
+### POST /api/config/reload
+
+Reload **`config.toml`** from disk, validate, and apply **hot-reloadable** changes. Audit log records the request.
+
+**Auth:** Required when a non-empty `api_key` is configured (unless your deployment treats unauthenticated access as open).
+
+**Response** `200 OK` (representative):
+
+```json
+{
+  "status": "applied",
+  "restart_required": false,
+  "restart_reasons": [],
+  "hot_actions_applied": ["ApprovalPolicy"],
+  "noop_changes": []
+}
+```
+
+`status` may be `no_changes`, `applied`, or `partial` when `restart_required` is true (some edits still need a full process restart). **Dashboard:** **Settings → System Info → Daemon / API** or **Monitor → Runtime** → **Reload config**.
+
+### POST /api/integrations/reload
+
+Hot-reload integration / extension MCP configs and reconnect.
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "reloaded",
+  "new_connections": 2
+}
+```
+
+**Dashboard:** **Reload integrations**. **Auth:** same as other POST routes when `api_key` is set.
 
 ### GET /api/peers
 
@@ -1505,6 +1812,33 @@ Verify the integrity of the Merkle hash chain audit trail. Walks the entire chai
 }
 ```
 
+### GET /api/logs/daemon/recent
+
+Returns recent **lines** from the CLI daemon tracing file: prefers **`{home}/logs/daemon.log`**, otherwise **`{home}/tui.log`** if that file exists (`home` is the kernel’s OpenFang/Armaraos data directory, same as `ARMARAOS_HOME` / `~/.armaraos`).
+
+**Query parameters:**
+
+| Name | Description |
+|------|-------------|
+| `lines` | Max lines after filtering (default `200`, clamped 1–2000). |
+| `level` | Optional minimum severity: `trace`, `debug`, `info`, `warn`, `error` (matches `tracing` default format substrings on each line). |
+| `filter` | Optional case-insensitive substring; line must contain it. |
+
+**Response** `200 OK`:
+
+```json
+{
+  "path": "logs/daemon.log",
+  "lines": [
+    { "seq": 1, "line": "2026-04-05T12:00:00.123456Z  INFO openfang_api: listening on 127.0.0.1:4200" }
+  ]
+}
+```
+
+`path` is `null` when no log file is present; `lines` is then empty.
+
+---
+
 ### GET /api/security
 
 Security status overview showing the state of all 16 security systems.
@@ -2121,6 +2455,32 @@ data: {"done":true,"usage":{"input_tokens":150,"output_tokens":340}}
 | `tool_result` | A tool invocation has completed. Contains the tool name and input. |
 | `done` | Final event. Contains `"done": true` and token usage statistics. |
 
+### GET /api/logs/stream (audit, SSE)
+
+Server-Sent Events stream of **new audit log entries** (same underlying store as `GET /api/audit/recent`). Each `data:` line is JSON with fields such as `seq`, `timestamp`, `agent_id`, `action`, `detail`, `outcome`, `hash`.
+
+**Query parameters:**
+
+| Name | Description |
+|------|-------------|
+| `level` | Optional: `info`, `warn`, or `error` — derived from a coarse classification of the audit `action` string. |
+| `filter` | Optional case-insensitive substring match across `action`, `detail`, and `agent_id`. |
+| `token` | When `api_key` is set and the client cannot send headers (e.g. `EventSource`), pass the same value as `Authorization: Bearer`. |
+
+On first poll after connect, the server **backfills** recent entries; then it sends only new rows (poll interval ~1s). Heartbeat comments keep the connection alive.
+
+**Auth:** Loopback clients may omit credentials; non-loopback requires Bearer or `token` (same rule as `/api/events/stream` and `/api/logs/daemon/stream`).
+
+### GET /api/logs/daemon/stream (SSE)
+
+SSE tail of the **daemon tracing log file** (same path rules as `GET /api/logs/daemon/recent`). Each `data:` payload is JSON: `{ "line": "..." }`.
+
+**Query parameters:** `level`, `filter`, and `token` — same meaning as **`/api/logs/daemon/recent`**. On connect, up to ~300 recent matching lines are sent, then new file growth is read incrementally (~1s poll).
+
+### GET /api/events/stream (kernel, SSE)
+
+SSE stream of kernel **`Event`** values (JSON per message): live bus traffic plus a short history on connect. Uses the same **loopback / Bearer / `token=`** auth rules as the log streams above.
+
 ---
 
 ## OpenAI-Compatible API
@@ -2299,7 +2659,7 @@ The `Retry-After` header indicates the window duration in seconds.
 
 ## Endpoint Summary
 
-**77 endpoints total** across 15 groups.
+**81+ endpoints total** across 15 groups (approximate; generated list may lag new routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -2309,16 +2669,22 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/health/detail` | Full health check (auth required) |
 | GET | `/api/status` | Kernel status |
 | GET | `/api/version` | Version info |
-| POST | `/api/shutdown` | Graceful shutdown |
+| GET | `/api/version/github-latest` | Latest GitHub release (server-side fetch for dashboard) |
+| POST | `/api/shutdown` | Graceful shutdown (loopback may omit Bearer; see route doc) |
 | GET | `/api/profiles` | List agent profiles |
 | GET | `/api/tools` | List available tools |
 | GET | `/api/config` | Configuration (secrets redacted) |
+| POST | `/api/config/reload` | Reload config from disk (hot reload + restart hints) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
-| GET | `/api/agents` | List agents |
+| GET | `/api/agents` | List agents (includes `system_prompt`, `identity`) |
 | POST | `/api/agents` | Spawn agent |
-| GET | `/api/agents/{id}` | Get agent details |
+| GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
 | PUT | `/api/agents/{id}/update` | Update agent config |
+| PATCH | `/api/agents/{id}/config` | Hot-update name, prompt, identity, model, fallbacks |
+| PATCH | `/api/agents/{id}/identity` | Update identity only (merged) |
+| GET | `/api/agents/{id}/tools` | Get tool allowlist / blocklist |
+| PUT | `/api/agents/{id}/tools` | Set tool allowlist / blocklist |
 | PUT | `/api/agents/{id}/mode` | Set agent mode (Stable/Normal) |
 | DELETE | `/api/agents/{id}` | Kill agent |
 | POST | `/api/agents/{id}/message` | Send message (blocking) |
@@ -2346,6 +2712,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | DELETE | `/api/memory/agents/{id}/kv/{key}` | Delete KV value |
 | **Channels** | | |
 | GET | `/api/channels` | List channels (40 adapters) |
+| POST | `/api/channels/reload` | Reload channel bridges from disk |
 | **Templates** | | |
 | GET | `/api/templates` | List templates |
 | GET | `/api/templates/{name}` | Get template |
@@ -2373,6 +2740,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/clawhub/skill/{slug}` | Skill details |
 | POST | `/api/clawhub/install` | Install from ClawHub |
 | **MCP & A2A** | | |
+| POST | `/api/integrations/reload` | Hot-reload extension MCP integrations |
 | GET | `/api/mcp/servers` | MCP server connections |
 | POST | `/mcp` | MCP HTTP transport (JSON-RPC 2.0) |
 | GET | `/.well-known/agent.json` | A2A agent card |
@@ -2383,7 +2751,12 @@ The `Retry-After` header indicates the window duration in seconds.
 | **Audit & Security** | | |
 | GET | `/api/audit/recent` | Recent audit logs |
 | GET | `/api/audit/verify` | Verify Merkle chain integrity |
+| GET | `/api/logs/daemon/recent` | Recent daemon tracing lines (file tail) |
 | GET | `/api/security` | Security status (16 systems) |
+| **SSE (see [SSE Streaming](#sse-streaming))** | | |
+| GET | `/api/logs/stream` | SSE: live audit entries (`level`, `filter`, `token`) |
+| GET | `/api/logs/daemon/stream` | SSE: tail daemon/tui tracing log |
+| GET | `/api/events/stream` | SSE: kernel event bus |
 | **Usage & Analytics** | | |
 | GET | `/api/usage` | Usage statistics |
 | GET | `/api/usage/summary` | Usage summary with quota |

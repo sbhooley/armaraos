@@ -396,6 +396,11 @@ impl ToolProfile {
 }
 
 /// LLM model configuration for an agent.
+///
+/// **Defaults:** [`ModelConfig::default`] uses `provider` and `model` of `"default"` so
+/// [`crate::config::DefaultModelConfig`] / kernel `[default_model]` applies at spawn time
+/// (`OpenFangKernel::spawn_agent` and agent restore). Manifests that omit `[model]` in TOML
+/// get the same behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelConfig {
@@ -419,8 +424,8 @@ pub struct ModelConfig {
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            provider: "default".to_string(),
+            model: "default".to_string(),
             max_tokens: 4096,
             temperature: 0.7,
             system_prompt: "You are a helpful AI agent.".to_string(),
@@ -802,6 +807,13 @@ mod tests {
             back.pinned_model,
             Some("claude-sonnet-4-20250514".to_string())
         );
+    }
+
+    #[test]
+    fn test_model_config_default_defers_to_kernel_default_model() {
+        let m = ModelConfig::default();
+        assert_eq!(m.provider, "default");
+        assert_eq!(m.model, "default");
     }
 
     #[test]

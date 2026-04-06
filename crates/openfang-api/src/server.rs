@@ -151,6 +151,10 @@ pub async fn build_router(
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/version", axum::routing::get(routes::version))
         .route(
+            "/api/version/github-latest",
+            axum::routing::get(routes::version_github_latest_release),
+        )
+        .route(
             "/api/agents",
             axum::routing::get(routes::list_agents).post(routes::spawn_agent),
         )
@@ -467,6 +471,14 @@ pub async fn build_router(
         )
         // Live log streaming (SSE)
         .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
+        .route(
+            "/api/logs/daemon/recent",
+            axum::routing::get(routes::daemon_logs_recent),
+        )
+        .route(
+            "/api/logs/daemon/stream",
+            axum::routing::get(routes::daemon_logs_stream),
+        )
         // Kernel event bus (SSE)
         .route(
             "/api/events/stream",
@@ -506,6 +518,10 @@ pub async fn build_router(
         .route(
             "/api/armaraos-home/read",
             axum::routing::get(routes::armaraos_home_read),
+        )
+        .route(
+            "/api/armaraos-home/download",
+            axum::routing::get(routes::armaraos_home_download),
         )
         .route(
             "/api/armaraos-home/write",

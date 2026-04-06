@@ -33,7 +33,7 @@ function agentsPage() {
   return {
     tab: 'agents',
     activeChatAgent: null,
-    /** Collapsed by default: allowlist-probe / offline-cron agent chats */
+    /** Collapsed by default: internal automation / probe agent chats */
     systemChatAgentsExpanded: false,
     // -- Agents state --
     showSpawnModal: false,
@@ -152,10 +152,9 @@ function agentsPage() {
 
     get agents() { return Alpine.store('app').agents; },
 
-    /** Kernel-spawned agents for AINL allowlist probe / offline cron (not user-created). */
+    /** Kernel-spawned agents for AINL allowlist probe / offline cron / IR-off allow (not user-created). */
     isAutomationProbeChatAgent(agent) {
-      var n = agent && agent.name != null ? String(agent.name) : '';
-      return n.startsWith('allowlist-probe') || n.startsWith('offline-cron');
+      return isInternalAutomationProbeChatAgentName(agent && agent.name);
     },
 
     get chatPickerPrimaryAgents() {

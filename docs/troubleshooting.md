@@ -52,24 +52,33 @@ curl http://127.0.0.1:4200/api/health/detail  # Requires auth
 
 For bug reports, the API can generate a **redacted archive** under `~/.armaraos/support/`:
 
-- **Endpoint:** `POST /api/support/diagnostics` (returns JSON with `bundle_path`).
+- **Create:** `POST /api/support/diagnostics` (returns JSON with `bundle_path`, `bundle_filename`, `relative_path`).
+- **Download:** `GET /api/support/diagnostics/download?name=<bundle_filename>` streams the `.zip` (`Content-Disposition: attachment`). The `name` query must match the safe pattern `armaraos-diagnostics-YYYYMMDD-HHMMSS.zip` (no path segments).
 - **Contents (typical):** `config.toml`, redacted `secrets.env`, `audit.json` (recent audit entries + tip hash), SQLite DB + WAL/SHM when present, recent log files, `meta.json` (paths, version, platform).
-- **Access:** From **loopback** (127.0.0.1 / ::1) the embedded dashboard can call this without Bearer auth so local troubleshooting works when an API key is set. Remote clients must use normal API authentication.
+- **Access:** From **loopback** (127.0.0.1 / ::1) both **POST** and **GET** above may be used **without** Bearer auth so the embedded dashboard can create and fetch the zip when an API key is set. Remote clients must use normal API authentication for both routes.
 
-From the UI: **Generate + copy bundle** when disconnected, or **Settings → System Info → Support** (desktop Help menu uses the same flow).
+From the UI: **Generate + copy bundle** when disconnected, or **Settings → System Info → Support** (desktop Help menu uses the same flow). On **desktop**, the app copies the zip to **Downloads** via Tauri (`copy_diagnostics_to_downloads` with **`bundlePath`**); on failure, the UI may retry via the HTTP download.
+
+**Home folder:** To grab the same file manually, open **Home folder** → `support/` and use **Download** (full file via `GET /api/armaraos-home/download`) — **View** only previews up to **512 KiB**, so large zips often show a preview error but **Download** still works.
 
 ### Remote access vs loopback (diagnostics)
 
-**By design**, `POST /api/support/diagnostics` is allowed **without** Bearer auth only from **loopback** (127.0.0.1 / ::1) so the embedded dashboard and desktop shell can fetch a bundle when an API key is configured. **Non-loopback** callers must use the same authentication as the rest of the API.
+**By design**, `POST /api/support/diagnostics` and **`GET /api/support/diagnostics/download`** are allowed **without** Bearer auth only from **loopback** (127.0.0.1 / ::1) so the embedded dashboard and desktop shell can create and download a bundle when an API key is configured. **`GET /api/armaraos-home/download`** follows the same loopback rule. **Non-loopback** callers must use the same authentication as the rest of the API.
 
 If you ever need **remote** support bundles (e.g. field support over the internet), that is a separate product decision: require strong auth, rate limits, audit logging, and possibly a dedicated support role — do not widen loopback-only endpoints without a threat model.
 
 ### View Logs
 
-OpenFang uses `tracing` for structured logging. Set the log level via environment:
+OpenFang uses `tracing` for structured logging.
+
+**CLI daemon (`openfang start`, `openfang gateway start`):** Logs go to **stderr** and to **`~/.armaraos/logs/daemon.log`** (under `ARMARAOS_HOME` when set). Open the dashboard **Logs → Daemon** to tail or filter without reading the file on disk. The **Live** tab is the **audit** trail (agent actions, tools, etc.), not the same as Rust tracing.
+
+**TUI / `openfang chat`:** Tracing is written to **`~/.armaraos/tui.log`** so the terminal UI is not corrupted.
+
+**Config:** `log_level` in `config.toml` (or dashboard **Logs → Daemon** → Save) sets default verbosity for the daemon process. **Restart the daemon** after changing it. `RUST_LOG` overrides the filter when set:
 
 ```bash
-RUST_LOG=info openfang start          # Default
+RUST_LOG=info openfang start          # Default-style filter
 RUST_LOG=debug openfang start         # Verbose
 RUST_LOG=openfang=debug openfang start  # Only OpenFang debug, deps at info
 ```
@@ -405,6 +414,18 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 3. Streaming: set `"stream": true` for SSE responses
 4. Images: use `image_url` with `data:image/png;base64,...` format
 
+### Dashboard: “Check daemon vs GitHub” / version compare fails
+
+**Cause (older builds):** The UI called **GitHub’s API from the browser**, which can fail (CORS, ad blockers, offline WebView).
+
+**Fix:** Use a current daemon. **Settings → System Info** and **Monitor → Runtime** call **`GET /api/version/github-latest`**, which fetches the release **on the server**. Verify: `curl -sS http://127.0.0.1:4200/api/version/github-latest | head -c 300`
+
+### Restart daemon or messaging bridges from the dashboard
+
+**Hot reload:** **Settings → System Info → Daemon / API** or **Monitor → Runtime** — **Reload config**, **Reload channels** (restarts channel bridges / gateways from disk), **Reload integrations**. These use your normal API auth when `api_key` is set.
+
+**Full stop:** **Shut down daemon** calls **`POST /api/shutdown`** (graceful exit). Restart via the **desktop app**, **`openfang start`**, or your **process supervisor**. Loopback clients may call shutdown without Bearer even when a key is set; remote clients must authenticate.
+
 ---
 
 ## Desktop App Issues
@@ -428,6 +449,12 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 - **Linux**: Requires a system tray (e.g., `libappindicator` on GNOME)
 - **macOS**: Should work out of the box
 - **Windows**: Check notification area settings, may need to show hidden icons
+
+### Scheduled AINL: `adapter blocked by capability gate: web` (or similar)
+
+**Typical expectation:** current ArmaraOS injects **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** for scheduled **`ainl run`** and sets a desktop default after **`~/.armaraos/.env`**, so digest / web graphs should run without users exporting adapter env vars.
+
+**If it still fails:** upgrade ArmaraOS and PyPI **`ainativelang`**, check **Agents → agent → Info** for **`scheduled_ainl_host_adapter`** (including **`ainl_allow_ir_declared_adapters`**), and see **[scheduled-ainl.md](scheduled-ainl.md)** for manifest opt-out and explicit allowlists.
 
 ---
 
@@ -620,6 +647,10 @@ openfang auth hash-password
 Paste the output into the `password_hash` field and restart the daemon.
 
 For public-facing deployments, you should also place a reverse proxy (Caddy, nginx) in front for TLS termination.
+
+### Where are the Get started page and Quick actions documented?
+
+The sidebar **Get started** entry opens hash **`#overview`**: **Quick actions** at the top (after the optional **Live** strip; includes **App Store** → `#ainl-library`), hero stats, setup checklist, **Setup Wizard** visibility (`openfang-onboarded`, sidebar **Get started** re-click), and panels. For layout, Alpine markup locations, CSS classes, and loading skeleton behavior, see **[dashboard-overview-ui.md](dashboard-overview-ui.md)**. For manual QA (checklist, Quick action hash targets, wizard gating), see **[dashboard-testing.md](dashboard-testing.md)** (*Get started page*). **Settings** and **Runtime** UI polish: **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)**.
 
 ### How do I configure the embedding model for memory?
 

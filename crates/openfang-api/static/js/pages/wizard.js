@@ -17,6 +17,8 @@ function wizardPage() {
     totalSteps: 6,
     loading: false,
     error: '',
+    /** Desktop only: anonymous install ping (PostHog). Uncheck = opt out before any request. */
+    wizardProductAnalyticsAllow: true,
 
     // Step 2: Provider setup
     providers: [],
@@ -276,6 +278,14 @@ function wizardPage() {
       this.loading = true;
       this.error = '';
       try {
+        if (typeof ArmaraosDesktopTauriInvoke === 'function') {
+          try {
+            var pr = await ArmaraosDesktopTauriInvoke('get_desktop_product_analytics_prefs');
+            if (pr && typeof pr.opt_out === 'boolean') {
+              this.wizardProductAnalyticsAllow = !pr.opt_out;
+            }
+          } catch (e) { /* ignore */ }
+        }
         await this.loadProviders();
         // Always select OpenRouter when the catalog includes it (recommended default on wizard entry).
         var providers = this.providers;
@@ -304,9 +314,23 @@ function wizardPage() {
       }
     },
 
+    async applyDesktopProductAnalyticsConsent(fromWizardContinue) {
+      if (typeof ArmaraosDesktopTauriInvoke !== 'function') return;
+      var allow = !!this.wizardProductAnalyticsAllow;
+      try {
+        await ArmaraosDesktopTauriInvoke('set_desktop_product_analytics_prefs', {
+          optOut: !allow,
+          fromWizardContinue: !!fromWizardContinue,
+        });
+      } catch (e) { /* ignore */ }
+    },
+
     // ── Navigation ──
 
-    nextStep() {
+    async nextStep() {
+      if (this.step === 1) {
+        await this.applyDesktopProductAnalyticsConsent(true);
+      }
       if (this.step === 2 && !this.wizardProviderReady) return;
       if (this.step === 3 && !this.createdAgent) {
         // Skip "Try It" if no agent was created
@@ -333,11 +357,14 @@ function wizardPage() {
       }
     },
 
-    goToStep(n) {
+    async goToStep(n) {
       if (n >= 1 && n <= this.totalSteps) {
         if (n === 4 && !this.createdAgent) return; // Can't go to Try It without agent
         // Do not allow skipping the provider step via the progress bar (must match Next button rules).
         if (n > 2 && !this.wizardProviderReady) return;
+        if (this.step === 1 && n === 2) {
+          await this.applyDesktopProductAnalyticsConsent(true);
+        }
         this.step = n;
         if (n === 2) {
           var self = this;

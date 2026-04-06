@@ -17,6 +17,7 @@ pub mod embedded_ainl_programs;
 pub mod error;
 pub mod event_bus;
 pub mod heartbeat;
+mod internal_automation_probe;
 pub mod kernel;
 pub mod metering;
 pub mod openclaw_workspace;

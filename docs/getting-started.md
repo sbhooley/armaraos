@@ -320,10 +320,13 @@ http://127.0.0.1:4200/
 ```
 
 The embedded WebChat UI allows you to:
+- Open **Get started** from the sidebar (first section, above **Chat**; **Comms** is under **Monitor**) for the landing dashboard: **Quick actions** at the top (agents, skills, **App Store**, channels, workflows, settings, **Daemon & runtime** → reload/shutdown controls on **Runtime**), system stats, provider status, optional **setup checklist**, and **Setup Wizard** entry in the header (after onboarding, use **Run setup again** or click **Get started** in the sidebar a second time to reopen the wizard — see [Dashboard Get started UI](dashboard-overview-ui.md)). Layout and source map: [dashboard-overview-ui.md](dashboard-overview-ui.md). Manual QA and `localStorage` notes: [Dashboard testing](dashboard-testing.md). **Settings** and **Runtime** pages use the same polished shell as other top-level routes, including **daemon lifecycle** actions — [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md).
 - View all running agents
 - Chat with any agent in real-time (via WebSocket)
 - See streaming responses as they are generated
 - View token usage per message
+
+The default landing route in the SPA is still `#overview`; bookmarks and links using that hash continue to work.
 
 ---
 
@@ -336,7 +339,7 @@ Now that you have OpenFang running:
 - **Set up channels**: Connect any of 40 messaging platforms (Telegram, Discord, Slack, WhatsApp, LINE, Mastodon, and 34 more). See [Channel Adapters](channel-adapters).
 - **Use bundled skills**: 60 expert knowledge skills are pre-installed (GitHub, Docker, Kubernetes, security audit, prompt engineering, etc.). See [Skill Development](skill-development).
 - **Build custom skills**: Extend agents with Python, WASM, or prompt-only skills. See [Skill Development](skill-development).
-- **Use the API**: 77 REST/WS/SSE endpoints, including an OpenAI-compatible `/v1/chat/completions`. See [API Reference](api-reference).
+- **Use the API**: Broad REST/WS/SSE surface, including an OpenAI-compatible `/v1/chat/completions` and ArmaraOS Home browser routes. See [API Reference](api-reference).
 - **Switch LLM providers**: 20 providers supported (Anthropic, OpenAI, Gemini, Groq, DeepSeek, xAI, Ollama, and more). Per-agent model overrides.
 - **Set up workflows**: Chain multiple agents together. Use `openfang workflow create` with a TOML workflow definition.
 - **Use MCP**: Connect to external tools via Model Context Protocol. Configure in `config.toml` under `[[mcp_servers]]`.

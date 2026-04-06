@@ -1,4 +1,4 @@
-// AINL Library — browse synced demo/examples/intelligence from upstream ainativelang
+// App Store (route id: ainl-library) — browse free AINL programs from synced library; paid catalog placeholder
 'use strict';
 
 function ainlLibraryPage() {
@@ -13,6 +13,10 @@ function ainlLibraryPage() {
     curated: [],
     sync: null,
     search: '',
+    /** 'free' | 'paid' — paid is a coming-soon placeholder */
+    storeTab: 'free',
+    /** Collapsible sections: omitted or true = expanded; false = collapsed */
+    expandedSections: {},
     loadHints: false,
     strictValidation: true,
     hintsTruncated: false,
@@ -20,6 +24,22 @@ function ainlLibraryPage() {
     expanded: {},
     tryBusy: null,
     outputModal: null,
+
+    isSectionOpen(key) {
+      return this.expandedSections[key] !== false;
+    },
+
+    toggleSection(key) {
+      var cur = this.expandedSections[key];
+      var open = cur !== false;
+      this.expandedSections = Object.assign({}, this.expandedSections, { [key]: !open });
+    },
+
+    sectionCategoryKey(cat) {
+      if (!cat) return 'cat-unknown';
+      var id = cat.id != null ? String(cat.id) : String(cat.label || 'unknown');
+      return 'cat-' + id.replace(/[^a-zA-Z0-9_-]/g, '_');
+    },
 
     get isDesktopShell() {
       try {
@@ -49,6 +69,25 @@ function ainlLibraryPage() {
         });
         return { id: cat.id, label: cat.label, programs: progs };
       }).filter(function(c) { return c.programs.length > 0; });
+    },
+
+    get filteredCurated() {
+      var q = (this.search || '').trim().toLowerCase();
+      var list = Array.isArray(this.curated) ? this.curated : [];
+      if (!q) return list;
+      return list.filter(function(c) {
+        var path = (c.relative_path || '').toLowerCase();
+        var name = (c.name || '').toLowerCase();
+        return path.indexOf(q) >= 0 || name.indexOf(q) >= 0;
+      });
+    },
+
+    totalFilteredPrograms() {
+      var n = 0;
+      this.filteredCategories().forEach(function(c) {
+        n += (c.programs || []).length;
+      });
+      return n;
     },
 
     async loadLibrary() {

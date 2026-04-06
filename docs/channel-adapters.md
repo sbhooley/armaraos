@@ -20,6 +20,7 @@ All adapters share a common foundation: graceful shutdown via `watch::channel`, 
 - [Email](#email)
 - [WebChat (Built-in)](#webchat-built-in)
 - [Agent Routing](#agent-routing)
+- [Outbound messages from agents (tools)](#outbound-messages-from-agents-tools)
 - [Writing Custom Adapters](#writing-custom-adapters)
 
 ---
@@ -612,6 +613,17 @@ The `AgentRouter` determines which agent receives an incoming message. The routi
 2. **User-agent binding**: If a user has previously been associated with a specific agent (via commands or configuration), messages from that user route to that agent.
 3. **Command prefix**: Users can switch agents by sending a command like `/agent coder` in the chat. Subsequent messages will be routed to the "coder" agent.
 4. **Fallback**: If no routing applies, messages go to the first available agent.
+
+### Outbound messages from agents (tools)
+
+Agents do not read channel secrets from the workspace by default. After you configure an adapter under **`[channels.<name>]`** (or the Dashboard **Channels** UI), the runtime exposes:
+
+- **`channel_send`** — send a message on a named channel (`channel` = adapter name such as `telegram`, `slack`, `discord`, `email`; `recipient` = chat id / channel / address, or empty when the adapter defines a default).
+- **`event_publish`** — broadcast a structured event to other agents (optional automation / hand coordination).
+
+**Tool gating:** With a **non-empty** per-agent **tool allowlist**, you must list tools explicitly (see **`GET` / `PUT /api/agents/{id}/tools`** in [API Reference](api-reference.md#put-apiagentsidtools)). With an **empty** allowlist, the agent’s **named profile** (e.g. Minimal, Coding, Research, Messaging, Automation) supplies the tool set; built-in profiles include **`channel_send`** and **`event_publish`** where appropriate so hands and automations can notify without custom `*` profiles.
+
+The Dashboard **Agents →** agent **Config** tab includes tool allow/block lists and an **Add messaging tools** shortcut. Bundled **hands** (e.g. Predictor) document the same constraints in their **`SKILL.md`**.
 
 ---
 

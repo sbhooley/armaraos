@@ -14,5 +14,8 @@ commands.allow = [
   "report_daemon_update_check",
   "generate_support_bundle",
   "copy_diagnostics_to_downloads",
+  "copy_home_file_to_downloads",
   "compose_support_email",
+  "get_desktop_product_analytics_prefs",
+  "set_desktop_product_analytics_prefs",
 ]

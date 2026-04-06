@@ -17,6 +17,8 @@ The AINL runtime can **intersect** the graph’s IR-derived adapter list with a 
 
 `AINL_HOST_ADAPTER_ALLOWLIST=core,http,web,queue,…`
 
+When **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** (the default for scheduled jobs below), the Python runtime **does not apply** this variable from the **environment** for intersection (CLI/`--host-adapter-allowlist` still wins). Use the next section for the full relax story.
+
 ### Default behavior (daemon)
 
 For each cron job, the kernel looks at the job’s **target agent**:
@@ -25,7 +27,7 @@ For each cron job, the kernel looks at the job’s **target agent**:
 - Otherwise, if the agent looks “online-capable” (non-empty **network**, **tools**, **shell**, **agent_spawn**, or **ofp_connect** in the manifest), the daemon sets the **full** default list that matches the `ainl` CLI registry (equivalent to an unrestricted local `ainl run` for typical graphs).
 - If the agent is offline-only on those axes, the variable is **not** set (no extra narrowing).
 
-The dashboard **Agents → Info** panel (and **`GET /api/agents/{id}`**) includes read-only **`scheduled_ainl_host_adapter`**: `source` (`none` | `metadata` | `default_online`), a **`summary`** string, and either **`allowlist`** (metadata) or **`adapter_count`** (default online list).
+The dashboard **Agents → Info** panel (and **`GET /api/agents/{id}`**) includes read-only **`scheduled_ainl_host_adapter`**: `source` (`none` | `metadata` | `default_online`), a **`summary`** string, **`ainl_allow_ir_declared_adapters`** (`"1"` or `"0"`), and either **`allowlist`** (metadata) or **`adapter_count`** (default online list).
 
 ### CLI / manual runs
 
@@ -33,6 +35,42 @@ The dashboard **Agents → Info** panel (and **`GET /api/agents/{id}`**) include
 - **CLI:** `ainl run --host-adapter-allowlist core,web,queue …` (overrides the env var for that process).
 
 See the AI Native Lang runtime: `RuntimeEngine` reads the parameter first, then `AINL_HOST_ADAPTER_ALLOWLIST`.
+
+## IR-declared adapters (`AINL_ALLOW_IR_DECLARED_ADAPTERS`)
+
+The AINL Python runtime can **ignore `AINL_HOST_ADAPTER_ALLOWLIST` from the environment** when **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`**, so graphs may use any adapter referenced in the IR (`web`, `http`, …). **`AINL_HOST_ADAPTER_DENYLIST`**, **`AINL_SECURITY_PROFILE`**, and **`AINL_STRICT_MODE`** still apply.
+
+### Default behavior (daemon + desktop)
+
+- **Scheduled `ainl run`:** the kernel **always** sets **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** on the child process — **`1`** by default, **`0`** only when the job’s target agent manifest sets **`ainl_allow_ir_declared_adapters`** to a falsey value (`"0"`, `"false"`, `"off"`, `"no"`, or JSON **`false`**). This avoids “capability gate: web” failures when the daemon was started from a shell that exported a narrow **`AINL_HOST_ADAPTER_ALLOWLIST`** (the kernel still **removes** inherited allowlist before optionally re-injecting its own; with relax **`1`**, Python ignores that env allowlist anyway).
+- **Desktop app:** after loading **`~/.armaraos/.env`** (and **`secrets.env`**) into the process, if **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** is still unset, the embedded server sets it to **`1`**. **Settings → AINL → Try** (`ainl validate` / `ainl run` on library files) also passes **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** on that subprocess.
+
+**Dashboard / API:** **`GET /api/agents/{id}`** includes **`scheduled_ainl_host_adapter.ainl_allow_ir_declared_adapters`** (`"1"` or `"0"`) next to the allowlist summary fields.
+
+### Headless CLI daemon
+
+If you run **`openfang start`** from a terminal **without** going through the desktop shell, the process does **not** get the desktop’s default; scheduled jobs **still** inject **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** per the kernel rule above. For **manual** `ainl run` in the same terminal, set the variable yourself or rely on upstream AINL behavior (e.g. **`intelligence/`** paths); see **`AI_Native_Lang/AGENTS.md`**.
+
+## Intelligence digest graphs (`intelligence/*.lang`)
+
+Programs like **`intelligence_digest.lang`** call **`web`**, **`tiktok`**, **`cache`**, **`queue`**, and **`memory`** (via `genmem`). With current kernel defaults, scheduled runs should **not** fail on **`adapter blocked by capability gate: web`** solely because the user never set environment variables.
+
+**If it still fails**, typical causes are: an **old** ArmaraOS/AINL pair, manifest **`ainl_allow_ir_declared_adapters`** set to **off**, **`AINL_INTELLIGENCE_FORCE_HOST_POLICY=1`** on the AINL side, or running **`ainl`** **outside** ArmaraOS without relax. **Fix (pick one):**
+
+1. **Upgrade** ArmaraOS and PyPI **`ainativelang`** so scheduled injection and intelligence-path relax are present.
+
+2. **Manifest:** ensure **`ainl_allow_ir_declared_adapters`** is not **`"0"`** / **`false`** unless you intend strict host intersection. To force relax explicitly:
+
+   ```toml
+   [metadata]
+   ainl_allow_ir_declared_adapters = "1"
+   ```
+
+3. **Explicit allowlist:** set **`ainl_host_adapter_allowlist`** to a CSV that includes at least **`core,web,tiktok,cache,queue,memory`** (only needed if relax is **`0`** and you enumerate adapters). Copy the full default line from **[`docs/snippets/agent-metadata-intelligence-cron.toml`](snippets/agent-metadata-intelligence-cron.toml)**.
+
+4. **Upstream AINL:** sources under an **`intelligence/`** path also set **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** when unset (unless **`AINL_INTELLIGENCE_FORCE_HOST_POLICY=1`**).
+
+After editing the agent manifest, restart the agent or reload configuration so the kernel picks up metadata — e.g. **Settings → System Info → Daemon / API** or **Monitor → Runtime** → **Reload config**, or a full daemon restart. Check **Agents → agent → Info** for **`scheduled_ainl_host_adapter`** (summary, **`ainl_allow_ir_declared_adapters`**, and allowlist fields). Narrative: **`AI_Native_Lang/docs/INTELLIGENCE_PROGRAMS.md`**; UI map: **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)** (*Daemon / API runtime*).
 
 ## Editing cron jobs
 

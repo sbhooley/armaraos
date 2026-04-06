@@ -97,6 +97,10 @@ async fn start_test_server_with_provider_patch(
         .route("/api/health", axum::routing::get(routes::health))
         .route("/api/status", axum::routing::get(routes::status))
         .route(
+            "/api/version/github-latest",
+            axum::routing::get(routes::version_github_latest_release),
+        )
+        .route(
             "/api/agents",
             axum::routing::get(routes::list_agents).post(routes::spawn_agent),
         )
@@ -245,6 +249,32 @@ async fn test_health_endpoint() {
     // Detailed fields should NOT appear in public health endpoint
     assert!(body["database"].is_null());
     assert!(body["agent_count"].is_null());
+}
+
+/// Dashboard “daemon vs GitHub” uses this route (server-side GitHub fetch).
+#[tokio::test]
+async fn test_github_latest_release_endpoint() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/version/github-latest", server.base_url))
+        .timeout(std::time::Duration::from_secs(45))
+        .send()
+        .await
+        .expect("GET github-latest");
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.expect("json body");
+    assert!(
+        status.is_success(),
+        "expected 2xx, got {status} body {body:?}"
+    );
+    let tag = body["tag_name"].as_str().unwrap_or("");
+    assert!(!tag.is_empty(), "tag_name missing: {body:?}");
+    let url = body["html_url"].as_str().unwrap_or("");
+    assert!(
+        url.contains("github.com"),
+        "html_url should be a GitHub URL: {body:?}"
+    );
 }
 
 #[tokio::test]

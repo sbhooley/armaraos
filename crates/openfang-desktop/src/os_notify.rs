@@ -27,6 +27,11 @@ pub fn post_from_app<R: Runtime>(
 /// Show a native notification (async on the Tauri runtime). Logs failures at `warn`.
 pub fn post(bundle_identifier: String, title: String, body: String, icon_path: Option<String>) {
     tauri::async_runtime::spawn(async move {
+        #[cfg(target_os = "macos")]
+        let bundle_id = bundle_identifier;
+        #[cfg(not(target_os = "macos"))]
+        drop(bundle_identifier);
+
         let mut n = notify_rust::Notification::new();
         n.summary(&title);
         n.body(&body);
@@ -42,7 +47,7 @@ pub fn post(bundle_identifier: String, title: String, body: String, icon_path: O
         }
         #[cfg(target_os = "macos")]
         {
-            let _ = notify_rust::set_application(&bundle_identifier);
+            let _ = notify_rust::set_application(&bundle_id);
         }
         match n.show() {
             Ok(_) => tracing::debug!(%title, "Desktop notification posted"),

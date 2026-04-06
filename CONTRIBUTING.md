@@ -162,6 +162,7 @@ OpenFang is organized as a Cargo workspace with 14 crates:
 - **Shared memory**: A fixed UUID (`AgentId(Uuid::from_bytes([0..0, 0x01]))`) provides a cross-agent KV namespace.
 - **Daemon detection**: The CLI checks `daemon.json` under the resolved data home (default `~/.armaraos/`, see `docs/data-directory.md`) and pings the health endpoint. If a daemon is running, commands use HTTP; otherwise, they boot an in-process kernel.
 - **Capability-based security**: Every agent operation is checked against the agent's granted capabilities before execution.
+- **Dashboard SPA**: Alpine.js app in `crates/openfang-api/static/` (`index_body.html`, `js/pages/`, `css/`). The **Get started** (`#overview`) landing — **Quick actions** (incl. **App Store**), **Setup Wizard** gating (`openfang-onboarded`, `navigateOverview` in `app.js`), layout, six-tile skeleton, and **setup checklist** rules (core vs channel vs perpetual Chat/Skills shortcuts; no `of-first-msg` / `of-skill-browsed`) — is documented in [docs/dashboard-overview-ui.md](docs/dashboard-overview-ui.md) and [docs/dashboard-testing.md](docs/dashboard-testing.md). **Settings** / **Runtime** page polish: [docs/dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md). Support zip + Home folder download flows (preview limits, Tauri `bundlePath` / `relativePath`) are in dashboard-testing; Tauri IPC details in [docs/desktop.md](docs/desktop.md#ipc-commands) (`generate_support_bundle`, `copy_diagnostics_to_downloads`, `copy_home_file_to_downloads`).
 
 ### Default language for programs and apps
 

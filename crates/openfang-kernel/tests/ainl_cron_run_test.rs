@@ -395,3 +395,218 @@ exit 0
         std::env::remove_var("AINL_HOST_ADAPTER_ALLOWLIST");
     }
 }
+
+/// Scheduled `ainl run` sets `AINL_ALLOW_IR_DECLARED_ADAPTERS=1` for mass-market defaults.
+#[tokio::test]
+#[serial]
+async fn cron_run_job_ainl_run_sets_allow_ir_declared_adapters_default() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().to_path_buf();
+    let lib = home.join("ainl-library");
+    std::fs::create_dir_all(&lib).expect("create ainl-library");
+
+    let prog = lib.join("stub.ainl");
+    std::fs::write(&prog, "S app core noop\nL1:\n R core.ADD 1 1 ->x\n J x\n").expect("write prog");
+
+    let probe = tmp.path().join("allow_ir_probe.txt");
+
+    let fake_ainl = home.join("fake-ainl");
+    let mut f = std::fs::File::create(&fake_ainl).expect("fake file");
+    f.write_all(
+        br#"#!/bin/sh
+if [ "$1" != "run" ]; then exit 1; fi
+shift
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) shift ;;
+    --frame-json) shift; shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$ARMARAOS_TEST_ALLOW_IR_OUT" ]; then
+  printf '%s' "${AINL_ALLOW_IR_DECLARED_ADAPTERS-__UNSET__}" > "$ARMARAOS_TEST_ALLOW_IR_OUT"
+fi
+echo '{"ok":true,"label":"test","result":42,"runtime_version":"stub"}'
+exit 0
+"#,
+    )
+    .expect("script");
+    drop(f);
+    std::fs::set_permissions(&fake_ainl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    unsafe {
+        std::env::set_var("ARMARAOS_AINL_BIN", fake_ainl.to_str().unwrap());
+        std::env::set_var(
+            "ARMARAOS_TEST_ALLOW_IR_OUT",
+            probe.to_str().expect("utf8 path"),
+        );
+    }
+
+    let config = KernelConfig {
+        home_dir: home.clone(),
+        ..Default::default()
+    };
+    let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
+    let kernel = Arc::new(kernel);
+    kernel.set_self_handle();
+
+    let assistant = kernel
+        .registry
+        .list()
+        .into_iter()
+        .next()
+        .expect("at least one agent after boot");
+
+    let job = CronJob {
+        id: CronJobId::new(),
+        agent_id: assistant.id,
+        name: "test-ainl-allow-ir".into(),
+        enabled: true,
+        schedule: CronSchedule::Cron {
+            expr: "0 0 * * *".into(),
+            tz: None,
+        },
+        action: CronAction::AinlRun {
+            program_path: "stub.ainl".into(),
+            cwd: None,
+            ainl_binary: None,
+            timeout_secs: Some(30),
+            json_output: true,
+            frame: None,
+        },
+        delivery: CronDelivery::None,
+        created_at: chrono::Utc::now(),
+        last_run: None,
+        next_run: None,
+    };
+
+    let out = kernel.cron_run_job(&job).await.expect("cron_run_job");
+    assert!(
+        out.contains("\"ok\": true") || out.contains("\"ok\":true"),
+        "{}",
+        out
+    );
+
+    let seen = std::fs::read_to_string(&probe).expect("probe file");
+    assert_eq!(seen, "1");
+
+    unsafe {
+        std::env::remove_var("ARMARAOS_AINL_BIN");
+        std::env::remove_var("ARMARAOS_TEST_ALLOW_IR_OUT");
+    }
+}
+
+/// Manifest `ainl_allow_ir_declared_adapters: "0"` forces subprocess `AINL_ALLOW_IR_DECLARED_ADAPTERS=0`.
+#[tokio::test]
+#[serial]
+async fn cron_run_job_ainl_run_allow_ir_declared_adapters_manifest_off() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = tmp.path().to_path_buf();
+    let lib = home.join("ainl-library");
+    std::fs::create_dir_all(&lib).expect("create ainl-library");
+
+    let prog = lib.join("stub.ainl");
+    std::fs::write(&prog, "S app core noop\nL1:\n R core.ADD 1 1 ->x\n J x\n").expect("write prog");
+
+    let probe = tmp.path().join("allow_ir_probe_off.txt");
+
+    let fake_ainl = home.join("fake-ainl");
+    let mut f = std::fs::File::create(&fake_ainl).expect("fake file");
+    f.write_all(
+        br#"#!/bin/sh
+if [ "$1" != "run" ]; then exit 1; fi
+shift
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) shift ;;
+    --frame-json) shift; shift ;;
+    *) break ;;
+  esac
+done
+if [ -n "$ARMARAOS_TEST_ALLOW_IR_OUT" ]; then
+  printf '%s' "${AINL_ALLOW_IR_DECLARED_ADAPTERS-__UNSET__}" > "$ARMARAOS_TEST_ALLOW_IR_OUT"
+fi
+echo '{"ok":true,"label":"test","result":42,"runtime_version":"stub"}'
+exit 0
+"#,
+    )
+    .expect("script");
+    drop(f);
+    std::fs::set_permissions(&fake_ainl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    unsafe {
+        std::env::set_var("ARMARAOS_AINL_BIN", fake_ainl.to_str().unwrap());
+        std::env::set_var(
+            "ARMARAOS_TEST_ALLOW_IR_OUT",
+            probe.to_str().expect("utf8 path"),
+        );
+    }
+
+    let config = KernelConfig {
+        home_dir: home.clone(),
+        ..Default::default()
+    };
+    let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
+    let kernel = Arc::new(kernel);
+    kernel.set_self_handle();
+
+    let assistant = kernel
+        .registry
+        .list()
+        .into_iter()
+        .next()
+        .expect("at least one agent after boot");
+
+    let mut manifest = assistant.manifest.clone();
+    manifest.name = format!(
+        "allow-ir-off-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    manifest.metadata.insert(
+        "ainl_allow_ir_declared_adapters".to_string(),
+        serde_json::json!("0"),
+    );
+
+    let agent_id = kernel.spawn_agent(manifest).expect("spawn probe agent");
+
+    let job = CronJob {
+        id: CronJobId::new(),
+        agent_id,
+        name: "test-ainl-allow-ir-off".into(),
+        enabled: true,
+        schedule: CronSchedule::Cron {
+            expr: "0 0 * * *".into(),
+            tz: None,
+        },
+        action: CronAction::AinlRun {
+            program_path: "stub.ainl".into(),
+            cwd: None,
+            ainl_binary: None,
+            timeout_secs: Some(30),
+            json_output: true,
+            frame: None,
+        },
+        delivery: CronDelivery::None,
+        created_at: chrono::Utc::now(),
+        last_run: None,
+        next_run: None,
+    };
+
+    let out = kernel.cron_run_job(&job).await.expect("cron_run_job");
+    assert!(
+        out.contains("\"ok\": true") || out.contains("\"ok\":true"),
+        "{}",
+        out
+    );
+
+    let seen = std::fs::read_to_string(&probe).expect("probe file");
+    assert_eq!(seen, "0");
+
+    unsafe {
+        std::env::remove_var("ARMARAOS_AINL_BIN");
+        std::env::remove_var("ARMARAOS_TEST_ALLOW_IR_OUT");
+    }
+}

@@ -34,6 +34,10 @@ curl -X POST http://localhost:4200/api/agents/{id}/message \
   -d '{"content": "Write unit tests for the auth module"}'
 ```
 
+### Tool profiles, channels, and allowlists
+
+Templates set a **`profile`** (e.g. `coding`, `full`). With an **empty** per-agent tool allowlist, the runtime expands that profile to a tool set; **Minimal**, **Coding**, **Research**, **Messaging**, **Automation**, and related presets include **`channel_send`** and **`event_publish`** so agents can notify over configured channels without a `Full` / `*` profile. If you set a **non-empty allowlist** (Dashboard **Agents → Config**, or **`PUT /api/agents/{id}/tools`**), you must list every tool the agent needs, including those two for outbound channel alerts. See **[Channel Adapters → Agent Routing](channel-adapters.md#agent-routing)** and **[API Reference → Agent tools](api-reference.md#put-apiagentsidtools)**.
+
 ---
 
 ## Template Tiers

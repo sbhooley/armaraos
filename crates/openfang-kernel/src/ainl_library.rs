@@ -204,8 +204,78 @@ pub fn resolve_ainl_binary(home_dir: &Path, override_opt: &Option<String>) -> St
     "ainl".to_string()
 }
 
-/// Register curated jobs idempotently (skips missing files and existing names).
-pub fn register_curated_ainl_cron_jobs(kernel: &OpenFangKernel) -> Result<usize, String> {
+/// Result of syncing embedded curated AINL cron definitions to the scheduler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CuratedAinlCronCuration {
+    pub added: usize,
+    pub updated: usize,
+    pub pruned: usize,
+}
+
+impl CuratedAinlCronCuration {
+    pub fn any(&self) -> bool {
+        self.added + self.updated + self.pruned > 0
+    }
+}
+
+fn default_curated_cron_agent_id(kernel: &OpenFangKernel) -> Option<AgentId> {
+    let list = kernel.registry.list();
+    list.iter()
+        .find(|e| e.name == "assistant")
+        .map(|e| e.id)
+        .or_else(|| list.first().map(|e| e.id))
+}
+
+fn curated_cron_schedule_matches(a: &CronSchedule, b: &CronSchedule) -> bool {
+    match (a, b) {
+        (
+            CronSchedule::Cron {
+                expr: e1,
+                tz: z1,
+            },
+            CronSchedule::Cron {
+                expr: e2,
+                tz: z2,
+            },
+        ) => e1 == e2 && z1 == z2,
+        _ => false,
+    }
+}
+
+fn curated_ainl_action_matches(a: &CronAction, b: &CronAction) -> bool {
+    match (a, b) {
+        (
+            CronAction::AinlRun {
+                program_path: p1,
+                cwd: c1,
+                ainl_binary: ab1,
+                timeout_secs: t1,
+                json_output: j1,
+                frame: f1,
+            },
+            CronAction::AinlRun {
+                program_path: p2,
+                cwd: c2,
+                ainl_binary: ab2,
+                timeout_secs: t2,
+                json_output: j2,
+                frame: f2,
+            },
+        ) => p1 == p2 && c1 == c2 && ab1 == ab2 && t1 == t2 && j1 == j2 && f1 == f2,
+        _ => false,
+    }
+}
+
+/// Register or update curated jobs (upsert by name), prune discontinued bundled names.
+///
+/// - **New jobs:** added only when the program file exists under `ainl-library`.
+/// - **Existing jobs:** schedule/action/agent target are refreshed from the embedded catalog;
+///   the user's **enabled** toggle in the scheduler is preserved.
+/// - **Prune:** removes `AinlRun` jobs with `armaraos-*` / `ainl-upstream-*` names that are no
+///   longer in the catalog (removed in a future app version).
+pub fn register_curated_ainl_cron_jobs(
+    kernel: &OpenFangKernel,
+) -> Result<CuratedAinlCronCuration, String> {
     if std::env::var("ARMARAOS_DISABLE_CURATED_AINL_CRON")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
@@ -213,32 +283,22 @@ pub fn register_curated_ainl_cron_jobs(kernel: &OpenFangKernel) -> Result<usize,
         tracing::debug!(
             "Curated AINL cron registration disabled (ARMARAOS_DISABLE_CURATED_AINL_CRON)"
         );
-        return Ok(0);
+        return Ok(CuratedAinlCronCuration::default());
     }
 
     let entries: Vec<CuratedCronEntry> =
         serde_json::from_str(CURATED_AINL_CRON_JSON).map_err(|e| format!("curated JSON: {e}"))?;
 
-    let agent_id: AgentId = kernel
-        .registry
-        .list()
-        .first()
-        .map(|e| e.id)
-        .ok_or_else(|| "no agents; cannot attach curated AINL cron jobs".to_string())?;
+    let curated_names: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
+
+    let Some(agent_id) = default_curated_cron_agent_id(kernel) else {
+        return Err("no agents; cannot attach curated AINL cron jobs".into());
+    };
 
     let lib = kernel.config.home_dir.join("ainl-library");
-    let mut existing_names: HashSet<String> = kernel
-        .cron_scheduler
-        .list_all_jobs()
-        .into_iter()
-        .map(|j| j.name)
-        .collect();
+    let mut out = CuratedAinlCronCuration::default();
 
-    let mut added = 0usize;
     for entry in entries {
-        if existing_names.contains(&entry.name) {
-            continue;
-        }
         let rel = entry.relative_path.trim_start_matches('/');
         let file_path = lib.join(rel);
         if !file_path.is_file() {
@@ -286,10 +346,38 @@ pub fn register_curated_ainl_cron_jobs(kernel: &OpenFangKernel) -> Result<usize,
             next_run: None,
         };
 
+        if let Some(existing_id) = kernel.cron_scheduler.find_first_job_id_by_name(&entry.name) {
+            let Some(existing) = kernel.cron_scheduler.get_job(existing_id) else {
+                continue;
+            };
+            let mut merged = job;
+            merged.id = existing_id;
+            merged.created_at = existing.created_at;
+            merged.last_run = existing.last_run;
+            merged.enabled = existing.enabled;
+
+            let unchanged = existing.agent_id == agent_id
+                && curated_cron_schedule_matches(&existing.schedule, &merged.schedule)
+                && curated_ainl_action_matches(&existing.action, &merged.action);
+            if unchanged {
+                continue;
+            }
+
+            match kernel.cron_scheduler.update_job(existing_id, merged) {
+                Ok(()) => {
+                    out.updated += 1;
+                    tracing::info!(name = %entry.name, "Updated curated AINL cron job (catalog or target agent changed)");
+                }
+                Err(e) => {
+                    tracing::warn!(name = %entry.name, error = %e, "Failed to update curated AINL cron job");
+                }
+            }
+            continue;
+        }
+
         match kernel.cron_scheduler.add_job(job, false) {
             Ok(_) => {
-                added += 1;
-                existing_names.insert(entry.name.clone());
+                out.added += 1;
                 tracing::info!(name = %entry.name, "Registered curated AINL cron job");
             }
             Err(e) => {
@@ -298,5 +386,11 @@ pub fn register_curated_ainl_cron_jobs(kernel: &OpenFangKernel) -> Result<usize,
         }
     }
 
-    Ok(added)
+    if !curated_names.is_empty() {
+        out.pruned = kernel
+            .cron_scheduler
+            .remove_discontinued_curated_ainl_jobs(&curated_names);
+    }
+
+    Ok(out)
 }

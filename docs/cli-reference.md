@@ -125,6 +125,7 @@ openfang start [--config <PATH>]
 - Boots the OpenFang kernel (loads config, initializes SQLite database, loads agents, connects MCP servers, starts background tasks).
 - Starts the HTTP API server on the address specified in `config.toml` (default: `127.0.0.1:4200`).
 - Writes `daemon.json` to `~/.armaraos/` so other CLI commands can discover the running daemon.
+- **Tracing:** Structured logs go to **stderr** and are **appended** to **`~/.armaraos/logs/daemon.log`** (same layout as `config.toml`’s `log_level` and optional `RUST_LOG`). The dashboard can tail this file over HTTP (see **Logs → Daemon**). If the log file cannot be opened, the daemon falls back to stderr only.
 - Blocks until interrupted with `Ctrl+C`.
 
 **Output:**
@@ -156,6 +157,26 @@ openfang start
 # Start with custom config
 openfang start --config /path/to/config.toml
 ```
+
+---
+
+### openfang gateway
+
+Grouped **daemon control** commands (same underlying behavior as the top-level **`openfang start`**, **`openfang stop`**, and **`openfang status`** where applicable).
+
+```
+openfang gateway start
+openfang gateway stop
+openfang gateway status [--json]
+```
+
+| Subcommand | Equivalent / notes |
+|------------|---------------------|
+| **`gateway start`** | Same daemon boot as **`openfang start`** (kernel + API, `daemon.json`, **stderr + `logs/daemon.log`** tracing). Does **not** accept **`--yolo`**; use **`openfang start --yolo`** if you need auto-approved tools. |
+| **`gateway stop`** | Same as **`openfang stop`**. |
+| **`gateway status`** | Same as **`openfang status`** (optional **`--json`**). |
+
+For full startup behavior, output shape, and **`--config`**, see **[openfang start](#openfang-start)** above (global **`--config`** applies to gateway subcommands too).
 
 ---
 

@@ -185,7 +185,7 @@ These close the gaps that would make users pick OpenClaw over OpenFang.
 
 ### 2.5 First-Run Wizard End-to-End -- DONE
 
-**Status: COMPLETE** — 6-step wizard (Welcome → Provider → Agent → Try It → Channel → Done) with provider auto-detection, API key help links (12 providers), 10 agent templates with category filtering, mini chat for testing, channel setup (Telegram/Discord/Slack), setup checklist on overview page.
+**Status: COMPLETE** — 6-step wizard (Welcome → Provider → Agent → Try It → Channel → Done) with provider auto-detection, API key help links (12 providers), 10 agent templates with category filtering, mini chat for testing, channel setup (Telegram/Discord/Slack), setup checklist on the **Get started** dashboard page (hash `#overview`; sidebar **Get started** above **Chat**).
 
 **Problem (was):** Setup wizard needs to actually work for zero-config users.
 

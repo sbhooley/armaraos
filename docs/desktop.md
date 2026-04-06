@@ -36,13 +36,14 @@ The desktop app follows a straightforward embedded-server pattern:
 ### Startup Sequence
 
 1. **Tracing init** -- `tracing_subscriber` is configured with `RUST_LOG` env, defaulting to `openfang=info,tauri=info`.
-2. **Kernel boot** -- `OpenFangKernel::boot(None)` loads the default configuration (from `config.toml` or defaults), wrapped in `Arc`. `set_self_handle()` is called to enable self-referencing kernel operations.
-3. **Port binding** -- A `std::net::TcpListener` binds to `127.0.0.1:0` on the main thread, which lets the OS assign a random free port. This ensures the port number is known before any window is created.
-4. **Server thread** -- A dedicated OS thread named `"openfang-server"` is spawned. It creates its own `tokio::runtime::Builder::new_multi_thread()` runtime and runs:
+2. **Dotenv + AINL defaults** -- `load_dotenv_files()` merges **`~/.armaraos/.env`** and **`secrets.env`** into the process (existing OS env wins). If **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** is still unset, it is set to **`1`** so AINL graphs can use IR-declared adapters without manual shell configuration. Scheduled **`ainl run`** children also receive this flag from the kernel; see **[scheduled-ainl.md](scheduled-ainl.md)**.
+3. **Kernel boot** -- `OpenFangKernel::boot(None)` loads the default configuration (from `config.toml` or defaults), wrapped in `Arc`. `set_self_handle()` is called to enable self-referencing kernel operations.
+4. **Port binding** -- A `std::net::TcpListener` binds to `127.0.0.1:0` on the main thread, which lets the OS assign a random free port. This ensures the port number is known before any window is created.
+5. **Server thread** -- A dedicated OS thread named `"openfang-server"` is spawned. It creates its own `tokio::runtime::Builder::new_multi_thread()` runtime and runs:
    - `kernel.start_background_agents()` -- heartbeat monitor, autonomous agents, etc.
    - `run_embedded_server()` -- builds the axum router via `openfang_api::server::build_router()`, converts the `std::net::TcpListener` to a `tokio::net::TcpListener`, and serves with graceful shutdown.
-5. **Tauri app** -- The Tauri builder is assembled with plugins, managed state, IPC commands, system tray, and a WebView window pointing at `http://127.0.0.1:{port}`.
-6. **Event loop** -- Tauri runs its native event loop. On exit, `server_handle.shutdown()` is called to stop the embedded server and kernel.
+6. **Tauri app** -- The Tauri builder is assembled with plugins, managed state, IPC commands, system tray, and a WebView window pointing at `http://127.0.0.1:{port}`.
+7. **Event loop** -- Tauri runs its native event loop. On exit, `server_handle.shutdown()` is called to stop the embedded server and kernel.
 
 ### ServerHandle
 

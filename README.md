@@ -65,6 +65,15 @@ armaraos start
 
 **Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)).
 
+### Desktop app — anonymous product analytics (PostHog)
+
+Official **desktop** builds may include a **project API key** for [PostHog](https://posthog.com) **baked in at compile time** (same kind of key as `NEXT_PUBLIC_POSTHOG_KEY` on the marketing site). The app sends **at most one** anonymous event per machine (`armaraos_desktop_first_open`: app version, OS, architecture) to estimate installs. **No** chat content, API keys, or agent data are included.
+
+- **Opt out:** In the embedded dashboard **Setup Wizard** (step 1 — Welcome), uncheck **Anonymous usage** before continuing. If you opt out, the app **does not** open network connections for this ping. A small preference file is stored under the app data directory (alongside other desktop state).
+- **Timing:** If you leave usage enabled, the ping runs after you continue past Welcome **or** after **about two minutes** if you never open the wizard (so silent launches are still counted only when allowed).
+- **Overrides:** Power users can still set **`ARMARAOS_PRODUCT_ANALYTICS=0`** to disable completely, or **`ARMARAOS_POSTHOG_KEY`** / **`ARMARAOS_POSTHOG_HOST`** at **runtime** to override the baked values (e.g. local debugging).
+- **Releases:** Maintainers configure GitHub Actions secrets **`ARMARAOS_POSTHOG_KEY`** (and optionally **`ARMARAOS_POSTHOG_HOST`**, e.g. EU ingest) so release builds embed the key automatically — **end users do not set environment variables** for normal installs.
+
 ---
 
 ## AINL program library & cron

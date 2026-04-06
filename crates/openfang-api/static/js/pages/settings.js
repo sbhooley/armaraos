@@ -2,7 +2,7 @@
 'use strict';
 
 function settingsPage() {
-  return {
+  return Object.assign(armaraosDaemonLifecycleControls(), {
     tab: 'providers',
     sysInfo: {},
     usageData: [],
@@ -267,11 +267,7 @@ function settingsPage() {
       try {
         var ver = await OpenFangAPI.get('/api/version');
         var current = ver.version || '';
-        var r = await fetch('https://api.github.com/repos/sbhooley/armaraos/releases/latest', {
-          headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'ArmaraOS-Dashboard' }
-        });
-        if (!r.ok) throw new Error('GitHub returned ' + r.status);
-        var rel = await r.json();
+        var rel = await OpenFangAPI.get('/api/version/github-latest');
         var tag = String(rel.tag_name || '').replace(/^v/i, '');
         var cmp = this.semverCompare(current, tag);
         this.daemonUpdateInfo = {
@@ -540,7 +536,7 @@ function settingsPage() {
         if (this.isDesktopShell) {
           try {
             var copyOut = await ArmaraosDesktopTauriInvoke('copy_diagnostics_to_downloads', {
-              bundle_path: this.diagBundlePath,
+              bundlePath: this.diagBundlePath,
             });
             if (copyOut && copyOut.downloads_path) {
               this.diagDownloadsPath = copyOut.downloads_path;
@@ -554,6 +550,20 @@ function settingsPage() {
               OpenFangToast.warn(
                 'Bundle created, but copy to Downloads failed: ' + (eCopy.message || String(eCopy))
               );
+            if (this.diagBundleFilename) {
+              try {
+                await OpenFangAPI.downloadDiagnosticsZip(this.diagBundleFilename);
+                OpenFangToast &&
+                  OpenFangToast.info('Started a browser-style download as a fallback — check Downloads');
+              } catch (eDl) {
+                OpenFangToast &&
+                  OpenFangToast.info(
+                    'You can open Home folder → support and copy the .zip manually (' +
+                      (this.diagBundleFilename || 'armaraos-diagnostics-*.zip') +
+                      ').'
+                  );
+              }
+            }
           }
         } else if (this.diagBundleFilename) {
           try {
@@ -1146,5 +1156,5 @@ function settingsPage() {
     destroy() {
       this.stopPeerPolling();
     }
-  };
+  });
 }

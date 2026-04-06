@@ -2,14 +2,18 @@
 
 use crate::{KernelState, PortState};
 use openfang_kernel::config::openfang_home;
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(target_os = "macos")]
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(target_os = "macos")]
+use tracing::warn;
 
 /// Return AINL bootstrap status (Option A bundling).
 #[tauri::command]
@@ -442,6 +446,7 @@ pub fn ainl_try_library_file(
     let mut cmd = Command::new(&ainl);
     cmd.current_dir(&cwd);
     cmd.env("PATH", crate::ainl::subprocess_path_with_venv_bin(&venv));
+    cmd.env("AINL_ALLOW_IR_DECLARED_ADAPTERS", "1");
     match mode.as_str() {
         "run" => {
             cmd.arg("run");
@@ -547,6 +552,66 @@ pub fn open_external_url(url: String) -> Result<(), String> {
     open::that(&url).map_err(|e| e.to_string())
 }
 
+/// Same rules as `openfang_api::routes::is_allowed_diagnostics_zip_name` (no path segments).
+fn diagnostics_zip_filename_ok(name: &str) -> bool {
+    const PREFIX: &str = "armaraos-diagnostics-";
+    const SUFFIX: &str = ".zip";
+    if !name.starts_with(PREFIX) || !name.ends_with(SUFFIX) {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return false;
+    }
+    let inner = &name[PREFIX.len()..name.len() - SUFFIX.len()];
+    let parts: Vec<&str> = inner.splitn(2, '-').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    if parts[0].len() != 8 || parts[1].len() != 6 {
+        return false;
+    }
+    parts[0].chars().all(|c| c.is_ascii_digit())
+        && parts[1].chars().all(|c| c.is_ascii_digit())
+}
+
+fn resolve_support_bundle_for_copy(
+    bundle_path: Option<String>,
+    bundle_filename: Option<String>,
+) -> Result<std::path::PathBuf, String> {
+    let support = openfang_home().join("support");
+    if let Some(name) = bundle_filename
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if diagnostics_zip_filename_ok(name) {
+            let p = support.join(name);
+            if p.is_file() {
+                return Ok(p);
+            }
+        }
+    }
+    if let Some(path) = bundle_path
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return validate_support_bundle_path(path);
+    }
+    if let Some(name) = bundle_filename
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if diagnostics_zip_filename_ok(name) {
+            return Err(format!(
+                "Diagnostics bundle not found in support folder: {name}"
+            ));
+        }
+    }
+    Err("Provide bundle_filename or bundle_path".to_string())
+}
+
 /// Ensure `user_path` is a real `.zip` under `openfang_home()/support/`.
 fn validate_support_bundle_path(user_path: &str) -> Result<std::path::PathBuf, String> {
     let p = std::path::Path::new(user_path);
@@ -568,9 +633,19 @@ fn validate_support_bundle_path(user_path: &str) -> Result<std::path::PathBuf, S
 }
 
 /// Copy a generated diagnostics zip into the user Downloads folder (same filename).
+/// Single `bundle_path` string matches Tauri IPC schema (`bundlePath` from JS).
 #[tauri::command]
 pub fn copy_diagnostics_to_downloads(bundle_path: String) -> Result<serde_json::Value, String> {
-    let canon = validate_support_bundle_path(&bundle_path)?;
+    let trimmed = bundle_path.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("bundlePath is required".to_string());
+    }
+    let name_only = std::path::Path::new(&trimmed)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| diagnostics_zip_filename_ok(n))
+        .map(String::from);
+    let canon = resolve_support_bundle_for_copy(Some(trimmed), name_only)?;
     let fname = canon
         .file_name()
         .and_then(|s| s.to_str())
@@ -582,6 +657,42 @@ pub fn copy_diagnostics_to_downloads(bundle_path: String) -> Result<serde_json::
     Ok(serde_json::json!({
         "downloads_path": dest.display().to_string(),
         "bundle_path": canon.display().to_string(),
+    }))
+}
+
+fn validate_home_relative_file(rel: &str) -> Result<std::path::PathBuf, String> {
+    let trimmed = rel.trim().trim_start_matches(['/', '\\']);
+    if trimmed.is_empty() || trimmed.contains("..") {
+        return Err("Invalid path".to_string());
+    }
+    let home = openfang_home();
+    let full = home.join(trimmed);
+    let meta = std::fs::canonicalize(&full).map_err(|e| format!("Invalid path: {e}"))?;
+    let home_canon = std::fs::canonicalize(&home).unwrap_or(home);
+    if !meta.starts_with(&home_canon) {
+        return Err("Path must be under the ArmaraOS home directory".to_string());
+    }
+    if !meta.is_file() {
+        return Err("Not a file".to_string());
+    }
+    Ok(meta)
+}
+
+/// Copy any file under ArmaraOS home (relative path like `support/foo.zip`) to Downloads.
+#[tauri::command]
+pub fn copy_home_file_to_downloads(relative_path: String) -> Result<serde_json::Value, String> {
+    let canon = validate_home_relative_file(&relative_path)?;
+    let fname = canon
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "Bad filename".to_string())?;
+    let dest_dir =
+        dirs::download_dir().ok_or_else(|| "Could not locate Downloads folder".to_string())?;
+    let dest = dest_dir.join(fname);
+    std::fs::copy(&canon, &dest).map_err(|e| format!("Copy to Downloads failed: {e}"))?;
+    Ok(serde_json::json!({
+        "downloads_path": dest.display().to_string(),
+        "source_path": canon.display().to_string(),
     }))
 }
 
@@ -701,4 +812,20 @@ pub fn compose_support_email(bundle_path: Option<String>) -> Result<serde_json::
     }
     open::that(&mailto).map_err(|e| e.to_string())?;
     Ok(serde_json::json!({"mode": "mailto"}))
+}
+
+/// Desktop telemetry prefs for the Setup Wizard (opt-out before first PostHog ping).
+#[tauri::command]
+pub fn get_desktop_product_analytics_prefs(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    Ok(crate::product_analytics::prefs_json(&app))
+}
+
+/// `opt_out`: user disabled anonymous install ping. `from_wizard_continue`: true when leaving wizard step 1.
+#[tauri::command]
+pub fn set_desktop_product_analytics_prefs(
+    opt_out: bool,
+    from_wizard_continue: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    crate::product_analytics::save_prefs_merged(opt_out, from_wizard_continue, &app)
 }

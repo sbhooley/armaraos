@@ -22,6 +22,13 @@ function homeFilesPage() {
     fileSize: 0,
     fileEditable: false,
     saveBusy: false,
+    downloadBusy: false,
+
+    get isDesktopShell() {
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      return !!(core && typeof core.invoke === 'function');
+    },
 
     init() {
       try {
@@ -91,6 +98,37 @@ function homeFilesPage() {
       var parts = this.breadcrumbParts();
       this.currentPath = parts.slice(0, idx + 1).join('/');
       this.refresh();
+    },
+
+    async downloadFileByRelativePath(rel) {
+      if (!rel) return;
+      this.downloadBusy = true;
+      try {
+        if (this.isDesktopShell && typeof ArmaraosDesktopTauriInvoke === 'function') {
+          var out = await ArmaraosDesktopTauriInvoke('copy_home_file_to_downloads', {
+            relativePath: rel,
+          });
+          if (out && out.downloads_path) {
+            OpenFangToast.success('Saved to Downloads');
+          } else {
+            OpenFangToast.success('Copied to Downloads');
+          }
+        } else {
+          await OpenFangAPI.downloadArmaraosHomeFile(rel);
+          OpenFangToast.success('Download started');
+        }
+      } catch (e) {
+        OpenFangToast.error((e && e.message) ? e.message : String(e));
+      }
+      this.downloadBusy = false;
+    },
+
+    async downloadFile(name) {
+      await this.downloadFileByRelativePath(this.pathToChild(name));
+    },
+
+    downloadOpenFile() {
+      return this.downloadFileByRelativePath(this.filePath);
     },
 
     async openFile(name) {

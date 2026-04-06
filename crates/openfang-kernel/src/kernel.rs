@@ -15,7 +15,7 @@ use crate::workflow::{StepAgent, Workflow, WorkflowEngine, WorkflowId, WorkflowR
 
 use openfang_memory::MemorySubstrate;
 use openfang_runtime::agent_loop::{
-    run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopResult,
+    run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopResult, LoopPhase,
 };
 use openfang_runtime::audit::AuditLog;
 use openfang_runtime::drivers;
@@ -36,6 +36,7 @@ use openfang_types::memory::Memory;
 use openfang_types::tool::ToolDefinition;
 
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -69,6 +70,20 @@ fn resolve_ainl_host_adapter_allowlist_for_entry(entry: &AgentEntry) -> Option<(
         Some((false, AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST.to_string()))
     } else {
         None
+    }
+}
+
+/// Whether scheduled `ainl run` should set `AINL_ALLOW_IR_DECLARED_ADAPTERS=1` (mass-market default).
+///
+/// Opt out with manifest metadata `ainl_allow_ir_declared_adapters`: `"0"`, `"false"`, `"off"`, `"no"`, or JSON `false`.
+fn ainl_allow_ir_declared_adapters_from_manifest(manifest: &AgentManifest) -> bool {
+    match manifest.metadata.get("ainl_allow_ir_declared_adapters") {
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim().to_ascii_lowercase();
+            !(t == "0" || t == "false" || t == "off" || t == "no")
+        }
+        Some(serde_json::Value::Bool(b)) => *b,
+        _ => true,
     }
 }
 
@@ -256,6 +271,10 @@ pub struct OpenFangKernel {
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
     /// messages via Telegram). Different agents can still run in parallel.
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
+    /// In-flight agent-loop phase per agent (Thinking / tool / stream) for turn watchdog.
+    pub agent_loop_phases: dashmap::DashMap<AgentId, crate::heartbeat::AgentLoopPhaseState>,
+    /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
+    pub heartbeat_failure_gate: Arc<crate::heartbeat::FailureNotifyGate>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenFangKernel>>,
     /// Unix millis when the cron scheduler loop last woke (0 = never).
@@ -1189,6 +1208,10 @@ impl OpenFangKernel {
             channel_adapters: dashmap::DashMap::new(),
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
+            agent_loop_phases: dashmap::DashMap::new(),
+            heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
+                crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
+            ),
             self_handle: OnceLock::new(),
             last_cron_scheduler_tick_ms: AtomicU64::new(0),
         };
@@ -1347,6 +1370,25 @@ impl OpenFangKernel {
             }
         }
 
+        // Collapse many uniquely named probe agents (allowlist-probe-*, etc.) to one per family.
+        let merged_probes =
+            crate::internal_automation_probe::consolidate_internal_probe_agent_families(&kernel);
+        if merged_probes > 0 {
+            info!(
+                count = merged_probes,
+                "Consolidated duplicate internal probe agents (per prefix family)"
+            );
+        }
+        // Drop internal automation/probe agents that nothing schedules anymore (stale test
+        // harness / reinstall leftovers). Matches dashboard "Automation & probe chats" names.
+        let pruned = crate::internal_automation_probe::gc_unreferenced_internal_probe_agents(&kernel);
+        if pruned > 0 {
+            info!(
+                count = pruned,
+                "Pruned unreferenced internal automation/probe agent(s)"
+            );
+        }
+
         // If no agents exist (fresh install), spawn a default assistant
         if kernel.registry.list().is_empty() {
             info!("No agents found — spawning default assistant");
@@ -1417,16 +1459,34 @@ impl OpenFangKernel {
             }
         }
 
-        match crate::ainl_library::register_curated_ainl_cron_jobs(&kernel) {
-            Ok(n) => {
-                if n > 0 {
-                    let _ = kernel.cron_scheduler.persist();
-                    info!(count = n, "Registered curated AINL cron jobs");
-                }
-            }
+        let (cron_reassigned, cron_deduped, cron_ainl_deduped) =
+            kernel.reconcile_persisted_cron_jobs();
+        if cron_reassigned + cron_deduped + cron_ainl_deduped > 0 {
+            info!(
+                reassigned = cron_reassigned,
+                deduped_names = cron_deduped,
+                deduped_ainl = cron_ainl_deduped,
+                "Reconciled persisted cron jobs"
+            );
+        }
+
+        let curation = match crate::ainl_library::register_curated_ainl_cron_jobs(&kernel) {
+            Ok(c) => c,
             Err(e) => {
                 tracing::debug!("Curated AINL cron registration skipped: {e}");
+                crate::ainl_library::CuratedAinlCronCuration::default()
             }
+        };
+        if curation.any() {
+            info!(
+                added = curation.added,
+                updated = curation.updated,
+                pruned = curation.pruned,
+                "Curated AINL cron jobs synced"
+            );
+        }
+        if cron_reassigned + cron_deduped + cron_ainl_deduped > 0 || curation.any() {
+            let _ = kernel.cron_scheduler.persist();
         }
 
         info!("OpenFang kernel booted successfully");
@@ -2169,47 +2229,11 @@ impl OpenFangKernel {
             // skill_snapshot was built before the spawn and moved into this
             // closure — it already contains bundled + global + workspace skills.
 
-            // Create a phase callback that emits PhaseChange events to WS/SSE clients
-            // and publishes AgentActivity on the kernel event bus (SSE / Comms / overview).
-            let phase_tx = tx.clone();
-            let kernel_phase = kernel_clone.clone();
-            let agent_id_phase = agent_id;
-            let phase_cb: openfang_runtime::agent_loop::PhaseCallback =
-                std::sync::Arc::new(move |phase| {
-                    use openfang_runtime::agent_loop::LoopPhase;
-                    let (phase_str, detail) = match &phase {
-                        LoopPhase::Thinking => ("thinking".to_string(), None),
-                        LoopPhase::ToolUse { tool_name } => {
-                            ("tool_use".to_string(), Some(tool_name.clone()))
-                        }
-                        LoopPhase::Streaming => ("streaming".to_string(), None),
-                        LoopPhase::Done => ("done".to_string(), None),
-                        LoopPhase::Error => ("error".to_string(), None),
-                    };
-                    let event = StreamEvent::PhaseChange {
-                        phase: phase_str.clone(),
-                        detail: detail.clone(),
-                    };
-                    let _ = phase_tx.try_send(event);
-                    if phase_str == "done" || phase_str == "error" {
-                        return;
-                    }
-                    let k = kernel_phase.clone();
-                    let ps = phase_str;
-                    let det = detail;
-                    let aid = agent_id_phase;
-                    tokio::spawn(async move {
-                        let ev = Event::new(
-                            aid,
-                            EventTarget::Broadcast,
-                            EventPayload::System(SystemEvent::AgentActivity {
-                                phase: ps,
-                                detail: det,
-                            }),
-                        );
-                        k.event_bus.publish(ev).await;
-                    });
-                });
+            let phase_cb = OpenFangKernel::loop_phase_callback(
+                Arc::clone(&kernel_clone),
+                agent_id,
+                Some(tx.clone()),
+            );
 
             let ainl_library_root = kernel_clone.config.home_dir.join("ainl-library");
             let result = run_agent_loop_streaming(
@@ -2408,7 +2432,15 @@ impl OpenFangKernel {
             "agent_name": entry.name,
         });
 
-        let result = self
+        let agent_id = entry.id;
+        self.record_agent_loop_phase(
+            agent_id,
+            &LoopPhase::ToolUse {
+                tool_name: "wasm_sandbox".to_string(),
+            },
+        );
+
+        let exec_out = self
             .wasm_sandbox
             .execute(
                 &wasm_bytes,
@@ -2417,42 +2449,55 @@ impl OpenFangKernel {
                 kernel_handle,
                 &entry.id.to_string(),
             )
-            .await
-            .map_err(|e| {
-                KernelError::OpenFang(OpenFangError::Internal(format!(
-                    "WASM execution failed: {e}"
-                )))
-            })?;
+            .await;
 
-        // Extract response text from WASM output JSON
-        let response = result
-            .output
-            .get("response")
-            .and_then(|v| v.as_str())
-            .or_else(|| result.output.get("text").and_then(|v| v.as_str()))
-            .or_else(|| result.output.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| serde_json::to_string(&result.output).unwrap_or_default());
+        let loop_result = match exec_out {
+            Ok(result) => {
+                // Extract response text from WASM output JSON
+                let response = result
+                    .output
+                    .get("response")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| result.output.get("text").and_then(|v| v.as_str()))
+                    .or_else(|| result.output.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| serde_json::to_string(&result.output).unwrap_or_default());
 
-        info!(
-            agent = %entry.name,
-            fuel_consumed = result.fuel_consumed,
-            "WASM agent execution complete"
+                info!(
+                    agent = %entry.name,
+                    fuel_consumed = result.fuel_consumed,
+                    "WASM agent execution complete"
+                );
+
+                Ok(AgentLoopResult {
+                    response,
+                    total_usage: openfang_types::message::TokenUsage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                    iterations: 1,
+                    cost_usd: None,
+                    silent: false,
+                    directives: Default::default(),
+                    latency_ms: None,
+                    llm_fallback_note: None,
+                })
+            }
+            Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
+                "WASM execution failed: {e}"
+            )))),
+        };
+
+        self.record_agent_loop_phase(
+            agent_id,
+            if loop_result.is_ok() {
+                &LoopPhase::Done
+            } else {
+                &LoopPhase::Error
+            },
         );
 
-        Ok(AgentLoopResult {
-            response,
-            total_usage: openfang_types::message::TokenUsage {
-                input_tokens: 0,
-                output_tokens: 0,
-            },
-            iterations: 1,
-            cost_usd: None,
-            silent: false,
-            directives: Default::default(),
-            latency_ms: None,
-            llm_fallback_note: None,
-        })
+        loop_result
     }
 
     /// Execute a Python script agent.
@@ -2486,35 +2531,54 @@ impl OpenFangKernel {
             "system_prompt": entry.manifest.model.system_prompt,
         });
 
-        let result = python_runtime::run_python_agent(
+        self.record_agent_loop_phase(
+            agent_id,
+            &LoopPhase::ToolUse {
+                tool_name: "python_agent".to_string(),
+            },
+        );
+
+        let py_out = python_runtime::run_python_agent(
             &resolved_path.to_string_lossy(),
             &agent_id.to_string(),
             message,
             &context,
             &config,
         )
-        .await
-        .map_err(|e| {
-            KernelError::OpenFang(OpenFangError::Internal(format!(
+        .await;
+
+        let loop_result = match py_out {
+            Ok(result) => {
+                info!(agent = %entry.name, "Python agent execution complete");
+                Ok(AgentLoopResult {
+                    response: result.response,
+                    total_usage: openfang_types::message::TokenUsage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
+                    cost_usd: None,
+                    iterations: 1,
+                    silent: false,
+                    directives: Default::default(),
+                    latency_ms: None,
+                    llm_fallback_note: None,
+                })
+            }
+            Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
                 "Python execution failed: {e}"
-            )))
-        })?;
+            )))),
+        };
 
-        info!(agent = %entry.name, "Python agent execution complete");
-
-        Ok(AgentLoopResult {
-            response: result.response,
-            total_usage: openfang_types::message::TokenUsage {
-                input_tokens: 0,
-                output_tokens: 0,
+        self.record_agent_loop_phase(
+            agent_id,
+            if loop_result.is_ok() {
+                &LoopPhase::Done
+            } else {
+                &LoopPhase::Error
             },
-            cost_usd: None,
-            iterations: 1,
-            silent: false,
-            directives: Default::default(),
-            latency_ms: None,
-            llm_fallback_note: None,
-        })
+        );
+
+        loop_result
     }
 
     /// Execute the default LLM-based agent loop.
@@ -2814,6 +2878,12 @@ impl OpenFangKernel {
         };
 
         let ainl_library_root = self.config.home_dir.join("ainl-library");
+        let phase_cb_storage = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|k| OpenFangKernel::loop_phase_callback(k, agent_id, None));
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -2829,7 +2899,7 @@ impl OpenFangKernel {
             self.embedding_driver.as_deref(),
             manifest.workspace.as_deref(),
             Some(ainl_library_root.as_path()),
-            None, // on_phase callback
+            phase_cb_storage.as_ref(),
             Some(&self.media_engine),
             if self.config.tts.enabled {
                 Some(&self.tts_engine)
@@ -3505,6 +3575,26 @@ impl OpenFangKernel {
         ))
     }
 
+    /// After agents are loaded, re-point cron jobs at a live agent and collapse duplicates.
+    pub fn reconcile_persisted_cron_jobs(&self) -> (usize, usize, usize) {
+        let agents = self.registry.list();
+        let alive: HashSet<AgentId> = agents.iter().map(|e| e.id).collect();
+        let fallback = agents
+            .iter()
+            .find(|e| e.name == "assistant")
+            .map(|e| e.id)
+            .or_else(|| agents.first().map(|e| e.id));
+        let Some(fb) = fallback else {
+            return (0, 0, 0);
+        };
+        let r = self
+            .cron_scheduler
+            .reassign_jobs_from_missing_agents(&alive, fb);
+        let d = self.cron_scheduler.dedupe_jobs_by_name();
+        let a = self.cron_scheduler.dedupe_ainl_run_jobs_same_signature();
+        (r, d, a)
+    }
+
     /// Kill an agent.
     pub fn kill_agent(&self, agent_id: AgentId) -> KernelResult<()> {
         let entry = self
@@ -3808,6 +3898,88 @@ impl OpenFangKernel {
     /// Must be called once after the kernel is wrapped in `Arc`.
     pub fn set_self_handle(self: &Arc<Self>) {
         let _ = self.self_handle.set(Arc::downgrade(self));
+    }
+
+    /// Track agent-loop phase for [`crate::heartbeat::turn_phase_stall_secs`] (turn watchdog).
+    pub fn record_agent_loop_phase(&self, agent_id: AgentId, phase: &LoopPhase) {
+        use crate::heartbeat::{AgentLoopPhaseState, MonitoredLoopPhase};
+        use dashmap::mapref::entry::Entry;
+
+        match phase {
+            LoopPhase::Done | LoopPhase::Error => {
+                self.agent_loop_phases.remove(&agent_id);
+                return;
+            }
+            _ => {}
+        }
+
+        if !self.config.turn_watchdog.enabled {
+            return;
+        }
+
+        let kind = match phase {
+            LoopPhase::Thinking => MonitoredLoopPhase::Thinking,
+            LoopPhase::ToolUse { .. } => MonitoredLoopPhase::ToolUse,
+            LoopPhase::Streaming => MonitoredLoopPhase::Streaming,
+            LoopPhase::Done | LoopPhase::Error => return,
+        };
+
+        let now = chrono::Utc::now();
+        match self.agent_loop_phases.entry(agent_id) {
+            Entry::Occupied(mut o) => {
+                if o.get().kind != kind {
+                    o.insert(AgentLoopPhaseState { kind, since: now });
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(AgentLoopPhaseState { kind, since: now });
+            }
+        }
+    }
+
+    /// Phase callback for streaming and non-streaming agent loops (WS/SSE + event bus + watchdog).
+    pub fn loop_phase_callback(
+        kernel: Arc<OpenFangKernel>,
+        agent_id: AgentId,
+        stream_tx: Option<tokio::sync::mpsc::Sender<StreamEvent>>,
+    ) -> openfang_runtime::agent_loop::PhaseCallback {
+        std::sync::Arc::new(move |phase| {
+            kernel.record_agent_loop_phase(agent_id, &phase);
+            let (phase_str, detail) = match &phase {
+                LoopPhase::Thinking => ("thinking".to_string(), None),
+                LoopPhase::ToolUse { tool_name } => {
+                    ("tool_use".to_string(), Some(tool_name.clone()))
+                }
+                LoopPhase::Streaming => ("streaming".to_string(), None),
+                LoopPhase::Done => ("done".to_string(), None),
+                LoopPhase::Error => ("error".to_string(), None),
+            };
+            if let Some(tx) = &stream_tx {
+                let event = StreamEvent::PhaseChange {
+                    phase: phase_str.clone(),
+                    detail: detail.clone(),
+                };
+                let _ = tx.try_send(event);
+            }
+            if matches!(phase, LoopPhase::Done | LoopPhase::Error) {
+                return;
+            }
+            let k = kernel.clone();
+            let ps = phase_str;
+            let det = detail;
+            let aid = agent_id;
+            tokio::spawn(async move {
+                let ev = Event::new(
+                    aid,
+                    EventTarget::Broadcast,
+                    EventPayload::System(SystemEvent::AgentActivity {
+                        phase: ps,
+                        detail: det,
+                    }),
+                );
+                k.event_bus.publish(ev).await;
+            });
+        })
     }
 
     // ─── Agent Binding management ──────────────────────────────────────
@@ -4539,14 +4711,15 @@ impl OpenFangKernel {
     }
 
     ///
-    /// Periodically checks all running agents' last_active timestamps and
-    /// publishes `HealthCheckFailed` events for unresponsive agents.
+    /// Periodically checks non-reactive running agents' `last_active` timestamps and
+    /// publishes `HealthCheckFailed` for unresponsive scheduled/continuous/proactive loops.
     fn start_heartbeat_monitor(self: &Arc<Self>) {
         use crate::heartbeat::{check_agents, is_quiet_hours, HeartbeatConfig, RecoveryTracker};
 
         let kernel = Arc::clone(self);
         let config = HeartbeatConfig {
             default_timeout_secs: self.config.heartbeat.default_timeout_secs,
+            reactive_idle_timeout_secs: self.config.heartbeat.reactive_idle_timeout_secs,
             ..HeartbeatConfig::default()
         };
         let interval_secs = config.check_interval_secs;
@@ -4564,8 +4737,17 @@ impl OpenFangKernel {
                     break;
                 }
 
-                let statuses = check_agents(&kernel.registry, &config);
+                let statuses = check_agents(
+                    &kernel.registry,
+                    &config,
+                    &kernel.agent_loop_phases,
+                    &kernel.config.turn_watchdog,
+                );
                 for status in &statuses {
+                    if status.state == AgentState::Running && !status.unresponsive {
+                        kernel.heartbeat_failure_gate.clear(status.agent_id);
+                    }
+
                     // Skip agents in quiet hours (per-agent config)
                     if let Some(entry) = kernel.registry.get(status.agent_id) {
                         if let Some(ref auto_cfg) = entry.manifest.autonomous {
@@ -4633,6 +4815,7 @@ impl OpenFangKernel {
                         let _ = kernel
                             .registry
                             .set_state(status.agent_id, AgentState::Running);
+                        kernel.heartbeat_failure_gate.clear(status.agent_id);
 
                         // Do not publish HealthCheckFailed here: it is not a user-facing failure
                         // (desktop would show a bogus "unresponsive for 0s" alert every recovery).
@@ -4658,21 +4841,32 @@ impl OpenFangKernel {
                         let _ = kernel
                             .registry
                             .set_state(status.agent_id, AgentState::Crashed);
-                        warn!(
-                            agent = %status.name,
-                            inactive_secs = status.inactive_secs,
-                            "Unresponsive Running agent marked as Crashed for recovery"
-                        );
 
-                        let event = Event::new(
-                            status.agent_id,
-                            EventTarget::System,
-                            EventPayload::System(SystemEvent::HealthCheckFailed {
-                                agent_id: status.agent_id,
-                                unresponsive_secs: status.inactive_secs as u64,
-                            }),
-                        );
-                        kernel.event_bus.publish(event).await;
+                        if kernel
+                            .heartbeat_failure_gate
+                            .allow_notify(status.agent_id)
+                        {
+                            warn!(
+                                agent = %status.name,
+                                inactive_secs = status.inactive_secs,
+                                "Unresponsive Running agent marked as Crashed for recovery"
+                            );
+                            let event = Event::new(
+                                status.agent_id,
+                                EventTarget::System,
+                                EventPayload::System(SystemEvent::HealthCheckFailed {
+                                    agent_id: status.agent_id,
+                                    unresponsive_secs: status.inactive_secs as u64,
+                                }),
+                            );
+                            kernel.event_bus.publish(event).await;
+                        } else {
+                            debug!(
+                                agent = %status.name,
+                                inactive_secs = status.inactive_secs,
+                                "Unresponsive Running agent marked as Crashed (recent HealthCheckFailed for this agent — suppressed duplicate notify)"
+                            );
+                        }
                     }
                 }
             }
@@ -4798,6 +4992,9 @@ impl OpenFangKernel {
     /// Also sets [`AINL_HOST_ADAPTER_ALLOWLIST`] when the job's agent manifest indicates
     /// online capabilities (or an explicit `ainl_host_adapter_allowlist` metadata value),
     /// so `ainl run` intersects IR policy the same way as hosted runners.
+    ///
+    /// Sets `AINL_ALLOW_IR_DECLARED_ADAPTERS` to `1` by default so desktop/daemon users are not
+    /// required to export host-adapter env; opt out via manifest `ainl_allow_ir_declared_adapters`.
     fn apply_resolved_env_to_ainl_command(
         &self,
         cmd: &mut tokio::process::Command,
@@ -4840,17 +5037,30 @@ impl OpenFangKernel {
             cmd.env("AINL_HOST_ADAPTER_ALLOWLIST", &list);
             debug!(agent = %agent_id, "ainl cron: set AINL_HOST_ADAPTER_ALLOWLIST for subprocess");
         }
+        let relax = self
+            .registry
+            .get(agent_id)
+            .map(|e| ainl_allow_ir_declared_adapters_from_manifest(&e.manifest))
+            .unwrap_or(true);
+        cmd.env(
+            "AINL_ALLOW_IR_DECLARED_ADAPTERS",
+            if relax { "1" } else { "0" },
+        );
     }
 
-    /// JSON for API/dashboard: how scheduled `ainl run` sets `AINL_HOST_ADAPTER_ALLOWLIST`.
+    /// JSON for API/dashboard: how scheduled `ainl run` sets `AINL_HOST_ADAPTER_ALLOWLIST`
+    /// and `AINL_ALLOW_IR_DECLARED_ADAPTERS`.
     pub fn scheduled_ainl_host_adapter_info(&self, agent_id: AgentId) -> serde_json::Value {
         let Some(entry) = self.registry.get(agent_id) else {
             return serde_json::Value::Null;
         };
+        let relax = ainl_allow_ir_declared_adapters_from_manifest(&entry.manifest);
+        let allow_ir = if relax { "1" } else { "0" };
         match resolve_ainl_host_adapter_allowlist_for_entry(&entry) {
             None => serde_json::json!({
                 "source": "none",
                 "summary": "No host-adapter allowlist env for scheduled AINL (offline-style agent or metadata off). IR/graph limits still apply.",
+                "ainl_allow_ir_declared_adapters": allow_ir,
             }),
             Some((true, list)) => {
                 let pr = openfang_types::truncate_str(&list, 93);
@@ -4863,12 +5073,14 @@ impl OpenFangKernel {
                     "source": "metadata",
                     "summary": format!("Custom list from manifest metadata: {preview}."),
                     "allowlist": list,
+                    "ainl_allow_ir_declared_adapters": allow_ir,
                 })
             }
             Some((false, list)) => serde_json::json!({
                 "source": "default_online",
                 "summary": "Default full host-adapter allowlist (agent has network, tools, shell, spawn, or OFP).",
                 "adapter_count": list.split(',').filter(|s| !s.is_empty()).count(),
+                "ainl_allow_ir_declared_adapters": allow_ir,
             }),
         }
     }

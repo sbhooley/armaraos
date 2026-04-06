@@ -1823,6 +1823,102 @@ pub async fn version() -> impl IntoResponse {
     }))
 }
 
+/// GET /api/version/github-latest — Latest ArmaraOS release on GitHub (server-side fetch).
+///
+/// The dashboard cannot reliably call `api.github.com` from the browser or embedded webview
+/// (CORS / “Load failed”). The daemon proxies this read-only public API.
+const GITHUB_ARMARAOS_LATEST: &str =
+    "https://api.github.com/repos/sbhooley/armaraos/releases/latest";
+
+pub async fn version_github_latest_release() -> impl IntoResponse {
+    let client = match reqwest::Client::builder()
+        .user_agent(concat!(
+            "ArmaraOS/",
+            env!("CARGO_PKG_VERSION"),
+            " (daemon; +https://github.com/sbhooley/armaraos)"
+        ))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("HTTP client: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let resp = match client
+        .get(GITHUB_ARMARAOS_LATEST)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("GitHub request failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = resp.status();
+    let body = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("GitHub response body: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    if !status.is_success() {
+        let preview: String = body.chars().take(240).collect();
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({
+                "error": format!("GitHub returned HTTP {}", status.as_u16()),
+                "detail": preview
+            })),
+        )
+            .into_response();
+    }
+
+    let v: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Invalid GitHub JSON: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let tag_name = v
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    let html_url = v
+        .get("html_url")
+        .and_then(|t| t.as_str())
+        .unwrap_or("https://github.com/sbhooley/armaraos/releases")
+        .to_string();
+
+    Json(serde_json::json!({
+        "tag_name": tag_name,
+        "html_url": html_url,
+    }))
+    .into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Single agent detail + SSE streaming
 // ---------------------------------------------------------------------------
@@ -3993,14 +4089,9 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // the health probe from starving the async runtime when the agent loop
     // is holding the database lock for session saves.
     let memory = state.kernel.memory.clone();
-    let db_ok = tokio::task::spawn_blocking(move || {
-        let shared_id = openfang_types::agent::AgentId(uuid::Uuid::from_bytes([
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-        ]));
-        memory.structured_get(shared_id, "__health_check__").is_ok()
-    })
-    .await
-    .unwrap_or(false);
+    let db_ok = tokio::task::spawn_blocking(move || memory.sqlite_liveness_probe())
+        .await
+        .unwrap_or(false);
 
     let status = if db_ok { "ok" } else { "degraded" };
 
@@ -4015,12 +4106,7 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let health = state.kernel.supervisor.health();
 
     let memory = state.kernel.memory.clone();
-    let db_ok = tokio::task::spawn_blocking(move || {
-        let shared_id = openfang_types::agent::AgentId(uuid::Uuid::from_bytes([
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-        ]));
-        memory.structured_get(shared_id, "__health_check__").is_ok()
-    })
+    let db_ok = tokio::task::spawn_blocking(move || memory.sqlite_liveness_probe())
     .await
     .unwrap_or(false);
 
@@ -5781,7 +5867,7 @@ pub async fn audit_recent(
     let items: Vec<serde_json::Value> = entries
         .iter()
         .filter(|e| {
-            q.as_ref().map_or(true, |needle| {
+            q.as_ref().is_none_or(|needle| {
                 let hay = format!(
                     "{:?} {} {} {}",
                     e.action, e.detail, e.outcome, e.agent_id
@@ -6016,6 +6102,241 @@ pub async fn logs_stream(
         .into_response()
 }
 
+fn resolve_daemon_tracing_log_path(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    let daemon = home.join("logs").join("daemon.log");
+    if daemon.is_file() {
+        return Some(daemon);
+    }
+    let tui = home.join("tui.log");
+    if tui.is_file() {
+        return Some(tui);
+    }
+    None
+}
+
+/// Rank of a `tracing-subscriber` default-format line for minimum-level filtering (higher = more severe).
+fn tracing_line_level_rank(line: &str) -> u8 {
+    if line.contains(" ERROR ") {
+        return 5;
+    }
+    if line.contains(" WARN ") {
+        return 4;
+    }
+    if line.contains(" INFO ") {
+        return 3;
+    }
+    if line.contains("DEBUG") {
+        return 2;
+    }
+    if line.contains("TRACE") {
+        return 1;
+    }
+    3
+}
+
+fn tracing_min_level_floor(min: &str) -> u8 {
+    match min {
+        "error" => 5,
+        "warn" => 4,
+        "info" => 3,
+        "debug" => 2,
+        "trace" => 1,
+        _ => 1,
+    }
+}
+
+fn daemon_line_matches(line: &str, min_level: &str, text_sub: &str) -> bool {
+    if !text_sub.is_empty() && !line.to_lowercase().contains(text_sub) {
+        return false;
+    }
+    if min_level.is_empty() {
+        return true;
+    }
+    tracing_line_level_rank(line) >= tracing_min_level_floor(min_level)
+}
+
+fn read_daemon_log_tail(path: &std::path::Path, max_lines: usize) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const MAX_READ: u64 = 512 * 1024;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let len = match f.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return Vec::new(),
+    };
+    let read_start = len.saturating_sub(MAX_READ);
+    if f.seek(SeekFrom::Start(read_start)).is_err() {
+        return Vec::new();
+    }
+    let take = len - read_start;
+    let mut buf = Vec::new();
+    if f.take(take).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let mut s = String::from_utf8_lossy(&buf).into_owned();
+    if read_start > 0 {
+        if let Some(idx) = s.find('\n') {
+            s = s[idx + 1..].to_string();
+        }
+    }
+    let mut lines: Vec<String> = s.lines().map(std::string::ToString::to_string).collect();
+    if lines.len() > max_lines {
+        let skip = lines.len() - max_lines;
+        lines.drain(..skip);
+    }
+    lines
+}
+
+/// GET /api/logs/daemon/recent — last lines from `~/.armaraos/logs/daemon.log` (or `tui.log` fallback).
+///
+/// Query: `lines` (1–2000, default 200), `level` (trace|debug|info|warn|error), `filter` (substring).
+pub async fn daemon_logs_recent(
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let home = openfang_kernel::config::openfang_home();
+    let path_opt = resolve_daemon_tracing_log_path(&home);
+    let rel_display = path_opt.as_ref().and_then(|p| {
+        p.strip_prefix(&home)
+            .ok()
+            .map(|s| s.display().to_string())
+    });
+
+    let n: usize = params
+        .get("lines")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200)
+        .clamp(1, 2000);
+
+    let min_level = params.get("level").cloned().unwrap_or_default().to_lowercase();
+    let text = params
+        .get("filter")
+        .cloned()
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let lines: Vec<serde_json::Value> = match &path_opt {
+        None => Vec::new(),
+        Some(p) => {
+            let raw = read_daemon_log_tail(p, 8000);
+            let filtered: Vec<String> = raw
+                .into_iter()
+                .filter(|l| daemon_line_matches(l, &min_level, &text))
+                .collect();
+            let skip = filtered.len().saturating_sub(n);
+            filtered
+                .into_iter()
+                .skip(skip)
+                .enumerate()
+                .map(|(i, line)| {
+                    serde_json::json!({
+                        "seq": (skip + i + 1) as u64,
+                        "line": line,
+                    })
+                })
+                .collect()
+        }
+    };
+
+    Json(serde_json::json!({
+        "path": rel_display,
+        "lines": lines,
+    }))
+}
+
+/// GET /api/logs/daemon/stream — SSE tail of daemon tracing log (same files as [`daemon_logs_recent`]).
+///
+/// Query: `level`, `filter`, optional `token=` (remote clients when `api_key` is set).
+pub async fn daemon_logs_stream(
+    Query(params): Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use std::convert::Infallible;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::time::Duration;
+
+    let home = openfang_kernel::config::openfang_home();
+    let min_level = params.get("level").cloned().unwrap_or_default().to_lowercase();
+    let text_filter = params
+        .get("filter")
+        .cloned()
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(256);
+
+    tokio::spawn(async move {
+        let mut offset: u64 = 0;
+        let mut initialized = false;
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let Some(pth) = resolve_daemon_tracing_log_path(&home) else {
+                continue;
+            };
+            if !initialized {
+                initialized = true;
+                let backfill = read_daemon_log_tail(&pth, 300);
+                for line in backfill {
+                    if !daemon_line_matches(&line, &min_level, &text_filter) {
+                        continue;
+                    }
+                    let data = serde_json::to_string(&serde_json::json!({ "line": line }))
+                        .unwrap_or_default();
+                    if tx.send(Ok(Event::default().data(data))).await.is_err() {
+                        return;
+                    }
+                }
+                offset = std::fs::metadata(&pth).map(|m| m.len()).unwrap_or(0);
+                continue;
+            }
+            let meta = match std::fs::metadata(&pth) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let len = meta.len();
+            if len < offset {
+                offset = 0;
+            }
+            if len <= offset {
+                continue;
+            }
+            let mut f = match std::fs::File::open(&pth) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            if f.seek(SeekFrom::Start(offset)).is_err() {
+                continue;
+            }
+            let mut chunk = String::new();
+            let take = len - offset;
+            if f.take(take).read_to_string(&mut chunk).is_err() {
+                continue;
+            }
+            offset = len;
+            for line in chunk.lines() {
+                if !daemon_line_matches(line, &min_level, &text_filter) {
+                    continue;
+                }
+                let data = serde_json::to_string(&serde_json::json!({ "line": line }))
+                    .unwrap_or_default();
+                if tx.send(Ok(Event::default().data(data))).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+
+    let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(rx_stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("ping"),
+        )
+        .into_response()
+}
+
 /// GET /api/events/stream — SSE stream of kernel [`openfang_types::event::Event`] values (JSON per message).
 ///
 /// On connect, sends up to 100 recent events from the bus history (oldest first), then live events.
@@ -6187,6 +6508,8 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 const ARMARAOS_HOME_BROWSER_MAX_ENTRIES: usize = 4000;
 /// Max bytes returned for a single file read (prevents huge memory use).
 const ARMARAOS_HOME_BROWSER_MAX_READ_BYTES: u64 = 512 * 1024;
+/// Max bytes for `GET /api/armaraos-home/download` (diagnostics zips may include DB).
+const ARMARAOS_HOME_DOWNLOAD_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(serde::Deserialize)]
 pub struct ArmaraosHomeBrowserQuery {
@@ -6545,6 +6868,163 @@ pub async fn armaraos_home_read(
         "home_edit_backup": dash.home_edit_backup,
     }))
     .into_response()
+}
+
+/// GET /api/armaraos-home/download?path= — Stream a file from the ArmaraOS home tree (larger cap than read).
+pub async fn armaraos_home_download(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Query(q): Query<ArmaraosHomeBrowserQuery>,
+) -> axum::response::Response {
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let rel = normalize_armaraos_home_rel(&q.path);
+    const PATH: &str = "/api/armaraos-home/download";
+
+    if rel.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Missing path",
+            "Query parameter `path` must name a file relative to the ArmaraOS home directory."
+                .to_string(),
+            Some("Example: path=support/armaraos-diagnostics-20260101-120000.zip"),
+        )
+        .into_response();
+    }
+
+    let resolved = match resolve_sandbox_path(&rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid path",
+                e,
+                Some("Use paths relative to your ArmaraOS home directory."),
+            )
+            .into_response();
+        }
+    };
+
+    if !resolved.is_file() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Not a file",
+            format!("{rel} is not a regular file."),
+            Some("Pick a file path, not a directory."),
+        )
+        .into_response();
+    }
+
+    let len = match std::fs::metadata(&resolved) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "File not found",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if len > ARMARAOS_HOME_DOWNLOAD_MAX_BYTES {
+        return api_json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            &rid,
+            PATH,
+            "File too large",
+            format!(
+                "File is {} bytes; maximum download is {} bytes. Open the folder in Finder / Explorer instead.",
+                len, ARMARAOS_HOME_DOWNLOAD_MAX_BYTES
+            ),
+            None,
+        )
+        .into_response();
+    }
+
+    let path_for_blocking = resolved.clone();
+    let bytes = match tokio::task::spawn_blocking(move || std::fs::read(&path_for_blocking)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            return api_json_error(
+                StatusCode::FORBIDDEN,
+                &rid,
+                PATH,
+                "Cannot read file",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Read task failed",
+                e.to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    let basename = std::path::Path::new(&rel)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    let safe_name: String = basename
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\r' | '\n' | '\\'))
+        .collect();
+    let safe_name = if safe_name.is_empty() {
+        "download".to_string()
+    } else {
+        safe_name
+    };
+    let cd = format!("attachment; filename=\"{safe_name}\"");
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Response};
+    let disp = match HeaderValue::from_str(&cd) {
+        Ok(h) => h,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Header build failed",
+                "Invalid filename for Content-Disposition.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+    match Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_DISPOSITION, disp)
+        .body(Body::from(bytes))
+    {
+        Ok(resp) => resp.into_response(),
+        Err(_) => api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Response build failed",
+            "Could not build download response.".to_string(),
+            None,
+        )
+        .into_response(),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -15263,13 +15743,21 @@ pub async fn post_ainl_register_curated(
         tracing::warn!("AINL library pointer files (register-curated): {e}");
     }
 
+    let (cron_reassigned, cron_deduped, cron_ainl_deduped) =
+        state.kernel.reconcile_persisted_cron_jobs();
+
     match openfang_kernel::ainl_library::register_curated_ainl_cron_jobs(&state.kernel) {
-        Ok(n) => {
+        Ok(curation) => {
             let _ = state.kernel.cron_scheduler.persist();
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
-                    "registered": n,
+                    "registered": curation.added,
+                    "updated": curation.updated,
+                    "pruned": curation.pruned,
+                    "cron_reassigned": cron_reassigned,
+                    "cron_deduped": cron_deduped,
+                    "cron_ainl_deduped": cron_ainl_deduped,
                     "embedded_programs_written": embedded_written,
                 })),
             )

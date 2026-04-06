@@ -44,6 +44,44 @@ function overviewPage() {
     _kernelEventHandler: null,
     _kernelDebounce: null,
 
+    /** `localStorage` openfang-onboarded — finished setup wizard (or dismissed onboarding). */
+    onboarded: false,
+    /** When false (onboarded users), Setup Wizard is hidden until they click "Get started". */
+    overviewWizardCtaVisible: true,
+
+    initOverviewWizardCta() {
+      try {
+        this.onboarded = localStorage.getItem('openfang-onboarded') === 'true';
+        this.overviewWizardCtaVisible = !this.onboarded;
+      } catch (e) {
+        this.onboarded = false;
+        this.overviewWizardCtaVisible = true;
+      }
+    },
+
+    revealSetupWizardCta() {
+      this.overviewWizardCtaVisible = true;
+    },
+
+    /** Sidebar "Get started" clicked while already on this page — reveal wizard for onboarded users. */
+    onOverviewNavSamePage() {
+      try {
+        if (localStorage.getItem('openfang-onboarded') === 'true') {
+          this.revealSetupWizardCta();
+        }
+      } catch (e) { /* ignore */ }
+    },
+
+    refreshOnboardingFlags() {
+      try {
+        var now = localStorage.getItem('openfang-onboarded') === 'true';
+        if (now && !this.onboarded) {
+          this.overviewWizardCtaVisible = false;
+        }
+        this.onboarded = now;
+      } catch (e) { /* ignore */ }
+    },
+
     async loadOverview() {
       this.loading = true;
       clearPageLoadError(this);
@@ -61,6 +99,7 @@ function overviewPage() {
           this.loadObservability()
         ]);
         this.lastRefresh = Date.now();
+        this.refreshOnboardingFlags();
       } catch(e) {
         applyPageLoadError(this, e, 'Could not load overview data.');
       }
@@ -89,6 +128,7 @@ function overviewPage() {
           this.loadObservability()
         ]);
         this.lastRefresh = Date.now();
+        this.refreshOnboardingFlags();
       } catch(e) { /* silent */ }
     },
 

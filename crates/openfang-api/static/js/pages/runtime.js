@@ -1,7 +1,7 @@
 // Runtime page — system overview and provider status
 document.addEventListener('alpine:init', function() {
   Alpine.data('runtimePage', function() {
-    return {
+    return Object.assign(armaraosDaemonLifecycleControls(), {
       loading: true,
       uptime: '-',
       agentCount: 0,
@@ -70,11 +70,7 @@ document.addEventListener('alpine:init', function() {
         try {
           var ver = await OpenFangAPI.get('/api/version');
           var current = ver.version || '';
-          var r = await fetch('https://api.github.com/repos/sbhooley/armaraos/releases/latest', {
-            headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'ArmaraOS-Dashboard' }
-          });
-          if (!r.ok) throw new Error('GitHub returned ' + r.status);
-          var rel = await r.json();
+          var rel = await OpenFangAPI.get('/api/version/github-latest');
           var tag = String(rel.tag_name || '').replace(/^v/i, '');
           var cmp = this.semverCompare(current, tag);
           this.daemonUpdateInfo = {
@@ -176,6 +172,6 @@ document.addEventListener('alpine:init', function() {
         }
         this.updateChecking = false;
       }
-    };
+    });
   });
 });

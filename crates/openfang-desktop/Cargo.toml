@@ -38,6 +38,7 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 semver = "1"
 chrono = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 notify-rust = "4.12"
 
 [features]
