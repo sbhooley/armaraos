@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP API:** **`GET /api/version/github-latest`** — server-side fetch of the latest GitHub release for the ArmaraOS repo (dashboard **Check daemon vs GitHub** / **Check vs GitHub** no longer calls `api.github.com` from the browser).
+- **Dashboard → Daemon / API:** **Reload config** (`POST /api/config/reload`), **Reload channels** (`POST /api/channels/reload`), **Reload integrations** (`POST /api/integrations/reload`), and **Shut down** (`POST /api/shutdown`) with confirmation modals; shared Alpine mixin in **`static/js/daemon_lifecycle.js`** (bundled from **`webchat.rs`** after **`api.js`**). **`OpenFangToast.confirm`** accepts optional **`{ confirmLabel, danger }`**.
+- **Dashboard → Get started:** **Quick actions** — **App Store** (`#ainl-library`), **Daemon & runtime** (`#runtime`), plus agents/skills/channels/workflows/settings; **seven-tile** loading skeleton. **Setup Wizard** / **Run setup again** in the page header with visibility tied to **`localStorage`** **`openfang-onboarded`**; sidebar **Get started** re-click (`navigateOverview`) reveals the wizard for onboarded users; checklist **Setup Wizard** button follows the same flag.
+- **Dashboard → Settings / Runtime:** Page-scoped backgrounds, headers with subtitles, Settings tab bar in a rounded accent toolbar, Runtime responsive stat grid and styled **System** / **Providers** panels (`settings-page-*`, `runtime-page-*` classes in `components.css`).
+- **Dashboard → App Store:** On-disk catalog section title **AI Native Lang Programs Available** (replacing “AINL programs on disk”).
+- **HTTP API:** `GET /api/agents` and `GET /api/agents/{id}` expose **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, `greeting_style`, …), and detail adds **`tool_allowlist`** / **`tool_blocklist`** for dashboard and clients.
+- **Dashboard (Agents):** **Config** tab reloads agent detail into the form; **Add messaging tools** for `channel_send` / `event_publish`; save re-fetches to stay in sync.
+- **Tool presets (`openfang-types`):** Non-**Full** profiles (Minimal, Coding, Research, Messaging, Automation, …) include **`channel_send`** and **`event_publish`** where appropriate.
+- **Bundled hands:** Metadata and skills reference channel/event tools for alerts (e.g. Predictor); regression coverage in **`openfang-hands`**.
+- **Desktop (Tauri):** OS notifications use ArmaraOS branding; **`HealthCheckFailed`** is not shown as a desktop toast (logs / Web UI only).
+- **Scheduled `ainl run` (kernel):** each `ainl` subprocess receives **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** by default so IR-declared adapters (e.g. **`web`**, **`http`**) work without users exporting host-adapter env; per-agent opt-out via manifest **`ainl_allow_ir_declared_adapters`** (`"0"`, `"false"`, `"off"`, `"no"`, or JSON **`false`**).
+- **HTTP API:** agent detail **`scheduled_ainl_host_adapter`** includes **`ainl_allow_ir_declared_adapters`** (`"1"` / `"0"`) alongside allowlist summary fields.
+- **Desktop (Tauri) — product analytics:** Optional one-time PostHog event **`armaraos_desktop_first_open`** (anonymous: app version, OS, arch). Release builds can embed **`ARMARAOS_POSTHOG_KEY`** at compile time (GitHub Actions secret); runtime env overrides for debugging. Send is deferred (**~120s** or after Setup Wizard **Welcome** → **Get Started** when usage stays enabled); prefs in **`desktop_telemetry_prefs.json`**. Opt-out: uncheck **Anonymous usage** on wizard step 1, or **`ARMARAOS_PRODUCT_ANALYTICS=0`**. IPC: **`get_desktop_product_analytics_prefs`**, **`set_desktop_product_analytics_prefs`** (dashboard permission allowlist).
+- **Dashboard → Setup Wizard:** **Anonymous usage** checkbox on Welcome (desktop shell only) syncs telemetry consent before any analytics request.
+
+### Changed
+
+- **`PATCH /api/agents/{id}/config`:** Empty **`system_prompt`** / **`description`** are ignored; identity fields merge so **`""`** clears optional strings but does not wipe color accidentally; **`PATCH …/identity`** merges with current row instead of replacing unspecified fields with null.
+- **Dashboard → Sidebar:** **Comms** moved under **Monitor** (with Timeline, Logs, Runtime, …) instead of **Agents**.
+
+### Fixed
+
+- **Agents → Config:** Opening or saving agent settings no longer wiped **system prompt**, **archetype**, **vibe**, or tool allow/block lists—the API returns those values on **`GET /api/agents`** / **`GET /api/agents/{id}`**, the dashboard reloads detail into the form, and partial PATCH bodies no longer overwrite stored fields with empty strings.
+- **Dashboard → Agents list:** Internal automation probe agents (**`allowlist-probe`**, **`offline-cron`**, **`allow-ir-off`**) stay available for automation but are **hidden from the main agent sidebar**; grouped with existing internal-chat behavior (`isInternalAutomationProbeChatAgentName` in **`js/app.js`**).
+- **Desktop (`openfang-desktop`):** after **`~/.armaraos/.env`** / **`secrets.env`**, sets **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** when still unset; **`ainl_try_library_file`** (Settings → AINL library validate/run) passes **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** on the subprocess.
+
+### Docs
+
+- **`docs/api-reference.md`:** **`GET /api/version/github-latest`**; reload routes (**`/api/config/reload`**, **`/api/channels/reload`**, **`/api/integrations/reload`**); **`POST /api/shutdown`** auth notes; agents list/detail + **`PATCH`/`GET`/`PUT`** config/tools merge semantics; summary table.
+- **`docs/dashboard-overview-ui.md`:** Seven quick actions (**Daemon & runtime**), **Comms** under **Monitor**, skeleton count, Setup Wizard / **App Store** / `navigateOverview` / **`dashboard-testing`** QA pointers.
+- **`docs/dashboard-settings-runtime-ui.md`:** Polished Settings/Runtime class map, **daemon lifecycle** (**`daemon_lifecycle.js`**), reload/shutdown/GitHub compare.
+- **`docs/dashboard-testing.md`:** Seven-tile quick actions, daemon lifecycle + **`github-latest`** QA, Setup Wizard, App Store title, Settings/Runtime layout, Agents **Config** + curl smoke; **`scripts/verify-dashboard-smoke.sh`** includes **`GET /api/version/github-latest`**.
+- **`docs/README.md`**, **`docs/getting-started.md`**, **`docs/troubleshooting.md`**, **`docs/architecture.md`**, **`docs/configuration.md`**, **`docs/scheduled-ainl.md`**, **`CONTRIBUTING.md`**, **`CLAUDE.md`**, **`docs/release-desktop.md`**, **`docs/ootb-ainl.md`**, **`docs/dashboard-bookmarks.md`:** Cross-links for Get started, Settings/Runtime, daemon controls, GitHub compare troubleshooting, scheduled AINL reload.
+- **`docs/channel-adapters.md`:** **GET/PUT** tools link text aligned with the API.
+- **`docs/agent-templates.md`:** Profiles vs allowlists and channel tools.
+- **`docs/desktop.md`:** *Native OS Notifications* — ArmaraOS branding; **HealthCheckFailed** not shown as a toast (use logs / Web UI).
+- **`README.md`:** Desktop PostHog analytics (collection, opt-out, timing, optional CI secrets).
+- **`docs/release-desktop.md`:** Optional **`ARMARAOS_POSTHOG_KEY`** / **`ARMARAOS_POSTHOG_HOST`** for release builds.
+- **`.env.example`:** PostHog vars — baked key vs runtime override.
+
+### Build / CI
+
+- **`.github/workflows/release.yml`:** Desktop job passes **`ARMARAOS_POSTHOG_KEY`** and **`ARMARAOS_POSTHOG_HOST`** from secrets into the Tauri build (optional; empty when unset).
+
+## [0.6.5] - 2026-04-05
+
+### Added
+
+- **HTTP API:** `GET /api/armaraos-home/download?path=` streams a file from the ArmaraOS home tree as `application/octet-stream` with `Content-Disposition: attachment` (cap **256 MiB**; separate from the 512 KiB **preview** limit on `GET /api/armaraos-home/read`).
+- **Dashboard → Home folder:** Per-row **Download** (green) and modal **Download** / **Download full file** / error-state **Download file** so large binaries (e.g. diagnostics `.zip`) save even when **View** fails with “file too large” for preview.
+- **Desktop (Tauri):** `copy_home_file_to_downloads` — copies a home-relative path (e.g. `support/armaraos-diagnostics-*.zip`) to the user **Downloads** folder (used from the Home folder page on desktop).
+- **CLI daemon:** `openfang start` / **`openfang gateway start`** mirror `tracing` to **stderr** and **`{home}/logs/daemon.log`** (creates `logs/` as needed); falls back to stderr-only if the file cannot be opened.
+- **HTTP API:** `GET /api/logs/daemon/recent` and **`GET /api/logs/daemon/stream`** (SSE) read the daemon tracing file (`daemon.log`, else `tui.log`); **`GET /api/logs/stream`** supports `level` and `filter` query parameters for server-side audit filtering.
+- **Dashboard → Logs:** **Daemon** tab (tail + SSE, optional `log_level` save reminding restart); **Live** tab reconnects the audit SSE when filters change.
+- **Tests:** `crates/openfang-api/tests/sse_stream_auth.rs` asserts loopback vs non-loopback auth for **`/api/logs/daemon/stream`**.
+
+### Changed
+
+- **Dashboard:** Sidebar labels the landing dashboard **Get started** and places it **above Chat**; page title matches. Internal route id remains `overview` / `#overview`.
+- **Dashboard — setup checklist:** First chat message and browse/install skill rows are **perpetual shortcuts** (always ○ + **Go**, never marked complete). Optional progress after core steps tracks **channel** only. Removed `localStorage` keys `of-first-msg` and `of-skill-browsed` and checklist refresh via `armaraos-onboarding-local`.
+- **Dashboard → Get started:** **Quick actions** moved to the top of the page (after the Live SSE strip) with a grid card and loading skeleton; removed the duplicate quick-actions block from the bottom.
+
+### Fixed
+
+- **Support diagnostics zip:** `GET /api/support/diagnostics/download` is allowed from **loopback** without Bearer (same policy as `POST …/diagnostics`) so the dashboard fetch + blob save works when `api_key` is set; client also sends `token` query + `credentials: 'same-origin'` for robustness.
+- **Desktop:** `copy_diagnostics_to_downloads` again takes a single argument **`bundlePath`** (Tauri IPC camelCase) to match code generation; resolves `support/<filename>` when needed before copying to Downloads.
+- **Home folder:** Symlink entries can use row **Download**; preview modal always exposes **Download** when a path is known.
+
+### Docs
+
+- **`docs/dashboard-testing.md`:** Support bundle create/download, Home folder preview (512 KiB) vs full download (256 MiB), desktop Tauri commands (`bundlePath`, `relativePath`), Get started / Quick actions checklist, **Logs** page (Live / Daemon / Audit Trail), curl smoke for daemon recent + audit SSE; link to **`docs/dashboard-overview-ui.md`**.
+- **`docs/troubleshooting.md`:** Diagnostics POST+GET loopback policy; **`GET /api/armaraos-home/download`**; UI paths for Support + Home folder; FAQ linking **Get started** / Quick actions to **`dashboard-overview-ui.md`** and **`dashboard-testing.md`**.
+- **`README.md`:** Diagnostics and home-folder download summary.
+- **`CLAUDE.md`:** Support/home download testing pointers; Get started / overview UI pointer.
+- **`docs/dashboard-overview-ui.md`:** Get started (`#overview`) layout, Quick actions strip (top of page), skeleton, file/CSS map.
+- **`docs/architecture.md`:** `openfang-api` crate row links embedded dashboard assets to **`docs/dashboard-overview-ui.md`**.
+- **`docs/getting-started.md`:** WebChat bullet mentions **Quick actions** and links **`dashboard-overview-ui.md`**.
+- **`docs/README.md`:** Index rows for dashboard overview UI and **dashboard-home-folder** (Release & Operations).
+- **`CONTRIBUTING.md`:** Dashboard SPA bullet linking the overview UI doc.
+- **`scripts/verify-dashboard-smoke.sh`:** Comments + steps for `GET …/diagnostics/download` and `GET …/armaraos-home/download` after POST diagnostics; **`GET /api/logs/daemon/recent?lines=5`** smoke (empty `lines` OK when `daemon.log` does not exist yet).
+- **`docs/data-directory.md`**, **`docs/cli-reference.md`**, **`docs/configuration.md`**, **`docs/troubleshooting.md`:** `daemon.log` / `tui.log`, CLI daemon tracing, `log_level` + restart, audit vs tracing in the dashboard; CLI reference **`openfang gateway`** subsection (`start` / `stop` / `status`, equivalence to top-level commands, **`--yolo`** only on **`openfang start`**).
+- **`docs/api-reference.md`:** `GET /api/logs/daemon/recent`, audit and daemon SSE (`level`, `filter`, `token`, loopback auth); ArmaraOS home browser intro (loopback **`/download`**, links to dashboard-home-folder + dashboard-testing).
+- **`docs/desktop.md`:** IPC subsections for `generate_support_bundle`, `copy_diagnostics_to_downloads` (`bundlePath`), `copy_home_file_to_downloads` (`relativePath`), `compose_support_email`; removed stale fixed command count.
+- **`docs/dashboard-home-folder.md`:** **Dashboard UI** subsection (View vs Download, modal header / error-state download).
+- **`docs/release-desktop.md`:** Smoke checklist — **Logs** tabs.
+
 ## [0.6.4] - 2026-04-05
 
 ### Added
@@ -268,4 +356,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.5
 [0.6.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.4
