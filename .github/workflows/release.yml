@@ -185,8 +185,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           # Baked into the binary (option_env!) — same PostHog project as ainativelang.com when set.
-          ARMARAOS_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY }}
-          ARMARAOS_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST }}
+          # Prefer ARMARAOS_*; fallback AINL_* so one org-level secret matches the ecosystem (same phc_ as NEXT_PUBLIC_POSTHOG_KEY on ainativelangweb).
+          ARMARAOS_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY || secrets.AINL_POSTHOG_KEY }}
+          ARMARAOS_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST || secrets.AINL_POSTHOG_HOST }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ArmaraOS ${{ github.ref_name }}"
@@ -255,7 +256,11 @@ jobs:
   # Requires secret: AINLATIVELANGWEB_DEPLOY_TOKEN (fine-grained PAT, contents:write on ainativelangweb).
   sync-desktop-updates-to-website:
     name: Publish updater to ainativelang.com
-    needs: [desktop, publish-updater-latest-json]
+    # This job mirrors *downloadable installers* to ainativelang.com. It prefers a signed
+    # updater `latest.json` when present on the GitHub Release, but does NOT require
+    # TAURI_SIGNING_PRIVATE_KEY — so we can still keep the website download buttons fresh
+    # even if updater signing is temporarily unavailable.
+    needs: [desktop]
     # Require a successful desktop matrix (all platforms). `always()` caused this job to run after a Linux failure and error on missing `latest.json`.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -285,36 +290,64 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} is stable (latest.json + beta.json on the website)."
           fi
 
-      - name: Download latest.json from release
+      - name: Fetch release metadata (asset list + published_at)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/armaraos-release
-          gh release download "${GITHUB_REF_NAME}" \
-            --repo "${{ github.repository }}" \
-            --dir /tmp/armaraos-release \
-            -p "latest.json"
-          test -f /tmp/armaraos-release/latest.json
+          gh api "repos/${{ github.repository }}/releases/tags/${GITHUB_REF_NAME}" > /tmp/armaraos-release/release.json
+          test -s /tmp/armaraos-release/release.json
 
-      - name: Download updater archives (only files referenced in latest.json)
+      - name: Download installers (desktop artifacts) from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mapfile -t FILES < <(jq -r '[.. | objects | select(has("url")) | .url] | unique[] | split("/") | last | split("?") | .[0]' /tmp/armaraos-release/latest.json)
+          # We mirror end-user desktop installers (used by website download buttons),
+          # plus updater bundles if present.
+          mapfile -t FILES < <(jq -r '
+            [.assets[].name
+              | select(
+                  (test("^ArmaraOS_.*\\.(dmg|deb|rpm)$"))
+                  or (test("^ArmaraOS_.*_(x64|arm64)-setup\\.exe$"))
+                  or (test("^ArmaraOS_.*_(x64|arm64)_en-US\\.msi$"))
+                  or (test("^ArmaraOS_(aarch64|x64)\\.app\\.tar\\.gz$"))
+                )
+            ] | unique[]' /tmp/armaraos-release/release.json)
+
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "::error::No url fields in latest.json"
+            echo "::error::No ArmaraOS desktop installer assets found on release ${GITHUB_REF_NAME}."
+            echo "::error::Expected assets like ArmaraOS_<ver>_x64-setup.exe / .dmg / .deb."
             exit 1
           fi
+
           args=()
           for f in "${FILES[@]}"; do
             args+=(-p "$f")
           done
+
           gh release download "${GITHUB_REF_NAME}" \
             --repo "${{ github.repository }}" \
             --dir /tmp/armaraos-release \
             "${args[@]}"
+
+      - name: Download signed updater latest.json if present (optional)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # If the release already has a signed latest.json (tauri-action or post-process),
+          # prefer it. Otherwise, we'll generate a lightweight website-only latest.json.
+          if jq -e '.assets[].name | select(. == "latest.json")' /tmp/armaraos-release/release.json >/dev/null; then
+            gh release download "${GITHUB_REF_NAME}" \
+              --repo "${{ github.repository }}" \
+              --dir /tmp/armaraos-release \
+              -p "latest.json"
+            echo "Downloaded signed latest.json from release."
+          else
+            echo "No latest.json asset on release; will generate website download manifest."
+          fi
 
       - name: Rewrite updater JSON and stage binaries
         env:
@@ -323,28 +356,86 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/updater-web
           BASE="https://ainativelang.com/downloads/armaraos"
-          jq_rewrite='def fname: split("/") | last | split("?") | .[0];
-            walk(
-              if type == "object" and has("url") then
-                .url = ($base + "/" + (.url | fname))
-              else . end
-            )'
-          if [ "${PRERELEASE}" = "true" ]; then
-            jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/beta.json
-            echo "Staged beta.json only (prerelease)."
-          else
-            jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/latest.json
-            cp -v /tmp/updater-web/latest.json /tmp/updater-web/beta.json
-          fi
-          mapfile -t FILES < <(jq -r '[.. | objects | select(has("url")) | .url] | unique[] | split("/") | last | split("?") | .[0]' /tmp/armaraos-release/latest.json)
-          for f in "${FILES[@]}"; do
-            if [[ -f "/tmp/armaraos-release/$f" ]]; then
-              cp -v "/tmp/armaraos-release/$f" "/tmp/updater-web/$f"
-            else
-              echo "::error::Release asset missing: $f (referenced in latest.json)"
-              exit 1
-            fi
+
+          PUB_DATE="$(jq -r '.published_at // empty' /tmp/armaraos-release/release.json)"
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Stage mirrored binaries.
+          for f in /tmp/armaraos-release/*; do
+            base=$(basename "$f")
+            case "$base" in
+              release.json) continue ;;
+              latest.json) continue ;;
+            esac
+            cp -v "$f" "/tmp/updater-web/$base"
           done
+
+          if [ -f /tmp/armaraos-release/latest.json ]; then
+            # Signed updater manifest path: rewrite embedded URLs to website mirror.
+            jq_rewrite='def fname: split("/") | last | split("?") | .[0];
+              walk(
+                if type == "object" and has("url") then
+                  .url = ($base + "/" + (.url | fname))
+                else . end
+              )'
+            if [ "${PRERELEASE}" = "true" ]; then
+              jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/beta.json
+              echo "Staged beta.json only (prerelease; signed updater manifest)."
+            else
+              jq --arg base "$BASE" "$jq_rewrite" /tmp/armaraos-release/latest.json > /tmp/updater-web/latest.json
+              cp -v /tmp/updater-web/latest.json /tmp/updater-web/beta.json
+              echo "Staged latest.json + beta.json (signed updater manifest)."
+            fi
+          else
+            # Website-only manifest: enough for download buttons (NOT for in-app updater installs).
+            #
+            # Keep format compatible with ainativelangweb’s loader (`fromUpdaterManifest` reads `.platforms[*].url`).
+            # We intentionally omit `signature` fields here.
+            url_for() {
+              local pat="$1"
+              jq -r --arg p "$pat" '.assets[] | select(.name | test($p)) | .name' /tmp/armaraos-release/release.json | head -1
+            }
+
+            DMG_AARCH="$(url_for '^ArmaraOS_.*_aarch64\\.dmg$')"
+            DMG_X64="$(url_for '^ArmaraOS_.*_x64\\.dmg$')"
+            WIN_X64_EXE="$(url_for '^ArmaraOS_.*_x64-setup\\.exe$')"
+            WIN_ARM_EXE="$(url_for '^ArmaraOS_.*_arm64-setup\\.exe$')"
+            LINUX_DEB="$(url_for '^ArmaraOS_.*_amd64\\.deb$')"
+
+            jq -n \
+              --arg v "$VERSION" \
+              --arg notes "ArmaraOS ${GITHUB_REF_NAME} — see https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}" \
+              --arg pub "$PUB_DATE" \
+              --arg base "$BASE" \
+              --arg dmg_aarch "$DMG_AARCH" \
+              --arg dmg_x64 "$DMG_X64" \
+              --arg win_x64 "$WIN_X64_EXE" \
+              --arg win_arm "$WIN_ARM_EXE" \
+              --arg linux_deb "$LINUX_DEB" \
+              '{
+                version: $v,
+                notes: $notes,
+                pub_date: $pub,
+                platforms: (
+                  {}
+                  + (if ($dmg_aarch | length) > 0 then {"darwin-aarch64": {url: ($base + "/" + $dmg_aarch)}} else {} end)
+                  + (if ($dmg_x64 | length) > 0 then {"darwin-x86_64": {url: ($base + "/" + $dmg_x64)}} else {} end)
+                  + (if ($win_x64 | length) > 0 then {"windows-x86_64": {url: ($base + "/" + $win_x64)}} else {} end)
+                  + (if ($win_arm | length) > 0 then {"windows-aarch64": {url: ($base + "/" + $win_arm)}} else {} end)
+                  + (if ($linux_deb | length) > 0 then {"linux-x86_64": {url: ($base + "/" + $linux_deb)}} else {} end)
+                )
+              }' > /tmp/updater-web/latest.json
+
+            if [ "${PRERELEASE}" = "true" ]; then
+              # Beta-only: keep stable latest.json on site, but still update beta.json and installers.
+              cp -v /tmp/updater-web/latest.json /tmp/updater-web/beta.json
+              rm -f /tmp/updater-web/latest.json
+              echo "Staged beta.json only (prerelease; website-only manifest)."
+            else
+              cp -v /tmp/updater-web/latest.json /tmp/updater-web/beta.json
+              echo "Staged latest.json + beta.json (website-only manifest)."
+            fi
+          fi
 
       - uses: actions/checkout@v6
         with:
@@ -375,19 +466,56 @@ jobs:
             cp -v /tmp/updater-web/* "$DEST/"
           fi
 
+      - name: Bump latestArmaraosReleaseTag in config/site.ts
+        env:
+          PRERELEASE: ${{ steps.tagkind.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # Only bump the stable tag; prerelease tags don't change the homepage version badge.
+          if [ "${PRERELEASE}" = "true" ]; then
+            echo "Prerelease — skipping config/site.ts bump."
+            exit 0
+          fi
+          SITE_TS="web/config/site.ts"
+          if [ ! -f "$SITE_TS" ]; then
+            echo "::warning::$SITE_TS not found; skipping version bump."
+            exit 0
+          fi
+          # Replace the latestArmaraosReleaseTag value in-place.
+          sed -i "s|latestArmaraosReleaseTag: \"v[^\"]*\"|latestArmaraosReleaseTag: \"${GITHUB_REF_NAME}\"|g" "$SITE_TS"
+          echo "Set latestArmaraosReleaseTag to ${GITHUB_REF_NAME} in $SITE_TS"
+
       - name: Commit and push
         run: |
           set -euo pipefail
           cd web
           git config user.name "ArmaraOS release"
           git config user.email "armaraos-releases@users.noreply.github.com"
-          git add public/downloads/armaraos/
+          git add public/downloads/armaraos/ config/site.ts
           if git diff --staged --quiet; then
             echo "No file changes; skipping push."
             exit 0
           fi
           git commit -m "chore: ArmaraOS desktop updater ${{ github.ref_name }}"
           git push origin HEAD:main
+
+      - name: Ping ainativelangweb sync workflow
+        # Fire a repository_dispatch to ainativelangweb so its sync-armaraos-release
+        # workflow knows a new release landed (used as a fallback trigger if the
+        # direct commit above was skipped due to a missing deploy token).
+        env:
+          TOK: ${{ secrets.AINLATIVELANGWEB_DEPLOY_TOKEN }}
+        run: |
+          if [ -z "${TOK}" ]; then
+            echo "No deploy token — skipping repository_dispatch ping."
+            exit 0
+          fi
+          curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${TOK}" \
+            https://api.github.com/repos/sbhooley/ainativelangweb/dispatches \
+            -d "{\"event_type\":\"armaraos-released\",\"client_payload\":{\"tag\":\"${GITHUB_REF_NAME}\"}}"
 
   # ── CLI Binary (5 platforms) ──────────────────────────────────────────────
   cli:
@@ -463,8 +591,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ── Docker (linux/amd64 + linux/arm64) ────────────────────────────────────
+  # Off by default: multi-arch push is slow and the image targets server/web-style
+  # deployments, not the desktop app. To publish on a tag, set the repo variable
+  # ENABLE_ARMARAOS_DOCKER_RELEASE to "true" (Settings → Secrets and variables → Actions → Variables).
   docker:
     name: Docker Image
+    if: ${{ vars.ENABLE_ARMARAOS_DOCKER_RELEASE == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
