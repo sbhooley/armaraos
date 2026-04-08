@@ -176,6 +176,7 @@ pub async fn auth(
         || (path == "/api/budget/agents" && is_get)
         || (path.starts_with("/api/budget/agents/") && is_get)
         || (path == "/api/network/status" && is_get)
+        || (path == "/api/system/network-hints" && is_get)
         || (path == "/api/a2a/agents" && is_get)
         || (path == "/api/approvals" && is_get)
         || (path.starts_with("/api/approvals/") && is_get)

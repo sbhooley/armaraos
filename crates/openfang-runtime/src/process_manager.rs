@@ -64,11 +64,14 @@ impl ProcessManager {
     }
 
     /// Start a persistent process. Returns the process ID.
+    ///
+    /// `cwd` sets the working directory for the child process; `None` inherits the daemon's cwd.
     pub async fn start(
         &self,
         agent_id: &str,
         command: &str,
         args: &[String],
+        cwd: Option<&str>,
     ) -> Result<ProcessId, String> {
         // Check per-agent limit
         let agent_count = self
@@ -84,11 +87,15 @@ impl ProcessManager {
             ));
         }
 
-        let mut child = tokio::process::Command::new(command)
-            .args(args)
+        let mut cmd = tokio::process::Command::new(command);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start process '{}': {}", command, e))?;
 
@@ -275,7 +282,7 @@ mod tests {
             vec![]
         };
 
-        let id = pm.start("agent1", cmd, &args).await.unwrap();
+        let id = pm.start("agent1", cmd, &args, None).await.unwrap();
         assert!(id.starts_with("proc_"));
 
         let list = pm.list("agent1");
@@ -302,8 +309,8 @@ mod tests {
             vec![]
         };
 
-        let id1 = pm.start("agent1", cmd, &args).await.unwrap();
-        let result = pm.start("agent1", cmd, &args).await;
+        let id1 = pm.start("agent1", cmd, &args, None).await.unwrap();
+        let result = pm.start("agent1", cmd, &args, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("max: 1"));
 

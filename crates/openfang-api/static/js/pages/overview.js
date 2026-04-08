@@ -32,6 +32,8 @@ function overviewPage() {
     scheduleCount: 0,
     /** GET /api/observability/snapshot */
     observability: {},
+    /** Recently opened agents (from localStorage). */
+    recentAgents: [],
     loading: true,
     loadError: '',
     loadErrorDetail: '',
@@ -82,9 +84,24 @@ function overviewPage() {
       } catch (e) { /* ignore */ }
     },
 
+    loadRecentAgents() {
+      try {
+        var raw = localStorage.getItem('armaraos-recent-agents');
+        var list = raw ? JSON.parse(raw) : [];
+        var agents = Alpine.store('app').agents || [];
+        var agentMap = {};
+        agents.forEach(function(a) { agentMap[String(a.id)] = a; });
+        this.recentAgents = list.slice(0, 3).map(function(r) {
+          var live = agentMap[r.id];
+          return live ? live : { id: r.id, name: r.name || r.id, identity: { emoji: r.emoji || '' } };
+        });
+      } catch (e) { this.recentAgents = []; }
+    },
+
     async loadOverview() {
       this.loading = true;
       clearPageLoadError(this);
+      this.loadRecentAgents();
       try {
         await Promise.all([
           this.loadHealth(),

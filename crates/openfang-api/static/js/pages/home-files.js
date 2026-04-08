@@ -118,7 +118,7 @@ function homeFilesPage() {
           OpenFangToast.success('Download started');
         }
       } catch (e) {
-        OpenFangToast.error((e && e.message) ? e.message : String(e));
+        OpenFangToast.error(openFangErrText(e));
       }
       this.downloadBusy = false;
     },
@@ -180,7 +180,7 @@ function homeFilesPage() {
         this.refresh();
         this.closeFileModal();
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
       }
       this.saveBusy = false;
     },

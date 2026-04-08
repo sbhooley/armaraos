@@ -64,6 +64,13 @@ function settingsPage() {
     diagDownloadsPath: '',
     diagError: '',
 
+    get configSchemaLine() {
+      var a = this.sysInfo.config_schema_version;
+      var b = this.sysInfo.config_schema_version_binary;
+      if (a == null && b == null) return '—';
+      return String(a != null ? a : '?') + ' (binary ' + String(b != null ? b : '?') + ')';
+    },
+
     // -- Dynamic config state --
     configSchema: null,
     configValues: {},
@@ -243,7 +250,7 @@ function settingsPage() {
         await this.loadUpdaterPrefs();
         OpenFangToast && OpenFangToast.success('Update channel saved');
       } catch(e) {
-        OpenFangToast && OpenFangToast.error(e.message || String(e));
+        OpenFangToast && OpenFangToast.error(openFangErrText(e) || String(e));
       }
       this.releaseChannelSaving = false;
     },
@@ -300,7 +307,13 @@ function settingsPage() {
           uptime_seconds: status.uptime_seconds || 0,
           agent_count: status.agent_count || 0,
           default_provider: status.default_provider || '-',
-          default_model: status.default_model || '-'
+          default_model: status.default_model || '-',
+          api_listen: status.api_listen || status.listen || '-',
+          home_dir: status.home_dir || '-',
+          log_level: status.log_level || '-',
+          network_enabled: !!status.network_enabled,
+          config_schema_version: status.config_schema_version != null ? status.config_schema_version : null,
+          config_schema_version_binary: status.config_schema_version_binary != null ? status.config_schema_version_binary : null
         };
       } catch(e) { throw e; }
     },
@@ -377,7 +390,7 @@ function settingsPage() {
         OpenFangToast.success('Model deleted');
         await this.loadModels();
       } catch(e) {
-        OpenFangToast.error('Failed to delete: ' + (e.message || 'Unknown error'));
+        OpenFangToast.error('Failed to delete: ' + openFangErrText(e));
       }
     },
 
@@ -411,7 +424,7 @@ function settingsPage() {
         this.configDirty[key] = false;
         OpenFangToast.success('Saved ' + field);
       } catch(e) {
-        OpenFangToast.error('Failed to save: ' + e.message);
+        OpenFangToast.error('Failed to save: ' + openFangErrText(e));
       }
       this.configSaving[key] = false;
     },
@@ -488,7 +501,7 @@ function settingsPage() {
           OpenFangToast.success('Up to date');
         }
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
         await this.loadUpdaterPrefs();
       }
       this.updateChecking = false;
@@ -710,7 +723,7 @@ function settingsPage() {
           OpenFangToast.warn(st.detail || 'Upgrade finished with warnings');
         }
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
       }
       this.ainlUpgradeLoading = false;
     },
@@ -760,7 +773,7 @@ function settingsPage() {
       try {
         await ArmaraosDesktopTauriInvoke('open_ainl_library_dir');
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
       }
     },
 
@@ -843,7 +856,7 @@ function settingsPage() {
         await this.loadProviders();
         await this.loadModels();
       } catch(e) {
-        OpenFangToast.error('Failed to save key: ' + e.message);
+        OpenFangToast.error('Failed to save key: ' + openFangErrText(e));
       }
     },
 
@@ -854,7 +867,7 @@ function settingsPage() {
         await this.loadProviders();
         await this.loadModels();
       } catch(e) {
-        OpenFangToast.error('Failed to remove key: ' + e.message);
+        OpenFangToast.error('Failed to remove key: ' + openFangErrText(e));
       }
     },
 
@@ -870,7 +883,7 @@ function settingsPage() {
         window.open(resp.verification_uri, '_blank');
         this.pollCopilotOAuth();
       } catch(e) {
-        OpenFangToast.error('Failed to start Copilot login: ' + e.message);
+        OpenFangToast.error('Failed to start Copilot login: ' + openFangErrText(e));
         this.copilotOAuth.polling = false;
       }
     },
@@ -900,7 +913,7 @@ function settingsPage() {
             self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
           }
         } catch(e) {
-          OpenFangToast.error('Poll error: ' + e.message);
+          OpenFangToast.error('Poll error: ' + openFangErrText(e));
           self.copilotOAuth = { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 };
         }
       }, self.copilotOAuth.interval * 1000);
@@ -919,7 +932,7 @@ function settingsPage() {
         }
       } catch(e) {
         this.providerTestResults[provider.id] = { status: 'error', error: e.message };
-        OpenFangToast.error('Test failed: ' + e.message);
+        OpenFangToast.error('Test failed: ' + openFangErrText(e));
       }
       this.providerTesting[provider.id] = false;
     },
@@ -941,7 +954,7 @@ function settingsPage() {
         }
         await this.loadProviders();
       } catch(e) {
-        OpenFangToast.error('Failed to save URL: ' + e.message);
+        OpenFangToast.error('Failed to save URL: ' + openFangErrText(e));
       }
       this.providerUrlSaving[provider.id] = false;
     },
@@ -969,7 +982,7 @@ function settingsPage() {
         await this.loadProviders();
       } catch(e) {
         this.customProviderStatus = 'Error: ' + (e.message || 'Failed');
-        OpenFangToast.error('Failed to add provider: ' + e.message);
+        OpenFangToast.error('Failed to add provider: ' + openFangErrText(e));
       }
       this.addingCustomProvider = false;
     },
@@ -1128,7 +1141,7 @@ function settingsPage() {
         this.scanResult = data;
         this.migStep = 'preview';
       } catch(e) {
-        OpenFangToast.error('Scan failed: ' + e.message);
+        OpenFangToast.error('Scan failed: ' + openFangErrText(e));
       }
       this.scanning = false;
     },

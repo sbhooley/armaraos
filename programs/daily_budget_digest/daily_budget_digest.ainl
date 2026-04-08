@@ -1,0 +1,19 @@
+# ArmaraOS Daily Budget Digest
+# ==============================
+# Runs every morning at 08:00. Fetches the token spend summary from the
+# ArmaraOS budget API. Output JSON is captured by the kernel into the
+# owning agent's session feed (inbox-style, no LLM turn triggered).
+#
+# Uses: http, core
+# Validate: ainl validate programs/daily_budget_digest/daily_budget_digest.ainl --strict
+
+daily_budget_digest:
+  budget = http.GET "http://127.0.0.1:4200/api/budget"
+  top_agents = http.GET "http://127.0.0.1:4200/api/budget/agents"
+  ts = core.NOW 0
+
+  total_spent = core.GET budget total_spent_usd
+  budget_limit = core.GET budget budget_limit_usd
+  period = core.GET budget period
+
+  out {period: period, total_spent_usd: total_spent, budget_limit_usd: budget_limit, generated_at: ts}

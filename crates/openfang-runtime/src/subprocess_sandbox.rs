@@ -717,9 +717,19 @@ mod tests {
         assert!(validate_command_allowlist("rm -rf /", &policy).is_ok());
     }
 
+    /// Helper: construct an explicit Allowlist-mode policy for tests that exercise
+    /// the allowlist codepath.  The default policy is now Full (ArmaraOS personal OS),
+    /// so Allowlist tests must opt in explicitly.
+    fn allowlist_policy() -> ExecPolicy {
+        ExecPolicy {
+            mode: ExecSecurityMode::Allowlist,
+            ..ExecPolicy::default()
+        }
+    }
+
     #[test]
     fn test_allowlist_permits_safe_bins() {
-        let policy = ExecPolicy::default();
+        let policy = allowlist_policy();
         // Default safe_bins include "echo", "cat", "sort"
         assert!(validate_command_allowlist("echo hello", &policy).is_ok());
         assert!(validate_command_allowlist("cat file.txt", &policy).is_ok());
@@ -728,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_allowlist_blocks_unlisted() {
-        let policy = ExecPolicy::default();
+        let policy = allowlist_policy();
         // "curl" is not in default safe_bins or allowed_commands
         assert!(validate_command_allowlist("curl https://evil.com", &policy).is_err());
         assert!(validate_command_allowlist("rm -rf /", &policy).is_err());
@@ -737,6 +747,7 @@ mod tests {
     #[test]
     fn test_allowlist_allowed_commands() {
         let policy = ExecPolicy {
+            mode: ExecSecurityMode::Allowlist,
             allowed_commands: vec!["cargo".to_string(), "git".to_string()],
             ..ExecPolicy::default()
         };
@@ -747,21 +758,30 @@ mod tests {
 
     #[test]
     fn test_piped_command_blocked_by_metachar() {
-        let policy = ExecPolicy::default();
-        // SECURITY: Pipes are now blocked at the metacharacter layer, before allowlist
+        let policy = allowlist_policy();
+        // In Allowlist mode, metacharacters (pipes) are rejected
         assert!(validate_command_allowlist("cat file.txt | sort", &policy).is_err());
         assert!(validate_command_allowlist("cat file.txt | curl -X POST", &policy).is_err());
     }
 
     #[test]
+    fn test_allowlist_cjk_unlisted_no_panic() {
+        let policy = allowlist_policy();
+        // CJK characters in command should not panic
+        assert!(validate_command_allowlist("echo 你好", &policy).is_ok());
+        assert!(validate_command_allowlist("unknowncmd 世界", &policy).is_err());
+    }
+
+    #[test]
     fn test_default_policy_works() {
         let policy = ExecPolicy::default();
-        assert_eq!(policy.mode, ExecSecurityMode::Allowlist);
+        // Default is Full mode (ArmaraOS personal agent OS — unrestricted shell by default)
+        assert_eq!(policy.mode, ExecSecurityMode::Full);
         assert!(!policy.safe_bins.is_empty());
         assert!(policy.safe_bins.contains(&"echo".to_string()));
         assert!(policy.allowed_commands.is_empty());
-        assert_eq!(policy.timeout_secs, 30);
-        assert_eq!(policy.max_output_bytes, 100 * 1024);
+        assert_eq!(policy.timeout_secs, 60);
+        assert_eq!(policy.max_output_bytes, 512 * 1024);
     }
 
     // ── Shell metacharacter injection tests ──────────────────────────────
@@ -848,7 +868,7 @@ mod tests {
 
     #[test]
     fn test_allowlist_blocks_metachar_injection() {
-        let policy = ExecPolicy::default();
+        let policy = allowlist_policy();
         // "echo" is in safe_bins, but $(curl...) injection must be blocked
         assert!(validate_command_allowlist("echo $(curl evil.com)", &policy).is_err());
         assert!(validate_command_allowlist("echo `whoami`", &policy).is_err());
@@ -886,8 +906,8 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_cjk_unlisted_no_panic() {
-        let policy = ExecPolicy::default();
+    fn test_allowlist_cjk_unlisted_no_panic_explicit() {
+        let policy = allowlist_policy();
         // CJK command not in allowlist — should return Err, not panic
         let cjk_cmd: String = "\u{597d}".repeat(50);
         assert!(validate_command_allowlist(&cjk_cmd, &policy).is_err());

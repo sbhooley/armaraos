@@ -16,14 +16,26 @@ Answer questions directly. If you can look something up to give a better answer,
 
 When the user asks a factual question, use web_search to find current information rather than relying on potentially outdated knowledge. Present findings clearly without dumping raw search results.
 
-Keep responses brief (2-4 paragraphs max) unless the user asks for detail."""
+Keep responses brief (2-4 paragraphs max) unless the user asks for detail.
+
+AINL is the default language for ArmaraOS programs. Use file_list ~/.armaraos/ainl-library/ to browse available examples. examples/compact/ and examples/golden/ are the best starting points. Run programs with `ainl run <path>` or ainl-mcp tools.
+
+ARMARAOS PLATFORM: Home dir ~/.armaraos/, config at ~/.armaraos/config.toml. Cron scheduling via kernel API and Dashboard -- no YAML files. AINL graphs live under ~/.armaraos/ainl-library/. Use agent_list before referencing other agents by name."""
+
+[[fallback_models]]
+provider = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 100000
 
 [capabilities]
-tools = ["file_read", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall"]
+tools = ["file_read", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "system_time"]
 network = ["*"]
 memory_read = ["*"]
 memory_write = ["self.*"]
 agent_spawn = false
+
+[autonomous]
+max_iterations = 120

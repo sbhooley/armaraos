@@ -72,6 +72,10 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
         if e.contains("escapes allowed root") {
             format!(
                 "Access denied: path '{}' resolves outside workspace. \
+                 To write to a file outside your workspace, use `shell_exec` instead \
+                 (e.g. a Python one-liner or heredoc: \
+                 `python3 -c \"open('/absolute/path', 'w').write(...)\"` or \
+                 `shell_exec` with `command='bash'` and a heredoc in `stdin`). \
                  To read synced AINL programs, use paths starting with `ainl-library/` \
                  (e.g. `ainl-library/examples/...`) or an absolute path under that directory.",
                 user_path
@@ -82,11 +86,14 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
     })
 }
 
-/// Resolve a path for **read** operations: workspace sandbox **or** the host AINL library tree.
+/// Resolve a path for **read** operations: workspace sandbox, AINL library tree,
+/// or the ArmaraOS home directory.
 ///
 /// - **`ainl-library/` prefix:** virtual path into `ainl_library_root` (e.g. `~/.armaraos/ainl-library`).
 ///   Example: `ainl-library/examples/wishlist/01_cache_and_memory.ainl`
-/// - **Absolute path:** if it resolves under `ainl_library_root`, allowed for reads.
+/// - **Absolute path under `ainl_library_root`:** allowed for reads.
+/// - **Absolute path under ArmaraOS home** (`~/.armaraos/` or `ARMARAOS_HOME`): allowed for reads
+///   so agents can inspect config, cron jobs, and other platform files.
 /// - Otherwise same as [`resolve_sandbox_path`] on `workspace_root`.
 pub fn resolve_sandbox_path_read(
     user_path: &str,
@@ -133,7 +140,41 @@ pub fn resolve_sandbox_path_read(
         }
     }
 
+    // Absolute path: allow reads from the ArmaraOS home directory
+    // (e.g. ~/.armaraos/config.toml, cron_jobs.json, agent manifests).
+    // ARMARAOS_HOME / OPENFANG_HOME override the default ~/.armaraos location.
+    let p = Path::new(trimmed);
+    if p.is_absolute() {
+        if let Some(home) = armaraos_home_from_env() {
+            if home.exists() {
+                if let Ok(res) = finalize_within_root(p.to_path_buf(), &home) {
+                    return Ok(res);
+                }
+            }
+        }
+    }
+
     resolve_sandbox_path(trimmed, workspace_root)
+}
+
+/// Resolve the ArmaraOS home directory from environment variables.
+///
+/// Priority: `ARMARAOS_HOME` → `OPENFANG_HOME` → `$HOME/.armaraos` → `$USERPROFILE/.armaraos`
+fn armaraos_home_from_env() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("ARMARAOS_HOME") {
+        return Some(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("OPENFANG_HOME") {
+        return Some(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("HOME") {
+        return Some(PathBuf::from(v).join(".armaraos"));
+    }
+    #[cfg(windows)]
+    if let Ok(v) = std::env::var("USERPROFILE") {
+        return Some(PathBuf::from(v).join(".armaraos"));
+    }
+    None
 }
 
 #[cfg(test)]

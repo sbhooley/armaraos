@@ -1,11 +1,66 @@
 [
   {
+    "name": "armaraos-agent-health-monitor",
+    "relative_path": "armaraos-programs/agent_health_monitor/agent_health_monitor.ainl",
+    "cron_expr": "*/15 * * * *",
+    "timeout_secs": 30,
+    "enabled": true,
+    "json_output": true,
+    "description": "Polls the local ArmaraOS API every 15 minutes and writes agent health status to memory."
+  },
+  {
+    "name": "armaraos-daily-budget-digest",
+    "relative_path": "armaraos-programs/daily_budget_digest/daily_budget_digest.ainl",
+    "cron_expr": "0 8 * * *",
+    "timeout_secs": 45,
+    "enabled": true,
+    "json_output": true,
+    "description": "Fetches token spend summary each morning and writes a structured budget digest to memory."
+  },
+  {
+    "name": "armaraos-budget-threshold-alert",
+    "relative_path": "armaraos-programs/budget_threshold_alert/budget_threshold_alert.ainl",
+    "cron_expr": "0 * * * *",
+    "timeout_secs": 30,
+    "enabled": true,
+    "json_output": true,
+    "description": "Checks hourly if spend exceeds 80% of budget limit and writes an alert record to memory."
+  },
+  {
+    "name": "armaraos-new-version-checker",
+    "relative_path": "armaraos-programs/new_version_checker/new_version_checker.ainl",
+    "cron_expr": "0 10 * * 6",
+    "timeout_secs": 60,
+    "enabled": true,
+    "json_output": true,
+    "description": "Checks GitHub and PyPI weekly for new ArmaraOS and AINL releases; writes update status to memory."
+  },
+  {
+    "name": "armaraos-channel-session-digest",
+    "relative_path": "armaraos-programs/channel_session_digest/channel_session_digest.ainl",
+    "cron_expr": "0 */6 * * *",
+    "timeout_secs": 30,
+    "enabled": true,
+    "json_output": true,
+    "description": "Every 6 hours, snapshots agent session activity counts to memory for channel digest integrations."
+  },
+  {
+    "name": "armaraos-weekly-usage-report",
+    "relative_path": "armaraos-programs/weekly_usage_report/weekly_usage_report.ainl",
+    "cron_expr": "0 18 * * 0",
+    "timeout_secs": 120,
+    "enabled": false,
+    "json_output": true,
+    "description": "Sunday evening: LLM-generated natural language summary of the week's usage. Requires LLM adapter enabled."
+  },
+  {
     "name": "armaraos-ainl-health-weekly",
     "relative_path": "armaraos-programs/armaraos_health_ping/armaraos_health_ping.ainl",
     "cron_expr": "0 9 * * 7",
     "timeout_secs": 90,
     "enabled": true,
-    "json_output": true
+    "json_output": true,
+    "description": "Minimal AINL runtime smoke test (core.ADD 1 0); confirms the AINL engine is operational."
   },
   {
     "name": "armaraos-learning-frame-echo-quarterly",
@@ -42,27 +97,11 @@
     }
   },
   {
-    "name": "armaraos-automation-stub-weekly",
-    "relative_path": "armaraos-programs/armaraos_automation_stub/armaraos_automation_stub.ainl",
-    "cron_expr": "0 11 * * 7",
-    "timeout_secs": 90,
-    "enabled": false,
-    "json_output": true
-  },
-  {
     "name": "ainl-upstream-hello-weekly",
     "relative_path": "examples/compact/hello_compact.ainl",
     "cron_expr": "0 9 * * 7",
     "timeout_secs": 120,
     "enabled": false,
     "json_output": false
-  },
-  {
-    "name": "ainl-upstream-examples-hello-monthly",
-    "relative_path": "examples/hello.ainl",
-    "cron_expr": "0 0 1 * *",
-    "timeout_secs": 180,
-    "enabled": false,
-    "json_output": true
   }
 ]

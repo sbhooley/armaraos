@@ -40,12 +40,24 @@ Global primitives (**`.card`**, **`.tabs`**, **`.info-card`**, **`.table`**) are
 
 Tab labels and behavior (lazy loads for Security, Network, etc.) are unchanged; only presentation is scoped.
 
+### At-a-glance instance summary (config schema, API, home)
+
+Below the Settings tab bar (visible on **every** Settings tab once load succeeds), a compact line shows:
+
+- **Daemon** — package version (`GET /api/version` / `GET /api/status`).
+- **Config schema** — effective file schema vs binary constant, e.g. `1 (binary 1)` (from `GET /api/status`).
+- **API** — `api_listen`.
+- **Log** — daemon `log_level`.
+- **Home** — resolved `home_dir`.
+
+**System** tab: the stat grid includes a **Config schema** tile with the same formatting. See [troubleshooting.md](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance) for user-facing triage notes.
+
 ## Runtime
 
 - **Root:** `runtime-page-root`.
 - **Header:** `runtime-page-header` + `runtime-page-header-sub` — subtitle describes daemon status, platform, API listen, and providers.
 - **Body:** `runtime-page-body` — layered radial gradients (`info-subtle` + `accent-subtle`) for a distinct but on-brand backdrop.
-- **Stat tiles:** **`runtime-stats-grid`** replaces a fixed four-column grid with `repeat(auto-fill, minmax(148px, 1fr))` so tiles wrap on narrow widths. Each tile combines **`card stat-card runtime-stat-card`** (accent top border, gradient fill, hover lift).
+- **Stat tiles:** **`runtime-stats-grid`** replaces a fixed four-column grid with `repeat(auto-fill, minmax(148px, 1fr))` so tiles wrap on narrow widths. Each tile combines **`card stat-card runtime-stat-card`** (accent top border, gradient fill, hover lift). One tile surfaces **Config schema** (`effective (binary N)`) from `GET /api/status`, matching the Settings summary line.
 - **Default model value:** class **`runtime-stat-value-sm`** for smaller type and `word-break` on long model IDs.
 - **System / Providers blocks:** **`card runtime-panel`** with **`runtime-panel-title`** on the header (uppercase section label). Providers table adds **`runtime-panel-table`** for thead styling and row hover.
 - **Footer actions:** **`runtime-page-footer`** wraps **Refresh** plus **Reload config**, **Reload channels**, **Reload integrations**, and **Shut down** (destructive styling on shutdown). Same actions appear under **Settings → System Info → Daemon / API runtime** with short help text and per-button spinners while a POST is in flight.

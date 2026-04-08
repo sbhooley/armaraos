@@ -152,8 +152,10 @@ listen_addr = "127.0.0.1:4200"        # OFP listen address
 ### Verify Your Setup
 
 ```bash
-openfang doctor
+armaraos doctor
 ```
+
+(`openfang doctor` is the same binary when both are on your PATH.)
 
 This checks that your config exists, API keys are set, and the toolchain is available.
 
@@ -320,7 +322,8 @@ http://127.0.0.1:4200/
 ```
 
 The embedded WebChat UI allows you to:
-- Open **Get started** from the sidebar (first section, above **Chat**; **Comms** is under **Monitor**) for the landing dashboard: **Quick actions** at the top (agents, skills, **App Store**, channels, workflows, settings, **Daemon & runtime** → reload/shutdown controls on **Runtime**), system stats, provider status, optional **setup checklist**, and **Setup Wizard** entry in the header (after onboarding, use **Run setup again** or click **Get started** in the sidebar a second time to reopen the wizard — see [Dashboard Get started UI](dashboard-overview-ui.md)). Layout and source map: [dashboard-overview-ui.md](dashboard-overview-ui.md). Manual QA and `localStorage` notes: [Dashboard testing](dashboard-testing.md). **Settings** and **Runtime** pages use the same polished shell as other top-level routes, including **daemon lifecycle** actions — [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md).
+- Open **Get started** from the sidebar (first section, above **Chat**; **Comms** is under **Monitor**) for the landing dashboard: **Quick actions** at the top (agents, skills, **App Store**, channels, workflows, settings, **Daemon & runtime** → reload/shutdown controls on **Runtime**), system stats, provider status, optional **setup checklist**, and **Setup Wizard** entry in the header (after onboarding, use **Run setup again** or click **Get started** in the sidebar a second time to reopen the wizard — see [Dashboard Get started UI](dashboard-overview-ui.md)). The guided **Setup Wizard** (`#wizard`): steps, provider rules, and how agents are created — [dashboard-setup-wizard.md](dashboard-setup-wizard.md). Layout and source map: [dashboard-overview-ui.md](dashboard-overview-ui.md). Manual QA and `localStorage` notes: [Dashboard testing](dashboard-testing.md). **Settings** and **Runtime** pages use the same polished shell as other top-level routes, including **daemon lifecycle** actions — [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md).
+- **Config schema at a glance:** Open **Settings** — the line under the tab bar shows **Config schema** as `effective (binary N)` plus API, log level, and home path; **System** repeats it as a stat tile, and **Daemon & runtime** shows the same schema line. Details: [Troubleshooting — Config schema in the dashboard](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance).
 - View all running agents
 - Chat with any agent in real-time (via WebSocket)
 - See streaming responses as they are generated
@@ -345,7 +348,7 @@ Now that you have OpenFang running:
 - **Use MCP**: Connect to external tools via Model Context Protocol. Configure in `config.toml` under `[[mcp_servers]]`.
 - **Migrate from OpenClaw**: Run `openfang migrate --from openclaw`. See [MIGRATION.md](../MIGRATION.md).
 - **Desktop app**: Run `cargo tauri dev` for a native desktop experience with system tray.
-- **Run diagnostics**: `openfang doctor` checks your entire setup.
+- **Run diagnostics**: `armaraos doctor` checks your entire setup.
 
 ### Useful Commands Reference
 
@@ -353,7 +356,7 @@ Now that you have OpenFang running:
 openfang init                          # Initialize ~/.armaraos/
 openfang start                         # Start the daemon
 openfang status                        # Check daemon status
-openfang doctor                        # Run diagnostic checks
+armaraos doctor                        # Run diagnostic checks
 
 openfang agent spawn <manifest.toml>   # Spawn an agent
 openfang agent list                    # List all agents

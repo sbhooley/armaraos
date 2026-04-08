@@ -23,6 +23,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Usage & Analytics Endpoints](#usage--analytics-endpoints)
 - [Migration Endpoints](#migration-endpoints)
 - [Session Management Endpoints](#session-management-endpoints)
+- [Slash Templates Endpoints](#slash-templates-endpoints)
 - [Cron/Scheduler Endpoints](#cronscheduler-endpoints)
 - [Support diagnostics bundle](#support-diagnostics-redacted-bundle)
 - [ArmaraOS Home Browser Endpoints](#armaraos-home-browser-endpoints)
@@ -155,6 +156,8 @@ Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / 
 ### POST /api/agents
 
 Spawn a new agent from a TOML manifest.
+
+The body must deserialize to **`AgentManifest`**: use **top-level** fields such as `name`, `description`, `profile`, and `[model]`. Do **not** nest those keys under an `[agent]` table; nested tables do not map to the manifest root and can yield a missing or default agent name. On-disk `agent.toml` files and the dashboard **Setup Wizard** use this flat shape — see [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
 
 **Request Body** (JSON):
 
@@ -791,7 +794,13 @@ Generate and download a **redacted** support archive under **`support/`** in the
 }
 ```
 
-Typical zip contents: `config.toml`, redacted `secrets.env`, recent `audit` export, SQLite DB + WAL/SHM when present, recent logs, `meta.json`.
+**Zip layout (order matters for support):** `README.txt` → `diagnostics_snapshot.json` → `config.toml` → `secrets.env` (if present) → `meta.json` → `audit.json` → `data/openfang.db*` → `home/logs/…`.
+
+- **`README.txt`** — Index of bundle files; points triage at `diagnostics_snapshot.json` first.
+- **`diagnostics_snapshot.json`** — Full support snapshot (config schema effective + binary, runtime fields, paths, memory SQLite `user_version` vs expected, env-var **presence** flags only).
+- **`meta.json`** — Compact metadata (overlaps the snapshot; retained for older tooling).
+
+Also: redacted `secrets.env`, `audit.json`, SQLite + WAL/SHM, recent logs.
 
 #### GET /api/support/diagnostics/download
 
@@ -918,18 +927,24 @@ Full health check with all dependency status. Requires authentication. Unlike th
 
 ### GET /api/status
 
-Detailed kernel status including all agents.
+Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, and `uptime_seconds`.
 
 **Response** `200 OK`:
 
 ```json
 {
   "status": "running",
+  "version": "0.6.6",
   "agent_count": 2,
-  "data_dir": "/home/user/.armaraos/data",
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
   "uptime_seconds": 3600,
+  "api_listen": "127.0.0.1:4200",
+  "home_dir": "/home/user/.armaraos",
+  "log_level": "info",
+  "network_enabled": false,
+  "config_schema_version": 1,
+  "config_schema_version_binary": 1,
   "agents": [
     {
       "id": "a1b2c3d4-...",
@@ -969,8 +984,8 @@ Build and version information.
 
 ```json
 {
-  "tag_name": "v0.6.5",
-  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.6.5",
+  "tag_name": "v0.6.6",
+  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.6.6",
   "published_at": "2026-01-01T12:00:00Z"
 }
 ```
@@ -1041,19 +1056,24 @@ List all available tools that agents can use.
 
 ### GET /api/config
 
-Retrieve current kernel configuration (secrets are redacted).
+Retrieve current kernel configuration (secrets are redacted). Includes `config_schema_version` (effective loaded value). Shape is a subset of the full `KernelConfig` — not every TOML field is mirrored here.
 
 **Response** `200 OK`:
 
 ```json
 {
+  "home_dir": "/home/user/.armaraos",
   "data_dir": "/home/user/.armaraos/data",
-  "default_provider": "groq",
-  "default_model": "llama-3.3-70b-versatile",
-  "listen_addr": "127.0.0.1:4200",
-  "api_key_set": true,
-  "channels_configured": 2,
-  "mcp_servers": 1
+  "config_schema_version": 1,
+  "api_key": "***",
+  "default_model": {
+    "provider": "groq",
+    "model": "llama-3.3-70b-versatile",
+    "api_key_env": "GROQ_API_KEY"
+  },
+  "memory": {
+    "decay_rate": 0.1
+  }
 }
 ```
 
@@ -2089,6 +2109,40 @@ Cancel the agent's current LLM run. Aborts any in-progress generation.
 }
 ```
 
+### POST /api/agents/{id}/btw
+
+Inject extra context into an agent loop **while it is already running**. The text is queued via an in-memory channel and drained at the start of the next iteration, appended to the conversation as a `[btw] …` user message before the next LLM call.
+
+Use this to steer a running agent mid-turn — add tasks, share new information, or correct its direction without waiting for the current turn to finish.
+
+Returns `409 Conflict` when the agent has no active loop (i.e. it is idle or already finished).
+
+**Request Body**:
+
+```json
+{
+  "text": "Also check whether the Cargo.lock is up to date before finishing."
+}
+```
+
+**Response** `200 OK` (injection queued):
+
+```json
+{
+  "status": "injected"
+}
+```
+
+**Response** `409 Conflict` (no active loop):
+
+```json
+{
+  "error": "agent not running"
+}
+```
+
+**Dashboard:** Type `/btw <text>` in the chat input while an agent is working. The message is sent immediately and appears as a local confirmation in the chat timeline; the agent picks it up on its next iteration.
+
 ### PUT /api/agents/{id}/model
 
 Switch an agent's LLM model at runtime.
@@ -2109,6 +2163,61 @@ Switch an agent's LLM model at runtime.
   "model": "claude-sonnet-4-20250514"
 }
 ```
+
+---
+
+## Slash Templates Endpoints
+
+Slash templates let users define reusable message shortcuts (e.g. `/t standup` expands to a full standup prompt). Templates are stored server-side in `~/.armaraos/slash-templates.json` so they survive app upgrades and browser data clears.
+
+### GET /api/slash-templates
+
+Load the full list of saved slash templates.
+
+**Response** `200 OK`:
+
+```json
+{
+  "templates": [
+    {
+      "name": "standup",
+      "text": "Give me a morning standup summary: what did you do yesterday, what's planned today, any blockers?"
+    },
+    {
+      "name": "debug",
+      "text": "Walk me through debugging this error step by step."
+    }
+  ]
+}
+```
+
+Returns `{ "templates": [] }` when no templates have been saved yet.
+
+### PUT /api/slash-templates
+
+Save the full list of slash templates, replacing any existing file. The body must contain a `"templates"` array. Writes are atomic (write to `.json.tmp`, then rename) to prevent corruption.
+
+**Request Body**:
+
+```json
+{
+  "templates": [
+    { "name": "standup", "text": "Give me a morning standup summary…" },
+    { "name": "review",  "text": "Review this code for bugs and style issues." }
+  ]
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "saved",
+  "count": 2
+}
+```
+
+**Dashboard:** Use `/t save <name>` in any chat input to create a template, `/t <name>` to expand it, and `/t list` to browse. Templates are loaded from the server at first use and cached in memory for the session.
 
 ---
 

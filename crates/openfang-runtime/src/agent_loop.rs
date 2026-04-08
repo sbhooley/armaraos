@@ -31,8 +31,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-/// Maximum iterations in the agent loop before giving up.
-const MAX_ITERATIONS: u32 = 50;
+/// Maximum iterations in the agent loop before giving up (when manifest has no `[autonomous].max_iterations`).
+/// Multi-step coding and web research often need >50 tool rounds; specialists should set `[autonomous]` explicitly.
+const MAX_ITERATIONS: u32 = 80;
 
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
@@ -49,12 +50,36 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 /// target, so these need a significantly longer timeout than regular tools.
 const AGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 
+/// Classifies a tool call after the synchronous pre-pass (loop guard + hooks).
+/// `Resolved` carries a pre-built error block; `Pending` holds a call ready for
+/// parallel async execution.
+enum ToolDispatch<'a> {
+    Resolved(openfang_types::message::ContentBlock),
+    Pending {
+        tool_call: &'a openfang_types::tool::ToolCall,
+        verdict: crate::loop_guard::LoopGuardVerdict,
+    },
+}
+
 /// Returns the appropriate timeout duration for a given tool name.
 /// Inter-agent calls get a longer timeout since they may trigger full agent loops.
 fn tool_timeout_for(tool_name: &str) -> Duration {
     match tool_name {
+        // Inter-agent: can trigger a full nested agent loop
         "agent_send" | "agent_spawn" => Duration::from_secs(AGENT_TOOL_TIMEOUT_SECS),
+        // Document processing: large files can be slow
         "document_extract" | "spreadsheet_build" => Duration::from_secs(180),
+        // Channel messaging: network round-trip to external service
+        "channel_send" | "channel_stream" => Duration::from_secs(30),
+        // Media generation / external AI APIs: network + model latency
+        "image_generate" | "text_to_speech" | "speech_to_text" | "media_describe"
+        | "media_transcribe" => Duration::from_secs(300),
+        // External A2A: remote agent may need time to process
+        "a2a_send" | "a2a_discover" => Duration::from_secs(300),
+        // Persistent process tools: process_start is fast (just spawns), poll/write/kill are instant
+        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
+            Duration::from_secs(30)
+        }
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -64,7 +89,7 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
 const MAX_CONTINUATIONS: u32 = 5;
 
 /// Maximum message history size before auto-trimming to prevent context overflow.
-const MAX_HISTORY_MESSAGES: usize = 20;
+const MAX_HISTORY_MESSAGES: usize = 60;
 
 /// Detect when the LLM claims to have performed an action (sent, posted, emailed)
 /// without actually calling any tools. Prevents hallucinated completions.
@@ -87,6 +112,51 @@ fn phantom_action_detected(text: &str) -> bool {
     has_action && has_channel
 }
 
+/// Detect when the LLM claims to have started/stopped a process without actually calling
+/// `process_start` or `process_kill`. Fires even when other tools were used (e.g., process_list
+/// was called but the model then claimed the process was started without calling process_start).
+fn process_phantom_detected(
+    text: &str,
+    tools_called: &std::collections::HashSet<String>,
+) -> bool {
+    let lower = text.to_lowercase();
+
+    // Phantom start: model claims process is now running without having called process_start
+    if !tools_called.contains("process_start") {
+        let start_claims = [
+            "is up in background",
+            "started it now",
+            "starting it now",
+            "starting now",
+            "started now",
+            "proc_1 is up",
+            "process started",
+            "bot started",
+            "is now running",
+            "is now up",
+        ];
+        if start_claims.iter().any(|p| lower.contains(p)) {
+            return true;
+        }
+    }
+
+    // Phantom kill/stop: model claims to have killed a process without calling process_kill
+    if !tools_called.contains("process_kill") && !tools_called.contains("process_stop") {
+        let kill_claims = [
+            "killed it",
+            "stopped the bot",
+            "process stopped",
+            "process killed",
+            "is now stopped",
+        ];
+        if kill_claims.iter().any(|p| lower.contains(p)) {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Returns true when the agent response text indicates an intentional silent completion.
 /// Matches `NO_REPLY` (exact) and `[SILENT]` (case-insensitive).
 fn is_silent_token(text: &str) -> bool {
@@ -94,19 +164,130 @@ fn is_silent_token(text: &str) -> bool {
     trimmed == "NO_REPLY" || trimmed.eq_ignore_ascii_case("[silent]")
 }
 
-/// Extra guidance injected after failed tool calls to prevent fabricated follow-up actions.
-const TOOL_ERROR_GUIDANCE: &str =
-    "[System: One or more tool calls failed. Failed tools did not produce usable data. Do NOT invent missing results, cite nonexistent search results, or pretend failed tools succeeded. If your next steps depend on a failed tool, either retry with a materially different approach or explain the failure to the user and stop. Do not write files, store memory, or take downstream actions based on failed tool outputs.]";
+/// Tracks error patterns across agent loop iterations to inject guidance that is targeted,
+/// non-redundant, and coordinated with the loop guard.
+///
+/// Design principles:
+/// - First occurrence of a new error → short, specific guidance matched to the error kind.
+/// - Second occurrence of the same error pattern → stronger redirect ("stop, try differently").
+/// - Third+ identical pattern → silence; loop guard is already steering; adding more text
+///   wastes context and confuses the model.
+/// - All-loop-guard-block errors → silence; loop guard messages are already self-contained.
+/// - Clean round (no errors) → resets all counters so the next error is treated as first.
+struct ToolErrorTracker {
+    /// Fingerprint of the last error batch (sorted "tool:error_prefix" pairs).
+    last_fingerprint: Option<String>,
+    /// How many consecutive iterations produced the identical fingerprint.
+    same_fingerprint_streak: usize,
+}
 
-fn append_tool_error_guidance(tool_result_blocks: &mut Vec<ContentBlock>) {
-    let has_tool_error = tool_result_blocks
-        .iter()
-        .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. }));
-    if has_tool_error {
-        tool_result_blocks.push(ContentBlock::Text {
-            text: TOOL_ERROR_GUIDANCE.to_string(),
-            provider_metadata: None,
+impl ToolErrorTracker {
+    fn new() -> Self {
+        Self { last_fingerprint: None, same_fingerprint_streak: 0 }
+    }
+
+    /// Call when a tool round produced no errors so counters reset cleanly.
+    fn record_success(&mut self) {
+        self.last_fingerprint = None;
+        self.same_fingerprint_streak = 0;
+    }
+
+    /// Compute the guidance text (if any) to inject after this tool round.
+    ///
+    /// Updates internal state; must be called exactly once per round.
+    fn compute_guidance(
+        &mut self,
+        tool_result_blocks: &[ContentBlock],
+        denial_count: usize,
+    ) -> Option<String> {
+        // Collect errors (excluding approval-denial ones handled separately)
+        let all_errors: Vec<(&str, &str)> = tool_result_blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { tool_name, content, is_error: true, .. } => {
+                    Some((tool_name.as_str(), content.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        if all_errors.is_empty() {
+            self.record_success();
+            return None;
+        }
+
+        // Fingerprint: stable sorted "tool:error_prefix" pairs (60 chars of error text)
+        let mut fp_parts: Vec<String> = all_errors
+            .iter()
+            .map(|(name, content)| {
+                let prefix: String = content.chars().take(60).collect();
+                format!("{name}:{prefix}")
+            })
+            .collect();
+        fp_parts.sort();
+        let fingerprint = fp_parts.join("|");
+
+        if self.last_fingerprint.as_deref() == Some(&fingerprint) {
+            self.same_fingerprint_streak += 1;
+        } else {
+            self.last_fingerprint = Some(fingerprint);
+            self.same_fingerprint_streak = 1;
+        }
+
+        // Loop-guard block messages are self-contained — don't pile on.
+        let all_loop_guard_blocks = all_errors.iter().all(|(_, content)| {
+            content.starts_with("Blocked:") || content.starts_with("Circuit breaker:")
         });
+        if all_loop_guard_blocks {
+            return None;
+        }
+
+        let non_denial_errors = all_errors.len().saturating_sub(denial_count);
+        if non_denial_errors == 0 {
+            return None;
+        }
+
+        match self.same_fingerprint_streak {
+            // First occurrence: targeted, concise guidance matched to the error kind.
+            1 => {
+                let has_missing_param = all_errors.iter().any(|(_, c)| {
+                    c.contains("Missing '") && c.contains("' parameter")
+                        || c.contains("Missing required")
+                        || c.contains("missing required")
+                });
+                let failing_tools: Vec<&str> =
+                    all_errors.iter().map(|(n, _)| *n).collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                let tool_list = failing_tools.join(", ");
+
+                if has_missing_param {
+                    Some(format!(
+                        "[System: Tool call(s) to [{tool_list}] are missing required parameters \
+                         (received empty or incomplete input). Re-read the tool schema and \
+                         supply all required fields — do not call tools with empty {{}} inputs.]"
+                    ))
+                } else {
+                    Some(format!(
+                        "[System: {non_denial_errors} tool call(s) failed ([{tool_list}]). \
+                         Do not invent results from failed calls or take actions downstream of \
+                         failed outputs. If the task is not finished, retry with different \
+                         parameters, a different tool, or a different approach.]"
+                    ))
+                }
+            }
+            // Second identical failure: escalate — the first guidance was not acted on.
+            2 => Some(
+                "[System: The same tool error has occurred twice in a row. \
+                 You are not making progress. Stop using the failing tool(s), \
+                 recall your original goal, and switch to a completely different method \
+                 to accomplish it.]"
+                    .to_string(),
+            ),
+            // Third+ identical failure: silence — loop guard is blocking/warning and
+            // adding more text only wastes context and derails the model further.
+            _ => None,
+        }
     }
 }
 
@@ -170,6 +351,59 @@ pub struct AgentLoopResult {
     pub llm_fallback_note: Option<String>,
 }
 
+/// Check whether a tool call is missing any required parameters.
+///
+/// Reads the JSON Schema `required` array from the tool definition and returns
+/// a rich, self-contained error string that names every missing field with its
+/// type and description — so the LLM can self-correct in one step without
+/// needing to re-read the schema out-of-band.
+///
+/// Returns `None` when all required fields are present.
+fn missing_required_params_error(
+    tool_name: &str,
+    input: &serde_json::Value,
+    tool_def: &openfang_types::tool::ToolDefinition,
+) -> Option<String> {
+    let required = tool_def.input_schema.get("required")?.as_array()?;
+    if required.is_empty() {
+        return None;
+    }
+    let properties = tool_def.input_schema.get("properties");
+    let mut missing: Vec<String> = Vec::new();
+    for req in required {
+        let field = match req.as_str() {
+            Some(f) => f,
+            None => continue,
+        };
+        let absent = input.get(field).is_none() || input[field].is_null();
+        if absent {
+            let field_desc = properties
+                .and_then(|p| p.get(field))
+                .map(|f| {
+                    let ty = f.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+                    let desc = f.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    if desc.is_empty() {
+                        format!("{field} ({ty})")
+                    } else {
+                        format!("{field} ({ty}): {desc}")
+                    }
+                })
+                .unwrap_or_else(|| field.to_string());
+            missing.push(field_desc);
+        }
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Error: '{tool_name}' called without required parameter(s). \
+         Received: {input}. \
+         Missing required field(s) — {}. \
+         Retry with all required fields supplied.",
+        missing.join("; ")
+    ))
+}
+
 /// Run the agent execution loop for a single user message.
 ///
 /// This is the core of OpenFang: it loads session context, recalls memories,
@@ -199,6 +433,7 @@ pub async fn run_agent_loop(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -375,6 +610,14 @@ pub async fn run_agent_loop(
     };
     let mut loop_guard = LoopGuard::new(loop_guard_config);
     let mut consecutive_max_tokens: u32 = 0;
+    // Counts consecutive iterations where every tool call was blocked by the loop guard.
+    // Used to exit early when the model is clearly stuck calling the same blocked tools.
+    let mut consecutive_all_blocked: u32 = 0;
+    let mut tool_error_tracker = ToolErrorTracker::new();
+    // Tracks the names of all tools called since the last EndTurn response, so process
+    // phantom detection can tell whether the model claimed to start/stop a process without
+    // actually calling the corresponding tool.
+    let mut last_tools_called: std::collections::HashSet<String> = Default::default();
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -383,8 +626,20 @@ pub async fn run_agent_loop(
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
 
+    let mut btw_rx = btw_rx;
     for iteration in 0..max_iterations {
         debug!(iteration, "Agent loop iteration");
+
+        // Drain any /btw context injections the user sent while this loop was running.
+        // Each injection is added as a user message so the next LLM call sees it.
+        if let Some(ref mut rx) = btw_rx {
+            while let Ok(btw_text) = rx.try_recv() {
+                info!("Injecting /btw context ({} chars)", btw_text.len());
+                messages.push(openfang_types::message::Message::user(
+                    format!("[btw] {btw_text}"),
+                ));
+            }
+        }
 
         // Context overflow recovery pipeline (replaces emergency_trim_messages)
         let recovery =
@@ -575,6 +830,24 @@ pub async fn run_agent_loop(
                 } else {
                     text
                 };
+                // Process phantom detection: the model used some tools (e.g. process_list) but then
+                // claimed to have started/stopped a process without calling process_start/process_kill.
+                // This fires even when any_tools_executed is true, because the wrong tool was used.
+                let text = if process_phantom_detected(&text, &last_tools_called) {
+                    warn!(agent = %manifest.name, "Process phantom detected — re-prompting for real process tool use");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: You described starting or stopping a process but did not call \
+                         process_start or process_kill. You must call the appropriate process \
+                         management tool to actually perform the action — do not claim the process \
+                         is running/stopped without having called the tool.]"
+                    ));
+                    last_tools_called.clear();
+                    continue;
+                } else {
+                    last_tools_called.clear();
+                    text
+                };
 
                 final_response = text.clone();
                 session.messages.push(Message::assistant(text));
@@ -692,19 +965,22 @@ pub async fn run_agent_loop(
                     available_tools.iter().map(|t| t.name.clone()).collect();
                 let caller_id_str = session.agent_id.to_string();
 
-                // Execute each tool call with loop guard, timeout, and truncation
+                // Execute tool calls with loop guard, timeout, and truncation.
+                // Pre-pass: apply loop guard and hooks synchronously (they mutate shared state
+                // and may circuit-break). Calls that pass become async futures run in parallel.
                 let mut tool_result_blocks = Vec::new();
-                for tool_call in deduplicate_tool_calls(&response) {
-                    // Loop guard check
+
+                let deduped = deduplicate_tool_calls(&response);
+                let mut dispatches: Vec<ToolDispatch<'_>> = Vec::with_capacity(deduped.len());
+
+                for tool_call in &deduped {
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
                             warn!(tool = %tool_call.name, "Circuit breaker triggered");
-                            // Save session before bailing
                             if let Err(e) = memory.save_session_async(session).await {
                                 warn!("Failed to save session on circuit break: {e}");
                             }
-                            // Fire AgentLoopEnd hook on circuit break
                             if let Some(hook_reg) = hooks {
                                 let ctx = crate::hooks::HookContext {
                                     agent_name: &manifest.name,
@@ -721,20 +997,19 @@ pub async fn run_agent_loop(
                         }
                         LoopGuardVerdict::Block(msg) => {
                             warn!(tool = %tool_call.name, "Tool call blocked by loop guard");
-                            tool_result_blocks.push(ContentBlock::ToolResult {
+                            dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
                                 content: msg.clone(),
                                 is_error: true,
-                            });
+                            }));
                             continue;
                         }
-                        _ => {} // Allow or Warn — proceed with execution
+                        _ => {}
                     }
 
-                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool");
-
-                    // Notify phase: ToolUse
+                    // Notify phase: ToolUse (first tool sets it; parallel tools fire concurrently but
+                    // this callback is cheap and idempotent in practice)
                     if let Some(cb) = on_phase {
                         let sanitized: String = tool_call
                             .name
@@ -742,12 +1017,10 @@ pub async fn run_agent_loop(
                             .filter(|c| !c.is_control())
                             .take(64)
                             .collect();
-                        cb(LoopPhase::ToolUse {
-                            tool_name: sanitized,
-                        });
+                        cb(LoopPhase::ToolUse { tool_name: sanitized });
                     }
 
-                    // Fire BeforeToolCall hook (can block execution)
+                    // Fire BeforeToolCall hook (synchronous gate — must run before dispatch)
                     if let Some(hook_reg) = hooks {
                         let ctx = crate::hooks::HookContext {
                             agent_name: &manifest.name,
@@ -759,104 +1032,197 @@ pub async fn run_agent_loop(
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
-                            tool_result_blocks.push(ContentBlock::ToolResult {
+                            dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!(
-                                    "Hook blocked tool '{}': {}",
-                                    tool_call.name, reason
-                                ),
+                                content: format!("Hook blocked tool '{}': {}", tool_call.name, reason),
                                 is_error: true,
-                            });
+                            }));
                             continue;
                         }
                     }
 
-                    // Resolve effective exec policy (per-agent override or global)
-                    let effective_exec_policy = manifest.exec_policy.as_ref();
-
-                    // Timeout-wrapped execution
-                    let timeout = tool_timeout_for(&tool_call.name);
-                    let timeout_secs = timeout.as_secs();
-                    let result = match tokio::time::timeout(
-                        timeout,
-                        tool_runner::execute_tool(
-                            &tool_call.id,
+                    // Pre-execution required-param validation: catch empty or incomplete
+                    // tool calls before they reach the tool handler. Returns a rich error
+                    // with the full field list so the LLM can self-correct in one step.
+                    if let Some(def) = available_tools.iter().find(|d| d.name == tool_call.name) {
+                        if let Some(err_msg) = missing_required_params_error(
                             &tool_call.name,
                             &tool_call.input,
-                            kernel.as_ref(),
-                            Some(&allowed_tool_names),
-                            Some(&caller_id_str),
-                            skill_registry,
-                            mcp_connections,
-                            web_ctx,
-                            browser_ctx,
-                            if hand_allowed_env.is_empty() {
-                                None
-                            } else {
-                                Some(&hand_allowed_env)
-                            },
-                            workspace_root,
-                            ainl_library_root,
-                            media_engine,
-                            effective_exec_policy,
-                            tts_engine,
-                            docker_config,
-                            process_manager,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s", timeout_secs);
-                            openfang_types::tool::ToolResult {
+                            def,
+                        ) {
+                            debug!(tool = %tool_call.name, "Pre-execution param validation failed");
+                            dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
-                                content: format!(
-                                    "Tool '{}' timed out after {}s.",
-                                    tool_call.name, timeout_secs
-                                ),
+                                tool_name: tool_call.name.clone(),
+                                content: err_msg,
                                 is_error: true,
-                            }
+                            }));
+                            continue;
                         }
-                    };
-
-                    // Fire AfterToolCall hook
-                    if let Some(hook_reg) = hooks {
-                        let ctx = crate::hooks::HookContext {
-                            agent_name: &manifest.name,
-                            agent_id: caller_id_str.as_str(),
-                            event: openfang_types::agent::HookEvent::AfterToolCall,
-                            data: serde_json::json!({
-                                "tool_name": &tool_call.name,
-                                "result": &result.content,
-                                "is_error": result.is_error,
-                            }),
-                        };
-                        let _ = hook_reg.fire(&ctx);
                     }
 
-                    // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
-                    let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-
-                    // Append warning if verdict was Warn
-                    let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                        format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                    } else {
-                        content
-                    };
-
-                    tool_result_blocks.push(ContentBlock::ToolResult {
-                        tool_use_id: result.tool_use_id,
-                        tool_name: tool_call.name.clone(),
-                        content: final_content,
-                        is_error: result.is_error,
-                    });
+                    // Track the tool name so EndTurn can check for process phantom actions
+                    last_tools_called.insert(tool_call.name.clone());
+                    dispatches.push(ToolDispatch::Pending { tool_call, verdict });
                 }
 
-                append_tool_error_guidance(&mut tool_result_blocks);
+                // Run all pending (approved) tool calls concurrently, preserving LLM-declared order
+                // in the final result list so the next LLM turn sees results in the same order as
+                // the tool_use blocks it produced.
+                let effective_exec_policy = manifest.exec_policy.as_ref();
+                let pending_futures: Vec<_> = dispatches
+                    .iter()
+                    .filter_map(|d| {
+                        if let ToolDispatch::Pending { tool_call, .. } = d {
+                            let timeout = tool_timeout_for(&tool_call.name);
+                            Some((
+                                tool_call,
+                                tokio::time::timeout(
+                                    timeout,
+                                    tool_runner::execute_tool(
+                                        &tool_call.id,
+                                        &tool_call.name,
+                                        &tool_call.input,
+                                        kernel.as_ref(),
+                                        Some(&allowed_tool_names),
+                                        Some(&caller_id_str),
+                                        skill_registry,
+                                        mcp_connections,
+                                        web_ctx,
+                                        browser_ctx,
+                                        if hand_allowed_env.is_empty() {
+                                            None
+                                        } else {
+                                            Some(&hand_allowed_env)
+                                        },
+                                        workspace_root,
+                                        ainl_library_root,
+                                        media_engine,
+                                        effective_exec_policy,
+                                        tts_engine,
+                                        docker_config,
+                                        process_manager,
+                                    ),
+                                ),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-                // Detect approval denials and inject guidance to prevent infinite retry loops
+                // Collect futures while preserving their association with the tool_call metadata
+                let (pending_tool_calls, pending_futs): (Vec<&&ToolCall>, Vec<_>) =
+                    pending_futures.into_iter().unzip();
+                let parallel_results = futures::future::join_all(pending_futs).await;
+
+                // Merge pre-resolved blocks and parallel results back in LLM-declaration order
+                let mut pending_iter = pending_tool_calls
+                    .into_iter()
+                    .zip(parallel_results.into_iter())
+                    .peekable();
+
+                for dispatch in &dispatches {
+                    match dispatch {
+                        ToolDispatch::Resolved(block) => {
+                            tool_result_blocks.push(block.clone());
+                        }
+                        ToolDispatch::Pending { tool_call, verdict } => {
+                            let (tc, timeout_result) = pending_iter.next().unwrap();
+                            let timeout_secs = tool_timeout_for(&tc.name).as_secs();
+                            let result = match timeout_result {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    warn!(tool = %tc.name, "Tool execution timed out after {}s", timeout_secs);
+                                    openfang_types::tool::ToolResult {
+                                        tool_use_id: tc.id.clone(),
+                                        content: format!("Tool '{}' timed out after {}s.", tc.name, timeout_secs),
+                                        is_error: true,
+                                    }
+                                }
+                            };
+
+                            // Fire AfterToolCall hook
+                            if let Some(hook_reg) = hooks {
+                                let ctx = crate::hooks::HookContext {
+                                    agent_name: &manifest.name,
+                                    agent_id: caller_id_str.as_str(),
+                                    event: openfang_types::agent::HookEvent::AfterToolCall,
+                                    data: serde_json::json!({
+                                        "tool_name": &tool_call.name,
+                                        "result": &result.content,
+                                        "is_error": result.is_error,
+                                    }),
+                                };
+                                let _ = hook_reg.fire(&ctx);
+                            }
+
+                            let content = truncate_tool_result_dynamic(&result.content, &context_budget);
+                            let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
+                                format!("{content}\n\n[LOOP GUARD] {warn_msg}")
+                            } else {
+                                content
+                            };
+
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: result.tool_use_id,
+                                tool_name: tool_call.name.clone(),
+                                content: final_content,
+                                is_error: result.is_error,
+                            });
+                        }
+                    }
+                }
+
+                // All-blocked early exit: if every result in this iteration was a loop-guard
+                // block (not just a warning or error), the model is stuck and no guidance
+                // has penetrated. After 3 consecutive fully-blocked iterations, exit gracefully
+                // rather than burning the remaining iteration budget on futile retries.
+                {
+                    let all_blocked = !tool_result_blocks.is_empty()
+                        && tool_result_blocks.iter().all(|b| {
+                            matches!(b, ContentBlock::ToolResult { content, is_error: true, .. }
+                            if content.starts_with("Blocked:") || content.starts_with("Circuit breaker:"))
+                        });
+                    if all_blocked {
+                        consecutive_all_blocked += 1;
+                    } else {
+                        consecutive_all_blocked = 0;
+                    }
+                    const MAX_CONSECUTIVE_ALL_BLOCKED: u32 = 3;
+                    if consecutive_all_blocked >= MAX_CONSECUTIVE_ALL_BLOCKED {
+                        warn!(
+                            agent = %manifest.name,
+                            consecutive_all_blocked,
+                            "All tool calls blocked for {} consecutive iterations — exiting early",
+                            consecutive_all_blocked
+                        );
+                        let summary = "I was unable to complete this task: my tool calls were \
+                             repeatedly blocked because I appeared to be stuck calling the same \
+                             tools in a loop. Please try rephrasing your request, breaking it \
+                             into smaller steps, or using a different approach.";
+                        session.messages.push(Message::assistant(summary));
+                        if let Err(e) = memory.save_session_async(session).await {
+                            warn!("Failed to save session on all-blocked exit: {e}");
+                        }
+                        if let Some(cb) = on_phase {
+                            cb(LoopPhase::Done);
+                        }
+                        return Ok(AgentLoopResult {
+                            response: summary.to_string(),
+                            total_usage,
+                            iterations: iteration + 1,
+                            cost_usd: None,
+                            silent: false,
+                            directives: Default::default(),
+                            latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                            llm_fallback_note: llm_fallback_note.clone(),
+                        });
+                    }
+                }
+
+                // Approval denials: always inject — the model must not retry denied tools.
                 let denial_count = tool_result_blocks
                     .iter()
                     .filter(|b| {
@@ -879,21 +1245,13 @@ pub async fn run_agent_loop(
                     });
                 }
 
-                // Detect tool errors and inject guidance to prevent fabrication
-                let error_count = tool_result_blocks
-                    .iter()
-                    .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
-                    .count();
-                let non_denial_errors = error_count.saturating_sub(denial_count);
-                if non_denial_errors > 0 {
+                // Smart error guidance: targeted on first occurrence, escalating on second,
+                // silent on third+ (loop guard handles repeated failures from that point).
+                if let Some(guidance) =
+                    tool_error_tracker.compute_guidance(&tool_result_blocks, denial_count)
+                {
                     tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool(s) returned errors. Report the error honestly \
-                             to the user. Do NOT fabricate results or pretend the tool succeeded. \
-                             If a search or fetch failed, tell the user it failed and suggest \
-                             alternatives instead of making up data.]",
-                            non_denial_errors
-                        ),
+                        text: guidance,
                         provider_metadata: None,
                     });
                 }
@@ -905,6 +1263,23 @@ pub async fn run_agent_loop(
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
+
+                // Wrap-up injection: if we are within 3 iterations of the limit, tell
+                // the LLM to stop calling tools and produce a text summary. This prevents
+                // a hard MaxIterationsExceeded error for agents stuck in a tool loop.
+                if iteration + 1 + 3 >= max_iterations {
+                    warn!(
+                        agent = %manifest.name,
+                        iteration,
+                        max_iterations,
+                        "Approaching iteration limit — injecting wrap-up prompt"
+                    );
+                    messages.push(Message::user(
+                        "[System: You are very close to the maximum number of allowed steps. \
+                         Stop calling tools now. Write a final text response summarizing \
+                         what you have done and any results or next steps for the user.]",
+                    ));
+                }
 
                 // Interim save after tool execution to prevent data loss on crash
                 if let Err(e) = memory.save_session_async(session).await {
@@ -965,12 +1340,25 @@ pub async fn run_agent_loop(
         }
     }
 
-    // Save session before failing so conversation history is preserved
+    // Iteration limit reached — degrade gracefully instead of hard-erroring.
+    // Return a helpful in-chat message so the user sees it as a reply, not an error banner.
+    warn!(
+        agent = %manifest.name,
+        max_iterations,
+        "Agent loop hit max iterations — returning graceful fallback response"
+    );
+
+    let fallback = format!(
+        "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
+         If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
+         If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
+    );
+    session.messages.push(Message::assistant(&fallback));
+
     if let Err(e) = memory.save_session_async(session).await {
         warn!("Failed to save session on max iterations: {e}");
     }
 
-    // Fire AgentLoopEnd hook on max iterations exceeded
     if let Some(hook_reg) = hooks {
         let ctx = crate::hooks::HookContext {
             agent_name: &manifest.name,
@@ -984,7 +1372,16 @@ pub async fn run_agent_loop(
         let _ = hook_reg.fire(&ctx);
     }
 
-    Err(OpenFangError::MaxIterationsExceeded(max_iterations))
+    Ok(AgentLoopResult {
+        response: fallback,
+        total_usage,
+        iterations: max_iterations,
+        cost_usd: None,
+        silent: false,
+        directives: Default::default(),
+        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+        llm_fallback_note,
+    })
 }
 
 /// Call an LLM driver with automatic retry on rate-limit and overload errors.
@@ -1502,6 +1899,7 @@ pub async fn run_agent_loop_streaming(
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
+    btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting streaming agent loop");
 
@@ -1672,6 +2070,14 @@ pub async fn run_agent_loop_streaming(
     };
     let mut loop_guard = LoopGuard::new(loop_guard_config);
     let mut consecutive_max_tokens: u32 = 0;
+    // Counts consecutive iterations where every tool call was blocked by the loop guard.
+    // Used to exit early when the model is clearly stuck calling the same blocked tools.
+    let mut consecutive_all_blocked: u32 = 0;
+    let mut tool_error_tracker = ToolErrorTracker::new();
+    // Tracks the names of all tools called since the last EndTurn response, so process
+    // phantom detection can tell whether the model claimed to start/stop a process without
+    // actually calling the corresponding tool.
+    let mut last_tools_called: std::collections::HashSet<String> = Default::default();
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -1680,8 +2086,19 @@ pub async fn run_agent_loop_streaming(
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
 
+    let mut btw_rx = btw_rx;
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
+
+        // Drain any /btw context injections the user sent while this loop was running.
+        if let Some(ref mut rx) = btw_rx {
+            while let Ok(btw_text) = rx.try_recv() {
+                info!("Injecting /btw context ({} chars)", btw_text.len());
+                messages.push(openfang_types::message::Message::user(
+                    format!("[btw] {btw_text}"),
+                ));
+            }
+        }
 
         // Context overflow recovery pipeline (replaces emergency_trim_messages)
         let recovery =
@@ -1733,12 +2150,20 @@ pub async fn run_agent_loop_streaming(
         // Notify phase: on first iteration emit Streaming; on subsequent
         // iterations (after tool execution) emit Thinking so the UI shows
         // "Thinking..." instead of overwriting streamed text with "streaming".
+        // Also emit an iteration-progress PhaseChange so the client knows
+        // we are on step N and still actively working.
         if let Some(cb) = on_phase {
             if iteration == 0 {
                 cb(LoopPhase::Streaming);
             } else {
                 cb(LoopPhase::Thinking);
             }
+        }
+        if iteration > 0 {
+            let _ = stream_tx.send(StreamEvent::PhaseChange {
+                phase: "iteration".to_string(),
+                detail: Some(format!("Step {} — thinking…", iteration + 1)),
+            }).await;
         }
 
         // Stream LLM call with retry, error classification, and circuit breaker
@@ -1869,6 +2294,39 @@ pub async fn run_agent_loop_streaming(
                 } else {
                     text
                 };
+                // Phantom action detection (streaming): channel actions without tools.
+                let text = if !any_tools_executed
+                    && iteration == 0
+                    && phantom_action_detected(&text)
+                {
+                    warn!(agent = %manifest.name, "Phantom action detected (streaming) — re-prompting for real tool use");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: You claimed to perform an action but did not call any tools. \
+                         You must use the appropriate tool (e.g., channel_send, web_fetch, file_write) \
+                         to actually perform the action. Do not claim completion without executing tools.]"
+                    ));
+                    continue;
+                } else {
+                    text
+                };
+                // Process phantom detection (streaming): model claimed to start/stop a process
+                // without calling process_start or process_kill.
+                let text = if process_phantom_detected(&text, &last_tools_called) {
+                    warn!(agent = %manifest.name, "Process phantom detected (streaming) — re-prompting");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: You described starting or stopping a process but did not call \
+                         process_start or process_kill. You must call the appropriate process \
+                         management tool to actually perform the action — do not claim the process \
+                         is running/stopped without having called the tool.]"
+                    ));
+                    last_tools_called.clear();
+                    continue;
+                } else {
+                    last_tools_called.clear();
+                    text
+                };
                 final_response = text.clone();
                 session.messages.push(Message::assistant(text));
 
@@ -1981,10 +2439,16 @@ pub async fn run_agent_loop_streaming(
                     available_tools.iter().map(|t| t.name.clone()).collect();
                 let caller_id_str = session.agent_id.to_string();
 
-                // Execute each tool call with loop guard, timeout, and truncation
+                // Execute tool calls with loop guard, timeout, and truncation (streaming path).
+                // Same parallel dispatch strategy as the non-streaming path: pre-pass for guard
+                // and hooks, then join_all for approved calls.
                 let mut tool_result_blocks = Vec::new();
-                for tool_call in deduplicate_tool_calls(&response) {
-                    // Loop guard check
+
+                let deduped_s = deduplicate_tool_calls(&response);
+                let mut dispatches_s: Vec<ToolDispatch<'_>> =
+                    Vec::with_capacity(deduped_s.len());
+
+                for tool_call in &deduped_s {
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
@@ -1992,7 +2456,6 @@ pub async fn run_agent_loop_streaming(
                             if let Err(e) = memory.save_session_async(session).await {
                                 warn!("Failed to save session on circuit break: {e}");
                             }
-                            // Fire AgentLoopEnd hook on circuit break
                             if let Some(hook_reg) = hooks {
                                 let ctx = crate::hooks::HookContext {
                                     agent_name: &manifest.name,
@@ -2009,20 +2472,19 @@ pub async fn run_agent_loop_streaming(
                         }
                         LoopGuardVerdict::Block(msg) => {
                             warn!(tool = %tool_call.name, "Tool call blocked by loop guard (streaming)");
-                            tool_result_blocks.push(ContentBlock::ToolResult {
+                            dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
                                 content: msg.clone(),
                                 is_error: true,
-                            });
+                            }));
                             continue;
                         }
-                        _ => {} // Allow or Warn — proceed with execution
+                        _ => {}
                     }
 
                     debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool (streaming)");
 
-                    // Notify phase: ToolUse
                     if let Some(cb) = on_phase {
                         let sanitized: String = tool_call
                             .name
@@ -2030,12 +2492,9 @@ pub async fn run_agent_loop_streaming(
                             .filter(|c| !c.is_control())
                             .take(64)
                             .collect();
-                        cb(LoopPhase::ToolUse {
-                            tool_name: sanitized,
-                        });
+                        cb(LoopPhase::ToolUse { tool_name: sanitized });
                     }
 
-                    // Fire BeforeToolCall hook (can block execution)
                     if let Some(hook_reg) = hooks {
                         let ctx = crate::hooks::HookContext {
                             agent_name: &manifest.name,
@@ -2047,119 +2506,200 @@ pub async fn run_agent_loop_streaming(
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
-                            tool_result_blocks.push(ContentBlock::ToolResult {
+                            dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!(
-                                    "Hook blocked tool '{}': {}",
-                                    tool_call.name, reason
-                                ),
+                                content: format!("Hook blocked tool '{}': {}", tool_call.name, reason),
                                 is_error: true,
-                            });
+                            }));
                             continue;
                         }
                     }
 
-                    // Resolve effective exec policy (per-agent override or global)
-                    let effective_exec_policy = manifest.exec_policy.as_ref();
-
-                    // Timeout-wrapped execution
-                    let timeout = tool_timeout_for(&tool_call.name);
-                    let timeout_secs = timeout.as_secs();
-                    let result = match tokio::time::timeout(
-                        timeout,
-                        tool_runner::execute_tool(
-                            &tool_call.id,
+                    // Pre-execution required-param validation (streaming path).
+                    if let Some(def) = available_tools.iter().find(|d| d.name == tool_call.name) {
+                        if let Some(err_msg) = missing_required_params_error(
                             &tool_call.name,
                             &tool_call.input,
-                            kernel.as_ref(),
-                            Some(&allowed_tool_names),
-                            Some(&caller_id_str),
-                            skill_registry,
-                            mcp_connections,
-                            web_ctx,
-                            browser_ctx,
-                            if hand_allowed_env.is_empty() {
-                                None
-                            } else {
-                                Some(&hand_allowed_env)
-                            },
-                            workspace_root,
-                            ainl_library_root,
-                            media_engine,
-                            effective_exec_policy,
-                            tts_engine,
-                            docker_config,
-                            process_manager,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s (streaming)", timeout_secs);
-                            openfang_types::tool::ToolResult {
+                            def,
+                        ) {
+                            debug!(tool = %tool_call.name, "Pre-execution param validation failed (streaming)");
+                            dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
-                                content: format!(
-                                    "Tool '{}' timed out after {}s.",
-                                    tool_call.name, timeout_secs
-                                ),
+                                tool_name: tool_call.name.clone(),
+                                content: err_msg,
                                 is_error: true,
-                            }
+                            }));
+                            continue;
                         }
-                    };
-
-                    // Fire AfterToolCall hook
-                    if let Some(hook_reg) = hooks {
-                        let ctx = crate::hooks::HookContext {
-                            agent_name: &manifest.name,
-                            agent_id: caller_id_str.as_str(),
-                            event: openfang_types::agent::HookEvent::AfterToolCall,
-                            data: serde_json::json!({
-                                "tool_name": &tool_call.name,
-                                "result": &result.content,
-                                "is_error": result.is_error,
-                            }),
-                        };
-                        let _ = hook_reg.fire(&ctx);
                     }
 
-                    // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
-                    let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-
-                    // Append warning if verdict was Warn
-                    let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                        format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                    } else {
-                        content
-                    };
-
-                    // Notify client of tool execution result (detect dead consumer)
-                    let preview: String = final_content.chars().take(300).collect();
-                    if stream_tx
-                        .send(StreamEvent::ToolExecutionResult {
-                            id: tool_call.id.clone(),
-                            name: tool_call.name.clone(),
-                            result_preview: preview,
-                            is_error: result.is_error,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        warn!(agent = %manifest.name, "Stream consumer disconnected — continuing tool loop but will not stream further");
-                    }
-
-                    tool_result_blocks.push(ContentBlock::ToolResult {
-                        tool_use_id: result.tool_use_id,
-                        tool_name: tool_call.name.clone(),
-                        content: final_content,
-                        is_error: result.is_error,
-                    });
+                    // Track the tool name so EndTurn can check for process phantom actions
+                    last_tools_called.insert(tool_call.name.clone());
+                    dispatches_s.push(ToolDispatch::Pending { tool_call, verdict });
                 }
 
-                append_tool_error_guidance(&mut tool_result_blocks);
+                let effective_exec_policy = manifest.exec_policy.as_ref();
+                let pending_futures_s: Vec<_> = dispatches_s
+                    .iter()
+                    .filter_map(|d| {
+                        if let ToolDispatch::Pending { tool_call, .. } = d {
+                            let timeout = tool_timeout_for(&tool_call.name);
+                            Some((
+                                tool_call,
+                                tokio::time::timeout(
+                                    timeout,
+                                    tool_runner::execute_tool(
+                                        &tool_call.id,
+                                        &tool_call.name,
+                                        &tool_call.input,
+                                        kernel.as_ref(),
+                                        Some(&allowed_tool_names),
+                                        Some(&caller_id_str),
+                                        skill_registry,
+                                        mcp_connections,
+                                        web_ctx,
+                                        browser_ctx,
+                                        if hand_allowed_env.is_empty() {
+                                            None
+                                        } else {
+                                            Some(&hand_allowed_env)
+                                        },
+                                        workspace_root,
+                                        ainl_library_root,
+                                        media_engine,
+                                        effective_exec_policy,
+                                        tts_engine,
+                                        docker_config,
+                                        process_manager,
+                                    ),
+                                ),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
-                // Detect approval denials and inject guidance to prevent infinite retry loops
+                let (pending_tcs_s, pending_futs_s): (Vec<&&ToolCall>, Vec<_>) =
+                    pending_futures_s.into_iter().unzip();
+                let parallel_results_s = futures::future::join_all(pending_futs_s).await;
+
+                let mut pending_iter_s = <Vec<&&ToolCall> as IntoIterator>::into_iter(pending_tcs_s)
+                    .zip(parallel_results_s.into_iter())
+                    .peekable();
+
+                for dispatch in &dispatches_s {
+                    match dispatch {
+                        ToolDispatch::Resolved(block) => {
+                            tool_result_blocks.push(block.clone());
+                        }
+                        ToolDispatch::Pending { tool_call, verdict } => {
+                            let (tc, timeout_result) = pending_iter_s.next().unwrap();
+                            let timeout_secs = tool_timeout_for(&tc.name).as_secs();
+                            let result = match timeout_result {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    warn!(tool = %tc.name, "Tool execution timed out after {}s (streaming)", timeout_secs);
+                                    openfang_types::tool::ToolResult {
+                                        tool_use_id: tc.id.clone(),
+                                        content: format!("Tool '{}' timed out after {}s.", tc.name, timeout_secs),
+                                        is_error: true,
+                                    }
+                                }
+                            };
+
+                            if let Some(hook_reg) = hooks {
+                                let ctx = crate::hooks::HookContext {
+                                    agent_name: &manifest.name,
+                                    agent_id: caller_id_str.as_str(),
+                                    event: openfang_types::agent::HookEvent::AfterToolCall,
+                                    data: serde_json::json!({
+                                        "tool_name": &tool_call.name,
+                                        "result": &result.content,
+                                        "is_error": result.is_error,
+                                    }),
+                                };
+                                let _ = hook_reg.fire(&ctx);
+                            }
+
+                            let content = truncate_tool_result_dynamic(&result.content, &context_budget);
+                            let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
+                                format!("{content}\n\n[LOOP GUARD] {warn_msg}")
+                            } else {
+                                content
+                            };
+
+                            let preview: String = final_content.chars().take(300).collect();
+                            if stream_tx
+                                .send(StreamEvent::ToolExecutionResult {
+                                    id: tool_call.id.clone(),
+                                    name: tool_call.name.clone(),
+                                    result_preview: preview,
+                                    is_error: result.is_error,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!(agent = %manifest.name, "Stream consumer disconnected — continuing tool loop but will not stream further");
+                            }
+
+                            tool_result_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: result.tool_use_id,
+                                tool_name: tool_call.name.clone(),
+                                content: final_content,
+                                is_error: result.is_error,
+                            });
+                        }
+                    }
+                }
+
+                // All-blocked early exit (streaming path) — mirrors the non-streaming path.
+                {
+                    let all_blocked = !tool_result_blocks.is_empty()
+                        && tool_result_blocks.iter().all(|b| {
+                            matches!(b, ContentBlock::ToolResult { content, is_error: true, .. }
+                            if content.starts_with("Blocked:") || content.starts_with("Circuit breaker:"))
+                        });
+                    if all_blocked {
+                        consecutive_all_blocked += 1;
+                    } else {
+                        consecutive_all_blocked = 0;
+                    }
+                    const MAX_CONSECUTIVE_ALL_BLOCKED_S: u32 = 3;
+                    if consecutive_all_blocked >= MAX_CONSECUTIVE_ALL_BLOCKED_S {
+                        warn!(
+                            agent = %manifest.name,
+                            consecutive_all_blocked,
+                            "All tool calls blocked for {} consecutive iterations — exiting early (streaming)",
+                            consecutive_all_blocked
+                        );
+                        let summary = "I was unable to complete this task: my tool calls were \
+                             repeatedly blocked because I appeared to be stuck calling the same \
+                             tools in a loop. Please try rephrasing your request, breaking it \
+                             into smaller steps, or using a different approach.";
+                        session.messages.push(Message::assistant(summary));
+                        if let Err(e) = memory.save_session_async(session).await {
+                            warn!("Failed to save session on all-blocked exit (streaming): {e}");
+                        }
+                        if let Some(cb) = on_phase {
+                            cb(LoopPhase::Done);
+                        }
+                        let _ = stream_tx.send(StreamEvent::TextDelta { text: summary.to_string() }).await;
+                        return Ok(AgentLoopResult {
+                            response: summary.to_string(),
+                            total_usage,
+                            iterations: iteration + 1,
+                            cost_usd: None,
+                            silent: false,
+                            directives: Default::default(),
+                            latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                            llm_fallback_note: llm_fallback_note.clone(),
+                        });
+                    }
+                }
+
+                // Approval denials: always inject — the model must not retry denied tools.
                 let denial_count = tool_result_blocks
                     .iter()
                     .filter(|b| {
@@ -2182,21 +2722,13 @@ pub async fn run_agent_loop_streaming(
                     });
                 }
 
-                // Detect tool errors and inject guidance to prevent fabrication
-                let error_count = tool_result_blocks
-                    .iter()
-                    .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
-                    .count();
-                let non_denial_errors = error_count.saturating_sub(denial_count);
-                if non_denial_errors > 0 {
+                // Smart error guidance: targeted on first occurrence, escalating on second,
+                // silent on third+ (loop guard handles repeated failures from that point).
+                if let Some(guidance) =
+                    tool_error_tracker.compute_guidance(&tool_result_blocks, denial_count)
+                {
                     tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool(s) returned errors. Report the error honestly \
-                             to the user. Do NOT fabricate results or pretend the tool succeeded. \
-                             If a search or fetch failed, tell the user it failed and suggest \
-                             alternatives instead of making up data.]",
-                            non_denial_errors
-                        ),
+                        text: guidance,
                         provider_metadata: None,
                     });
                 }
@@ -2207,6 +2739,22 @@ pub async fn run_agent_loop_streaming(
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
+
+                // Wrap-up injection: if we are within 3 iterations of the limit, tell
+                // the LLM to stop calling tools and produce a text summary.
+                if iteration + 1 + 3 >= max_iterations {
+                    warn!(
+                        agent = %manifest.name,
+                        iteration,
+                        max_iterations,
+                        "Approaching iteration limit (streaming) — injecting wrap-up prompt"
+                    );
+                    messages.push(Message::user(
+                        "[System: You are very close to the maximum number of allowed steps. \
+                         Stop calling tools now. Write a final text response summarizing \
+                         what you have done and any results or next steps for the user.]",
+                    ));
+                }
 
                 if let Err(e) = memory.save_session_async(session).await {
                     warn!("Failed to interim-save session: {e}");
@@ -2264,11 +2812,27 @@ pub async fn run_agent_loop_streaming(
         }
     }
 
+    // Iteration limit reached — degrade gracefully instead of hard-erroring (streaming path).
+    warn!(
+        agent = %manifest.name,
+        max_iterations,
+        "Streaming agent loop hit max iterations — returning graceful fallback response"
+    );
+
+    let fallback = format!(
+        "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
+         If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
+         If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
+    );
+    session.messages.push(Message::assistant(&fallback));
+
+    // Stream the fallback message so the UI displays it in the chat bubble
+    let _ = stream_tx.send(StreamEvent::TextDelta { text: fallback.clone() }).await;
+
     if let Err(e) = memory.save_session_async(session).await {
         warn!("Failed to save session on max iterations: {e}");
     }
 
-    // Fire AgentLoopEnd hook on max iterations exceeded
     if let Some(hook_reg) = hooks {
         let ctx = crate::hooks::HookContext {
             agent_name: &manifest.name,
@@ -2282,7 +2846,16 @@ pub async fn run_agent_loop_streaming(
         let _ = hook_reg.fire(&ctx);
     }
 
-    Err(OpenFangError::MaxIterationsExceeded(max_iterations))
+    Ok(AgentLoopResult {
+        response: fallback,
+        total_usage,
+        iterations: max_iterations,
+        cost_usd: None,
+        silent: false,
+        directives: Default::default(),
+        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+        llm_fallback_note,
+    })
 }
 
 /// Recover tool calls that LLMs output as plain text instead of the proper
@@ -3157,7 +3730,7 @@ mod tests {
 
     #[test]
     fn test_max_iterations_constant() {
-        assert_eq!(MAX_ITERATIONS, 50);
+        assert_eq!(MAX_ITERATIONS, 80);
     }
 
     #[test]
@@ -3223,13 +3796,22 @@ mod tests {
             tool_timeout_for("spreadsheet_build"),
             Duration::from_secs(180)
         );
+        // Media generation / external AI APIs
+        assert_eq!(tool_timeout_for("image_generate"), Duration::from_secs(300));
+        assert_eq!(tool_timeout_for("text_to_speech"), Duration::from_secs(300));
+        assert_eq!(tool_timeout_for("media_describe"), Duration::from_secs(300));
+        assert_eq!(tool_timeout_for("a2a_send"), Duration::from_secs(300));
+        // Persistent process tools
+        assert_eq!(tool_timeout_for("process_start"), Duration::from_secs(30));
+        assert_eq!(tool_timeout_for("process_poll"), Duration::from_secs(30));
+        // Standard tools
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
         assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
     }
 
     #[test]
     fn test_max_history_messages() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 20);
+        assert_eq!(MAX_HISTORY_MESSAGES, 60);
     }
 
     // --- Integration tests for empty response guards ---
@@ -3385,6 +3967,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -3403,7 +3986,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tool_error_injects_no_fabrication_guidance() {
+    async fn test_tool_error_injects_error_guidance() {
         let memory = openfang_memory::MemorySubstrate::open_in_memory(0.01).unwrap();
         let agent_id = openfang_types::agent::AgentId::new();
         let mut session = openfang_memory::session::Session {
@@ -3439,22 +4022,22 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should complete without error");
 
-        let guidance_seen = session.messages.iter().any(|msg| {
-            match &msg.content {
+        // On the first tool error, the tracker should inject a [System: ...] guidance block.
+        let guidance_seen = session.messages.iter().any(|msg| match &msg.content {
             MessageContent::Blocks(blocks) => blocks.iter().any(|block| {
-                matches!(block, ContentBlock::Text { text, .. } if text == TOOL_ERROR_GUIDANCE)
+                matches!(block, ContentBlock::Text { text, .. } if text.starts_with("[System:"))
             }),
             _ => false,
-        }
         });
 
         assert!(
             guidance_seen,
-            "Expected tool error guidance in session messages after failed tool call"
+            "Expected [System: ...] error guidance in session messages after first failed tool call"
         );
     }
 
@@ -3495,6 +4078,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -3549,6 +4133,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -3596,6 +4181,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3721,6 +4307,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should recover via retry");
@@ -3769,6 +4356,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Loop should complete with fallback");
@@ -3783,7 +4371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_history_messages_constant() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 20);
+        assert_eq!(MAX_HISTORY_MESSAGES, 60);
     }
 
     #[tokio::test]
@@ -3825,6 +4413,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4802,6 +5391,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Agent loop should complete");
@@ -4873,6 +5463,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -4946,6 +5537,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Normal loop should complete");
@@ -5010,6 +5602,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // btw_rx
         )
         .await
         .expect("Streaming loop should complete");

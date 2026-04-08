@@ -465,7 +465,7 @@ function handsPage() {
           self.instances = self.instances.filter(function(i) { return i.instance_id !== inst.instance_id; });
           OpenFangToast.success('Hand deactivated.');
         } catch(e) {
-          OpenFangToast.error('Deactivation failed: ' + (e.message || 'unknown error'));
+          OpenFangToast.error('Deactivation failed: ' + openFangErrText(e));
         }
       });
     },

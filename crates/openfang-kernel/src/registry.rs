@@ -213,6 +213,25 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Update the autonomous loop step limit for an agent.
+    pub fn update_max_iterations(&self, id: AgentId, max_iterations: u32) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        match entry.manifest.autonomous.as_mut() {
+            Some(cfg) => cfg.max_iterations = max_iterations,
+            None => {
+                entry.manifest.autonomous = Some(openfang_types::agent::AutonomousConfig {
+                    max_iterations,
+                    ..Default::default()
+                });
+            }
+        }
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
     /// Update an agent's skill allowlist.
     pub fn update_skills(&self, id: AgentId, skills: Vec<String>) -> OpenFangResult<()> {
         let mut entry = self

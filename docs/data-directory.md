@@ -4,7 +4,7 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 
 | Path | Purpose |
 |------|---------|
-| `~/.armaraos/config.toml` | Main configuration file |
+| `~/.armaraos/config.toml` | Main configuration file (see **Config schema version** below) |
 | `~/.armaraos/data/openfang.db` | SQLite database (filename is historical) |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/agents/` | Agent manifests and per-agent data |
@@ -29,3 +29,29 @@ Older installs used **`~/.openfang/`**. On first run, if **`~/.armaraos`** does 
 Fresh installs with no prior directory **create** `~/.armaraos` automatically.
 
 Implementation lives in `openfang_types::config` (`openfang_home_dir`, `ensure_armaraos_data_home`), used by the kernel and CLI.
+
+## Config schema version
+
+`config.toml` includes an optional top-level field:
+
+```toml
+config_schema_version = 1
+```
+
+- **Omitted or `0`:** treated as a **legacy** file from before versioning. On startup the daemon runs **in-memory migrations** (for example aligning old default model IDs), then **appends** `config_schema_version = N` to the file (other content is left as-is).
+- **`N` matching the running binary:** no migration.
+- **`N` greater than the binary:** the kernel logs a warning (a **newer** app wrote the file; this binary may ignore unknown keys).
+
+The current target version is the `CONFIG_SCHEMA_VERSION` constant in `crates/openfang-types/src/config.rs` (also re-exported from `openfang_kernel::config`). Bump it when you add a new migration step.
+
+**Seeing it live:** The dashboard **Settings** page shows **Config schema** under the tab bar and on **System**; **Daemon & runtime** shows the same pair. **`GET /api/status`** returns `config_schema_version` and `config_schema_version_binary`. Support bundles include both numbers in **`diagnostics_snapshot.json`** and **`meta.json`** (see [troubleshooting.md](troubleshooting.md#dashboard-support-bundle-redacted-zip)).
+
+## Backup and reset (troubleshooting upgrades)
+
+Reinstalling the desktop app or CLI **does not** remove `~/.armaraos/`. If something behaves like a “sticky” error across versions, compare against a **clean profile**:
+
+1. **Quit** the daemon / desktop app.
+2. **Back up** the whole folder, e.g. `mv ~/.armaraos ~/.armaraos.bak` (or copy it elsewhere).
+3. Start again — a **fresh** `config.toml` and state will be created on first run.
+
+To restore later, rename the backup back. For a partial reset, keep `secrets.env` / `.env` and only replace `config.toml` or the SQLite DB under `data/` as needed.

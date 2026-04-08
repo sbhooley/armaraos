@@ -125,7 +125,7 @@ function schedulerPage() {
         );
         await this.loadJobs();
       } catch(e) {
-        OpenFangToast.error('Register failed: ' + (e.message || e));
+        OpenFangToast.error('Register failed: ' + openFangErrText(e));
       }
       this.ainlRegLoading = false;
     },
@@ -382,7 +382,7 @@ function schedulerPage() {
         this.resetNewJobForm();
         await this.loadJobs();
       } catch(e) {
-        OpenFangToast.error('Failed to save schedule: ' + (e.message || e));
+        OpenFangToast.error('Failed to save schedule: ' + openFangErrText(e));
       }
       this.creating = false;
     },
@@ -394,7 +394,7 @@ function schedulerPage() {
         job.enabled = newState;
         OpenFangToast.success('Schedule ' + (newState ? 'enabled' : 'paused'));
       } catch(e) {
-        OpenFangToast.error('Failed to toggle schedule: ' + (e.message || e));
+        OpenFangToast.error('Failed to toggle schedule: ' + openFangErrText(e));
       }
     },
 
@@ -407,7 +407,7 @@ function schedulerPage() {
           self.jobs = self.jobs.filter(function(j) { return j.id !== job.id; });
           OpenFangToast.success('Schedule "' + jobName + '" deleted');
         } catch(e) {
-          OpenFangToast.error('Failed to delete schedule: ' + (e.message || e));
+          OpenFangToast.error('Failed to delete schedule: ' + openFangErrText(e));
         }
       });
     },
@@ -425,7 +425,7 @@ function schedulerPage() {
           OpenFangToast.error('Run failed: ' + (result.error || 'Unknown error'));
         }
       } catch(e) {
-        OpenFangToast.error('Run failed: ' + (e.message || e));
+        OpenFangToast.error('Run failed: ' + openFangErrText(e));
       }
       this.runningJobId = '';
     },
@@ -459,7 +459,7 @@ function schedulerPage() {
         trigger.enabled = newState;
         OpenFangToast.success('Trigger ' + (newState ? 'enabled' : 'disabled'));
       } catch(e) {
-        OpenFangToast.error('Failed to toggle trigger: ' + (e.message || e));
+        OpenFangToast.error('Failed to toggle trigger: ' + openFangErrText(e));
       }
     },
 
@@ -471,7 +471,7 @@ function schedulerPage() {
           self.triggers = self.triggers.filter(function(t) { return t.id !== trigger.id; });
           OpenFangToast.success('Trigger deleted');
         } catch(e) {
-          OpenFangToast.error('Failed to delete trigger: ' + (e.message || e));
+          OpenFangToast.error('Failed to delete trigger: ' + openFangErrText(e));
         }
       });
     },

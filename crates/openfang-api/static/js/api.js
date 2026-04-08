@@ -163,6 +163,15 @@ function makeApiError(message, status, detail, hint, where, requestId, serverPat
   return e;
 }
 
+// Compose a full human-readable error string from an OpenFangAPIError, including
+// server detail and hint when present. Safe to call on any value.
+function openFangErrText(e) {
+  var msg = (e && e.message) || 'Unknown error';
+  var detail = e && e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+  var hint = e && e.hint ? (' Hint: ' + e.hint) : '';
+  return msg + detail + hint;
+}
+
 // ── API Client ──
 var OpenFangAPI = (function() {
   var BASE = window.location.origin;
@@ -252,6 +261,21 @@ var OpenFangAPI = (function() {
         );
       }
       throw e;
+    });
+  }
+
+  var _networkHintsCache = { value: null, at: 0 };
+  var NETWORK_HINTS_TTL_MS = 60000;
+
+  /** GET /api/system/network-hints (cached ~60s). VPN/tunnel/proxy hints for wizard + chat copy. */
+  function getNetworkHints() {
+    var now = Date.now();
+    if (_networkHintsCache.value && now - _networkHintsCache.at < NETWORK_HINTS_TTL_MS) {
+      return Promise.resolve(_networkHintsCache.value);
+    }
+    return get('/api/system/network-hints').then(function(j) {
+      _networkHintsCache = { value: j, at: Date.now() };
+      return j;
     });
   }
 
@@ -520,6 +544,7 @@ var OpenFangAPI = (function() {
     setAuthToken: setAuthToken,
     getToken: getToken,
     sseUrl: sseUrl,
+    getNetworkHints: getNetworkHints,
     get: get,
     post: post,
     put: put,

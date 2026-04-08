@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ArmaraOS installer — works on Linux, macOS, WSL
-# Usage: curl -sSf https://armaraos.sh | sh   (if/when you host a vanity domain)
+# Usage: curl -sSf https://armaraos.sh | sh
+#   or:  curl -sSf https://ainativelang.com/install.sh | sh
 #
 # Environment variables:
 #   ARMARAOS_INSTALL_DIR  — custom install directory (default: ~/.armaraos/bin)

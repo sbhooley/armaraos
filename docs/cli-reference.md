@@ -2,6 +2,8 @@
 
 Complete command-line reference for `openfang`, the CLI tool for the OpenFang Agent OS.
 
+**ArmaraOS installs** (shell installer) also place a wrapper command **`armaraos`** next to **`openfang`** (it runs the same binary). Use either name, for example **`armaraos doctor`** or **`openfang doctor`**.
+
 ## Data directory
 
 Paths below use the default ArmaraOS home **`~/.armaraos/`**. Override with **`ARMARAOS_HOME`** or **`OPENFANG_HOME`**. An existing **`~/.openfang/`** directory is renamed to **`~/.armaraos/`** on first run when possible. See [`data-directory.md`](data-directory.md).
@@ -209,13 +211,15 @@ openfang status --json | jq '.agent_count'
 
 ---
 
-### openfang doctor
+### doctor (`armaraos` / `openfang`)
 
 Run diagnostic checks on the OpenFang installation.
 
 ```
-openfang doctor [--json] [--repair]
+armaraos doctor [--json] [--repair]
 ```
+
+(`openfang doctor` is the same when both commands come from the same install.)
 
 **Options:**
 
@@ -243,11 +247,11 @@ openfang doctor [--json] [--repair]
 **Example:**
 
 ```bash
-openfang doctor
+armaraos doctor
 
-openfang doctor --repair
+armaraos doctor --repair
 
-openfang doctor --json
+armaraos doctor --json
 ```
 
 ---
@@ -1138,7 +1142,7 @@ openfang start          # Starts daemon, writes daemon.json
 openfang status         # Connects to daemon via HTTP
 Ctrl+C                  # Daemon shuts down, daemon.json removed
 
-openfang doctor --repair  # Cleans up stale daemon.json from crashes
+armaraos doctor --repair  # Cleans up stale daemon.json from crashes
 ```
 
 ---
@@ -1337,13 +1341,13 @@ openfang mcp
 
 ```bash
 # Run all diagnostic checks
-openfang doctor
+armaraos doctor
 
 # Auto-repair issues
-openfang doctor --repair
+armaraos doctor --repair
 
 # Machine-readable diagnostics
-openfang doctor --json
+armaraos doctor --json
 ```
 
 ### Shell completions
@@ -1359,7 +1363,7 @@ openfang completion fish > ~/.config/fish/completions/openfang.fish
 
 ## Supported LLM Providers
 
-The following providers are recognized by `openfang config set-key` and `openfang doctor`:
+The following providers are recognized by `armaraos config set-key` and `armaraos doctor` (same as `openfang …`):
 
 | Provider | Environment Variable | Default Model |
 |---|---|---|

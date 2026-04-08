@@ -827,7 +827,7 @@ pub enum ExecSecurityMode {
 }
 
 /// Shell/exec security policy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ExecPolicy {
     /// Security mode: "deny" blocks all, "allowlist" only allows listed,
@@ -854,17 +854,32 @@ fn default_no_output_timeout() -> u64 {
 impl Default for ExecPolicy {
     fn default() -> Self {
         Self {
-            mode: ExecSecurityMode::default(),
+            // ArmaraOS is a personal agent OS on a user-owned machine.  Full mode
+            // means sh -c is used so pipes, redirects, and semicolons work naturally.
+            // Operators who need stricter sandboxing can set mode = "allowlist" or
+            // "deny" in config.toml [exec_policy] or in an individual agent manifest.
+            mode: ExecSecurityMode::Full,
             safe_bins: vec![
-                "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc",
-                "date", "echo", "printf", "basename", "dirname", "pwd", "env",
+                // Basic stdin/stream utilities
+                "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail",
+                "wc", "date", "echo", "printf", "basename", "dirname", "pwd", "env",
+                // File system navigation and inspection (read-only)
+                "ls", "find", "grep", "rg", "which", "whereis", "type",
+                "stat", "file", "diff", "cmp", "od", "xxd",
+                // Process and system info (read-only)
+                "ps", "df", "du", "uname", "arch", "hostname", "id", "whoami",
+                "lsof", "lscpu", "uptime", "lsblk",
+                // Text processing utilities
+                "awk", "sed", "jq", "xargs",
+                // Common path/string utilities
+                "realpath", "readlink", "tee", "mktemp",
             ]
             .into_iter()
             .map(String::from)
             .collect(),
             allowed_commands: Vec::new(),
-            timeout_secs: 30,
-            max_output_bytes: 100 * 1024,
+            timeout_secs: 60,
+            max_output_bytes: 512 * 1024,
             no_output_timeout_secs: default_no_output_timeout(),
         }
     }
@@ -1016,12 +1031,21 @@ impl Default for ThinkingConfig {
     }
 }
 
+/// On-disk `config.toml` schema version for this binary.
+///
+/// Bump when the file format or migration steps change; document in `docs/data-directory.md`.
+pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+
 /// Top-level kernel configuration.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KernelConfig {
     /// ArmaraOS home directory (default: `~/.armaraos`).
     pub home_dir: PathBuf,
+    /// `config.toml` schema version on disk. `0` means the file predates versioning (legacy).
+    /// New installs and fully migrated files use [`CONFIG_SCHEMA_VERSION`].
+    #[serde(default)]
+    pub config_schema_version: u32,
     /// Data directory for databases (default: `~/.armaraos/data`).
     pub data_dir: PathBuf,
     /// Log level (trace, debug, info, warn, error).
@@ -1445,6 +1469,7 @@ impl Default for KernelConfig {
         Self {
             data_dir: home_dir.join("data"),
             home_dir,
+            config_schema_version: CONFIG_SCHEMA_VERSION,
             log_level: "info".to_string(),
             api_listen: "127.0.0.1:50051".to_string(),
             network_enabled: false,
@@ -1532,6 +1557,7 @@ impl std::fmt::Debug for KernelConfig {
         f.debug_struct("KernelConfig")
             .field("home_dir", &self.home_dir)
             .field("data_dir", &self.data_dir)
+            .field("config_schema_version", &self.config_schema_version)
             .field("log_level", &self.log_level)
             .field("api_listen", &self.api_listen)
             .field("network_enabled", &self.network_enabled)
@@ -3871,6 +3897,20 @@ mod tests {
         assert_eq!(config.log_level, "info");
         assert_eq!(config.api_listen, "127.0.0.1:50051");
         assert!(!config.network_enabled);
+    }
+
+    #[test]
+    fn test_config_schema_version_matches_constant() {
+        let c = KernelConfig::default();
+        assert_eq!(c.config_schema_version, CONFIG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_config_schema_version_omitted_is_legacy_zero() {
+        let toml_str = r#"log_level = "warn""#;
+        let c: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.config_schema_version, 0);
+        assert_eq!(c.log_level, "warn");
     }
 
     #[test]

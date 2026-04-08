@@ -68,6 +68,8 @@ Older class **`overview-inline-actions`** was removed with the bottom quick-acti
 
 ## Setup Wizard visibility
 
+**Behavior reference (steps, provider rules, manifest TOML, rebuild):** [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
+
 After the guided **Setup Wizard** completes, the dashboard sets `localStorage` **`openfang-onboarded`** to **`true`** (see `wizard.js`). The Get started page uses that flag to avoid cluttering the header and checklist for users who already finished onboarding.
 
 | State | Header | Checklist **Setup Wizard** button |
@@ -93,7 +95,7 @@ After the guided **Setup Wizard** completes, the dashboard sets `localStorage` *
 
 - **Auto-refresh:** `silentRefresh()` on a 30s interval; debounced refresh on `armaraos-kernel-event` for lifecycle/system events (`overviewShouldRefreshOnKernelEvent` in `overview.js`).
 - **Teardown:** `@page-leave.window="stopAutoRefresh()"` clears the interval and kernel listener.
-- **Implementation** of titles, progress, and `showSetupChecklist` is in `overview.js` getters; keep **`docs/dashboard-testing.md`** (*Get started page — setup checklist*) in sync when that logic changes. Manual QA steps (hashes, `localStorage`, removed onboarding keys) live there.
+- **Implementation** of titles, progress, and `showSetupChecklist` is in `overview.js` getters; keep **`docs/dashboard-testing.md`** (*Get started page — setup checklist*) in sync when that logic changes. Manual QA steps (hashes, `localStorage`, removed onboarding keys) live there. First-run **Setup Wizard** contract: [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
 
 ## Sidebar navigation
 

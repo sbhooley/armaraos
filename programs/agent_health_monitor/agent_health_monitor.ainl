@@ -1,0 +1,21 @@
+# ArmaraOS Agent Health Monitor
+# ================================
+# Polls the local ArmaraOS API every 15 minutes. Checks overall daemon health
+# and counts how many agents are registered. Output is captured by the kernel
+# into the owning agent's session feed (inbox-style, no LLM turn triggered).
+#
+# Uses: http, core
+# Validate: ainl validate programs/agent_health_monitor/agent_health_monitor.ainl --strict
+
+agent_health_monitor:
+  health = http.GET "http://127.0.0.1:4200/api/health"
+  agents = http.GET "http://127.0.0.1:4200/api/agents"
+
+  daemon_status = core.GET health status
+  agent_count = core.GET agents total
+  ts = core.NOW 0
+
+  if daemon_status == "ok":
+    out {status: "healthy", agents: agent_count, checked_at: ts}
+
+  out {status: "degraded", daemon_status: daemon_status, checked_at: ts}

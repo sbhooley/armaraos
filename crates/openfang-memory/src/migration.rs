@@ -71,6 +71,27 @@ fn set_schema_version(conn: &Connection, version: u32) -> Result<(), rusqlite::E
     conn.pragma_update(None, "user_version", version)
 }
 
+/// Expected SQLite `user_version` after migrations complete (`run_migrations`).
+#[must_use]
+pub fn memory_substrate_schema_expected() -> u32 {
+    SCHEMA_VERSION
+}
+
+/// Read `PRAGMA user_version` from a SQLite file (read-only open). Returns `None` if missing or unreadable.
+#[must_use]
+pub fn read_sqlite_user_version(path: &std::path::Path) -> Option<u32> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let v: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .ok()?;
+    Some(v as u32)
+}
+
 /// Version 1: Create all core tables.
 fn migrate_v1(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
@@ -359,5 +380,17 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap(); // Should not error
+    }
+
+    #[test]
+    fn test_read_sqlite_user_version_readonly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            run_migrations(&conn).unwrap();
+        }
+        let uv = read_sqlite_user_version(&path).expect("user_version");
+        assert_eq!(uv, memory_substrate_schema_expected());
     }
 }

@@ -9,6 +9,6 @@
 wishlist_host_smoke:
   in: session_key note wishlist_id
 
-  tag = core.concat "armaraos_wishlist_host_ok"
-  line = core.concat tag "|" wishlist_id "|" session_key "|" note
+  tag = core.CONCAT "armaraos_wishlist_host_ok"
+  line = core.CONCAT tag "|" wishlist_id "|" session_key "|" note
   out line

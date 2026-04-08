@@ -1527,12 +1527,14 @@ fn write_config_if_missing(
     if config_path.exists() {
         ui::check_ok(&format!("Config already exists: {}", config_path.display()));
     } else {
+        let schema = openfang_types::config::CONFIG_SCHEMA_VERSION;
         let default_config = format!(
             r#"# OpenFang Agent OS configuration
 # See https://github.com/RightNow-AI/openfang for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENFANG_LISTEN env var.
 api_listen = "127.0.0.1:4200"
+config_schema_version = {schema}
 
 [default_model]
 provider = "{provider}"
@@ -2136,7 +2138,7 @@ fn cmd_doctor(json: bool, repair: bool) {
     let mut repaired = false;
 
     if !json {
-        ui::step("OpenFang Doctor");
+        ui::step("ArmaraOS Doctor");
         println!();
     }
 
@@ -2240,6 +2242,34 @@ fn cmd_doctor(json: bool, repair: bool) {
                         ui::check_ok(&format!("Config file: {}", config_path.display()));
                     }
                     checks.push(serde_json::json!({"check": "config_file", "status": "ok"}));
+
+                    // Effective schema after the same load path as the daemon (includes + migrations).
+                    let loaded = openfang_kernel::config::load_config(Some(&config_path));
+                    let eff = loaded.config_schema_version;
+                    let bin = openfang_types::config::CONFIG_SCHEMA_VERSION;
+                    if eff > bin {
+                        if !json {
+                            ui::check_warn(&format!(
+                                "Config schema version {eff} is newer than this binary ({bin}); upgrade the CLI or expect ignored keys"
+                            ));
+                        }
+                        checks.push(serde_json::json!({
+                            "check": "config_schema",
+                            "status": "warn",
+                            "effective": eff,
+                            "binary": bin
+                        }));
+                    } else {
+                        if !json {
+                            ui::check_ok(&format!("Config schema version: {eff} (binary {bin})"));
+                        }
+                        checks.push(serde_json::json!({
+                            "check": "config_schema",
+                            "status": "ok",
+                            "effective": eff,
+                            "binary": bin
+                        }));
+                    }
                 }
                 Err(e) => {
                     if !json {
@@ -2263,6 +2293,7 @@ fn cmd_doctor(json: bool, repair: bool) {
 
 # For Docker, change to "0.0.0.0:4200" or set OPENFANG_LISTEN env var.
 api_listen = "127.0.0.1:4200"
+config_schema_version = {schema}
 
 [default_model]
 provider = "{provider}"
@@ -2271,7 +2302,11 @@ api_key_env = "{api_key_env}"
 
 [memory]
 decay_rate = 0.05
-"#
+"#,
+                    schema = openfang_types::config::CONFIG_SCHEMA_VERSION,
+                    provider = provider,
+                    model = model,
+                    api_key_env = api_key_env,
                 );
                 let _ = std::fs::create_dir_all(&openfang_dir);
                 if std::fs::write(&config_path, default_config).is_ok() {

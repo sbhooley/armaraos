@@ -1110,11 +1110,13 @@ complex_threshold = 500
         format!("api_key_env = \"{}\"", p.env_var)
     };
 
+    let schema = openfang_types::config::CONFIG_SCHEMA_VERSION;
     let config = format!(
         r#"# OpenFang Agent OS configuration
 # See https://github.com/RightNow-AI/openfang for documentation
 
 api_listen = "127.0.0.1:4200"
+config_schema_version = {schema}
 
 [default_model]
 provider = "{provider}"

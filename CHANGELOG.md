@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-07
+
+### Added
+
+- **Dashboard → Settings:** At-a-glance line under the tab bar (**Daemon**, **Config schema** as `effective (binary N)`, **API**, **Log**, **Home**); **System** tab **Config schema** stat tile.
+- **Support diagnostics zip:** `README.txt`, `diagnostics_snapshot.json` (structured triage: config schema, paths, runtime, memory SQLite `user_version` vs expected, env override presence flags), and expanded `meta.json` (plus existing config, secrets redaction, audit, DB, logs).
+- **`openfang-memory`:** `memory_substrate_schema_expected()`, `read_sqlite_user_version()` for read-only bundle snapshots.
+- **Dashboard:** **Command palette** (Cmd/Ctrl+K) — full-window overlay searching pages, agents, actions, and recent sessions (`static/js/pages/command-palette.js`, `index_body.html`).
+- **HTTP API:** **`GET /api/system/network-hints`** — host-side VPN/tunnel/proxy hints (`crates/openfang-api/src/network_hints.rs`); wired into Setup Wizard and chat; loopback GET allowed without Bearer (see `middleware.rs`).
+- **Embedded AINL (`programs/`):** Six new compact graphs materialized with the kernel’s **`armaraos-programs`** mirror (see [docs/ootb-ainl.md](docs/ootb-ainl.md)):
+  - **`agent_health_monitor`** — polls `GET /api/health` and `GET /api/agents` on the local daemon (comments: ~15 min cadence when scheduled).
+  - **`budget_threshold_alert`** — compares spend to budget; emits when usage crosses **80%** of the configured limit (comments: hourly when scheduled).
+  - **`channel_session_digest`** — lightweight snapshot (`active_agents`, timestamp) for session feeds (comments: ~6 h when scheduled).
+  - **`daily_budget_digest`** — morning budget summary: period, totals, limit (comments: **08:00** when scheduled).
+  - **`new_version_checker`** — compares **GitHub** latest ArmaraOS tag and **PyPI** `ainativelang` to `GET /api/version` (comments: weekly **Saturday 10:00** when scheduled).
+  - **`weekly_usage_report`** — aggregates budget/agents/skills and calls **`llm.COMPLETION`** (`llm/openrouter`) for a short summary (comments: **Sunday 18:00** when scheduled; requires **`AINL_MCP_LLM_ENABLED=1`** or **`AINL_CONFIG`** with an LLM section).
+
+### Documentation
+
+- **Config schema & diagnostics:** [troubleshooting.md](docs/troubleshooting.md) (TOC, dashboard at-a-glance, bundle contents); [api-reference.md](docs/api-reference.md) (`GET /api/status`, `GET /api/config`, `POST /api/support/diagnostics`); [dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md); [dashboard-testing.md](docs/dashboard-testing.md); [data-directory.md](docs/data-directory.md); [configuration.md](docs/configuration.md) (`config_schema_version` row); [getting-started.md](docs/getting-started.md); [desktop.md](docs/desktop.md); [docs/README.md](docs/README.md); root [CLAUDE.md](CLAUDE.md).
+- **`docs/agent-automation-hardening.md`:** Agent workflows — valid `file_write` / `shell_exec` JSON, persist vs re-acquire, loop guard interaction, acquire/extract/persist/verify phases, workspace habits, optional future preflight notes and caveats; **`armaraos-skill-mint-stub-monthly`** reference.
+- **`docs/troubleshooting.md`:** New subsection for missing `path`/`command`; loop guard note on empty repeated tool calls; TOC link to hardening guide.
+- **`docs/ootb-ainl.md`:** Expanded **`armaraos-skill-mint-stub-monthly`** row (schedule, frame, host Markdown).
+- **`docs/README.md`**, **`docs/agent-files-and-documents.md`:** Cross-links and **`file_write`** section.
+
 ## [0.6.5] - 2026-04-05
 
 ### Added
@@ -325,5 +350,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.6]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.6
 [0.6.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.5
 [0.6.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.4

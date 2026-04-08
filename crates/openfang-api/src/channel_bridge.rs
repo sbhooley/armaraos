@@ -1042,7 +1042,7 @@ fn read_token(env_var_or_token: &str, adapter_name: &str) -> Option<String> {
 /// or `None` if no channels are configured.
 pub async fn start_channel_bridge(kernel: Arc<OpenFangKernel>) -> Option<BridgeManager> {
     let channels = kernel.config.channels.clone();
-    let (bridge, _names) = start_channel_bridge_with_config(kernel, &channels).await;
+    let (bridge, _names, _errors) = start_channel_bridge_with_config(kernel, &channels).await;
     bridge
 }
 
@@ -1052,7 +1052,7 @@ pub async fn start_channel_bridge(kernel: Arc<OpenFangKernel>) -> Option<BridgeM
 pub async fn start_channel_bridge_with_config(
     kernel: Arc<OpenFangKernel>,
     config: &openfang_types::config::ChannelsConfig,
-) -> (Option<BridgeManager>, Vec<String>) {
+) -> (Option<BridgeManager>, Vec<String>, Vec<(String, String)>) {
     let has_any = config.telegram.is_some()
         || config.discord.is_some()
         || config.slack.is_some()
@@ -1099,7 +1099,7 @@ pub async fn start_channel_bridge_with_config(
         || config.linkedin.is_some();
 
     if !has_any {
-        return (None, Vec::new());
+        return (None, Vec::new(), Vec::new());
     }
 
     let handle = KernelBridgeAdapter {
@@ -1680,7 +1680,7 @@ pub async fn start_channel_bridge_with_config(
     }
 
     if adapters.is_empty() {
-        return (None, Vec::new());
+        return (None, Vec::new(), Vec::new());
     }
 
     // Resolve per-channel default agents AND set the first one as system-wide fallback
@@ -1740,6 +1740,7 @@ pub async fn start_channel_bridge_with_config(
     let mut manager = BridgeManager::new(bridge_handle, router);
 
     let mut started_names = Vec::new();
+    let mut start_errors: Vec<(String, String)> = Vec::new();
     for (adapter, _) in adapters {
         let name = adapter.name().to_string();
         // Register adapter in kernel so agents can use `channel_send` tool
@@ -1754,25 +1755,29 @@ pub async fn start_channel_bridge_with_config(
             Err(e) => {
                 // Remove from kernel map if start failed
                 kernel.channel_adapters.remove(&name);
-                error!("Failed to start {name} bridge: {e}");
+                let msg = e.to_string();
+                error!("Failed to start {name} bridge: {msg}");
+                start_errors.push((name, msg));
             }
         }
     }
 
     if started_names.is_empty() {
-        (None, Vec::new())
+        (None, Vec::new(), start_errors)
     } else {
-        (Some(manager), started_names)
+        (Some(manager), started_names, start_errors)
     }
 }
 
 /// Reload channels from disk config — stops old bridge, starts new one.
 ///
 /// Reads `config.toml` fresh, rebuilds the channel bridge, and stores it
-/// in `AppState.bridge_manager`. Returns the list of started channel names.
+/// in `AppState.bridge_manager`. Returns `(started_names, per_channel_errors)`.
+/// Per-channel errors contain `(channel_name, error_message)` for each channel
+/// that was configured but failed to start (e.g. bad token, network error).
 pub async fn reload_channels_from_disk(
     state: &crate::routes::AppState,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, Vec<(String, String)>), String> {
     // Stop existing bridge
     {
         let mut guard = state.bridge_manager.lock().await;
@@ -1819,7 +1824,7 @@ pub async fn reload_channels_from_disk(
     *state.channels_config.write().await = fresh_config.channels.clone();
 
     // Start new bridge with fresh channel config
-    let (new_bridge, started) =
+    let (new_bridge, started, ch_errors) =
         start_channel_bridge_with_config(state.kernel.clone(), &fresh_config.channels).await;
 
     // Store the new bridge
@@ -1831,7 +1836,7 @@ pub async fn reload_channels_from_disk(
         "Channel hot-reload complete"
     );
 
-    Ok(started)
+    Ok((started, ch_errors))
 }
 
 #[cfg(test)]

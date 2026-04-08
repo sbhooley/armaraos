@@ -53,7 +53,19 @@ pub fn walk_ainl_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(out)
 }
 
+/// Marker file: if a directory contains this file it is excluded from the App Store walk.
+const LIBRARY_SKIP_MARKER: &str = ".ainl-library-skip";
+
 fn walk_ainl_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    // Honour the skip marker placed inside a directory tree.
+    if dir.join(LIBRARY_SKIP_MARKER).exists() {
+        tracing::debug!(
+            dir = %dir.display(),
+            "Skipping ainl-library subtree ({})",
+            LIBRARY_SKIP_MARKER
+        );
+        return Ok(());
+    }
     let read = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
     for ent in read {
         let ent = ent.map_err(|e| format!("read_dir entry: {e}"))?;

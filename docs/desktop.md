@@ -225,7 +225,7 @@ Opens `~/.armaraos/` or `~/.armaraos/logs/` in the OS file manager.
 
 ### `generate_support_bundle`
 
-Calls the embedded API **`POST /api/support/diagnostics`** on loopback (no separate auth). Returns the same JSON as the HTTP route (`bundle_path`, `bundle_filename`, `relative_path`, …). Used from the Help menu and from the dashboard when generating a bundle from the shell.
+Calls the embedded API **`POST /api/support/diagnostics`** on loopback (no separate auth). Returns the same JSON as the HTTP route (`bundle_path`, `bundle_filename`, `relative_path`, …). Used from the Help menu and from the dashboard when generating a bundle from the shell. The generated zip includes **`README.txt`**, **`diagnostics_snapshot.json`** (support triage: config schema, paths, runtime, memory SQLite version), and expanded **`meta.json`** — see [api-reference.md](api-reference.md#post-apisupportdiagnostics) and [troubleshooting.md](troubleshooting.md#dashboard-support-bundle-redacted-zip).
 
 ### `copy_diagnostics_to_downloads`
 

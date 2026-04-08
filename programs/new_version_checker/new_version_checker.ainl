@@ -1,0 +1,25 @@
+# ArmaraOS New Version Checker
+# ================================
+# Runs weekly on Saturday at 10:00. Fetches the latest ArmaraOS release
+# from GitHub and the latest AINL version from PyPI. Compares to the
+# currently running version and outputs an update record. The kernel captures
+# this into the owning agent's session feed (inbox-style, no LLM turn triggered).
+#
+# Uses: http, core
+# Validate: ainl validate programs/new_version_checker/new_version_checker.ainl --strict
+
+new_version_checker:
+  ts = core.NOW 0
+
+  armaraos_release = http.GET "https://api.github.com/repos/sbhooley/armaraos/releases/latest"
+  ainl_release = http.GET "https://pypi.org/pypi/ainativelang/json"
+  local_version = http.GET "http://127.0.0.1:4200/api/version"
+
+  armaraos_latest = core.GET armaraos_release tag_name
+  ainl_latest = core.GET ainl_release info version
+  running_version = core.GET local_version version
+
+  if armaraos_latest != running_version:
+    out {update_available: true, armaraos_latest: armaraos_latest, ainl_latest: ainl_latest, current: running_version, checked_at: ts}
+
+  out {update_available: false, armaraos_latest: armaraos_latest, ainl_latest: ainl_latest, checked_at: ts}

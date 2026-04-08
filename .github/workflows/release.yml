@@ -12,7 +12,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # Must match a version published on PyPI: https://pypi.org/project/ainativelang/
-  AINL_PYPI_VERSION: "1.4.0"
+  # To release 1.4.2: cd AI_Native_Lang && python -m build && twine upload dist/*
+  AINL_PYPI_VERSION: "1.4.2"
 
 jobs:
   # ── Tauri Desktop App (Windows + macOS + Linux) ───────────────────────────
@@ -102,33 +103,59 @@ jobs:
           cargo run -p xtask -- bundle-portable-python --target "${{ matrix.platform.rust_target }}"
 
       - name: Import macOS signing certificate
+        # Required secrets (add under repo Settings → Secrets → Actions):
+        #   MAC_CERT_BASE64       — base64-encoded Developer ID Application .p12 cert
+        #                           base64 -i cert.p12 | pbcopy
+        #   MAC_CERT_PASSWORD     — password set when exporting the .p12 from Keychain
+        #
+        # Without these, builds use ad-hoc signing (-) which is NOT notarizable and
+        # triggers the "unidentified developer" warning on macOS.
         if: runner.os == 'macOS'
         env:
           MAC_CERT_BASE64: ${{ secrets.MAC_CERT_BASE64 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
+          set -euo pipefail
           if [ -z "${MAC_CERT_BASE64:-}" ]; then
-            echo "MAC_CERT_BASE64 not set; using ad-hoc codesign identity (-)."
-            echo "APPLE_SIGNING_IDENTITY=-" >> $GITHUB_ENV
+            echo "::warning::MAC_CERT_BASE64 not set — using ad-hoc codesign identity (-)."
+            echo "::warning::This build will NOT be notarized. Users on macOS will see 'unidentified developer'."
+            echo "::warning::To fix: export a Developer ID Application cert as .p12, base64-encode it,"
+            echo "::warning::and add MAC_CERT_BASE64 + MAC_CERT_PASSWORD to GitHub repo secrets."
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "NOTARIZE_READY=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "$MAC_CERT_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          echo "$MAC_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import $RUNNER_TEMP/certificate.p12 -P "$MAC_CERT_PASSWORD" \
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MAC_CERT_PASSWORD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::Certificate imported but no 'Developer ID Application' identity found."
+            echo "::error::Ensure MAC_CERT_BASE64 is a Developer ID Application certificate, not Distribution."
+            exit 1
+          fi
           echo "Using signing identity: $IDENTITY"
-          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> $GITHUB_ENV
-          rm -f $RUNNER_TEMP/certificate.p12
+          echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "NOTARIZE_READY=true" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/certificate.p12"
 
-      - name: Configure macOS notarization (optional)
+      - name: Configure macOS notarization
+        # Required secrets (in addition to MAC_CERT_BASE64):
+        #   MAC_NOTARIZE_APPLE_ID  — Apple ID email (e.g. dev@example.com)
+        #   MAC_NOTARIZE_PASSWORD  — App-specific password (appleid.apple.com → Security)
+        #   MAC_NOTARIZE_TEAM_ID   — 10-char Team ID (developer.apple.com → Membership)
+        #
+        # All three must be set for notarization to run. Without notarization, macOS
+        # Gatekeeper quarantines the .dmg on first launch.
         if: runner.os == 'macOS'
         env:
           APPLE_ID_SECRET: ${{ secrets.MAC_NOTARIZE_APPLE_ID }}
@@ -136,13 +163,19 @@ jobs:
           APPLE_TEAM_ID_SECRET: ${{ secrets.MAC_NOTARIZE_TEAM_ID }}
         run: |
           set -euo pipefail
-          if [ -z "${APPLE_ID_SECRET:-}" ] || [ -z "${APPLE_PASSWORD_SECRET:-}" ] || [ -z "${APPLE_TEAM_ID_SECRET:-}" ]; then
-            echo "Notarization secrets missing; skipping notarization."
+          if [ "${NOTARIZE_READY:-false}" != "true" ]; then
+            echo "Skipping notarization: no Developer ID certificate."
             exit 0
           fi
-          echo "APPLE_ID=$APPLE_ID_SECRET" >> $GITHUB_ENV
-          echo "APPLE_PASSWORD=$APPLE_PASSWORD_SECRET" >> $GITHUB_ENV
-          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET" >> $GITHUB_ENV
+          if [ -z "${APPLE_ID_SECRET:-}" ] || [ -z "${APPLE_PASSWORD_SECRET:-}" ] || [ -z "${APPLE_TEAM_ID_SECRET:-}" ]; then
+            echo "::warning::Notarization secrets missing (MAC_NOTARIZE_APPLE_ID / MAC_NOTARIZE_PASSWORD / MAC_NOTARIZE_TEAM_ID)."
+            echo "::warning::Build will be signed but not notarized — Gatekeeper quarantine applies on first run."
+            exit 0
+          fi
+          echo "APPLE_ID=$APPLE_ID_SECRET" >> "$GITHUB_ENV"
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET" >> "$GITHUB_ENV"
+          echo "Notarization configured for ${APPLE_ID_SECRET}"
 
       - name: Build and bundle Tauri desktop app
         uses: tauri-apps/tauri-action@v0
@@ -168,7 +201,8 @@ jobs:
 
             **CLI (Linux/macOS)**:
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
+            curl -sSf https://armaraos.sh | sh
+            # or: curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
             ```
 
             **Docker**:
@@ -183,15 +217,45 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          # Prefer NSIS Setup.exe over WiX .msi when both exist (matches shipped assets).
+          updaterJsonPreferNsis: true
           projectPath: crates/openfang-desktop
           args: ${{ matrix.platform.args }}
+
+  # Post-process: tauri-action skips latest.json when it finds no .sig artifacts on the runner.
+  # This job downloads published bundles from the release, signs them with TAURI_SIGNING_PRIVATE_KEY,
+  # and uploads a combined latest.json so the website sync step can mirror installers.
+  publish-updater-latest-json:
+    name: Publish latest.json (signed)
+    needs: [desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Assemble latest.json from release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/ci/assemble-latest-json.sh
 
   # ── Mirror Tauri updater to public website (ainativelang.com) ───────────────
   # Rewrites latest.json URLs from GitHub release assets to /downloads/armaraos/
   # Requires secret: AINLATIVELANGWEB_DEPLOY_TOKEN (fine-grained PAT, contents:write on ainativelangweb).
   sync-desktop-updates-to-website:
     name: Publish updater to ainativelang.com
-    needs: [desktop]
+    needs: [desktop, publish-updater-latest-json]
     # Require a successful desktop matrix (all platforms). `always()` caused this job to run after a Linux failure and error on missing `latest.json`.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest

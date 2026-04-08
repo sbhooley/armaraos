@@ -218,6 +218,15 @@ pub async fn build_router(
             axum::routing::post(routes::stop_agent),
         )
         .route(
+            "/api/agents/{id}/btw",
+            axum::routing::post(routes::inject_btw),
+        )
+        .route(
+            "/api/slash-templates",
+            axum::routing::get(routes::get_slash_templates)
+                .put(routes::put_slash_templates),
+        )
+        .route(
             "/api/agents/{id}/model",
             axum::routing::put(routes::set_model),
         )
@@ -489,6 +498,10 @@ pub async fn build_router(
         .route(
             "/api/network/status",
             axum::routing::get(routes::network_status),
+        )
+        .route(
+            "/api/system/network-hints",
+            axum::routing::get(routes::system_network_hints),
         )
         // Agent communication (Comms) endpoints
         .route(

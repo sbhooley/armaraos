@@ -60,7 +60,7 @@ function skillsPage() {
       var r = (rt || '').toLowerCase();
       if (r === 'python' || r === 'py') return { text: 'PY', cls: 'runtime-badge-py' };
       if (r === 'node' || r === 'nodejs' || r === 'js' || r === 'javascript') return { text: 'JS', cls: 'runtime-badge-js' };
-      if (r === 'wasm' || r === 'webassembly') return { text: 'WASM', cls: 'runtime-badge-wasm' };
+      if (r === 'wasm' || r === 'webassembly') return { text: 'WASM · coming soon', cls: 'runtime-badge-wasm runtime-badge-unavailable' };
       if (r === 'prompt_only' || r === 'prompt' || r === 'promptonly') return { text: 'PROMPT', cls: 'runtime-badge-prompt' };
       return { text: r.toUpperCase().substring(0, 4), cls: 'runtime-badge-prompt' };
     },
@@ -285,7 +285,7 @@ function skillsPage() {
           OpenFangToast.success('Skill "' + name + '" uninstalled');
           await self.loadSkills();
         } catch(e) {
-          OpenFangToast.error('Failed to uninstall skill: ' + e.message);
+          OpenFangToast.error('Failed to uninstall skill: ' + openFangErrText(e));
         }
       });
     },
@@ -303,7 +303,7 @@ function skillsPage() {
         this.tab = 'installed';
         await this.loadSkills();
       } catch(e) {
-        OpenFangToast.error('Failed to create skill: ' + e.message);
+        OpenFangToast.error('Failed to create skill: ' + openFangErrText(e));
       }
     },
 

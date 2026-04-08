@@ -64,6 +64,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "browser_navigate"
             | "memory_recall"
             | "memory_store"
+            | "memory_list"
             | "agent_send"
             | "agent_list"
             | "agent_spawn"
@@ -74,6 +75,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "task_complete"
             | "task_list"
             | "event_publish"
+            | "channel_stream"
             | "schedule_create"
             | "schedule_list"
             | "schedule_delete"
@@ -200,6 +202,7 @@ mod tests {
             "task_complete",
             "task_list",
             "event_publish",
+            "channel_stream",
             "schedule_create",
             "schedule_list",
             "schedule_delete",

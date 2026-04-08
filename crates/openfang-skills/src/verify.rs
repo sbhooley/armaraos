@@ -82,8 +82,11 @@ impl SkillVerifier {
             }
             if tool_lower == "file_write" || tool_lower == "file_delete" {
                 warnings.push(SkillWarning {
-                    severity: WarningSeverity::Warning,
-                    message: format!("Skill requires filesystem write tool: {tool}"),
+                    severity: WarningSeverity::Critical,
+                    message: format!(
+                        "Skill requires destructive filesystem tool: {tool} — \
+                         third-party skills must not perform unguarded writes or deletes"
+                    ),
                 });
             }
         }
@@ -250,12 +253,16 @@ mod tests {
         .unwrap();
 
         let warnings = SkillVerifier::security_scan(&manifest);
-        // Should have: node runtime, shell_exec tool, file_write tool,
-        // ShellExec cap, NetConnect(*) cap
+        // Should have: node runtime, shell_exec tool (Critical), file_write tool (Critical),
+        // ShellExec cap (Critical), NetConnect(*) cap (Warning)
         assert!(warnings.len() >= 4);
         assert!(warnings
             .iter()
             .any(|w| w.severity == WarningSeverity::Critical));
+        // file_write must now be Critical, not Warning
+        assert!(warnings.iter().any(|w| {
+            w.severity == WarningSeverity::Critical && w.message.contains("file_write")
+        }));
     }
 
     #[test]

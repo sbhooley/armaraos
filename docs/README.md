@@ -21,6 +21,7 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 | [Architecture](architecture.md) | 12-crate structure, kernel boot, agent lifecycle, memory substrate |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
+| [Agent automation hardening](agent-automation-hardening.md) | Tool args, persist vs re-scrape, loop guard interaction, phases, workspace habits; skill-mint stub cron reference |
 | [Security](security.md) | 16 defense-in-depth security systems |
 
 ## Integrations
@@ -48,10 +49,11 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 | [Production Checklist](production-checklist.md) | Every step before tagging v0.1.0 -- signing keys, secrets, verification |
 | [Desktop release smoke](release-desktop.md) | Tauri build, updater, AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |
-| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download), Home folder preview vs download, chat unread + digest, kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility QA, **App Store** section title, **Settings / Runtime** layout smoke, **daemon lifecycle** + **GitHub-latest** QA, **Agents → Config** QA, Playwright notes |
+| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download; **`README.txt`** + **`diagnostics_snapshot.json`** triage), Home folder preview vs download, chat unread + digest, kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility + **end-to-end `#wizard` QA**, **App Store** section title, **Settings / Runtime** layout smoke (**Settings** at-a-glance config schema line), **daemon lifecycle** + **GitHub-latest** QA, **Agents → Config** QA, Playwright notes |
 | [Dashboard Home folder](dashboard-home-folder.md) | Home browser API + **dashboard UI** (row/modal Download, symlinks, large files when preview hits 512 KiB cap) |
 | [Dashboard Get started UI](dashboard-overview-ui.md) | `#overview` landing: layout, **Quick actions** (incl. **App Store**, **Daemon & runtime** → `#runtime`), **Comms** under **Monitor**, Setup Wizard gating (`openfang-onboarded`, `navigateOverview`), setup checklist, seven-tile skeleton, CSS and source map |
-| [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md) | `#settings` / `#runtime` plus shared **`dashboard-page-*`** shell on **Skills**, **Channels**, **Hands**, **Home folder**, **Analytics**; **`dashboard-toolbar-tabs`**, **Channels** filter card, **Analytics** stat grid; daemon **Reload** / **Shut down**, **`daemon_lifecycle.js`** — class map and files |
+| [Dashboard Setup Wizard](dashboard-setup-wizard.md) | `#wizard` first-run flow: provider test / Next rules, flat `manifest_toml` for `POST /api/agents`, valid `ToolProfile` values, static embed + rebuild note, links to overview and API |
+| [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md) | `#settings` / `#runtime` plus shared **`dashboard-page-*`** shell on **Skills**, **Channels**, **Hands**, **Home folder**, **Analytics**; **`dashboard-toolbar-tabs`**, **Channels** filter card, **Analytics** stat grid; **Settings** summary line (config schema, API, log, home); daemon **Reload** / **Shut down**, **`daemon_lifecycle.js`** — class map and files |
 | [Scheduled AINL](scheduled-ainl.md) | Cron `ainl run`, `~/.armaraos/.env`, `AINL_HOST_ADAPTER_ALLOWLIST`, `AINL_ALLOW_IR_DECLARED_ADAPTERS`, editing jobs |
 
 ## Additional Resources

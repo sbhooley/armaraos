@@ -144,7 +144,7 @@ function channelsPage() {
         await this.loadBindings();
         await this.refreshStatus();
       } catch(e) {
-        OpenFangToast.error(e.message || 'Failed to add binding');
+        OpenFangToast.error(openFangErrText(e));
       }
       this.bindingSaving = false;
     },
@@ -158,7 +158,7 @@ function channelsPage() {
           await self.loadBindings();
           await self.refreshStatus();
         } catch(e) {
-          OpenFangToast.error(e.message || 'Failed');
+          OpenFangToast.error(openFangErrText(e));
         }
       });
     },
@@ -302,12 +302,39 @@ function channelsPage() {
     async saveChannel() {
       if (!this.setupModal) return;
       var name = this.setupModal.name;
+
+      // Validate required fields before hitting the server
+      if (this.setupModal.fields) {
+        var missing = [];
+        this.setupModal.fields.forEach(function(f) {
+          if (!f.required) return;
+          // A field is satisfied if it already has a saved value OR the user has typed something
+          var hasSaved = f.has_value;
+          var hasTyped = (this.formValues[f.key] || '').trim().length > 0;
+          if (!hasSaved && !hasTyped) missing.push(f.label || f.key);
+        }.bind(this));
+        if (missing.length > 0) {
+          OpenFangToast.error('Required: ' + missing.join(', '));
+          return;
+        }
+      }
+
       this.configuring = true;
       try {
-        await OpenFangAPI.post('/api/channels/' + name + '/configure', {
+        var configResult = await OpenFangAPI.post('/api/channels/' + name + '/configure', {
           fields: this.formValues
         });
         this.setupStep = 2;
+
+        // If the server saved the config but could not activate the channel (e.g. bad token),
+        // surface the reason immediately rather than hiding it behind the test step.
+        if (configResult && configResult.activated === false && configResult.note) {
+          OpenFangToast.warn(this.setupModal.display_name + ' saved but not activated — ' + configResult.note);
+          await this.refreshStatus();
+          this.configuring = false;
+          return;
+        }
+
         // Auto-test after save
         try {
           var testResult = await OpenFangAPI.post('/api/channels/' + name + '/test', this.testMessagePayload());
@@ -316,14 +343,17 @@ function channelsPage() {
             this.setupStep = 3;
             OpenFangToast.success(this.setupModal.display_name + ' activated!');
           } else {
-            OpenFangToast.success(this.setupModal.display_name + ' saved. ' + (testResult.message || ''));
+            OpenFangToast.warn(this.setupModal.display_name + ' saved. ' + (testResult.message || 'Test to verify connection.'));
           }
         } catch(te) {
-          OpenFangToast.success(this.setupModal.display_name + ' saved. Test to verify connection.');
+          OpenFangToast.warn(this.setupModal.display_name + ' saved. Test to verify connection.');
         }
         await this.refreshStatus();
       } catch(e) {
-        OpenFangToast.error('Failed: ' + (e.message || 'Unknown error'));
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Failed: ' + msg + detail + hint);
       }
       this.configuring = false;
     },
@@ -340,7 +370,9 @@ function channelsPage() {
           await self.refreshStatus();
           self.setupModal = null;
         } catch(e) {
-          OpenFangToast.error('Failed: ' + (e.message || 'Unknown error'));
+          var msg = e.message || 'Unknown error';
+          var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+          OpenFangToast.error('Failed: ' + msg + detail);
         }
       });
     },
@@ -359,7 +391,10 @@ function channelsPage() {
           OpenFangToast.error(result.message);
         }
       } catch(e) {
-        OpenFangToast.error('Test failed: ' + (e.message || 'Unknown error'));
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Test failed: ' + msg + detail + hint);
       }
       this.testing[name] = false;
     },

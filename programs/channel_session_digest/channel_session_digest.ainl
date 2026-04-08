@@ -1,0 +1,17 @@
+# ArmaraOS Channel Session Digest
+# ===================================
+# Runs every 6 hours. Fetches agent session activity and outputs a snapshot.
+# Channel integrations can read the kernel session feed for these summaries.
+# Output is captured by the kernel into the owning agent's session feed
+# (inbox-style, no LLM turn triggered).
+#
+# Uses: http, core
+# Validate: ainl validate programs/channel_session_digest/channel_session_digest.ainl --strict
+
+channel_session_digest:
+  ts = core.NOW 0
+  agents = http.GET "http://127.0.0.1:4200/api/agents"
+
+  active_count = core.GET agents total
+
+  out {active_agents: active_count, generated_at: ts}

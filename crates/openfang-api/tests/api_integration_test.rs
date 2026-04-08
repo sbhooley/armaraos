@@ -95,6 +95,10 @@ async fn start_test_server_with_provider_patch(
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
+        .route(
+            "/api/system/network-hints",
+            axum::routing::get(routes::system_network_hints),
+        )
         .route("/api/status", axum::routing::get(routes::status))
         .route(
             "/api/version/github-latest",
@@ -225,6 +229,27 @@ memory_write = ["self.*"]
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_network_hints_endpoint() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/system/network-hints", server.base_url))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.get("likely_vpn").is_some());
+    assert!(body.get("confidence").is_some());
+    assert!(body["tunnel_interface_names"].is_array());
+    assert!(body["interface_names"].is_array());
+    assert!(body["proxy_env"].is_object());
+    assert!(body["notes"].is_array());
+}
 
 #[tokio::test]
 async fn test_health_endpoint() {
@@ -1036,6 +1061,10 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
+        .route(
+            "/api/system/network-hints",
+            axum::routing::get(routes::system_network_hints),
+        )
         .route("/api/status", axum::routing::get(routes::status))
         .route(
             "/api/agents",

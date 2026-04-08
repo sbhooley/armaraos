@@ -1140,6 +1140,8 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "home_dir": state.kernel.config.home_dir.display().to_string(),
         "log_level": state.kernel.config.log_level,
         "network_enabled": state.kernel.config.network_enabled,
+        "config_schema_version": state.kernel.config.config_schema_version,
+        "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
         "agents": agents,
     }))
 }
@@ -2002,6 +2004,7 @@ pub async fn get_agent(
             "mcp_servers": entry.manifest.mcp_servers,
             "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
             "fallback_models": entry.manifest.fallback_models,
+            "max_iterations": entry.manifest.autonomous.as_ref().map(|a| a.max_iterations),
             "scheduled_ainl_host_adapter": state.kernel.scheduled_ainl_host_adapter_info(agent_id),
             "turn_stats": {
                 "last_latency_ms": entry.turn_stats.last_latency_ms,
@@ -2520,9 +2523,9 @@ const CHANNEL_REGISTRY: &[ChannelMeta] = &[
     },
     ChannelMeta {
         name: "google_chat", display_name: "Google Chat", icon: "GC",
-        description: "Google Chat service account adapter",
-        category: "enterprise", difficulty: "Hard", setup_time: "~15 min",
-        quick_setup: "Enter path to your service account JSON key",
+        description: "Google Chat service account adapter (requires Google Workspace + service account JSON key with Chat API enabled)",
+        category: "enterprise", difficulty: "Hard", setup_time: "~20 min",
+        quick_setup: "Create a Google Cloud project, enable the Chat API, download a service account JSON key, then paste it below",
         setup_type: "form",
         fields: &[
             ChannelField { key: "service_account_env", label: "Service Account JSON", field_type: FieldType::Secret, env_var: Some("GOOGLE_CHAT_SERVICE_ACCOUNT"), required: true, placeholder: "/path/to/key.json", advanced: false },
@@ -2677,9 +2680,9 @@ const CHANNEL_REGISTRY: &[ChannelMeta] = &[
     },
     ChannelMeta {
         name: "xmpp", display_name: "XMPP/Jabber", icon: "XM",
-        description: "XMPP/Jabber protocol adapter",
-        category: "developer", difficulty: "Easy", setup_time: "~3 min",
-        quick_setup: "Enter your JID and password",
+        description: "XMPP/Jabber protocol adapter (coming soon — tokio-xmpp dependency not yet integrated; config is saved but connection will not start)",
+        category: "developer", difficulty: "Hard", setup_time: "~10 min",
+        quick_setup: "XMPP support is not yet active. Config is saved for when the integration ships.",
         setup_type: "form",
         fields: &[
             ChannelField { key: "jid", label: "JID", field_type: FieldType::Text, env_var: None, required: true, placeholder: "bot@jabber.org", advanced: false },
@@ -3335,8 +3338,20 @@ pub async fn configure_channel(
 
     // Hot-reload: activate the channel immediately
     match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => {
+        Ok((started, ch_errors)) => {
             let activated = started.iter().any(|s| s.eq_ignore_ascii_case(&name));
+            let note = if activated {
+                format!("{} activated successfully.", name)
+            } else {
+                // Surface the specific error from this channel's startup attempt
+                // (e.g. "Telegram getMe failed: Unauthorized — Check that the bot token is correct")
+                let ch_error = ch_errors
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&name))
+                    .map(|(_, e)| e.as_str())
+                    .unwrap_or("check credentials and restart if the issue persists");
+                format!("Channel configured but could not activate: {ch_error}")
+            };
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -3344,11 +3359,7 @@ pub async fn configure_channel(
                     "channel": name,
                     "activated": activated,
                     "started_channels": started,
-                    "note": if activated {
-                        format!("{} activated successfully.", name)
-                    } else {
-                        "Channel configured but could not start (check credentials).".to_string()
-                    }
+                    "note": note,
                 })),
             )
         }
@@ -3418,7 +3429,7 @@ pub async fn remove_channel(
 
     // Hot-reload: deactivate the channel immediately
     match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => (
+        Ok((started, _)) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "status": "removed",
@@ -3517,6 +3528,55 @@ pub async fn test_channel(
         }
     }
 
+    // No target given — for Telegram, go ahead and call getMe to validate the token.
+    // For other channels an env-var-exists check is the best we can do without a target.
+    if name == "telegram" {
+        let token = std::env::var("TELEGRAM_BOT_TOKEN").unwrap_or_default();
+        if token.is_empty() {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "message": "TELEGRAM_BOT_TOKEN is not set. Save your bot token first."
+                })),
+            );
+        }
+        let url = format!("https://api.telegram.org/bot{token}/getMe");
+        match reqwest::Client::new().get(&url).timeout(std::time::Duration::from_secs(10)).send().await {
+            Err(e) => {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "error",
+                        "message": format!("Could not reach Telegram API: {e}. Check your network or firewall.")
+                    })),
+                );
+            }
+            Ok(resp) => {
+                let json: serde_json::Value = resp.json().await.unwrap_or_default();
+                if json["ok"].as_bool() == Some(true) {
+                    let bot_username = json["result"]["username"].as_str().unwrap_or("unknown");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "ok",
+                            "message": format!("Bot token valid — connected as @{}. Enter your chat_id above to send a test message.", bot_username)
+                        })),
+                    );
+                } else {
+                    let desc = json["description"].as_str().unwrap_or("unknown error");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "status": "error",
+                            "message": format!("Telegram rejected the bot token: {desc}. Get a valid token from @BotFather.")
+                        })),
+                    );
+                }
+            }
+        }
+    }
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -3591,11 +3651,12 @@ async fn send_channel_test_message(channel_name: &str, target_id: &str) -> Resul
 /// POST /api/channels/reload — Manually trigger a channel hot-reload from disk config.
 pub async fn reload_channels(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match crate::channel_bridge::reload_channels_from_disk(&state).await {
-        Ok(started) => (
+        Ok((started, ch_errors)) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "status": "ok",
                 "started": started,
+                "errors": ch_errors.into_iter().map(|(n, e)| serde_json::json!({"channel": n, "error": e})).collect::<Vec<_>>(),
             })),
         ),
         Err(e) => (
@@ -4238,12 +4299,16 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
                     serde_json::json!({"type": "local"})
                 }
             };
+            let runtime_str = format!("{:?}", s.manifest.runtime.runtime_type);
+            let runtime_supported =
+                s.manifest.runtime.runtime_type != openfang_skills::SkillRuntime::Wasm;
             serde_json::json!({
                 "name": s.manifest.skill.name,
                 "description": s.manifest.skill.description,
                 "version": s.manifest.skill.version,
                 "author": s.manifest.skill.author,
-                "runtime": format!("{:?}", s.manifest.runtime.runtime_type),
+                "runtime": runtime_str,
+                "runtime_supported": runtime_supported,
                 "tools_count": s.manifest.tools.provided.len(),
                 "tags": s.manifest.skill.tags,
                 "enabled": s.enabled,
@@ -6468,6 +6533,11 @@ pub async fn network_status(State(state): State<Arc<AppState>>) -> impl IntoResp
     }))
 }
 
+/// GET /api/system/network-hints — VPN/proxy/tunnel hints from host network interfaces.
+pub async fn system_network_hints() -> impl IntoResponse {
+    Json(crate::network_hints::collect())
+}
+
 // ---------------------------------------------------------------------------
 // Tools endpoint
 // ---------------------------------------------------------------------------
@@ -7259,6 +7329,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
     Json(serde_json::json!({
         "home_dir": config.home_dir.to_string_lossy(),
         "data_dir": config.data_dir.to_string_lossy(),
+        "config_schema_version": config.config_schema_version,
         "api_key": if config.api_key.is_empty() { "not set" } else { "***" },
         "default_model": {
             "provider": config.default_model.provider,
@@ -9358,6 +9429,163 @@ pub async fn compact_session(
     }
 }
 
+// ── Slash Templates ──────────────────────────────────────────────────────────
+
+const SLASH_TEMPLATES_FILE: &str = "slash-templates.json";
+
+/// GET /api/slash-templates — Load saved slash templates from disk.
+///
+/// Returns `{"templates": [...]}` where each entry is `{"name":"...","text":"..."}`.
+/// Returns an empty array (not 404) when the file doesn't exist yet.
+pub async fn get_slash_templates(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let path = state.kernel.config.home_dir.join(SLASH_TEMPLATES_FILE);
+    let body = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (StatusCode::OK, Json(serde_json::json!({ "templates": [] }))).into_response();
+        }
+        Err(e) => {
+            tracing::warn!("Failed to read slash-templates.json: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => {
+            tracing::warn!("slash-templates.json is invalid JSON: {e}");
+            (StatusCode::OK, Json(serde_json::json!({ "templates": [] }))).into_response()
+        }
+    }
+}
+
+/// PUT /api/slash-templates — Persist the full template list to disk.
+///
+/// Body: `{"templates": [{"name":"...","text":"..."},...]}`.
+/// Writes atomically via a temp file to avoid corruption on crash.
+pub async fn put_slash_templates(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let path = state.kernel.config.home_dir.join(SLASH_TEMPLATES_FILE);
+
+    // Validate — must have a "templates" array
+    if !body.get("templates").map(|v| v.is_array()).unwrap_or(false) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "body must be {\"templates\":[...]}" })),
+        )
+            .into_response();
+    }
+
+    let json = match serde_json::to_string_pretty(&body) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    // Atomic write: write to .tmp then rename
+    let tmp_path = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &json) {
+        tracing::warn!("Failed to write slash-templates.json.tmp: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &path) {
+        tracing::warn!("Failed to rename slash-templates.json.tmp: {e}");
+        let _ = std::fs::remove_file(&tmp_path);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Request body for `POST /api/agents/{id}/btw`.
+#[derive(serde::Deserialize)]
+pub struct BtwRequest {
+    pub text: String,
+}
+
+/// POST /api/agents/{id}/btw — Inject context into a currently-running agent loop.
+///
+/// Works only while the agent is mid-run (streaming or blocking). Returns 409
+/// Conflict if the agent is not currently executing. The injected text is added
+/// as a `[btw] …` user message at the start of the next loop iteration.
+pub async fn inject_btw(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<BtwRequest>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/btw";
+
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
+            )
+            .into_response()
+        }
+    };
+
+    let text = req.text.trim().to_string();
+    if text.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Empty context",
+            "text must not be empty.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if state.kernel.inject_btw(agent_id, text) {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "injected" })),
+        )
+            .into_response()
+    } else {
+        api_json_error(
+            StatusCode::CONFLICT,
+            &rid,
+            PATH,
+            "Agent not running",
+            "No agent loop is currently active for this agent. Send a normal message first, then use /btw while it is running.".to_string(),
+            None,
+        )
+        .into_response()
+    }
+}
+
 /// POST /api/agents/{id}/stop — Cancel an agent's current LLM run.
 pub async fn stop_agent(
     State(state): State<Arc<AppState>>,
@@ -9912,12 +10140,15 @@ pub async fn set_provider_key(
                 name, model_id, env_var
             );
             backup_config(&config_path);
-            if let Ok(existing) = std::fs::read_to_string(&config_path) {
+            let new_content = if let Ok(existing) = std::fs::read_to_string(&config_path) {
                 let cleaned = remove_toml_section(&existing, "default_model");
-                let _ =
-                    std::fs::write(&config_path, format!("{}\n{}", cleaned.trim(), update_toml));
+                format!("{}\n{}", cleaned.trim(), update_toml)
             } else {
-                let _ = std::fs::write(&config_path, update_toml);
+                update_toml
+            };
+            let tmp = config_path.with_extension("toml.tmp");
+            if std::fs::write(&tmp, &new_content).is_ok() {
+                let _ = std::fs::rename(&tmp, &config_path);
             }
 
             // Hot-update the in-memory default model override so resolve_driver()
@@ -10119,6 +10350,7 @@ pub async fn test_provider(
         skip_permissions: true,
     };
 
+    let network_hints = crate::network_hints::collect();
     match openfang_runtime::drivers::create_driver(&driver_config) {
         Ok(driver) => {
             // Send a minimal completion request to test connectivity
@@ -10140,6 +10372,7 @@ pub async fn test_provider(
                             "status": "ok",
                             "provider": name,
                             "latency_ms": latency_ms,
+                            "network_hints": network_hints,
                         })),
                     )
                 }
@@ -10149,6 +10382,7 @@ pub async fn test_provider(
                         "status": "error",
                         "provider": name,
                         "error": format!("{e}"),
+                        "network_hints": network_hints,
                     })),
                 ),
             }
@@ -10159,6 +10393,7 @@ pub async fn test_provider(
                 "status": "error",
                 "provider": name,
                 "error": format!("Failed to create driver: {e}"),
+                "network_hints": network_hints,
             })),
         ),
     }
@@ -10284,7 +10519,9 @@ fn upsert_provider_url(
         std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    let tmp = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp, toml::to_string_pretty(&doc)?)?;
+    std::fs::rename(&tmp, config_path)?;
     Ok(())
 }
 
@@ -10373,7 +10610,10 @@ pub async fn create_skill(
     );
 
     let toml_path = skill_dir.join("skill.toml");
-    if let Err(e) = std::fs::write(&toml_path, &toml_content) {
+    let toml_tmp = skill_dir.join("skill.toml.tmp");
+    if let Err(e) = std::fs::write(&toml_tmp, &toml_content)
+        .and_then(|_| std::fs::rename(&toml_tmp, &toml_path))
+    {
         return api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &rid,
@@ -10398,6 +10638,11 @@ pub async fn create_skill(
 
 /// Write or update a key in the secrets.env file.
 /// File format: one `KEY=value` per line. Existing keys are overwritten.
+///
+/// Uses a write-to-tempfile-then-rename pattern for atomic, Windows-safe updates.
+/// On Windows, `std::fs::write` can fail with "Access denied" if any other process
+/// (antivirus, the daemon itself during a hot-reload) has the file open. Writing to
+/// a sibling temp file and renaming avoids the lock window.
 fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
     // Avoid corrupting the KEY=value line format if the user accidentally pasted
     // with trailing newlines/spaces (common on Windows).
@@ -10405,7 +10650,7 @@ fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<()
     if value.contains('\n') || value.contains('\r') {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "secret value contains newline characters",
+            "secret value contains newline characters — paste the token without surrounding text or line breaks",
         ));
     }
     let mut lines: Vec<String> = if path.exists() {
@@ -10424,18 +10669,25 @@ fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<()
     lines.push(format!("{key}={value}"));
 
     // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "secrets.env has no parent directory")
+    })?;
+    std::fs::create_dir_all(parent)?;
 
-    std::fs::write(path, lines.join("\n") + "\n")?;
+    // Write to a sibling temp file first, then rename for an atomic update.
+    // This prevents partial-write corruption and avoids Windows file-lock errors.
+    let tmp_path = path.with_extension("env.tmp");
+    std::fs::write(&tmp_path, lines.join("\n") + "\n")?;
 
-    // SECURITY: Restrict file permissions on Unix
+    // SECURITY: Restrict file permissions on Unix before the rename so the
+    // final file never has world-readable permissions even briefly.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
     }
+
+    std::fs::rename(&tmp_path, path)?;
 
     Ok(())
 }
@@ -10452,7 +10704,9 @@ fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::E
         .map(|l| l.to_string())
         .collect();
 
-    std::fs::write(path, lines.join("\n") + "\n")?;
+    let tmp_path = path.with_extension("env.tmp");
+    std::fs::write(&tmp_path, lines.join("\n") + "\n")?;
+    std::fs::rename(&tmp_path, path)?;
 
     Ok(())
 }
@@ -10527,7 +10781,13 @@ fn upsert_channel_config(
         std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    // Write to a sibling temp file first, then rename for an atomic update.
+    // This prevents partial-write corruption and avoids Windows file-lock errors
+    // when the daemon or another process has config.toml open.
+    let toml_str = toml::to_string_pretty(&doc)?;
+    let tmp_path = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &toml_str)?;
+    std::fs::rename(&tmp_path, config_path)?;
     Ok(())
 }
 
@@ -10555,7 +10815,9 @@ fn remove_channel_config(
         channels.remove(channel_name);
     }
 
-    std::fs::write(config_path, toml::to_string_pretty(&doc)?)?;
+    let tmp_path = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, toml::to_string_pretty(&doc)?)?;
+    std::fs::rename(&tmp_path, config_path)?;
     Ok(())
 }
 
@@ -11299,12 +11561,14 @@ pub async fn run_schedule(
 /// POST /api/support/diagnostics — Generate a redacted diagnostics bundle.
 ///
 /// Produces a `.zip` under `~/.armaraos/support/` containing:
+/// - `README.txt` — what each file is for (start here if unsure)
+/// - `diagnostics_snapshot.json` — structured support snapshot (config schema, paths, runtime, SQLite user_version)
+/// - `meta.json` — compact metadata (overlaps snapshot; kept for compatibility)
 /// - `config.toml` (as-is)
 /// - `secrets.env` (redacted values)
 /// - `audit.json` (recent audit trail entries)
 /// - the SQLite DB (openfang.db + -wal/-shm when present)
 /// - recent logs (best-effort)
-/// - basic version/build metadata
 pub async fn create_diagnostics_bundle(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
@@ -11329,6 +11593,8 @@ pub async fn create_diagnostics_bundle(
     let tmp_redacted = support_dir.join(format!("secrets.redacted-{ts}.env"));
     let tmp_meta = support_dir.join(format!("meta-{ts}.json"));
     let tmp_audit = support_dir.join(format!("audit-{ts}.json"));
+    let tmp_snapshot = support_dir.join(format!("diagnostics-snapshot-{ts}.json"));
+    let tmp_readme = support_dir.join(format!("README-support-{ts}.txt"));
 
     // 1) Create redacted secrets.env copy
     let secrets_path = home.join("secrets.env");
@@ -11386,9 +11652,96 @@ pub async fn create_diagnostics_bundle(
         .clone()
         .unwrap_or_else(|| data_dir.join("openfang.db"));
     let logs_dir = home.join("logs");
+    let agent_count = state.kernel.registry.list().len();
+    let uptime_secs = state.started_at.elapsed().as_secs();
+    let sqlite_user_ver = openfang_memory::migration::read_sqlite_user_version(&db_path);
+    let expected_mem = openfang_memory::migration::memory_substrate_schema_expected();
+    let cfg = &state.kernel.config;
+    let ts_rfc = chrono::Utc::now().to_rfc3339();
+
+    let snapshot = serde_json::json!({
+        "generated_at": ts_rfc,
+        "daemon": {
+            "package_version": env!("CARGO_PKG_VERSION"),
+            "config_schema_version_effective": cfg.config_schema_version,
+            "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
+            "uptime_seconds": uptime_secs,
+            "agent_count": agent_count,
+        },
+        "paths": {
+            "home_dir": home.display().to_string(),
+            "data_dir": data_dir.display().to_string(),
+            "db_path": db_path.display().to_string(),
+            "logs_dir": logs_dir.display().to_string(),
+            "config_path": config_path.display().to_string(),
+        },
+        "runtime": {
+            "api_listen": cfg.api_listen,
+            "log_level": cfg.log_level,
+            "network_enabled": cfg.network_enabled,
+            "default_provider": cfg.default_model.provider,
+            "default_model": cfg.default_model.model,
+        },
+        "memory_sqlite": {
+            "user_version": sqlite_user_ver,
+            "expected_schema_version": expected_mem,
+            "user_version_matches_expected": sqlite_user_ver.map(|u| u == expected_mem),
+        },
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+        },
+        "env": {
+            "ARMARAOS_HOME_set": std::env::var_os("ARMARAOS_HOME").is_some(),
+            "OPENFANG_HOME_set": std::env::var_os("OPENFANG_HOME").is_some(),
+        },
+    });
+    if let Err(e) = std::fs::write(
+        &tmp_snapshot,
+        serde_json::to_vec_pretty(&snapshot).unwrap_or_default(),
+    ) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to write diagnostics snapshot",
+            format!("{e}"),
+            None,
+        );
+    }
+
+    let readme_text = format!(
+        "ArmaraOS diagnostics bundle\n\
+---------------------------\n\
+Generated (UTC): {ts_rfc}\n\
+\n\
+Start with diagnostics_snapshot.json for a structured overview (config schema, paths, runtime, memory DB version).\n\
+\n\
+Files:\n\
+- diagnostics_snapshot.json — Full support snapshot (recommended first read)\n\
+- meta.json — Compact metadata (legacy fields; overlap with snapshot)\n\
+- README.txt — This file\n\
+- config.toml — On-disk configuration (as-is)\n\
+- secrets.env — Redacted (values replaced; keys preserved)\n\
+- audit.json — Recent audit trail export\n\
+- data/openfang.db* — SQLite memory substrate (+ WAL/SHM if present)\n\
+- home/logs/... — Recent log files from the home folder\n\
+"
+    );
+    if let Err(e) = std::fs::write(&tmp_readme, readme_text) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to write README",
+            format!("{e}"),
+            None,
+        );
+    }
+
     let meta = serde_json::json!({
         "app": "ArmaraOS",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "timestamp": ts_rfc,
         "version": env!("CARGO_PKG_VERSION"),
         "home_dir": home.display().to_string(),
         "data_dir": data_dir.display().to_string(),
@@ -11396,6 +11749,17 @@ pub async fn create_diagnostics_bundle(
         "logs_dir": logs_dir.display().to_string(),
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
+        "config_schema_version": cfg.config_schema_version,
+        "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
+        "uptime_seconds": uptime_secs,
+        "agent_count": agent_count,
+        "api_listen": cfg.api_listen,
+        "log_level": cfg.log_level,
+        "network_enabled": cfg.network_enabled,
+        "default_provider": cfg.default_model.provider,
+        "default_model": cfg.default_model.model,
+        "memory_sqlite_user_version": sqlite_user_ver,
+        "memory_substrate_schema_expected": expected_mem,
     });
     if let Err(e) = std::fs::write(
         &tmp_meta,
@@ -11466,6 +11830,28 @@ pub async fn create_diagnostics_bundle(
         Ok(())
     };
 
+    if let Err(e) = add_path(&tmp_readme, "README.txt") {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Diagnostics bundle failed",
+            e,
+            Some("Could not add README.txt to the archive."),
+        );
+    }
+    if let Err(e) = add_path(&tmp_snapshot, "diagnostics_snapshot.json") {
+        let _ = std::fs::remove_file(&out_path);
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Diagnostics bundle failed",
+            e,
+            Some("Could not add diagnostics_snapshot.json to the archive."),
+        );
+    }
     if let Err(e) = add_path(&config_path, "config.toml") {
         let _ = std::fs::remove_file(&out_path);
         return api_json_error(
@@ -11566,6 +11952,8 @@ pub async fn create_diagnostics_bundle(
 
     // Cleanup temp files (best-effort)
     let _ = std::fs::remove_file(&tmp_redacted);
+    let _ = std::fs::remove_file(&tmp_readme);
+    let _ = std::fs::remove_file(&tmp_snapshot);
     let _ = std::fs::remove_file(&tmp_meta);
     let _ = std::fs::remove_file(&tmp_audit);
 
@@ -11837,6 +12225,8 @@ pub struct PatchAgentConfigRequest {
     pub api_key_env: Option<String>,
     pub base_url: Option<String>,
     pub fallback_models: Option<Vec<openfang_types::agent::FallbackModel>>,
+    /// Override the agent's autonomous loop step limit (maps to [autonomous] max_iterations).
+    pub max_iterations: Option<u32>,
 }
 
 /// PATCH /api/agents/{id}/config — Hot-update agent name, description, system prompt, and identity.
@@ -12109,10 +12499,50 @@ pub async fn patch_agent_config(
         }
     }
 
-    // Persist updated manifest to database so changes survive restart
+    // Update autonomous loop step limit
+    if let Some(max_iter) = req.max_iterations {
+        if max_iter == 0 || max_iter > 10_000 {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid max_iterations",
+                "max_iterations must be between 1 and 10000.".to_string(),
+                None,
+            );
+        }
+        if state
+            .kernel
+            .registry
+            .update_max_iterations(agent_id, max_iter)
+            .is_err()
+        {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
+            );
+        }
+    }
+
+    // Persist updated manifest to database so changes survive restart,
+    // and also write user-editable fields back to the on-disk agent.toml
+    // so the kernel's disk-vs-DB comparison never clobbers them on reload.
     if let Some(entry) = state.kernel.registry.get(agent_id) {
         if let Err(e) = state.kernel.memory.save_agent(&entry) {
             tracing::warn!("Failed to persist agent config update: {e}");
+        }
+
+        // Write user-editable fields back to agent.toml so disk stays in sync.
+        let agent_toml_path = openfang_kernel::config::openfang_home()
+            .join("agents")
+            .join(&entry.name)
+            .join("agent.toml");
+        if agent_toml_path.exists() {
+            patch_agent_toml_on_disk(&agent_toml_path, &entry);
         }
     }
 
@@ -12120,6 +12550,74 @@ pub async fn patch_agent_config(
         StatusCode::OK,
         Json(serde_json::json!({"status": "ok", "agent_id": id})),
     )
+}
+
+/// Read the existing agent.toml, update user-editable fields in-place, and write it back.
+///
+/// Only touches system_prompt and identity (emoji, vibe, archetype, color, avatar_url,
+/// greeting_style). All other fields (capabilities, tools, exec_policy, mcp_servers, etc.)
+/// are left exactly as they are on disk so that upgrade-driven structural changes continue
+/// to propagate normally via the kernel's disk-vs-DB comparison.
+fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agent::AgentEntry) {
+    use toml::Value;
+
+    let Ok(raw) = std::fs::read_to_string(path) else { return };
+    let Ok(mut doc) = raw.parse::<Value>() else { return };
+
+    let Some(root) = doc.as_table_mut() else { return };
+
+    // Update [model].system_prompt
+    if let Some(Value::Table(model)) = root.get_mut("model") {
+        model.insert(
+            "system_prompt".to_string(),
+            Value::String(entry.manifest.model.system_prompt.clone()),
+        );
+    }
+
+    // Update [identity] — create the table if it doesn't exist yet
+    {
+        let id = &entry.identity;
+        let identity_tbl = root
+            .entry("identity".to_string())
+            .or_insert_with(|| Value::Table(toml::map::Map::new()));
+        if let Some(Value::Table(tbl)) = Some(identity_tbl) {
+            set_toml_opt_value(tbl, "emoji", id.emoji.as_deref());
+            set_toml_opt_value(tbl, "vibe", id.vibe.as_deref());
+            set_toml_opt_value(tbl, "archetype", id.archetype.as_deref());
+            set_toml_opt_value(tbl, "color", id.color.as_deref());
+            set_toml_opt_value(tbl, "avatar_url", id.avatar_url.as_deref());
+            set_toml_opt_value(tbl, "greeting_style", id.greeting_style.as_deref());
+        }
+    }
+
+    // Update [autonomous].max_iterations if present in the manifest
+    if let Some(autonomous) = &entry.manifest.autonomous {
+        let autonomous_tbl = root
+            .entry("autonomous".to_string())
+            .or_insert_with(|| Value::Table(toml::map::Map::new()));
+        if let Some(Value::Table(tbl)) = Some(autonomous_tbl) {
+            tbl.insert(
+                "max_iterations".to_string(),
+                Value::Integer(autonomous.max_iterations as i64),
+            );
+        }
+    }
+
+    let Ok(updated) = toml::to_string_pretty(&doc) else { return };
+    if updated != raw {
+        if let Err(e) = std::fs::write(path, &updated) {
+            tracing::warn!(path = %path.display(), "Failed to write agent.toml after config patch: {e}");
+        } else {
+            tracing::debug!(path = %path.display(), "Wrote user edits back to agent.toml");
+        }
+    }
+}
+
+fn set_toml_opt_value(tbl: &mut toml::map::Map<String, toml::Value>, key: &str, val: Option<&str>) {
+    match val {
+        Some(v) if !v.is_empty() => { tbl.insert(key.to_string(), toml::Value::String(v.to_string())); }
+        _ => { tbl.remove(key); }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -14382,7 +14880,7 @@ pub async fn add_binding(
         Json(serde_json::json!({
             "status": "created",
             "channels_reloaded": reload.is_ok(),
-            "channels_started": reload.as_ref().unwrap_or(&Vec::new()).clone(),
+            "channels_started": reload.as_ref().map(|(names, _)| names).unwrap_or(&Vec::new()).clone(),
             "reload_error": reload.err(),
         })),
     )
@@ -14404,7 +14902,7 @@ pub async fn remove_binding(
                 Json(serde_json::json!({
                     "status": "removed",
                     "channels_reloaded": reload.is_ok(),
-                    "channels_started": reload.as_ref().unwrap_or(&Vec::new()).clone(),
+                    "channels_started": reload.as_ref().map(|(names, _)| names).unwrap_or(&Vec::new()).clone(),
                     "reload_error": reload.err(),
                 })),
             )

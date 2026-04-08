@@ -174,7 +174,7 @@ function commsPage() {
         OpenFangToast.success('Message sent');
         this.showSendModal = false;
       } catch(e) {
-        OpenFangToast.error(e.message || 'Send failed');
+        OpenFangToast.error(openFangErrText(e) || 'Send failed');
       }
       this.sendLoading = false;
     },
@@ -196,7 +196,7 @@ function commsPage() {
         OpenFangToast.success('Task posted');
         this.showTaskModal = false;
       } catch(e) {
-        OpenFangToast.error(e.message || 'Task failed');
+        OpenFangToast.error(openFangErrText(e) || 'Task failed');
       }
       this.taskLoading = false;
     }

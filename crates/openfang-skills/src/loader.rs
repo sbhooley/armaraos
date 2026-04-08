@@ -4,7 +4,93 @@ use crate::{SkillError, SkillManifest, SkillRuntime, SkillToolResult};
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
+
+// ---------------------------------------------------------------------------
+// Subprocess sandbox constants — mirrors openfang-runtime::subprocess_sandbox
+// without introducing a crate dependency.
+// ---------------------------------------------------------------------------
+
+/// Maximum execution time for any skill subprocess.
+const SKILL_EXEC_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum output bytes collected from a skill subprocess (1 MiB).
+const SKILL_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// Environment variables considered safe to pass into skill subprocesses.
+const SKILL_SAFE_ENV_VARS: &[&str] = &[
+    "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
+];
+
+/// Windows-specific safe variables for skill subprocesses.
+#[cfg(windows)]
+const SKILL_SAFE_ENV_VARS_WINDOWS: &[&str] = &[
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "COMSPEC",
+    "WINDIR",
+    "PATHEXT",
+];
+
+/// Apply the skill subprocess sandbox to a `tokio::process::Command`.
+///
+/// Clears the entire inherited environment and re-adds only the vetted
+/// platform-independent safe variables plus any caller-specified extras.
+/// This prevents API keys, tokens, and credentials from leaking into
+/// third-party skill code.
+fn sandbox_skill_command(cmd: &mut tokio::process::Command, extra_vars: &[(&str, &str)]) {
+    cmd.env_clear();
+
+    for var in SKILL_SAFE_ENV_VARS {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+
+    #[cfg(windows)]
+    for var in SKILL_SAFE_ENV_VARS_WINDOWS {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+
+    for (k, v) in extra_vars {
+        cmd.env(k, v);
+    }
+}
+
+/// Collect output from a child process up to `SKILL_MAX_OUTPUT_BYTES`, with
+/// an absolute execution timeout of `SKILL_EXEC_TIMEOUT_SECS`.
+///
+/// On timeout the child process is force-killed before returning an error.
+async fn collect_output_with_timeout(
+    child: tokio::process::Child,
+) -> Result<std::process::Output, SkillError> {
+    let timeout = std::time::Duration::from_secs(SKILL_EXEC_TIMEOUT_SECS);
+
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) => {
+            // Cap stdout to prevent runaway skill output from exhausting heap.
+            if output.stdout.len() > SKILL_MAX_OUTPUT_BYTES {
+                warn!(
+                    bytes = output.stdout.len(),
+                    limit = SKILL_MAX_OUTPUT_BYTES,
+                    "Skill stdout exceeded output cap — truncating"
+                );
+                let mut truncated = output;
+                truncated.stdout.truncate(SKILL_MAX_OUTPUT_BYTES);
+                return Ok(truncated);
+            }
+            Ok(output)
+        }
+        Ok(Err(e)) => Err(SkillError::ExecutionFailed(format!("Wait error: {e}"))),
+        Err(_elapsed) => Err(SkillError::ExecutionFailed(format!(
+            "Skill execution timed out after {SKILL_EXEC_TIMEOUT_SECS}s"
+        ))),
+    }
+}
 
 /// Execute a skill tool by spawning the appropriate runtime.
 pub async fn execute_skill_tool(
@@ -90,28 +176,10 @@ async fn execute_python(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SECURITY: Isolate environment to prevent secret leakage.
-    // Skills are third-party code — they must not inherit API keys,
-    // tokens, or credentials from the host environment.
-    cmd.env_clear();
-    // Preserve PATH for binary resolution and platform essentials
-    if let Ok(path) = std::env::var("PATH") {
-        cmd.env("PATH", path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home);
-    }
-    #[cfg(windows)]
-    {
-        if let Ok(sp) = std::env::var("SYSTEMROOT") {
-            cmd.env("SYSTEMROOT", sp);
-        }
-        if let Ok(tmp) = std::env::var("TEMP") {
-            cmd.env("TEMP", tmp);
-        }
-    }
-    // Python needs PYTHONIOENCODING for UTF-8 output
-    cmd.env("PYTHONIOENCODING", "utf-8");
+    // SECURITY: Apply full subprocess sandbox — clears entire environment and
+    // re-adds only the vetted safe variable list. Python also needs
+    // PYTHONIOENCODING for correct UTF-8 output.
+    sandbox_skill_command(&mut cmd, &[("PYTHONIOENCODING", "utf-8")]);
 
     let mut child = cmd
         .spawn()
@@ -128,10 +196,7 @@ async fn execute_python(
         drop(stdin);
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| SkillError::ExecutionFailed(format!("Wait for Python: {e}")))?;
+    let output = collect_output_with_timeout(child).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -195,25 +260,9 @@ async fn execute_node(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SECURITY: Isolate environment (same as Python — prevent secret leakage)
-    cmd.env_clear();
-    if let Ok(path) = std::env::var("PATH") {
-        cmd.env("PATH", path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home);
-    }
-    #[cfg(windows)]
-    {
-        if let Ok(sp) = std::env::var("SYSTEMROOT") {
-            cmd.env("SYSTEMROOT", sp);
-        }
-        if let Ok(tmp) = std::env::var("TEMP") {
-            cmd.env("TEMP", tmp);
-        }
-    }
-    // Node needs NODE_PATH sometimes
-    cmd.env("NODE_NO_WARNINGS", "1");
+    // SECURITY: Apply full subprocess sandbox. NODE_NO_WARNINGS suppresses
+    // Node.js version deprecation noise on stdout.
+    sandbox_skill_command(&mut cmd, &[("NODE_NO_WARNINGS", "1")]);
 
     let mut child = cmd
         .spawn()
@@ -229,10 +278,7 @@ async fn execute_node(
         drop(stdin);
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| SkillError::ExecutionFailed(format!("Wait for Node.js: {e}")))?;
+    let output = collect_output_with_timeout(child).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -340,24 +386,9 @@ async fn execute_shell(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SECURITY: Isolate environment to prevent secret leakage.
-    // Same as Python/Node — skills are third-party code.
-    cmd.env_clear();
-    if let Ok(path) = std::env::var("PATH") {
-        cmd.env("PATH", path);
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.env("HOME", home);
-    }
-    #[cfg(windows)]
-    {
-        if let Ok(sp) = std::env::var("SYSTEMROOT") {
-            cmd.env("SYSTEMROOT", sp);
-        }
-        if let Ok(tmp) = std::env::var("TEMP") {
-            cmd.env("TEMP", tmp);
-        }
-    }
+    // SECURITY: Apply full subprocess sandbox — shell skills are the highest-
+    // risk runtime type. No extra vars beyond the safe baseline.
+    sandbox_skill_command(&mut cmd, &[]);
 
     let mut child = cmd
         .spawn()
@@ -374,10 +405,7 @@ async fn execute_shell(
         drop(stdin);
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| SkillError::ExecutionFailed(format!("Wait for shell: {e}")))?;
+    let output = collect_output_with_timeout(child).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

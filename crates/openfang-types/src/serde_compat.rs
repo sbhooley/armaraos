@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(policy.mode, crate::config::ExecSecurityMode::Full);
         // Should have default safe_bins, timeout, etc.
         assert!(!policy.safe_bins.is_empty());
-        assert_eq!(policy.timeout_secs, 30);
+        assert_eq!(policy.timeout_secs, 60); // default raised to 60s for agent OS use
     }
 
     #[test]

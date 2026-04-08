@@ -1,6 +1,15 @@
 // ArmaraOS Chat Page — Agent chat with markdown + streaming
 'use strict';
 
+/**
+ * Module-level per-agent message cache.
+ * Lives outside the Alpine component so it survives x-if destroy/recreate
+ * cycles (page navigation) and agent switches. Keyed by agent UUID.
+ * Values are shallow-cloned message arrays — deep objects (tools, images)
+ * are shared references since they are not mutated after finalization.
+ */
+var _agentMsgCache = {};
+
 function chatPage() {
   var msgId = 0;
   return {
@@ -11,6 +20,12 @@ function chatPage() {
     messageQueue: [],    // Queue for messages sent while streaming
     thinkingMode: 'off', // 'off' | 'on' | 'stream'
     _wsAgent: null,
+    _wsReconnectTimer: null,
+    _wsInFlightMsg: null,     // { text, files, images } — message in flight when WS dropped
+    _elapsedTimer: null,
+    elapsedSeconds: 0,        // live counter shown while agent is working
+    currentIteration: 0,      // tracks multi-step iteration number for display
+    sessionCostUsd: 0,        // cumulative cost for this chat session (USD)
     showSlashMenu: false,
     slashFilter: '',
     slashIdx: 0,
@@ -67,9 +82,20 @@ function chatPage() {
       { cmd: '/budget', desc: 'Show spending limits and current costs' },
       { cmd: '/peers', desc: 'Show OFP peer network status' },
       { cmd: '/a2a', desc: 'List discovered external A2A agents' },
-      { cmd: '/bookmarks', desc: 'Open saved Bookmarks' }
+      { cmd: '/bookmarks', desc: 'Open saved Bookmarks' },
+      { cmd: '/btw', desc: 'Inject context into the running agent loop (/btw <text>)' },
+      { cmd: '/t', desc: 'Expand a saved template (/t <name> | /t save <name> | /t list | /t delete <name>)' }
     ],
     tokenCount: 0,
+
+    /** Chat input history (per-agent, persisted to localStorage). Up/Down arrows to cycle. */
+    _msgHistory: [],
+    _msgHistoryIdx: -1,
+    _msgHistoryBuffer: '',
+
+    /** From GET /api/system/network-hints (VPN/tunnel awareness). */
+    networkHints: null,
+    networkHintsBannerDismissed: false,
 
     // ── Tip Bar ──
     tipIndex: 0,
@@ -88,6 +114,59 @@ function chatPage() {
       }, 30000);
     },
 
+    /** ArrowUp in textarea: navigate model picker, slash menu, or input history. */
+    handleInputArrowUp(e) {
+      if (this.showModelPicker) {
+        e.preventDefault();
+        this.modelPickerIdx = Math.max(0, this.modelPickerIdx - 1);
+        return;
+      }
+      if (this.showSlashMenu) {
+        e.preventDefault();
+        this.slashIdx = Math.max(0, this.slashIdx - 1);
+        return;
+      }
+      // History: navigate back when cursor is at the very start of the input
+      var ta = e.target;
+      if (ta && ta.selectionStart === 0 && this._msgHistory.length > 0) {
+        if (this._msgHistoryIdx === -1) this._msgHistoryBuffer = this.inputText;
+        this._msgHistoryIdx = Math.min(this._msgHistoryIdx + 1, this._msgHistory.length - 1);
+        this.inputText = this._msgHistory[this._msgHistoryIdx] || '';
+        e.preventDefault();
+        var self = this;
+        this.$nextTick(function() {
+          var el = document.getElementById('msg-input');
+          if (el) el.selectionStart = el.selectionEnd = el.value.length;
+        });
+      }
+    },
+
+    /** ArrowDown in textarea: navigate model picker, slash menu, or input history. */
+    handleInputArrowDown(e) {
+      if (this.showModelPicker) {
+        e.preventDefault();
+        this.modelPickerIdx = Math.min(this.filteredModelPicker.length - 1, this.modelPickerIdx + 1);
+        return;
+      }
+      if (this.showSlashMenu) {
+        e.preventDefault();
+        this.slashIdx = Math.min(this.filteredSlashCommands.length - 1, this.slashIdx + 1);
+        return;
+      }
+      // History: navigate forward when in history mode
+      if (this._msgHistoryIdx >= 0) {
+        e.preventDefault();
+        if (this._msgHistoryIdx > 0) {
+          this._msgHistoryIdx--;
+          this.inputText = this._msgHistory[this._msgHistoryIdx] || '';
+        } else {
+          this._msgHistoryIdx = -1;
+          this.inputText = this._msgHistoryBuffer || '';
+          this._msgHistoryBuffer = '';
+        }
+      }
+    },
+
     // Backward compat helper
     get thinkingEnabled() { return this.thinkingMode !== 'off'; },
 
@@ -99,6 +178,24 @@ function chatPage() {
         case 'medium': return '#eab308';
         default: return '#22c55e';
       }
+    },
+
+    get showChatNetworkBanner() {
+      if (this.networkHintsBannerDismissed || !this.currentAgent) return false;
+      var h = this.networkHints;
+      return !!(h && h.likely_vpn);
+    },
+
+    dismissChatNetworkBanner() {
+      this.networkHintsBannerDismissed = true;
+    },
+
+    async refreshChatNetworkHints() {
+      try {
+        if (typeof OpenFangAPI !== 'undefined' && OpenFangAPI.getNetworkHints) {
+          this.networkHints = await OpenFangAPI.getNetworkHints();
+        }
+      } catch (e) { /* ignore */ }
     },
 
     get modelDisplayName() {
@@ -183,6 +280,13 @@ function chatPage() {
         if (agent) {
           self.loadSession(agent.id);
           self.loadSessions(agent.id);
+          // Load per-agent input history
+          try {
+            var raw = localStorage.getItem('armaraos-chat-history-' + agent.id);
+            self._msgHistory = raw ? JSON.parse(raw) : [];
+          } catch (eH) { self._msgHistory = []; }
+          self._msgHistoryIdx = -1;
+          self._msgHistoryBuffer = '';
         }
       });
 
@@ -271,7 +375,10 @@ function chatPage() {
           if (el) el.focus();
         });
       }).catch(function(e) {
-        OpenFangToast.error('Failed to load models: ' + e.message);
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Failed to load models: ' + msg + detail + hint);
       });
     },
 
@@ -288,7 +395,10 @@ function chatPage() {
         self.showModelSwitcher = false;
         self.modelSwitching = false;
       }).catch(function(e) {
-        OpenFangToast.error('Switch failed: ' + e.message);
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Switch failed: ' + msg + detail + hint);
         self.modelSwitching = false;
       });
     },
@@ -319,14 +429,38 @@ function chatPage() {
       });
     },
 
+    _startElapsed: function() {
+      var self = this;
+      this.elapsedSeconds = 0;
+      this.currentIteration = 0;
+      if (this._elapsedTimer) clearInterval(this._elapsedTimer);
+      this._elapsedTimer = setInterval(function() { self.elapsedSeconds++; }, 1000);
+    },
+
+    _stopElapsed: function() {
+      if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+      this.elapsedSeconds = 0;
+      this.currentIteration = 0;
+    },
+
+    get elapsedDisplay() {
+      var s = this.elapsedSeconds;
+      if (s < 60) return s + 's';
+      var m = Math.floor(s / 60);
+      return m + 'm ' + (s % 60) + 's';
+    },
+
     // Clear any stuck typing indicator after 120s
     _resetTypingTimeout: function() {
       var self = this;
       if (self._typingTimeout) clearTimeout(self._typingTimeout);
       self._typingTimeout = setTimeout(function() {
         // Auto-clear stuck typing indicators
-        self.messages = self.messages.filter(function(m) { return !m.thinking; });
+        self._stopElapsed();
+        self.messages = self.messages.filter(function(m) { return !m.thinking && !m.streaming; });
+        self.messages.push({ id: ++msgId, role: 'system', text: 'The agent stopped responding (timeout). The task may still be running — try sending a follow-up message to check status.', meta: '', tools: [], ts: Date.now() });
         self.sending = false;
+        self.scrollToBottom(true);
       }, 120000);
     },
 
@@ -358,7 +492,7 @@ function chatPage() {
             OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/session/reset', {}).then(function() {
               self.messages = [];
               OpenFangToast.success('Session reset');
-            }).catch(function(e) { OpenFangToast.error('Reset failed: ' + e.message); });
+            }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Reset failed: '+msg+d+h); });
           }
           break;
         case '/compact':
@@ -367,7 +501,7 @@ function chatPage() {
             OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/session/compact', {}).then(function(res) {
               self.messages.push({ id: ++msgId, role: 'system', text: res.message || 'Compaction complete', meta: '', tools: [] });
               self.scrollToBottom(true);
-            }).catch(function(e) { OpenFangToast.error('Compaction failed: ' + e.message); });
+            }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Compaction failed: '+msg+d+h); });
           }
           break;
         case '/stop':
@@ -376,8 +510,34 @@ function chatPage() {
               self.messages.push({ id: ++msgId, role: 'system', text: res.message || 'Run cancelled', meta: '', tools: [] });
               self.sending = false;
               self.scrollToBottom(true);
-            }).catch(function(e) { OpenFangToast.error('Stop failed: ' + e.message); });
+            }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Stop failed: '+msg+d+h); });
           }
+          break;
+        case '/btw':
+          if (!cmdArgs.trim()) {
+            self.messages.push({ id: ++msgId, role: 'system', text: 'Usage: `/btw <context>` — Inject extra context or tasks into the running agent loop.', meta: '', tools: [] });
+            self.scrollToBottom(true);
+            break;
+          }
+          if (!self.currentAgent) {
+            self.messages.push({ id: ++msgId, role: 'system', text: 'No agent selected.', meta: '', tools: [] });
+            self.scrollToBottom(true);
+            break;
+          }
+          // Show a local indicator immediately so the user sees the injection was sent
+          self.messages.push({ id: ++msgId, role: 'system', text: '↩ **btw injected:** ' + cmdArgs, meta: '', tools: [] });
+          self.scrollToBottom(true);
+          OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/btw', { text: cmdArgs })
+            .catch(function(e) {
+              var msg = e.message || 'Unknown error';
+              var isNotRunning = e.status === 409 || (msg && msg.toLowerCase().indexOf('not running') !== -1);
+              if (isNotRunning) {
+                self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Agent is not currently running — btw context not injected. Send a message first, then /btw while it\'s working.', meta: '', tools: [] });
+              } else {
+                self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Injection failed: ' + msg, meta: '', tools: [] });
+              }
+              self.scrollToBottom(true);
+            });
           break;
         case '/usage':
           if (self.currentAgent) {
@@ -448,7 +608,7 @@ function chatPage() {
                 if (resolvedProvider) { self.currentAgent.model_provider = resolvedProvider; }
                 self.messages.push({ id: ++msgId, role: 'system', text: 'Model switched to: `' + resolvedModel + '`' + (resolvedProvider ? ' (provider: `' + resolvedProvider + '`)' : ''), meta: '', tools: [] });
                 self.scrollToBottom(true);
-              }).catch(function(e) { OpenFangToast.error('Model switch failed: ' + e.message); });
+              }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Model switch failed: '+msg+d+h); });
             } else {
               self.messages.push({ id: ++msgId, role: 'system', text: '**Current Model**\n- Provider: `' + (self.currentAgent.model_provider || '?') + '`\n- Model: `' + (self.currentAgent.model_name || '?') + '`', meta: '', tools: [] });
               self.scrollToBottom(true);
@@ -498,18 +658,140 @@ function chatPage() {
             self.scrollToBottom(true);
           }).catch(function() {});
           break;
+        case '/t': {
+          var tParts = cmdArgs.trim().split(/\s+/);
+          var tSub = tParts[0] || '';
+          var tName = tParts.slice(1).join(' ').trim();
+          if (!tSub || tSub === 'list') {
+            self._loadTemplates().then(function(tList) {
+              if (!tList.length) {
+                self.messages.push({ id: ++msgId, role: 'system', text: 'No templates saved yet.\nUse `/t save <name>` while text is in the input to save one.', meta: '', tools: [] });
+              } else {
+                var tLines = tList.map(function(t) { return '- **' + t.name + '** — ' + t.text.slice(0, 60) + (t.text.length > 60 ? '…' : ''); });
+                self.messages.push({ id: ++msgId, role: 'system', text: '**Saved templates (' + tList.length + ')**\n' + tLines.join('\n') + '\n\nUse `/t <name>` to expand.', meta: '', tools: [] });
+              }
+              self.scrollToBottom(true);
+            });
+          } else if (tSub === 'save') {
+            if (!tName) {
+              self.messages.push({ id: ++msgId, role: 'system', text: 'Usage: `/t save <name>` — saves current input text as a template named <name>.', meta: '', tools: [] });
+              self.scrollToBottom(true);
+            } else {
+              var textToSave = self.inputText.trim();
+              if (!textToSave) {
+                self.messages.push({ id: ++msgId, role: 'system', text: 'Input is empty — type your template text first, then run `/t save <name>`.', meta: '', tools: [] });
+                self.scrollToBottom(true);
+              } else {
+                self.inputText = '';
+                self._saveTemplate(tName, textToSave).then(function() {
+                  self.messages.push({ id: ++msgId, role: 'system', text: '✓ Template **' + tName + '** saved.', meta: '', tools: [] });
+                  self.scrollToBottom(true);
+                });
+              }
+            }
+          } else if (tSub === 'delete' || tSub === 'del' || tSub === 'rm') {
+            if (!tName) {
+              self.messages.push({ id: ++msgId, role: 'system', text: 'Usage: `/t delete <name>`', meta: '', tools: [] });
+              self.scrollToBottom(true);
+            } else {
+              self._deleteTemplate(tName).then(function(deleted) {
+                self.messages.push({ id: ++msgId, role: 'system', text: deleted ? '✓ Template **' + tName + '** deleted.' : 'No template named **' + tName + '** found.', meta: '', tools: [] });
+                self.scrollToBottom(true);
+              });
+            }
+          } else {
+            // Expand template by name — entire cmdArgs is the name
+            var expandName = cmdArgs.trim();
+            self._findTemplate(expandName).then(function(found) {
+              if (!found) {
+                self.messages.push({ id: ++msgId, role: 'system', text: 'No template named **' + expandName + '**. Use `/t list` to see saved templates.', meta: '', tools: [] });
+                self.scrollToBottom(true);
+              } else {
+                self.inputText = found.text;
+                self.$nextTick(function() {
+                  var el = document.getElementById('msg-input');
+                  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+                });
+              }
+            });
+          }
+          break;
+        }
       }
     },
 
+    /** In-memory template cache — loaded once from server, kept in sync. */
+    _templateCache: null,
+
+    /** Load templates from server (lazy, cached). Returns a Promise<Array>. */
+    _loadTemplates() {
+      var self = this;
+      if (self._templateCache !== null) return Promise.resolve(self._templateCache);
+      return OpenFangAPI.get('/api/slash-templates').then(function(res) {
+        self._templateCache = res.templates || [];
+        return self._templateCache;
+      }).catch(function() { return []; });
+    },
+
+    /** Persist the full template list to server and update cache. */
+    _persistTemplates(list) {
+      var self = this;
+      self._templateCache = list;
+      return OpenFangAPI.put('/api/slash-templates', { templates: list }).catch(function(e) {
+        OpenFangToast.error('Failed to save templates: ' + (e.message || 'Unknown error'));
+      });
+    },
+
+    /** Save or overwrite a template by name. Returns a Promise. */
+    _saveTemplate(name, text) {
+      return this._loadTemplates().then(function(list) {
+        var next = list.slice();
+        var idx = next.findIndex(function(t) { return t.name.toLowerCase() === name.toLowerCase(); });
+        if (idx >= 0) { next[idx] = { name: next[idx].name, text: text }; } else { next.push({ name: name, text: text }); }
+        return this._persistTemplates(next);
+      }.bind(this));
+    },
+
+    /** Find a template by name (case-insensitive). Returns a Promise<entry|null>. */
+    _findTemplate(name) {
+      return this._loadTemplates().then(function(list) {
+        return list.find(function(t) { return t.name.toLowerCase() === name.toLowerCase(); }) || null;
+      });
+    },
+
+    /** Delete a template by name. Returns a Promise<bool>. */
+    _deleteTemplate(name) {
+      return this._loadTemplates().then(function(list) {
+        var next = list.filter(function(t) { return t.name.toLowerCase() !== name.toLowerCase(); });
+        if (next.length === list.length) return false;
+        return this._persistTemplates(next).then(function() { return true; });
+      }.bind(this));
+    },
+
     selectAgent(agent) {
+      // Snapshot the current agent's messages before switching so we can restore
+      // them instantly if the user comes back (avoids blank-screen round-trips).
+      if (this.currentAgent && this.currentAgent.id && this.messages.length) {
+        _agentMsgCache[this.currentAgent.id] = this.messages.slice();
+      }
+
       // Reset in-flight UI so switching agents mid-stream cannot leave a stuck "Generating" state
       this.sending = false;
       this.messageQueue = [];
+      this._wsInFlightMsg = null;
+      if (this._wsReconnectTimer) { clearTimeout(this._wsReconnectTimer); this._wsReconnectTimer = null; }
       this._clearTypingTimeout();
+      this._stopElapsed();
       this._chatPinnedToBottom = true;
+      this._wsAgent = null;
       this.currentAgent = agent;
-      this.messages = [];
+
+      // Restore from cache immediately (synchronous) — loadSession will refresh in background
+      var cached = _agentMsgCache[agent.id];
+      this.messages = cached ? cached.slice() : [];
+
       this.connectWs(agent.id);
+      this.refreshChatNetworkHints();
       // Show welcome tips on first use
       if (!localStorage.getItem('of-chat-tips-seen')) {
         var localMsgId = 0;
@@ -542,13 +824,19 @@ function chatPage() {
       var self = this;
       try {
         var data = await OpenFangAPI.get('/api/agents/' + agentId + '/session');
+        // Only replace messages from the server when the agent isn't currently
+        // streaming — we don't want to clobber an in-progress live turn.
+        if (self.sending) return;
+        // Guard: don't apply stale load to a different agent (user switched while request was in flight)
+        if (!self.currentAgent || self.currentAgent.id !== agentId) return;
+
         if (data.messages && data.messages.length) {
-          self.messages = data.messages.map(function(m) {
+          var mapped = data.messages.map(function(m) {
             var role = m.role === 'User' ? 'user' : (m.role === 'System' ? 'system' : 'agent');
             var text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
             // Sanitize any raw function-call text from history
             text = self.sanitizeToolText(text);
-            // Build tool cards from historical tool data
+            // Build tool cards from historical tool data (expanded by default so all activity is visible)
             var tools = (m.tools || []).map(function(t, idx) {
               return {
                 id: (t.name || 'tool') + '-hist-' + idx,
@@ -565,9 +853,20 @@ function chatPage() {
             });
             return { id: ++msgId, role: role, text: text, meta: '', tools: tools, images: images };
           });
+          self.messages = mapped;
+          // Update the cache with authoritative server data
+          _agentMsgCache[agentId] = mapped.slice();
           self.$nextTick(function() { self.scrollToBottom(true); });
+        } else if (!self.messages.length) {
+          // Server has no history and we have no cache — clear the cache entry too
+          delete _agentMsgCache[agentId];
         }
-      } catch(e) { /* silent */ }
+      } catch(e) {
+        // Only show an error if we have no cached messages to fall back on
+        if (self.currentAgent && self.currentAgent.id === agentId && !self.messages.length) {
+          self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Could not load chat history. ' + (e && e.message ? e.message : ''), meta: '', tools: [] });
+        }
+      }
     },
 
     // Multi-session: load session list for current agent
@@ -606,6 +905,9 @@ function chatPage() {
       try {
         await OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/sessions/' + sessionId + '/switch', {});
         this.messages = [];
+        this.sending = false;
+        this._wsInFlightMsg = null;
+        if (this._wsReconnectTimer) { clearTimeout(this._wsReconnectTimer); this._wsReconnectTimer = null; }
         await this.loadSession(this.currentAgent.id);
         await this.loadSessions(this.currentAgent.id);
         // Reconnect WebSocket for new session (cannot reuse socket: session binding on server)
@@ -621,19 +923,61 @@ function chatPage() {
       var self = this;
       var idStr = String(agentId);
       this._wsAgent = idStr;
+      if (self._wsReconnectTimer) { clearTimeout(self._wsReconnectTimer); self._wsReconnectTimer = null; }
 
       OpenFangAPI.wsConnect(idStr, {
         onOpen: function() {
           Alpine.store('app').wsConnected = true;
+          // If we dropped mid-stream and have an in-flight message, retry it now
+          if (self._wsInFlightMsg) {
+            var pending = self._wsInFlightMsg;
+            self._wsInFlightMsg = null;
+            self.messages = self.messages.filter(function(m) { return !m.thinking && !m.streaming; });
+            self.messages.push({ id: ++msgId, role: 'system', text: 'Reconnected — retrying your message...', meta: '', tools: [], ts: Date.now() });
+            self.sending = false;
+            self.$nextTick(function() { self._sendPayload(pending.text, pending.files, pending.images); });
+          }
         },
         onMessage: function(data) { self.handleWsMessage(data); },
         onClose: function() {
           Alpine.store('app').wsConnected = false;
-          self._wsAgent = null;
+          // If the socket closed while we were waiting for a response, surface it
+          if (self.sending) {
+            self._clearTypingTimeout();
+            self._stopElapsed();
+            // Save in-flight message so onOpen can retry
+            var lastUser = null;
+            for (var i = self.messages.length - 1; i >= 0; i--) {
+              if (self.messages[i].role === 'user') { lastUser = self.messages[i]; break; }
+            }
+            if (lastUser && !self._wsInFlightMsg) {
+              self._wsInFlightMsg = { text: lastUser.text, files: [], images: lastUser.images || [] };
+            }
+            self.messages = self.messages.filter(function(m) { return !m.thinking && !m.streaming; });
+            self.messages.push({ id: ++msgId, role: 'system', text: 'Connection lost while waiting for a response. Reconnecting...', meta: '', tools: [], ts: Date.now() });
+            self.sending = false;
+            self.scrollToBottom(true);
+          }
+          // Schedule auto-reconnect after a short delay
+          if (self._wsAgent) {
+            if (self._wsReconnectTimer) clearTimeout(self._wsReconnectTimer);
+            self._wsReconnectTimer = setTimeout(function() {
+              if (self._wsAgent) { self.connectWs(self._wsAgent); }
+            }, 3000);
+          } else {
+            self._wsAgent = null;
+          }
         },
         onError: function() {
           Alpine.store('app').wsConnected = false;
-          self._wsAgent = null;
+          if (self.sending) {
+            self._clearTypingTimeout();
+            self._stopElapsed();
+            self.messages = self.messages.filter(function(m) { return !m.thinking && !m.streaming; });
+            self.messages.push({ id: ++msgId, role: 'system', text: 'Connection error. Check that the ArmaraOS daemon is running, then try again.', meta: '', tools: [], ts: Date.now() });
+            self.sending = false;
+            self.scrollToBottom(true);
+          }
         }
       });
     },
@@ -695,6 +1039,14 @@ function chatPage() {
             if (data.phase === 'context_warning') {
               var cwDetail = data.detail || 'Context limit reached.';
               this.messages.push({ id: ++msgId, role: 'system', text: cwDetail, meta: '', tools: [] });
+            } else if (data.phase === 'iteration') {
+              // Multi-step progress: extract step number and update the thinking bubble
+              var iterMatch = (data.detail || '').match(/Step\s+(\d+)/i);
+              if (iterMatch) this.currentIteration = parseInt(iterMatch[1], 10);
+              if (phaseMsg.thinking) {
+                phaseMsg.text = data.detail || ('Step ' + this.currentIteration + ' — thinking…');
+                this.messages.splice(phaseIdx, 1, phaseMsg);
+              }
             } else if (data.phase === 'thinking' && this.thinkingMode === 'stream') {
               // Stream reasoning tokens to a collapsible panel
               if (!phaseMsg._reasoning) phaseMsg._reasoning = '';
@@ -805,13 +1157,16 @@ function chatPage() {
                     }
                   } catch(e) { /* not JSON */ }
                 }
-                // Extract audio file path from text_to_speech results
+                // Extract audio file path and URL from text_to_speech results
                 if (data.tool === 'text_to_speech' && !data.is_error) {
                   try {
                     var ttsResult = JSON.parse(data.result);
                     if (ttsResult.saved_to) {
                       lastMsg3.tools[ri]._audioFile = ttsResult.saved_to;
                       lastMsg3.tools[ri]._audioDuration = ttsResult.duration_estimate_ms;
+                    }
+                    if (ttsResult.audio_url) {
+                      lastMsg3.tools[ri]._audioUrl = ttsResult.audio_url;
                     }
                   } catch(e) { /* not JSON */ }
                 }
@@ -820,11 +1175,15 @@ function chatPage() {
             }
             this.messages.splice(trIdx, 1, lastMsg3);
           }
+          // Cache after each tool result so mid-run state survives navigation
+          if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.scrollToBottom();
           break;
 
         case 'response':
           this._clearTypingTimeout();
+          this._stopElapsed();
+          this._wsInFlightMsg = null;  // response received — no retry needed
           // Update context pressure from response
           if (data.context_pressure) {
             this.contextPressure = data.context_pressure;
@@ -847,6 +1206,7 @@ function chatPage() {
             }
           });
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
+          if (data.cost_usd != null) this.sessionCostUsd += data.cost_usd;
           var meta = (data.input_tokens || 0) + ' in / ' + (data.output_tokens || 0) + ' out';
           if (data.cost_usd != null) meta += ' | $' + data.cost_usd.toFixed(4);
           if (data.iterations) meta += ' | ' + data.iterations + ' iter';
@@ -856,11 +1216,21 @@ function chatPage() {
           var finalText = (data.content && data.content.trim()) ? data.content : streamedText;
           // Strip raw function-call JSON that some models leak as text
           finalText = this.sanitizeToolText(finalText);
-          // If text is empty but tools ran, show a summary
+          // If text is empty but tools ran, provide a clear summary rather than a blank bubble
           if (!finalText.trim() && streamedTools.length) {
-            finalText = '';
+            var toolNames = streamedTools.map(function(t) { return '`' + t.name + '`'; });
+            var allOk = streamedTools.every(function(t) { return !t.is_error; });
+            finalText = allOk
+              ? 'Done. Ran ' + toolNames.join(', ') + '.'
+              : 'Finished with errors. Ran ' + toolNames.join(', ') + '. See tool details above.';
+          }
+          // If text is still empty with no tools (e.g. model returned nothing useful), say so
+          if (!finalText.trim()) {
+            finalText = '*(The agent returned no text. If you were expecting a response, try again or check /status.)*';
           }
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now() });
+          // Snapshot to cache so switching away and back shows the complete turn instantly
+          if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.sending = false;
           this.tokenCount = 0;
           this.scrollToBottom();
@@ -872,12 +1242,20 @@ function chatPage() {
           break;
 
         case 'silent_complete':
-          // Agent intentionally chose not to reply (NO_REPLY)
+          // Agent intentionally chose not to reply (NO_REPLY / silent completion)
           this._clearTypingTimeout();
+          this._stopElapsed();
+          this._wsInFlightMsg = null;
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
           this.sending = false;
           this.tokenCount = 0;
-          // No message bubble added — the agent was silent
+          // Show a subtle system note so the user knows something happened
+          if (data.cost_usd != null) this.sessionCostUsd += data.cost_usd;
+          var silentMeta = (data.input_tokens || 0) + ' in / ' + (data.output_tokens || 0) + ' out';
+          if (data.cost_usd != null) silentMeta += ' | $' + data.cost_usd.toFixed(4);
+          this.messages.push({ id: ++msgId, role: 'system', text: '*(No reply — agent processed the message but determined no response was needed.)*', meta: silentMeta, tools: [], ts: Date.now() });
+          if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
+          this.scrollToBottom();
           if (data.skill_draft_path) {
             OpenFangToast.success('Skill draft saved: ' + data.skill_draft_path);
           }
@@ -887,8 +1265,14 @@ function chatPage() {
 
         case 'error':
           this._clearTypingTimeout();
+          this._stopElapsed();
+          this._wsInFlightMsg = null;  // don't retry on explicit error from server
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
-          this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + data.content, meta: '', tools: [], ts: Date.now() });
+          var errBody = 'Error: ' + data.content;
+          if (this.networkHints && this.networkHints.likely_vpn) {
+            errBody += '\n\nTip: A VPN or strict firewall may block outbound LLM calls. Try split tunneling or allowlisting your provider.';
+          }
+          this.messages.push({ id: ++msgId, role: 'system', text: errBody, meta: '', tools: [], ts: Date.now() });
           this.sending = false;
           this.tokenCount = 0;
           this.scrollToBottom(true);
@@ -1142,6 +1526,15 @@ function chatPage() {
       if (!this.currentAgent || (!this.inputText.trim() && !this.attachments.length)) return;
       var text = this.inputText.trim();
 
+      // Save to per-agent input history before dispatching
+      if (text) {
+        var deduped = (this._msgHistory || []).filter(function(h) { return h !== text; });
+        this._msgHistory = [text].concat(deduped).slice(0, 50);
+        this._msgHistoryIdx = -1;
+        this._msgHistoryBuffer = '';
+        try { localStorage.setItem('armaraos-chat-history-' + this.currentAgent.id, JSON.stringify(this._msgHistory)); } catch (_eH) { /* ignore */ }
+      }
+
       // Handle slash commands
       if (text.startsWith('/') && !this.attachments.length) {
         var cmd = text.split(' ')[0].toLowerCase();
@@ -1192,8 +1585,9 @@ function chatPage() {
       // Collect image references for inline rendering
       var msgImages = uploadedFiles.filter(function(f) { return f.content_type && f.content_type.startsWith('image/'); });
 
-      // Always show user message immediately
+      // Always show user message immediately and update cache so switching away preserves it
       this.messages.push({ id: ++msgId, role: 'user', text: finalText, meta: '', tools: [], images: msgImages, ts: Date.now() });
+      if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
       this.scrollToBottom(true);
 
       // If already streaming, queue this message
@@ -1205,17 +1599,68 @@ function chatPage() {
       this._sendPayload(finalText, uploadedFiles, msgImages);
     },
 
+    // Split a large text into chunks just under the WS size limit.
+    // Breaks on paragraph boundaries when possible.
+    _splitLargeText: function(text, maxBytes) {
+      var chunks = [];
+      var remaining = text;
+      while (remaining.length > 0) {
+        if (new TextEncoder().encode(remaining).length <= maxBytes) {
+          chunks.push(remaining);
+          break;
+        }
+        // Try to break on a paragraph boundary near the limit
+        var searchEnd = maxBytes;
+        while (searchEnd > 0 && new TextEncoder().encode(remaining.slice(0, searchEnd)).length > maxBytes) {
+          searchEnd = Math.floor(searchEnd * 0.9);
+        }
+        var breakAt = remaining.lastIndexOf('\n\n', searchEnd);
+        if (breakAt <= 0) breakAt = remaining.lastIndexOf('\n', searchEnd);
+        if (breakAt <= 0) breakAt = searchEnd;
+        chunks.push(remaining.slice(0, breakAt).trim());
+        remaining = remaining.slice(breakAt).trim();
+      }
+      return chunks;
+    },
+
     async _sendPayload(finalText, uploadedFiles, msgImages) {
       this.sending = true;
+      this._startElapsed();
+
+      // Detect input that would be rejected by the 64KB WS / HTTP limit.
+      // Auto-split into chunks and queue them so the agent receives all content.
+      var WS_LIMIT = 60 * 1024; // slightly under 64KB to leave room for JSON framing
+      var encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+      var byteLen = encoder ? encoder.encode(finalText).length : finalText.length;
+      if (byteLen > WS_LIMIT && !uploadedFiles.length) {
+        var chunks = this._splitLargeText(finalText, WS_LIMIT);
+        if (chunks.length > 1) {
+          // Show the user what is happening
+          this.messages.push({ id: ++msgId, role: 'system', text: 'Large input (' + Math.ceil(byteLen / 1024) + ' KB) — splitting into ' + chunks.length + ' parts and sending automatically.', meta: '', tools: [], ts: Date.now() });
+          this.scrollToBottom(true);
+          // Send first chunk now, queue the rest with continuation prefixes
+          var self = this;
+          for (var ci = 1; ci < chunks.length; ci++) {
+            (function(i, total, chunk) {
+              self.messageQueue.unshift({ text: '[Continued — part ' + (i + 1) + ' of ' + total + ']\n\n' + chunk, files: [], images: [] });
+            })(ci, chunks.length, chunks[ci]);
+          }
+          finalText = '[Part 1 of ' + chunks.length + ' — please process all parts before responding]\n\n' + chunks[0];
+        }
+      }
 
       // Try WebSocket first
       var wsPayload = { type: 'message', content: finalText };
       if (uploadedFiles && uploadedFiles.length) wsPayload.attachments = uploadedFiles;
       if (OpenFangAPI.wsSend(wsPayload)) {
+        // Track in-flight so onClose can retry if the connection drops while waiting
+        this._wsInFlightMsg = { text: finalText, files: uploadedFiles || [], images: msgImages || [] };
         this.messages.push({ id: ++msgId, role: 'agent', text: '', meta: '', thinking: true, streaming: true, tools: [], ts: Date.now() });
         this.scrollToBottom(true);
         return;
       }
+      // WebSocket unavailable — clear any stale in-flight reference
+      this._wsInFlightMsg = null;
 
       // HTTP fallback
       if (!OpenFangAPI.isWsConnected()) {
@@ -1236,7 +1681,13 @@ function chatPage() {
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: [], ts: Date.now() });
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
-        this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + e.message, meta: '', tools: [], ts: Date.now() });
+        var errMsg = e.message || 'Unknown error';
+        if (e.detail && e.detail !== errMsg) errMsg += ' — ' + e.detail;
+        if (e.hint) errMsg += ' Hint: ' + e.hint;
+        if (this.networkHints && this.networkHints.likely_vpn) {
+          errMsg += ' VPN or firewall may block outbound LLM calls; try split tunneling or allowlisting.';
+        }
+        this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + errMsg, meta: '', tools: [], ts: Date.now() });
       }
       this.sending = false;
       this.scrollToBottom(true);
@@ -1257,7 +1708,7 @@ function chatPage() {
         self.sending = false;
         self.scrollToBottom(true);
         self.$nextTick(function() { self._processQueue(); });
-      }).catch(function(e) { OpenFangToast.error('Stop failed: ' + e.message); });
+      }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Stop failed: '+msg+d+h); });
     },
 
     killAgent() {
@@ -1274,7 +1725,7 @@ function chatPage() {
           OpenFangToast.success('Agent "' + name + '" stopped');
           Alpine.store('app').refreshAgents();
         } catch(e) {
-          OpenFangToast.error('Failed to stop agent: ' + e.message);
+          var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Failed to stop agent: '+msg+d+h);
         }
       });
     },
@@ -1459,7 +1910,7 @@ function chatPage() {
         this._sendPayload(text, [upload], []);
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking || m.role !== 'system'; });
-        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to upload audio: ' + (e.message || 'unknown error'));
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to upload audio: ' + openFangErrText(e));
       }
     },
 

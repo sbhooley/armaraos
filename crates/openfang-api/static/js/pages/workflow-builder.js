@@ -566,7 +566,7 @@ function workflowBuilder() {
         OpenFangToast.success('Workflow saved!');
         this.showSaveModal = false;
       } catch(e) {
-        OpenFangToast.error('Failed to save: ' + e.message);
+        OpenFangToast.error('Failed to save: ' + openFangErrText(e));
       }
     },
 

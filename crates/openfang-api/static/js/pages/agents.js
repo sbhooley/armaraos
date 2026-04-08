@@ -390,7 +390,8 @@ function agentsPage() {
         emoji: idn.emoji || '',
         color: idn.color || '#FF5C00',
         archetype: this.normalizeArchetypeForUi(idn.archetype),
-        vibe: idn.vibe || ''
+        vibe: idn.vibe || '',
+        max_iterations: (agent && agent.max_iterations) || null
       };
       this.toolFilters = { tool_allowlist: [], tool_blocklist: [] };
     },
@@ -420,7 +421,8 @@ function agentsPage() {
         emoji: idn.emoji || '',
         color: idn.color || '#FF5C00',
         archetype: this.normalizeArchetypeForUi(idn.archetype),
-        vibe: idn.vibe || ''
+        vibe: idn.vibe || '',
+        max_iterations: full.max_iterations != null ? full.max_iterations : null
       };
       this.toolFilters = {
         tool_allowlist: (full.tool_allowlist || []).slice(),
@@ -469,7 +471,7 @@ function agentsPage() {
           self.showDetailModal = false;
           await Alpine.store('app').refreshAgents();
         } catch(e) {
-          OpenFangToast.error('Failed to stop agent: ' + e.message);
+          OpenFangToast.error('Failed to stop agent: ' + openFangErrText(e));
         }
       });
     },
@@ -565,7 +567,7 @@ function agentsPage() {
         OpenFangToast.success('Mode set to ' + mode);
         await Alpine.store('app').refreshAgents();
       } catch(e) {
-        OpenFangToast.error('Failed to set mode: ' + e.message);
+        OpenFangToast.error('Failed to set mode: ' + openFangErrText(e));
       }
     },
 
@@ -612,7 +614,7 @@ function agentsPage() {
           OpenFangToast.error('Spawn failed: ' + (res.error || 'Unknown error'));
         }
       } catch(e) {
-        OpenFangToast.error('Failed to spawn agent: ' + e.message);
+        OpenFangToast.error('Failed to spawn agent: ' + openFangErrText(e));
       }
       this.spawning = false;
     },
@@ -626,7 +628,7 @@ function agentsPage() {
         this.agentFiles = data.files || [];
       } catch(e) {
         this.agentFiles = [];
-        OpenFangToast.error('Failed to load files: ' + e.message);
+        OpenFangToast.error('Failed to load files: ' + openFangErrText(e));
       }
       this.filesLoading = false;
     },
@@ -643,7 +645,7 @@ function agentsPage() {
         this.editingFile = file.name;
         this.fileContent = data.content || '';
       } catch(e) {
-        OpenFangToast.error('Failed to read file: ' + e.message);
+        OpenFangToast.error('Failed to read file: ' + openFangErrText(e));
       }
     },
 
@@ -655,7 +657,7 @@ function agentsPage() {
         OpenFangToast.success(this.editingFile + ' saved');
         await this.loadAgentFiles();
       } catch(e) {
-        OpenFangToast.error('Failed to save file: ' + e.message);
+        OpenFangToast.error('Failed to save file: ' + openFangErrText(e));
       }
       this.fileSaving = false;
     },
@@ -678,7 +680,7 @@ function agentsPage() {
         } catch (e2) { /* ignore */ }
         await Alpine.store('app').refreshAgents();
       } catch(e) {
-        OpenFangToast.error('Failed to save config: ' + e.message);
+        OpenFangToast.error('Failed to save config: ' + openFangErrText(e));
       }
       this.configSaving = false;
     },
@@ -694,7 +696,7 @@ function agentsPage() {
           this.showDetailModal = false;
         }
       } catch(e) {
-        OpenFangToast.error('Clone failed: ' + e.message);
+        OpenFangToast.error('Clone failed: ' + openFangErrText(e));
       }
     },
 
@@ -722,7 +724,7 @@ function agentsPage() {
           }
         }
       } catch(e) {
-        OpenFangToast.error('Failed to spawn from template: ' + e.message);
+        OpenFangToast.error('Failed to spawn from template: ' + openFangErrText(e));
       }
     },
 
@@ -734,7 +736,7 @@ function agentsPage() {
           await OpenFangAPI.del('/api/agents/' + agent.id + '/history');
           OpenFangToast.success('History cleared for "' + agent.name + '"');
         } catch(e) {
-          OpenFangToast.error('Failed to clear history: ' + e.message);
+          OpenFangToast.error('Failed to clear history: ' + openFangErrText(e));
         }
       });
     },
@@ -755,7 +757,7 @@ function agentsPage() {
           if (agents[i].id === this.detailAgent.id) { this.detailAgent = agents[i]; break; }
         }
       } catch(e) {
-        OpenFangToast.error('Failed to change model: ' + e.message);
+        OpenFangToast.error('Failed to change model: ' + openFangErrText(e));
       }
       this.modelSaving = false;
     },
@@ -775,7 +777,7 @@ function agentsPage() {
           if (agents[i].id === this.detailAgent.id) { this.detailAgent = agents[i]; break; }
         }
       } catch(e) {
-        OpenFangToast.error('Failed to change provider: ' + e.message);
+        OpenFangToast.error('Failed to change provider: ' + openFangErrText(e));
       }
       this.modelSaving = false;
     },
@@ -794,7 +796,7 @@ function agentsPage() {
         });
         OpenFangToast.success('Fallback added: ' + provider + '/' + model);
       } catch(e) {
-        OpenFangToast.error('Failed to save fallbacks: ' + e.message);
+        OpenFangToast.error('Failed to save fallbacks: ' + openFangErrText(e));
         this.detailAgent._fallbacks.pop();
       }
       this.editingFallback = false;
@@ -810,7 +812,7 @@ function agentsPage() {
         });
         OpenFangToast.success('Fallback removed');
       } catch(e) {
-        OpenFangToast.error('Failed to save fallbacks: ' + e.message);
+        OpenFangToast.error('Failed to save fallbacks: ' + openFangErrText(e));
         this.detailAgent._fallbacks.splice(idx, 0, removed[0]);
       }
     },
@@ -860,7 +862,7 @@ function agentsPage() {
       try {
         await OpenFangAPI.put('/api/agents/' + this.detailAgent.id + '/tools', this.toolFilters);
       } catch(e) {
-        OpenFangToast.error('Failed to update tool filters: ' + e.message);
+        OpenFangToast.error('Failed to update tool filters: ' + openFangErrText(e));
       }
     },
 
@@ -896,7 +898,7 @@ function agentsPage() {
           this.chatWithAgent({ id: res.agent_id, name: t.name, model_provider: t.provider, model_name: t.model });
         }
       } catch(e) {
-        OpenFangToast.error('Failed to spawn agent: ' + e.message);
+        OpenFangToast.error('Failed to spawn agent: ' + openFangErrText(e));
       }
     }
   };

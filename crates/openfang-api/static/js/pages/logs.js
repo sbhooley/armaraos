@@ -482,7 +482,7 @@ function logsPage() {
           'Saved. Restart the daemon for tracing to use the new log level.',
         );
       } catch (e) {
-        OpenFangToast.error(e.message || 'Could not save log level.');
+        OpenFangToast.error(openFangErrText(e) || 'Could not save log level.');
       }
     },
 
@@ -552,7 +552,7 @@ function logsPage() {
         }
       } catch (e) {
         this.chainValid = false;
-        OpenFangToast.error('Chain verification failed: ' + e.message);
+        OpenFangToast.error('Chain verification failed: ' + openFangErrText(e));
       }
     },
 

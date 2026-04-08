@@ -62,14 +62,14 @@ impl GoogleChatAdapter {
         }
     }
 
-    /// Get a valid access token, refreshing if expired or missing.
+    /// Get a valid OAuth2 access token via Google service account JWT flow.
     ///
-    /// In a full implementation this would perform JWT signing and exchange with
-    /// Google's OAuth2 token endpoint. For now it parses a pre-supplied token
-    /// from the service account key JSON (field "access_token") or returns an
-    /// error indicating that full JWT auth is not yet wired.
+    /// Implements the full RFC 7523 JWT Bearer Token flow:
+    /// 1. Parse the service account JSON for `client_email`, `private_key`, `token_uri`.
+    /// 2. Build and RS256-sign a JWT using the private key.
+    /// 3. POST the JWT to Google's token endpoint and cache the resulting access token.
     async fn get_access_token(&self) -> Result<String, Box<dyn std::error::Error>> {
-        // Check cache first
+        // Return cached token if still fresh
         {
             let cache = self.cached_token.read().await;
             if let Some((ref token, expiry)) = *cache {
@@ -79,23 +79,105 @@ impl GoogleChatAdapter {
             }
         }
 
-        // Parse the service account key to extract project/client info
         let key_json: serde_json::Value = serde_json::from_str(&self.service_account_key)
-            .map_err(|e| format!("Invalid service account key JSON: {e}"))?;
+            .map_err(|e| format!("Invalid service account JSON: {e}"))?;
 
-        // For a real implementation: build a JWT, sign with the private key,
-        // exchange at https://oauth2.googleapis.com/token for an access token.
-        // This adapter currently expects an "access_token" field for testing or
-        // a pre-authorized token workflow.
-        let token = key_json["access_token"]
+        let client_email = key_json["client_email"]
             .as_str()
-            .ok_or("Service account key missing 'access_token' field; full JWT auth not yet implemented")?
+            .ok_or("service account JSON missing 'client_email'")?;
+        let private_key_pem = key_json["private_key"]
+            .as_str()
+            .ok_or("service account JSON missing 'private_key'")?;
+        let token_uri = key_json["token_uri"]
+            .as_str()
+            .unwrap_or("https://oauth2.googleapis.com/token");
+
+        let jwt = Self::build_signed_jwt(client_email, token_uri, private_key_pem)?;
+
+        // Exchange JWT for an access token
+        let params = [
+            ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
+            ("assertion", jwt.as_str()),
+        ];
+        let resp = self
+            .client
+            .post(token_uri)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| format!("Token request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Google token endpoint error {status}: {body}").into());
+        }
+
+        let token_resp: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse token response: {e}"))?;
+
+        let access_token = token_resp["access_token"]
+            .as_str()
+            .ok_or("Token response missing 'access_token'")?
             .to_string();
 
-        let expiry = Instant::now() + Duration::from_secs(3600);
-        *self.cached_token.write().await = Some((token.clone(), expiry));
+        let expires_in = token_resp["expires_in"].as_u64().unwrap_or(3600);
+        let expiry = Instant::now() + Duration::from_secs(expires_in);
+        *self.cached_token.write().await = Some((access_token.clone(), expiry));
 
-        Ok(token)
+        info!("Google Chat: refreshed OAuth2 access token (expires in {expires_in}s)");
+        Ok(access_token)
+    }
+
+    /// Build an RS256-signed JWT for Google's service account OAuth2 flow.
+    fn build_signed_jwt(
+        client_email: &str,
+        token_uri: &str,
+        private_key_pem: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+        let now = Utc::now().timestamp();
+        let exp = now + 3600;
+
+        // JWT header
+        let header = serde_json::json!({"alg": "RS256", "typ": "JWT"});
+        let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?);
+
+        // JWT claims
+        let claims = serde_json::json!({
+            "iss": client_email,
+            "sub": client_email,
+            "scope": "https://www.googleapis.com/auth/chat.bot https://www.googleapis.com/auth/chat.messages",
+            "aud": token_uri,
+            "iat": now,
+            "exp": exp,
+        });
+        let claims_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&claims)?);
+
+        // Signing input
+        let signing_input = format!("{header_b64}.{claims_b64}");
+
+        // RS256 signing using OpenSSL
+        let pkey = openssl::pkey::PKey::private_key_from_pem(private_key_pem.as_bytes())
+            .map_err(|e| format!("Failed to load private key: {e}"))?;
+        let mut signer = openssl::sign::Signer::new(
+            openssl::hash::MessageDigest::sha256(),
+            &pkey,
+        )
+        .map_err(|e| format!("Failed to create signer: {e}"))?;
+        signer
+            .update(signing_input.as_bytes())
+            .map_err(|e| format!("Signer update failed: {e}"))?;
+        let signature = signer
+            .sign_to_vec()
+            .map_err(|e| format!("Signing failed: {e}"))?;
+        let sig_b64 = URL_SAFE_NO_PAD.encode(&signature);
+
+        Ok(format!("{signing_input}.{sig_b64}"))
     }
 
     /// Send a text message to a Google Chat space.
@@ -388,25 +470,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_google_chat_token_caching() {
-        let adapter = GoogleChatAdapter::new(
-            r#"{"access_token":"cached-tok","project_id":"p"}"#.to_string(),
-            vec![],
-            8091,
-        );
+        // Verify cache layer works by pre-seeding the cache and checking the fast path
+        let adapter = GoogleChatAdapter::new(r#"{}"#.to_string(), vec![], 8091);
 
-        // First call should parse and cache
+        // Manually seed the cache with a token expiring far in the future
+        {
+            let expiry = std::time::Instant::now() + std::time::Duration::from_secs(7200);
+            *adapter.cached_token.write().await = Some(("cached-tok".to_string(), expiry));
+        }
+
+        // Both calls must return the cached token without hitting the network
         let token = adapter.get_access_token().await.unwrap();
         assert_eq!(token, "cached-tok");
-
-        // Second call should return from cache
         let token2 = adapter.get_access_token().await.unwrap();
         assert_eq!(token2, "cached-tok");
     }
 
     #[test]
+    fn test_google_chat_build_signed_jwt_rejects_bad_key() {
+        // A PEM that is syntactically invalid must produce an error, not a panic
+        let result = GoogleChatAdapter::build_signed_jwt(
+            "test@example.iam.gserviceaccount.com",
+            "https://oauth2.googleapis.com/token",
+            "NOT-A-VALID-PEM",
+        );
+        assert!(result.is_err(), "Expected error for invalid PEM key");
+    }
+
+    #[test]
     fn test_google_chat_invalid_key() {
         let adapter = GoogleChatAdapter::new("not-json".to_string(), vec![], 8092);
-        // Can't call async get_access_token in sync test, but verify construction works
         assert_eq!(adapter.webhook_port, 8092);
     }
 }

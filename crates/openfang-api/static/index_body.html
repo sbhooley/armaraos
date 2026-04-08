@@ -33,6 +33,96 @@
 })();
 </script>
 
+<!-- Command Palette (Cmd/Ctrl+K) -->
+<div x-data="commandPalette()"
+     x-show="open"
+     x-transition:enter="transition ease-out duration-150"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="transition ease-in duration-100"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     class="cmd-palette-overlay"
+     @keydown.escape.window="open && closePalette()"
+     @keydown.arrow-up.window="if(open){moveUp();$event.preventDefault()}"
+     @keydown.arrow-down.window="if(open){moveDown();$event.preventDefault()}"
+     @keydown.enter.window="if(open){confirmSelected();$event.preventDefault()}"
+     aria-modal="true"
+     role="dialog"
+     aria-label="Command palette">
+  <!-- Backdrop -->
+  <div class="cmd-palette-backdrop" @click="closePalette()"></div>
+  <!-- Dialog -->
+  <div class="cmd-palette-dialog" @click.stop>
+    <!-- Search input row -->
+    <div class="cmd-palette-input-row">
+      <span class="cmd-palette-search-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      </span>
+      <input
+        id="cmd-palette-input"
+        class="cmd-palette-input"
+        type="text"
+        x-model="query"
+        @input="resetSelection()"
+        placeholder="Search pages, agents, actions…"
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <kbd class="cmd-palette-esc-hint" @click="closePalette()" title="Close">esc</kbd>
+    </div>
+    <!-- Results -->
+    <div class="cmd-palette-results" x-show="open">
+      <template x-if="hasResults">
+        <div>
+          <template x-for="(section, sIdx) in results" :key="section.id">
+            <div class="cmd-palette-section">
+              <div class="cmd-palette-section-label" x-text="section.label"></div>
+              <template x-for="(item, iIdx) in section.items" :key="item.id">
+                <button
+                  type="button"
+                  class="cmd-palette-item"
+                  :class="{ 'cmd-palette-item--selected': flatIndexFor(sIdx, iIdx) === selectedIdx }"
+                  @click="selectItem(item)"
+                  @mouseenter="selectedIdx = flatIndexFor(sIdx, iIdx)"
+                >
+                  <span class="cmd-palette-item-icon" aria-hidden="true">
+                    <template x-if="item.emoji">
+                      <span style="font-size:15px;line-height:1" x-text="item.emoji"></span>
+                    </template>
+                    <template x-if="!item.emoji">
+                      <span x-html="item.icon"></span>
+                    </template>
+                  </span>
+                  <span class="cmd-palette-item-body">
+                    <span class="cmd-palette-item-label" x-text="item.label"></span>
+                    <span class="cmd-palette-item-sublabel" x-text="item.sublabel"></span>
+                  </span>
+                  <span class="cmd-palette-item-enter" aria-hidden="true">↵</span>
+                </button>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+      <template x-if="!hasResults && query">
+        <div class="cmd-palette-empty">
+          No results for "<span x-text="query"></span>"
+        </div>
+      </template>
+      <template x-if="!hasResults && !query">
+        <div class="cmd-palette-empty">Start typing to search…</div>
+      </template>
+    </div>
+    <!-- Footer hint -->
+    <div class="cmd-palette-footer">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
 <!-- Auth Prompt (API Key or Username/Password) -->
 <div x-show="$store.app.showAuthPrompt" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" x-data="{ apiKeyInput: '', loginUser: '', loginPass: '' }">
   <div style="background:var(--bg-card,#1e1e2e);border:1px solid var(--border,#333);border-radius:12px;padding:2rem;max-width:400px;width:90%">
@@ -137,19 +227,24 @@
             <div class="sidebar-agent-list" x-show="!sidebarCollapsed && $store.app.primaryAgentsForSidebar().length > 0">
               <div class="sidebar-agent-list-label">Quick open</div>
               <template x-for="agent in $store.app.primaryAgentsForSidebar()" :key="agent.id">
-                <button type="button" class="sidebar-agent-row" @click="$store.app.openAgentChat(agent)" :title="(agent.name || '') + (agent.model_name ? ' · ' + agent.model_name : '') + ($store.app.agentHasChatUnread(agent.id) ? ' — unread messages' : '')">
-                  <div class="sidebar-agent-row-avatar">
-                    <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:16px;line-height:1"></span>
-                    <svg x-show="!agent.identity || !agent.identity.emoji" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    <span class="sidebar-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
-                  </div>
-                  <div class="sidebar-agent-row-body">
-                    <span class="sidebar-agent-row-name truncate" x-text="agent.name"></span>
-                    <span class="sidebar-agent-row-model truncate" x-text="agent.model_name"></span>
-                    <span class="sidebar-agent-row-activity truncate" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></span>
-                  </div>
-                  <span class="sidebar-agent-row-dot" :class="(agent.state === 'Running' ? 'sidebar-agent-row-dot--run' : (agent.state === 'Crashed' ? 'sidebar-agent-row-dot--idle' : 'sidebar-agent-row-dot--other'))" :title="agent.state === 'Crashed' ? 'Idle' : (agent.state || 'Unknown')"></span>
-                </button>
+                <div class="sidebar-agent-row-wrap" x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
+                  <button type="button" class="sidebar-agent-row" :class="{ 'sidebar-agent-row--pinned': $store.app.isAgentPinned(agent.id) }" @click="$store.app.openAgentChat(agent)" :title="(agent.name || '') + (agent.model_name ? ' · ' + agent.model_name : '') + ($store.app.agentHasChatUnread(agent.id) ? ' — unread messages' : '')">
+                    <div class="sidebar-agent-row-avatar">
+                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:16px;line-height:1"></span>
+                      <svg x-show="!agent.identity || !agent.identity.emoji" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span class="sidebar-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                    </div>
+                    <div class="sidebar-agent-row-body">
+                      <span class="sidebar-agent-row-name truncate" x-text="agent.name"></span>
+                      <span class="sidebar-agent-row-model truncate" x-text="agent.model_name"></span>
+                      <span class="sidebar-agent-row-activity truncate" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></span>
+                    </div>
+                    <span class="sidebar-agent-row-dot" :class="(agent.state === 'Running' ? 'sidebar-agent-row-dot--run' : (agent.state === 'Crashed' ? 'sidebar-agent-row-dot--idle' : 'sidebar-agent-row-dot--other'))" :title="agent.state === 'Crashed' ? 'Idle' : (agent.state || 'Unknown')"></span>
+                  </button>
+                  <button type="button" class="sidebar-agent-pin-btn" :class="{ 'sidebar-agent-pin-btn--active': $store.app.isAgentPinned(agent.id) }" x-show="hovered" @click.stop="$store.app.togglePinAgent(agent.id)" :title="$store.app.isAgentPinned(agent.id) ? 'Unpin agent' : 'Pin to top'" aria-label="Pin agent">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M16 1v6l2 4H6l2-4V1h8zM12 22v-7M8 1h8"/></svg>
+                  </button>
+                </div>
               </template>
             </div>
             <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
@@ -403,6 +498,34 @@
                 </span>
                 <span class="overview-quick-action-label">Daemon &amp; runtime</span>
               </button>
+            </div>
+          </div>
+
+          <!-- Jump back in — recently opened agents -->
+          <div
+            class="card overview-jump-back"
+            x-show="!loadError && !loading && recentAgents.length > 0"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0 transform -translate-y-1"
+            x-transition:enter-end="opacity-100 transform translate-y-0"
+            role="region"
+            aria-label="Jump back in"
+          >
+            <div class="overview-quick-actions-head">
+              <span class="overview-quick-actions-title">Jump back in</span>
+              <span class="overview-quick-actions-sub text-xs text-dim">Recently opened</span>
+            </div>
+            <div class="overview-jump-back-list">
+              <template x-for="agent in recentAgents" :key="agent.id">
+                <button type="button" class="overview-jump-back-tile" @click="$store.app.openAgentChat(agent)">
+                  <span class="overview-jump-back-avatar" aria-hidden="true">
+                    <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                    <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  </span>
+                  <span class="overview-jump-back-name truncate" x-text="agent.name || agent.id"></span>
+                  <span class="overview-jump-back-arrow" aria-hidden="true">›</span>
+                </button>
+              </template>
             </div>
           </div>
 
@@ -802,11 +925,12 @@
                 <span class="badge badge-running" x-show="currentAgent && !sending" style="animation:fadeIn 0.2s">
                   <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);margin-right:2px"></span> Ready
                 </span>
-                <span class="badge badge-suspended" x-show="sending" style="animation:fadeIn 0.2s">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                  Generating...
+                <span class="badge badge-suspended" x-show="sending" style="animation:fadeIn 0.2s;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite;flex-shrink:0"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                  <span x-text="currentIteration > 1 ? 'Step ' + currentIteration + ' · ' + elapsedDisplay : (elapsedSeconds > 3 ? 'Working · ' + elapsedDisplay : 'Generating...')"></span>
                 </span>
                 <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' queued'"></span>
+                <span x-show="sessionCostUsd > 0" :title="'Session cost: $' + sessionCostUsd.toFixed(6)" style="font-size:11px;font-family:var(--font-mono);opacity:0.55;cursor:default;padding:2px 6px;border-radius:6px;background:var(--surface-raised)" x-text="'$' + sessionCostUsd.toFixed(4)"></span>
                 <!-- Session switcher -->
                 <div style="position:relative">
                   <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
@@ -837,6 +961,13 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g x-show="!$store.app.focusMode"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g><g x-show="$store.app.focusMode"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></g></svg>
                 </button>
                 <button class="btn btn-danger btn-sm" @click="killAgent()">Stop</button>
+              </div>
+            </div>
+
+            <div class="info-card" x-show="showChatNetworkBanner" style="border-left-color:var(--accent);margin:0 0 10px 0;padding:10px 12px;font-size:12px;line-height:1.5">
+              <div class="flex justify-between items-start gap-2">
+                <span style="color:var(--text-dim)"><strong style="color:var(--text)">VPN/tunnel detected.</strong> If chat or models fail, outbound HTTPS to your provider may be blocked — try split tunneling or allowlisting. Local dashboard access is usually unaffected.</span>
+                <button type="button" class="btn btn-ghost btn-sm" style="flex-shrink:0;padding:2px 8px" @click="dismissChatNetworkBanner()" title="Dismiss">&times;</button>
               </div>
             </div>
 
@@ -880,9 +1011,12 @@
                             <svg x-show="msg._copied" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
                           </button>
                         </div>
-                        <!-- Thinking indicator with animated dots -->
+                        <!-- Thinking indicator: animated dots + live status text -->
                         <div class="message-bubble" x-show="msg.thinking" style="background:transparent;border:none;padding:4px 0">
-                          <div class="typing-dots"><span></span><span></span><span></span></div>
+                          <div style="display:flex;align-items:center;gap:8px">
+                            <div class="typing-dots"><span></span><span></span><span></span></div>
+                            <span x-show="msg.text && msg.text !== 'Processing...'" x-text="msg.text" style="font-size:0.82em;opacity:0.65;font-style:italic;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+                          </div>
                         </div>
                         <!-- Scheduled job output (kernel scheduler v2 envelope or legacy `[Scheduler]` line) -->
                         <template x-if="msg.text && msg.text.trim() && !msg.thinking && schedulerParts(msg)">
@@ -937,10 +1071,14 @@
                                     </template>
                                   </div>
                                   <div x-show="tool._audioFile" style="padding:8px 12px">
-                                    <div class="audio-player">
-                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-                                      <span class="text-xs" x-text="'Audio: ' + tool._audioFile.split('/').pop()"></span>
-                                      <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
+                                    <div class="audio-player" style="display:flex;flex-direction:column;gap:6px">
+                                      <div style="display:flex;align-items:center;gap:6px">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                                        <span class="text-xs" x-text="'Audio: ' + (tool._audioFile || '').split('/').pop()"></span>
+                                        <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
+                                        <a x-show="tool._audioUrl" :href="tool._audioUrl" download class="text-xs" style="margin-left:auto;color:var(--accent);text-decoration:none;opacity:0.8">&#8681; Download</a>
+                                      </div>
+                                      <audio x-show="tool._audioUrl" :src="tool._audioUrl" controls style="width:100%;height:32px;border-radius:6px"></audio>
                                     </div>
                                   </div>
                                   <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
@@ -1044,8 +1182,8 @@
                 <textarea id="msg-input" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message Armara... (/ for commands)'"
                           @keydown.enter.prevent="if(!$event.isComposing && $event.keyCode !== 229 && !$event.shiftKey){if(showModelPicker && filteredModelPicker.length){pickModel(filteredModelPicker[modelPickerIdx].id)}else if(showSlashMenu && filteredSlashCommands.length){executeSlashCommand(filteredSlashCommands[slashIdx].cmd)}else{sendMessage()}}"
                           @keydown.escape="showSlashMenu = false; showModelPicker = false"
-                          @keydown.arrow-up.prevent="if(showModelPicker){modelPickerIdx = Math.max(0, modelPickerIdx - 1)}else if(showSlashMenu){slashIdx = Math.max(0, slashIdx - 1)}"
-                          @keydown.arrow-down.prevent="if(showModelPicker){modelPickerIdx = Math.min(filteredModelPicker.length - 1, modelPickerIdx + 1)}else if(showSlashMenu){slashIdx = Math.min(filteredSlashCommands.length - 1, slashIdx + 1)}"
+                          @keydown.arrow-up="handleInputArrowUp($event)"
+                          @keydown.arrow-down="handleInputArrowDown($event)"
                           @input="$el.style.height='auto';$el.style.height=Math.min($el.scrollHeight,150)+'px'"
                           x-model="inputText"
                           :class="{ 'streaming-active': sending }"></textarea>
@@ -1421,6 +1559,15 @@
                       <option value="technical">Technical</option><option value="creative">Creative</option>
                       <option value="concise">Concise</option><option value="mentor">Mentor</option>
                     </select>
+                  </div>
+                  <div class="form-group mt-3">
+                    <label style="display:flex;align-items:center;gap:6px">
+                      Max Steps
+                      <span class="text-dim" style="font-size:11px;font-weight:400">(max_iterations — how many tool-call steps before the agent stops)</span>
+                    </label>
+                    <input type="number" class="form-input" x-model.number="configForm.max_iterations"
+                      min="1" max="10000" style="width:120px"
+                      :placeholder="'default (' + (configForm.max_iterations || 80) + ')'">
                   </div>
                   <button class="btn btn-primary mt-4" @click="saveConfig()" :disabled="configSaving">
                     <span x-show="!configSaving">Save Config</span><span x-show="configSaving">Saving...</span>
@@ -2214,7 +2361,7 @@
                   <div style="min-width:200px">
                     <div class="font-bold" style="font-size:13px;margin-bottom:4px">AINL program library</div>
                     <div class="text-xs text-dim mb-2" style="line-height:1.5">
-                      <strong>armaraos-programs/</strong> is shipped with the kernel (see docs/ootb-ainl.md). Upstream <code>demo/</code>, <code>examples/</code>, <code>intelligence/</code> are mirrored separately. Default OOTB job: <strong>armaraos-ainl-health-weekly</strong> (core-only ping). Enable <strong>armaraos-learning-frame-echo-quarterly</strong> in the table below when you want a learning-frame smoke run.
+                      <strong>armaraos-programs/</strong> ships with the kernel as compiled AINL graphs (see docs/ootb-ainl.md). These programs run on the AINL runtime via <code>ainl run</code> — ArmaraOS uses AINL for its own operational automation. Enabled by default: <strong>agent-health-monitor</strong> (every 15 min), <strong>daily-budget-digest</strong> (8am), <strong>budget-threshold-alert</strong> (hourly), <strong>new-version-checker</strong> (weekly). Opt-in: <strong>weekly-usage-report</strong> (LLM summary, Sunday), <strong>channel-session-digest</strong> (6h). Upstream <code>examples/</code> and <code>intelligence/</code> sync separately.
                     </div>
                     <div class="text-xs text-dim mt-2" style="line-height:1.5">
                       <strong style="color:var(--text)">AINL adapters:</strong> For jobs tied to an online-capable agent, the daemon sets <code>AINL_HOST_ADAPTER_ALLOWLIST</code> for the subprocess so graph policy matches the host (same idea as <code>ainl run</code> / hosted runners). Override via agent metadata if needed — see the doc linked above.
@@ -2862,9 +3009,10 @@
                       <span class="runtime-badge" :class="runtimeBadge(skill.runtime).cls" x-text="runtimeBadge(skill.runtime).text"></span>
                       <span class="badge" :class="sourceBadge(skill.source).cls" x-text="sourceBadge(skill.source).text" style="font-size:0.65rem"></span>
                     </div>
-                    <div class="toggle" :class="{ active: skill.enabled }" @click="skill.enabled = !skill.enabled"></div>
+                    <div class="toggle" :class="{ active: skill.enabled, 'toggle-disabled': skill.runtime_supported === false }" :title="skill.runtime_supported === false ? 'WASM runtime coming soon — cannot enable this skill yet' : ''" @click="skill.runtime_supported !== false && (skill.enabled = !skill.enabled)"></div>
                   </div>
                   <div class="card-meta" x-text="skill.description"></div>
+                  <div x-show="skill.runtime_supported === false" class="text-xs" style="color:var(--warn,#f59e0b);margin-top:4px">⚠ WASM runtime not yet available — this skill cannot run in this release.</div>
                   <div class="flex justify-between items-center mt-2">
                     <div class="flex gap-2 items-center">
                       <span class="text-xs text-dim" x-text="skill.tools_count + ' tool(s)'"></span>
@@ -3878,6 +4026,17 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'migration' }" @click="tab = 'migration'">Migration</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'ainl' }" @click="tab = 'ainl'; loadAinlDesktop(); loadAinlVersions()" x-show="isDesktopShell">AINL</div>
           </div>
+          <div class="settings-at-a-glance text-xs" style="padding:8px 0 14px;margin-bottom:4px;border-bottom:1px solid var(--border-subtle, rgba(255,255,255,0.08));line-height:1.5;display:flex;flex-wrap:wrap;gap:10px 20px;align-items:baseline">
+            <span><span class="text-dim">Daemon</span> <strong x-text="sysInfo.version || '—'"></strong></span>
+            <span class="text-dim" aria-hidden="true">·</span>
+            <span><span class="text-dim">Config schema</span> <strong x-text="configSchemaLine"></strong></span>
+            <span class="text-dim" aria-hidden="true">·</span>
+            <span><span class="text-dim">API</span> <code style="font-size:11px" x-text="sysInfo.api_listen || '—'"></code></span>
+            <span class="text-dim" aria-hidden="true">·</span>
+            <span><span class="text-dim">Log</span> <code style="font-size:11px" x-text="sysInfo.log_level || '—'"></code></span>
+            <span class="text-dim" aria-hidden="true">·</span>
+            <span style="min-width:0;max-width:100%"><span class="text-dim">Home</span> <code style="font-size:11px;word-break:break-word" x-text="sysInfo.home_dir || '—'"></code></span>
+          </div>
 
           <!-- Providers tab -->
           <div x-show="tab === 'providers'">
@@ -4092,6 +4251,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="stat-card"><div class="stat-value" x-text="sysInfo.platform || '-'"></div><div class="stat-label">Platform</div></div>
               <div class="stat-card"><div class="stat-value" x-text="formatUptime(sysInfo.uptime_seconds)"></div><div class="stat-label">Uptime</div></div>
               <div class="stat-card"><div class="stat-value" x-text="sysInfo.agent_count || 0"></div><div class="stat-label">Agents</div></div>
+              <div class="stat-card"><div class="stat-value" style="font-size:clamp(14px,2.5vw,18px)" x-text="configSchemaLine"></div><div class="stat-label">Config schema</div></div>
             </div>
             <div class="card mt-4" x-show="sysInfo.default_provider">
               <div class="card-header">Default Model</div>
@@ -4175,7 +4335,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="card mt-4">
               <div class="card-header">Support</div>
               <div class="card-meta text-dim" style="margin-top:6px">
-                Generate a redacted diagnostics bundle (.zip). On desktop we copy it to your <strong>Downloads</strong> folder and keep a copy under <code style="font-size:11px">support/</code> in your ArmaraOS home. In a browser, your download folder is used when the save prompt appears.
+                Generate a redacted diagnostics bundle (.zip). Each bundle includes <code style="font-size:11px">README.txt</code> and <code style="font-size:11px">diagnostics_snapshot.json</code> so support can see config schema, paths, and runtime at a glance. On desktop we copy it to your <strong>Downloads</strong> folder and keep a copy under <code style="font-size:11px">support/</code> in your ArmaraOS home. In a browser, your download folder is used when the save prompt appears.
               </div>
               <div class="flex items-center gap-2" style="margin-top:10px;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" @click="generateDiagnosticsBundle()" :disabled="diagGenerating">
@@ -5157,7 +5317,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                   <div class="session-row-main">
                     <div class="session-row-top">
-                      <span class="session-row-agent truncate" x-text="s.agent_name || s.agent_id"></span>
+                      <template x-if="renameSessionId !== s.session_id">
+                        <span class="session-row-agent truncate" x-text="sessionDisplayName(s)" style="cursor:text" @dblclick="startRename(s)" :title="sessionLabels[s.session_id] ? 'Custom label · double-click to edit' : 'Double-click to add a label'"></span>
+                      </template>
+                      <template x-if="renameSessionId === s.session_id">
+                        <input :id="'session-rename-' + s.session_id" class="session-rename-input form-input" type="text" x-model="renameSessionValue" @keydown.enter.prevent="commitRename(s.session_id)" @keydown.escape.prevent="cancelRename()" @blur="commitRename(s.session_id)" style="padding:2px 6px;height:24px;font-size:13px;min-width:0;flex:1">
+                      </template>
                       <code class="session-id-chip" x-text="shortSessionId(s.session_id)" :title="s.session_id"></code>
                     </div>
                     <div class="session-row-meta">
@@ -5166,6 +5331,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </div>
                   </div>
                   <div class="session-row-actions">
+                    <button type="button" class="btn btn-ghost btn-sm session-row-rename-btn" @click="startRename(s)" :title="sessionLabels[s.session_id] ? 'Edit label' : 'Add label'" aria-label="Rename session">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
                     <button type="button" class="btn btn-primary btn-sm" @click="openInChat(s)">Open</button>
                     <button type="button" class="btn btn-ghost btn-sm session-row-delete" @click="deleteSession(s.session_id)">Delete</button>
                   </div>
@@ -5944,6 +6112,17 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;line-height:1.6">
                 ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> (create a key in the OpenRouter dashboard). This app defaults to the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> for new agents unless you configure a different provider or model later.
               </p>
+              <div class="info-card" x-show="showWizardNetworkBanner" style="border-left-color:var(--accent);margin-bottom:14px">
+                <div class="flex justify-between items-start gap-2">
+                  <div>
+                    <h4 style="margin:0 0 4px 0;font-size:13px">VPN or tunnel detected</h4>
+                    <p style="margin:0;font-size:12px;line-height:1.55;color:var(--text-dim)">
+                      Outbound HTTPS to LLM APIs may be blocked or filtered. Your link to this app is usually fine. If the provider test fails, try split tunneling, allowlisting your provider, or correct <strong>HTTP_PROXY</strong> / <strong>HTTPS_PROXY</strong> for corporate networks.
+                    </p>
+                  </div>
+                  <button type="button" class="btn btn-ghost btn-sm" style="flex-shrink:0;padding:2px 8px" @click="dismissWizardNetworkBanner()" title="Dismiss">&times;</button>
+                </div>
+              </div>
               <p style="font-size:11px;color:var(--text-muted);margin-bottom:16px;line-height:1.5">
                 Prefer Anthropic, OpenAI, Groq, or others? Pick them below instead; paid keys are only required if you choose paid models.
               </p>
@@ -6055,7 +6234,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                   <div x-show="testResult" class="mt-2">
                     <div x-show="testResult && testResult.status === 'ok'" class="badge badge-success" style="padding:6px 12px">Connected<span x-show="testResult && testResult.latency_ms" x-text="' (' + (testResult ? testResult.latency_ms : '') + 'ms)'"></span></div>
-                    <div x-show="testResult && testResult.status !== 'ok'" class="badge badge-error" style="padding:6px 12px"><span x-text="testResult ? (testResult.error || 'Connection failed') : ''"></span></div>
+                    <div x-show="testResult && testResult.status !== 'ok'" class="badge badge-warn" style="padding:6px 12px">
+                      <span x-text="testResult ? (testResult.error || 'Connection test failed') : ''"></span>
+                      <span style="display:block;font-size:10px;margin-top:3px;opacity:0.85">Your key is saved — you can still continue. The test may fail if the selected model is temporarily unavailable or over quota.</span>
+                    </div>
                   </div>
                 </div>
               </template>
@@ -6094,7 +6276,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </div>
                     <div class="text-xs text-dim" style="line-height:1.6" x-text="tpl.description"></div>
                     <div class="flex justify-between items-center mt-2">
-                      <span class="text-xs" style="color:var(--text-muted)" x-text="tpl.provider + ' / ' + tpl.model"></span>
+                      <span class="text-xs" style="color:var(--text-muted)" x-text="(selectedProviderObj && providerIsConfigured(selectedProviderObj) ? selectedProviderObj.id : tpl.provider) + ' / ' + (selectedProviderObj && providerIsConfigured(selectedProviderObj) ? (defaultModelForProvider(selectedProviderObj.id) || tpl.model) : tpl.model)"></span>
                       <span class="badge badge-muted" x-text="tpl.profile"></span>
                     </div>
                     <div class="text-xs mt-1 text-dim" x-show="profileInfo(tpl.profile).desc" x-text="profileInfo(tpl.profile).desc"></div>
@@ -6622,6 +6804,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <tr><td style="font-weight:500">API Listen</td><td x-text="apiListen"></td></tr>
                   <tr><td style="font-weight:500">Home Directory</td><td x-text="homeDir"></td></tr>
                   <tr><td style="font-weight:500">Log Level</td><td x-text="logLevel"></td></tr>
+                  <tr><td style="font-weight:500">Config schema</td><td class="text-xs" x-text="configSchemaLine"></td></tr>
                   <tr><td style="font-weight:500">Network</td><td x-text="networkEnabled ? 'Enabled' : 'Disabled'"></td></tr>
                   <tr x-show="isDesktopShell">
                     <td style="font-weight:500">Desktop app updates</td>

@@ -251,18 +251,26 @@ pub async fn execute_tool(
         "shell_exec" => {
             let command = input["command"].as_str().unwrap_or("");
 
-            // SECURITY: Always check for shell metacharacters, even in Full mode.
-            // These enable command injection regardless of exec policy.
-            if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command)
-            {
-                return ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: format!(
-                        "shell_exec blocked: command contains {reason}. \
-                         Shell metacharacters are never allowed."
-                    ),
-                    is_error: true,
-                };
+            // Full exec mode uses `sh -c`, which natively handles pipes, redirects, etc.
+            // Metacharacter restrictions only apply in Allowlist mode where commands run
+            // via direct exec (no shell interpreter).
+            let is_full_exec = exec_policy
+                .is_some_and(|p| p.mode == openfang_types::config::ExecSecurityMode::Full);
+
+            if !is_full_exec {
+                if let Some(reason) =
+                    crate::subprocess_sandbox::contains_shell_metacharacters(command)
+                {
+                    return ToolResult {
+                        tool_use_id: tool_use_id.to_string(),
+                        content: format!(
+                            "shell_exec blocked: command contains {reason}. \
+                             Shell metacharacters (pipes, redirects, etc.) require \
+                             exec_policy.mode = 'full' in the agent manifest."
+                        ),
+                        is_error: true,
+                    };
+                }
             }
 
             // Exec policy enforcement (allowlist / deny / full)
@@ -282,8 +290,6 @@ pub async fn execute_tool(
                 }
             }
             // Skip heuristic taint patterns for Full exec policy (e.g. hand agents that need curl)
-            let is_full_exec = exec_policy
-                .is_some_and(|p| p.mode == openfang_types::config::ExecSecurityMode::Full);
             if !is_full_exec {
                 if let Some(violation) = check_taint_shell_exec(command) {
                     return ToolResult {
@@ -311,6 +317,7 @@ pub async fn execute_tool(
         // Shared memory tools
         "memory_store" => tool_memory_store(input, kernel),
         "memory_recall" => tool_memory_recall(input, kernel),
+        "memory_list" => tool_memory_list(input, kernel),
 
         // Collaboration tools
         "agent_find" => tool_agent_find(input, kernel),
@@ -362,6 +369,7 @@ pub async fn execute_tool(
 
         // Channel send tool (proactive outbound messaging)
         "channel_send" => tool_channel_send(input, kernel, workspace_root).await,
+        "channel_stream" => tool_channel_stream(input, kernel).await,
 
         // Persistent process tools
         "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
@@ -754,6 +762,16 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["key"]
             }),
         },
+        ToolDefinition {
+            name: "memory_list".to_string(),
+            description: "List all keys stored in shared memory, with their current values. Optional prefix filter (e.g. 'project.' to see only project-related keys). Use this to browse what has been remembered before recalling specific values.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prefix": { "type": "string", "description": "Optional prefix to filter keys (e.g. 'project.', 'user.'). Omit to list all keys." }
+                }
+            }),
+        },
         // --- Collaboration tools ---
         ToolDefinition {
             name: "agent_find".to_string(),
@@ -1124,6 +1142,20 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["channel", "recipient"]
             }),
         },
+        ToolDefinition {
+            name: "channel_stream".to_string(),
+            description: "Push a real-time progress update to a channel mid-task. Use this during long-running jobs to keep stakeholders informed without waiting for the task to finish. Sends immediately and returns without blocking. Same channel/recipient as channel_send. Prefer this over channel_send when the message is a status update rather than a final result.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "channel": { "type": "string", "description": "Channel adapter name (e.g., 'telegram', 'slack', 'discord', 'email')" },
+                    "recipient": { "type": "string", "description": "Platform-specific recipient identifier. Omit to use the channel's default_chat_id." },
+                    "message": { "type": "string", "description": "Progress update text to send. Keep it concise — this is a status ping, not a final report." },
+                    "thread_id": { "type": "string", "description": "Thread/topic ID to reply in (e.g., Telegram message_thread_id, Slack thread_ts). Use the same thread as the original task message for clean threading." }
+                },
+                "required": ["channel", "message"]
+            }),
+        },
         // --- Hand tools (curated autonomous capability packages) ---
         ToolDefinition {
             name: "hand_list".to_string(),
@@ -1238,12 +1270,13 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The executable to run (e.g. 'python', 'node', 'npm')" },
+                    "command": { "type": "string", "description": "The executable to run (e.g. 'python3', 'node', 'npm')" },
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Command-line arguments (e.g. ['-i'] for interactive Python)"
-                    }
+                        "description": "Command-line arguments (e.g. ['bot.py'] or ['-i'])"
+                    },
+                    "cwd": { "type": "string", "description": "Working directory for the process. Use an absolute path. Required when the script uses relative imports, reads local .env files, or relies on os.getcwd(). Example: '/Users/me/.armaraos/workspaces/MyBot'" }
                 },
                 "required": ["command"]
             }),
@@ -1773,6 +1806,26 @@ fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, Str
             "  - {} (id: {}, state: {}, model: {}:{})\n",
             a.name, a.id, a.state, a.model_provider, a.model_name
         ));
+        if !a.description.is_empty() {
+            output.push_str(&format!("    description: {}\n", a.description));
+        }
+        if !a.tags.is_empty() {
+            output.push_str(&format!("    tags: {}\n", a.tags.join(", ")));
+        }
+        if !a.tools.is_empty() {
+            // Show first 8 tools to keep output readable; a full list is available via agent_find
+            let shown: Vec<&String> = a.tools.iter().take(8).collect();
+            let suffix = if a.tools.len() > 8 {
+                format!(" (+{} more)", a.tools.len() - 8)
+            } else {
+                String::new()
+            };
+            output.push_str(&format!(
+                "    tools: {}{}\n",
+                shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                suffix
+            ));
+        }
     }
     Ok(output)
 }
@@ -1814,6 +1867,26 @@ fn tool_memory_recall(
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
+}
+
+fn tool_memory_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let prefix = input["prefix"].as_str();
+    let entries = kh.memory_list(prefix)?;
+    if entries.is_empty() {
+        return Ok(match prefix {
+            Some(p) => format!("No memory keys found matching prefix '{p}'."),
+            None => "No memory keys stored yet.".to_string(),
+        });
+    }
+    let result: Vec<serde_json::Value> = entries
+        .into_iter()
+        .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+        .collect();
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -2462,6 +2535,55 @@ async fn tool_channel_send(
         .await
 }
 
+/// Send a real-time progress update to a channel mid-task.
+/// Functionally identical to channel_send but semantically scoped to status pings —
+/// the description and parameter names guide the LLM to use it appropriately.
+async fn tool_channel_stream(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+
+    let channel = input["channel"]
+        .as_str()
+        .ok_or("Missing 'channel' parameter")?
+        .trim()
+        .to_lowercase();
+    let message = input["message"]
+        .as_str()
+        .ok_or("Missing 'message' parameter")?;
+    let thread_id = input["thread_id"].as_str().filter(|s| !s.is_empty());
+
+    let recipient_input = input["recipient"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    let recipient_owned = if recipient_input.is_empty() {
+        match kh.get_channel_default_recipient(&channel).await {
+            Some(id) => id,
+            None => {
+                return Err(format!(
+                    "Missing 'recipient' and no default_chat_id configured for channel '{channel}'."
+                ))
+            }
+        }
+    } else {
+        recipient_input
+    };
+
+    kh.send_channel_message(&channel, &recipient_owned, message, thread_id)
+        .await
+        .map(|_| {
+            serde_json::json!({
+                "sent": true,
+                "channel": channel,
+                "recipient": recipient_owned,
+            })
+            .to_string()
+        })
+}
+
 // ---------------------------------------------------------------------------
 // Hand tools (delegated to kernel via KernelHandle trait)
 // ---------------------------------------------------------------------------
@@ -3057,8 +3179,24 @@ async fn tool_text_to_speech(
         None
     };
 
+    // Also copy to the uploads temp dir so the dashboard can play it directly
+    // via GET /api/uploads/{file_id} — same pattern as image_generate.
+    let audio_url: Option<String> = {
+        let upload_dir = std::env::temp_dir().join("openfang_uploads");
+        let _ = std::fs::create_dir_all(&upload_dir);
+        let ext = &result.format;
+        let file_id = format!("{}.{ext}", uuid::Uuid::new_v4());
+        let upload_path = upload_dir.join(&file_id);
+        if std::fs::write(&upload_path, &result.audio_data).is_ok() {
+            Some(format!("/api/uploads/{file_id}"))
+        } else {
+            None
+        }
+    };
+
     let response = serde_json::json!({
         "saved_to": saved_path,
+        "audio_url": audio_url,
         "format": result.format,
         "provider": result.provider,
         "duration_estimate_ms": result.duration_estimate_ms,
@@ -3201,8 +3339,9 @@ async fn tool_process_start(
                 .collect()
         })
         .unwrap_or_default();
+    let cwd = input["cwd"].as_str();
 
-    let proc_id = pm.start(agent_id, command, &args).await?;
+    let proc_id = pm.start(agent_id, command, &args, cwd).await?;
     Ok(serde_json::json!({
         "process_id": proc_id,
         "status": "started"

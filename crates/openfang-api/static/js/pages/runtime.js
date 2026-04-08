@@ -12,6 +12,8 @@ document.addEventListener('alpine:init', function() {
       apiListen: '-',
       homeDir: '-',
       logLevel: '-',
+      configSchemaVersion: null,
+      configSchemaBinary: null,
       networkEnabled: false,
       providers: [],
       updateChecking: false,
@@ -28,6 +30,13 @@ document.addEventListener('alpine:init', function() {
         } catch (e) {
           return false;
         }
+      },
+
+      get configSchemaLine() {
+        if (this.configSchemaVersion == null && this.configSchemaBinary == null) return '—';
+        var a = this.configSchemaVersion != null ? String(this.configSchemaVersion) : '?';
+        var b = this.configSchemaBinary != null ? String(this.configSchemaBinary) : '?';
+        return a + ' (binary ' + b + ')';
       },
 
       semverCompare(a, b) {
@@ -59,7 +68,7 @@ document.addEventListener('alpine:init', function() {
           await this.loadUpdaterPrefs();
           OpenFangToast && OpenFangToast.success('Channel saved');
         } catch(e) {
-          OpenFangToast && OpenFangToast.error(e.message || String(e));
+          OpenFangToast && OpenFangToast.error(openFangErrText(e) || String(e));
         }
       },
 
@@ -115,6 +124,8 @@ document.addEventListener('alpine:init', function() {
           this.apiListen = status.api_listen || status.listen || '-';
           this.homeDir = status.home_dir || '-';
           this.logLevel = status.log_level || '-';
+          this.configSchemaVersion = status.config_schema_version != null ? status.config_schema_version : null;
+          this.configSchemaBinary = status.config_schema_version_binary != null ? status.config_schema_version_binary : null;
           this.networkEnabled = !!status.network_enabled;
 
           // Compute uptime from uptime_seconds
@@ -167,7 +178,7 @@ document.addEventListener('alpine:init', function() {
             OpenFangToast && OpenFangToast.success('Up to date');
           }
         } catch (e) {
-          OpenFangToast && OpenFangToast.error(e.message || String(e));
+          OpenFangToast && OpenFangToast.error(openFangErrText(e) || String(e));
           await this.loadUpdaterPrefs();
         }
         this.updateChecking = false;

@@ -596,9 +596,19 @@ impl BrowserSession {
     }
 
     async fn cmd_run_js(&self, expression: &str) -> BrowserResponse {
-        match self.cdp.run_js(expression).await {
+        let normalized = normalize_js_for_eval(expression);
+        match self.cdp.run_js(&normalized).await {
             Ok(val) => BrowserResponse::ok(serde_json::json!({"result": val})),
-            Err(e) => BrowserResponse::err(format!("JS execution failed: {e}")),
+            Err(e) => {
+                let hint = if e.contains("Uncaught") || e.contains("SyntaxError") {
+                    " Note: browser_run_js uses Runtime.evaluate which requires a value \
+                     expression. Use (function() { ... })() syntax for multi-statement code \
+                     with return values — top-level `return` is not valid here."
+                } else {
+                    ""
+                };
+                BrowserResponse::err(format!("JS execution failed: {e}.{hint}"))
+            }
         }
     }
 
@@ -1116,6 +1126,73 @@ pub async fn tool_browser_back(
     let title = data["title"].as_str().unwrap_or("(no title)");
     let url = data["url"].as_str().unwrap_or("");
     Ok(format!("Went back.\nPage: {title}\nURL: {url}"))
+}
+
+// ── JS normalization ──────────────────────────────────────────────────────
+
+/// Normalize a JavaScript snippet for use with `Runtime.evaluate`.
+///
+/// `Runtime.evaluate` executes expressions, not statements. LLMs frequently
+/// write function-body style code with top-level `return` statements, which
+/// causes a `SyntaxError: Illegal return statement` (reported as `"Uncaught"`
+/// by the CDP layer).
+///
+/// When the expression contains a top-level `return` and is not already
+/// wrapped in an IIFE or arrow function, this wraps it automatically so it
+/// executes correctly. False positives (expressions that don't need wrapping)
+/// are harmless — an IIFE always evaluates to its return value.
+fn normalize_js_for_eval(expression: &str) -> String {
+    let trimmed = expression.trim();
+
+    // Already wrapped in an IIFE or arrow IIFE — leave untouched.
+    if trimmed.starts_with("(function")
+        || trimmed.starts_with("(() =>")
+        || trimmed.starts_with("(async ")
+    {
+        return trimmed.to_string();
+    }
+
+    // Detect top-level `return` by walking character-by-character and tracking
+    // brace depth. A `return` keyword at depth 0 is outside any nested function.
+    if contains_top_level_return(trimmed) {
+        return format!("(function() {{ {} }})()", trimmed);
+    }
+
+    trimmed.to_string()
+}
+
+/// Return true if `expr` contains a `return` statement at brace depth 0.
+///
+/// Uses a simple character scan (not a full parser). String literals and
+/// comments may produce false positives in pathological cases, but those
+/// are harmless because wrapping in an IIFE is always safe.
+fn contains_top_level_return(expr: &str) -> bool {
+    let mut depth: i32 = 0;
+    let bytes = expr.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            b'r' if depth == 0 => {
+                let tail = &expr[i..];
+                if tail.starts_with("return ")
+                    || tail.starts_with("return;")
+                    || tail == "return"
+                {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 // ── Embedded JavaScript ────────────────────────────────────────────────────

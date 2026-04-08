@@ -66,6 +66,11 @@ pub struct ClawHubVersionInfo {
     pub created_at: i64,
     #[serde(default)]
     pub changelog: String,
+    /// SHA256 hex digest of the skill bundle (provided by ClawHub when available).
+    /// Empty string means the API did not supply a checksum — download is logged
+    /// but cannot be cryptographically verified against the registry.
+    #[serde(default)]
+    pub sha256: String,
 }
 
 /// Owner info from the skill detail endpoint.
@@ -492,18 +497,33 @@ impl ClawHubClient {
     /// Install a skill from ClawHub into the target directory.
     ///
     /// Security pipeline:
-    /// 1. Download skill zip and compute SHA256
-    /// 2. Detect format (SKILL.md vs package.json)
-    /// 3. Convert to OpenFang manifest
-    /// 4. Run manifest security scan
-    /// 5. If prompt-only: run prompt injection scan
-    /// 6. Check binary dependencies
-    /// 7. Write skill.toml with `verified: false`
+    /// 1. Fetch skill detail to retrieve expected SHA256 (when provided by API)
+    /// 2. Download skill zip and compute SHA256
+    /// 3. Verify SHA256 against registry value — block on mismatch
+    /// 4. Detect format (SKILL.md vs package.json)
+    /// 5. Convert to OpenFang manifest
+    /// 6. Run manifest security scan — block on any Critical warning
+    /// 7. If prompt-only: run prompt injection scan — block on Critical
+    /// 8. Check binary dependencies
+    /// 9. Write skill.toml with verified flag reflecting checksum outcome
     pub async fn install(
         &self,
         slug: &str,
         target_dir: &Path,
     ) -> Result<ClawHubInstallResult, SkillError> {
+        // Step 1: Fetch detail to get the expected SHA256 (may be empty if API
+        // does not yet supply it — download proceeds but is marked unverified).
+        let expected_sha256 = match self.get_skill(slug).await {
+            Ok(detail) => detail
+                .latest_version
+                .map(|v| v.sha256)
+                .unwrap_or_default(),
+            Err(e) => {
+                warn!(slug, error = %e, "Could not fetch skill detail for checksum — proceeding without hash verification");
+                String::new()
+            }
+        };
+
         // Use /api/v1/download?slug=... endpoint
         let url = format!("{}/download?slug={}", self.base_url, urlencoded(slug));
 
@@ -517,13 +537,29 @@ impl ClawHubClient {
             .await
             .map_err(|e| SkillError::Network(format!("Failed to read download body: {e}")))?;
 
-        // Step 1: SHA256 of downloaded content
+        // Step 2: Compute SHA256 of downloaded content.
         let sha256 = {
             let mut hasher = Sha256::new();
             hasher.update(&bytes);
             hex::encode(hasher.finalize())
         };
         info!(slug, sha256 = %sha256, "Downloaded skill");
+
+        // Step 3: Verify against registry-provided hash when available.
+        let checksum_verified = if !expected_sha256.is_empty() {
+            if !SkillVerifier::verify_checksum(&bytes, &expected_sha256) {
+                // Clean up any partial state — directory not yet created at this point.
+                return Err(SkillError::SecurityBlocked(format!(
+                    "SHA256 mismatch for skill '{slug}': \
+                     registry expected {expected_sha256}, got {sha256}. \
+                     The download may have been tampered with — installation blocked."
+                )));
+            }
+            info!(slug, "SHA256 checksum verified against ClawHub registry");
+            true
+        } else {
+            false
+        };
 
         // Create skill directory
         let skill_dir = target_dir.join(slug);
@@ -630,12 +666,36 @@ impl ClawHubClient {
             ));
         };
 
-        // Step 4: Manifest security scan
+        // Step 6: Manifest security scan — block on any Critical warning.
+        // This catches skills declaring shell_exec, file_write, file_delete,
+        // or other dangerous capabilities in their manifest.
         let manifest_warnings = SkillVerifier::security_scan(&manifest);
+        if manifest_warnings
+            .iter()
+            .any(|w| w.severity == WarningSeverity::Critical)
+        {
+            let critical_msgs: Vec<_> = manifest_warnings
+                .iter()
+                .filter(|w| w.severity == WarningSeverity::Critical)
+                .map(|w| w.message.clone())
+                .collect();
+
+            let _ = std::fs::remove_dir_all(&skill_dir);
+
+            return Err(SkillError::SecurityBlocked(format!(
+                "Skill manifest blocked due to dangerous capability: {}",
+                critical_msgs.join("; ")
+            )));
+        }
         all_warnings.extend(manifest_warnings);
 
-        // Step 7: Write skill.toml
+        // Step 9: Write skill.toml with verified flag reflecting checksum outcome.
         openclaw_compat::write_openfang_manifest(&skill_dir, &manifest)?;
+
+        // Persist the computed hash alongside the manifest so future integrity
+        // checks have a baseline even when the API did not supply a hash.
+        let hash_record = format!("# Auto-generated by OpenFang at install time\nsha256 = \"{sha256}\"\nverified = {checksum_verified}\n");
+        let _ = std::fs::write(skill_dir.join("checksum.toml"), hash_record);
 
         let result = ClawHubInstallResult {
             skill_name: manifest.skill.name.clone(),
@@ -903,6 +963,7 @@ mod tests {
                 version: "2.0.0".to_string(),
                 created_at: 0,
                 changelog: String::new(),
+                sha256: String::new(),
             }),
         };
         assert_eq!(ClawHubClient::entry_version(&entry), "2.0.0");

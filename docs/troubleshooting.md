@@ -7,11 +7,13 @@ Paths use the default data directory **`~/.armaraos/`** (see [data-directory.md]
 ## Table of Contents
 
 - [Quick Diagnostics](#quick-diagnostics)
+- [Config schema in the dashboard](#config-schema-in-the-dashboard-at-a-glance)
 - [Installation Issues](#installation-issues)
 - [Configuration Issues](#configuration-issues)
 - [LLM Provider Issues](#llm-provider-issues)
 - [Channel Issues](#channel-issues)
 - [Agent Issues](#agent-issues)
+- [Agent automation hardening](agent-automation-hardening.md) (tool args, phases, persist vs re-scrape)
 - [API Issues](#api-issues)
 - [Desktop App Issues](#desktop-app-issues)
 - [Performance](#performance)
@@ -24,8 +26,10 @@ Paths use the default data directory **`~/.armaraos/`** (see [data-directory.md]
 Run the built-in diagnostic tool:
 
 ```bash
-openfang doctor
+armaraos doctor
 ```
+
+(`openfang doctor` is equivalent when you have the CLI from the same install.)
 
 This checks:
 - Configuration file exists and is valid TOML
@@ -48,13 +52,21 @@ curl http://127.0.0.1:4200/api/health
 curl http://127.0.0.1:4200/api/health/detail  # Requires auth
 ```
 
+### Config schema in the dashboard (at a glance)
+
+To compare **effective** config file versioning with the **binary’s** built-in schema constant (useful after upgrades):
+
+- **Settings** (`#settings`): Immediately **below the tab bar** (all Settings tabs), a summary line shows **Daemon** version, **Config schema** (formatted like `1 (binary 1)`), **API** listen address, **Log** level, and **Home** directory. **Settings → System** also has a **Config schema** stat card with the same value.
+- **Monitor → Daemon & runtime** (`#runtime`): The system overview includes **Config schema** in the same `effective (binary N)` style.
+- **API:** `GET /api/status` exposes `config_schema_version` (effective after load) and `config_schema_version_binary` (constant in the running binary). `GET /api/config` includes `config_schema_version`. See [data-directory.md](data-directory.md#config-schema-version) for what the numbers mean on disk.
+
 ### Dashboard support bundle (redacted `.zip`)
 
 For bug reports, the API can generate a **redacted archive** under `~/.armaraos/support/`:
 
 - **Create:** `POST /api/support/diagnostics` (returns JSON with `bundle_path`, `bundle_filename`, `relative_path`).
 - **Download:** `GET /api/support/diagnostics/download?name=<bundle_filename>` streams the `.zip` (`Content-Disposition: attachment`). The `name` query must match the safe pattern `armaraos-diagnostics-YYYYMMDD-HHMMSS.zip` (no path segments).
-- **Contents (typical):** `config.toml`, redacted `secrets.env`, `audit.json` (recent audit entries + tip hash), SQLite DB + WAL/SHM when present, recent log files, `meta.json` (paths, version, platform).
+- **Contents:** Start with **`README.txt`** (what each file is for) and **`diagnostics_snapshot.json`** (structured triage: daemon version, both config schema numbers, paths, `api_listen`, `log_level`, default model, network flag, SQLite `user_version` vs expected memory schema, OS/arch, whether `ARMARAOS_HOME` / `OPENFANG_HOME` are set — no secret values). Also: **`meta.json`** (compact superset of legacy fields plus schema versions and memory SQLite hints), `config.toml`, redacted `secrets.env`, `audit.json` (recent audit entries + tip hash), `data/openfang.db` + WAL/SHM when present, and recent files under `home/logs/…`.
 - **Access:** From **loopback** (127.0.0.1 / ::1) both **POST** and **GET** above may be used **without** Bearer auth so the embedded dashboard can create and fetch the zip when an API key is set. Remote clients must use normal API authentication for both routes.
 
 From the UI: **Generate + copy bundle** when disconnected, or **Settings → System Info → Support** (desktop Help menu uses the same flow). On **desktop**, the app copies the zip to **Downloads** via Tauri (`copy_diagnostics_to_downloads` with **`bundlePath`**); on failure, the UI may retry via the HTTP download.
@@ -149,6 +161,14 @@ export OPENAI_API_KEY="sk-..."
 ```
 
 Add to your shell profile to persist across sessions.
+
+### Stale config after upgrading
+
+**Symptom:** A problem survives reinstalling the app, or a **fresh install** on another machine behaves differently from your upgraded machine.
+
+**Cause:** Installers update the binary, not your data directory. **`~/.armaraos/`** (config, SQLite, caches) persists until you move or delete it.
+
+**Fix:** See [data-directory.md](data-directory.md) (config schema version, backup, and full reset). Quick isolation test: stop the daemon, rename `~/.armaraos` to `~/.armaraos.bak`, start again — a new profile is created. Restore from the backup if needed.
 
 ### Config validation errors
 
@@ -306,6 +326,31 @@ RUST_LOG=openfang_channels=debug openfang start
 
 ## Agent Issues
 
+### `file_write` / `shell_exec`: "Missing 'path'" or "Missing 'command'"
+
+**Cause:** The model issued the tool with an **empty** `{}` input or without required fields. This is a **malformed tool call**, not a filesystem denial.
+
+**v0.6.5+:** The error message now lists every missing required field with its type and description, allowing the model to self-correct in one step.
+
+**Fix:**
+
+1. Retry with explicit JSON: `file_write` needs `path` + `content`; `shell_exec` needs `command`.
+2. Do **not** redo expensive browser/API work unless you have verified the data never made it to disk or session storage.
+
+**Details and workflow patterns:** [agent-automation-hardening.md](agent-automation-hardening.md).
+
+### `file_write` / `apply_patch`: "Access denied: path resolves outside workspace"
+
+**Cause:** The path points outside the agent's workspace directory. Both `file_write` and `apply_patch` are sandboxed to the agent's own workspace.
+
+**Fix:** Use `shell_exec` for cross-workspace writes:
+
+```json
+{ "command": "python3", "args": ["-c", "open('/abs/path/file.py','w').write('content')"] }
+```
+
+See [agent-automation-hardening.md — Cross-workspace writes](agent-automation-hardening.md#cross-workspace-writes-access-denied-path-resolves-outside-workspace).
+
 ### Agent stuck in a loop
 
 **Cause**: The agent is repeatedly calling the same tool with the same parameters.
@@ -314,6 +359,9 @@ RUST_LOG=openfang_channels=debug openfang start
 - **Warn** at 3 identical tool calls
 - **Block** at 5 identical tool calls
 - **Circuit breaker** at 30 total blocked calls (stops the agent)
+- **All-blocked early exit** (v0.6.5+): if every tool call in an iteration is blocked, a counter increments; after **3 consecutive all-blocked iterations** the loop exits gracefully with a summary.
+
+**Note:** Identical **empty** tool calls (e.g. repeated `file_write` with `{}`) count toward the same pattern and escalate quickly. Fix the **arguments** first; see [agent-automation-hardening.md](agent-automation-hardening.md).
 
 **Manual fix**: Cancel the agent's current run:
 ```bash
@@ -321,6 +369,22 @@ curl -X POST http://127.0.0.1:4200/api/agents/{id}/stop
 ```
 
 Or via chat command: `/stop`
+
+### Agent claims process is running without calling `process_start`
+
+**Cause:** The model called `process_list`, saw an empty result, then responded with "Starting it now — proc_1 is up" **without** actually calling `process_start`.
+
+**v0.6.5+:** The runtime detects this phantom action and re-prompts the model to call the actual tool.
+
+**If you see this in logs:** Look for `Process phantom detected` in the daemon log. If the model loops on this, check that `process_start` is granted in the agent manifest's `[capabilities].tools`.
+
+**Always use `cwd` when starting scripts that load local files:**
+
+```json
+{ "command": "python3", "args": ["bot.py"], "cwd": "/path/to/workspace" }
+```
+
+See [agent-automation-hardening.md — Process management](agent-automation-hardening.md#process-management-process_start-process_kill-process_list).
 
 ### Agent running out of context
 
@@ -650,7 +714,7 @@ For public-facing deployments, you should also place a reverse proxy (Caddy, ngi
 
 ### Where are the Get started page and Quick actions documented?
 
-The sidebar **Get started** entry opens hash **`#overview`**: **Quick actions** at the top (after the optional **Live** strip; includes **App Store** → `#ainl-library`), hero stats, setup checklist, **Setup Wizard** visibility (`openfang-onboarded`, sidebar **Get started** re-click), and panels. For layout, Alpine markup locations, CSS classes, and loading skeleton behavior, see **[dashboard-overview-ui.md](dashboard-overview-ui.md)**. For manual QA (checklist, Quick action hash targets, wizard gating), see **[dashboard-testing.md](dashboard-testing.md)** (*Get started page*). **Settings** and **Runtime** UI polish: **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)**.
+The sidebar **Get started** entry opens hash **`#overview`**: **Quick actions** at the top (after the optional **Live** strip; includes **App Store** → `#ainl-library`), hero stats, setup checklist, **Setup Wizard** visibility (`openfang-onboarded`, sidebar **Get started** re-click), and panels. For layout, Alpine markup locations, CSS classes, and loading skeleton behavior, see **[dashboard-overview-ui.md](dashboard-overview-ui.md)**. For the **Setup Wizard** (`#wizard`) itself (provider step, agent creation manifest, static rebuild), see **[dashboard-setup-wizard.md](dashboard-setup-wizard.md)**. For manual QA (checklist, Quick action hash targets, wizard gating), see **[dashboard-testing.md](dashboard-testing.md)** (*Get started page*). **Settings** and **Runtime** UI polish: **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)**.
 
 ### How do I configure the embedding model for memory?
 

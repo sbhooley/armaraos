@@ -1,0 +1,29 @@
+# ArmaraOS Weekly Usage Report
+# ================================
+# Runs every Sunday at 18:00. Gathers budget and agent data, then asks the
+# LLM to produce a concise natural-language summary. Output is captured by
+# the kernel into the owning agent's session feed.
+#
+# Requires: AINL_MCP_LLM_ENABLED=1 (or AINL_CONFIG with an llm section).
+# Without it, the llm.COMPLETION call will fail and the run is skipped.
+#
+# Uses: http, core, llm/openrouter
+# Validate: ainl validate programs/weekly_usage_report/weekly_usage_report.ainl --strict
+
+weekly_usage_report:
+  ts = core.NOW 0
+  budget = http.GET "http://127.0.0.1:4200/api/budget"
+  agents_resp = http.GET "http://127.0.0.1:4200/api/budget/agents"
+  skills_resp = http.GET "http://127.0.0.1:4200/api/skills"
+
+  total_spent = core.GET budget total_spent_usd
+  period = core.GET budget period
+  skill_count = core.GET skills_resp total
+
+  p1 = core.CONCAT "Summarize ArmaraOS weekly usage in 3-5 bullets for a developer. Data: period=" period
+  p2 = core.CONCAT p1 " total_spent_usd=" total_spent
+  prompt = core.CONCAT p2 " skill_count=" skill_count
+
+  summary = llm.COMPLETION prompt
+
+  out {report: summary, period: period, generated_at: ts}

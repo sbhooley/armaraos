@@ -38,13 +38,15 @@ Run the daemon, open the **Dashboard** URL from `openfang start` (default is oft
 
 4. **Get started → Setup Wizard visibility** — With `localStorage` **`openfang-onboarded`** set to **`true`** (e.g. after finishing the wizard, or set manually in devtools), open **Get started**. Expect **Setup Wizard** hidden in the page header and in the setup checklist card; **Run setup again** visible in the header. Click **Run setup again** → **Setup Wizard** appears (header + checklist). Click **Setup Wizard** → `#wizard`. Alternatively, while still on Get started, click the sidebar **Get started** item again → same reveal. Clear `openfang-onboarded` or use a fresh profile → **Setup Wizard** should show by default without **Run setup again**. With onboarded + collapsed CTA, completing the wizard again (or a silent refresh after the flag flips) should hide the primary wizard button again.
 
-5. **App Store → on-disk section title** — Open **App Store** (`#ainl-library`). The collapsible catalog section should read **AI Native Lang Programs Available** (not the old “on disk” wording).
+5. **Setup Wizard (`#wizard`) — end-to-end** — Open `#wizard` (or use the steps in item 4). After **Get Started** on step 1, on **step 2 (Provider)** with an already-configured provider: wait for the connection test to finish; **Next** should become enabled (label **Next**), even if the test shows a warning for a free model or transient API error. On **step 3**, confirm template cards reflect the configured provider/default model where applicable; enter an agent name, **Create Agent**, and confirm the toast and sidebar use that **name** (not `unnamed`). Complete **Try It**, optional **Channel**, and **Done**; confirm the summary lists provider and agent names sensibly. **Dev note:** `wizard.js` is embedded in the binary — rebuild the daemon after editing static assets so the browser picks up changes. Full contract: [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
 
-6. **Settings and Runtime pages — layout polish** — Open **Settings**: elevated header with subtitle; tab bar is a rounded card with accent top stripe and pill-style active tab. Open **Runtime**: header subtitle; stat tiles wrap in a responsive grid on a narrow window; **System** and **Providers** panels use uppercase section titles and readable tables. **Runtime** footer: **Refresh**, **Reload config**, **Reload channels**, **Reload integrations**, **Shut down** (see [Daemon lifecycle & GitHub version check](#daemon-lifecycle--github-version-check) below).
+6. **App Store → on-disk section title** — Open **App Store** (`#ainl-library`). The collapsible catalog section should read **AI Native Lang Programs Available** (not the old “on disk” wording).
 
-7. **Settings → System Info → Support** — Use **Generate diagnostics bundle** (same redacted `.zip` as the API). Confirm the UI mentions `.zip` and the generated path matches a file on disk. On **desktop**, confirm a copy lands in **Downloads** (or use the fallback download if copy fails). With `api_key` set, confirm the browser/WebView still completes save (loopback GET download + `token` query).
+7. **Settings and Runtime pages — layout polish** — Open **Settings**: elevated header with subtitle; tab bar is a rounded card with accent top stripe and pill-style active tab. **Below the tab bar**, confirm the **at-a-glance** line shows **Daemon**, **Config schema** (`N (binary M)`), **API**, **Log**, and **Home**. Open **Settings → System** and confirm the **Config schema** stat tile matches that line. Open **Runtime**: header subtitle; stat tiles wrap in a responsive grid on a narrow window; **Config schema** appears in the stat grid; **System** and **Providers** panels use uppercase section titles and readable tables. **Runtime** footer: **Refresh**, **Reload config**, **Reload channels**, **Reload integrations**, **Shut down** (see [Daemon lifecycle & GitHub version check](#daemon-lifecycle--github-version-check) below).
 
-8. **Home folder → `support/`** — Open **Home folder** in the nav, go to **`support`**, find a diagnostics `.zip`. Use row **Download** (green) or **View** then **Download** in the modal header. Large zips may show a preview error; **Download** must still save the full file. On desktop, row **Download** uses Tauri **`copy_home_file_to_downloads`** (`relativePath`).
+8. **Settings → System Info → Support** — Use **Generate diagnostics bundle** (same redacted `.zip` as the API). Confirm the UI mentions `.zip`, **README.txt** / **diagnostics_snapshot.json** in the Support copy, and the generated path matches a file on disk. Unzip once and confirm **`README.txt`** and **`diagnostics_snapshot.json`** exist and JSON includes `config_schema_version` / `config_schema_version_binary` under `daemon`. On **desktop**, confirm a copy lands in **Downloads** (or use the fallback download if copy fails). With `api_key` set, confirm the browser/WebView still completes save (loopback GET download + `token` query).
+
+9. **Home folder → `support/`** — Open **Home folder** in the nav, go to **`support`**, find a diagnostics `.zip`. Use row **Download** (green) or **View** then **Download** in the modal header. Large zips may show a preview error; **Download** must still save the full file. On desktop, row **Download** uses Tauri **`copy_home_file_to_downloads`** (`relativePath`).
 
 ## Daemon lifecycle & GitHub version check
 
@@ -67,6 +69,8 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 ## Support diagnostics bundle (create, download, desktop)
 
 **Create (API):** `POST /api/support/diagnostics` with body `{}` returns JSON including `bundle_path`, `bundle_filename`, and `relative_path`. From **loopback**, this POST does not require Bearer auth (so local UI works with `api_key` configured).
+
+**Bundle contents (triage):** The zip includes **`README.txt`**, **`diagnostics_snapshot.json`** (start here for support: schema versions, paths, runtime, SQLite memory `user_version` vs expected), expanded **`meta.json`**, `config.toml`, redacted `secrets.env`, `audit.json`, `data/openfang.db*` when present, and `home/logs/…` (see [api-reference.md](api-reference.md#post-apisupportdiagnostics) and [troubleshooting.md](troubleshooting.md#dashboard-support-bundle-redacted-zip)).
 
 **Download (API):** `GET /api/support/diagnostics/download?name=<bundle_filename>` streams the zip (`Content-Disposition: attachment`). From **loopback**, this GET is also allowed without Bearer (same rationale as POST). Remote clients must authenticate. The dashboard client may append `&token=<api_key>` and sends `Authorization` when a key is stored.
 
@@ -148,3 +152,185 @@ curl -sS "http://127.0.0.1:4200/api/agents/AGENT_ID/session/digest"
 ```
 
 `./scripts/verify-dashboard-smoke.sh` calls this automatically when `GET /api/agents` returns at least one agent.
+
+---
+
+## Command Palette (Cmd/Ctrl+K)
+
+The command palette overlays the full window and searches pages, agents, actions, and recent sessions simultaneously.
+
+**Open / close:**
+
+- Press **Cmd+K** (macOS) or **Ctrl+K** (Windows/Linux) from anywhere in the dashboard — the overlay should appear centered, focused, and ready to type.
+- Press **Esc**, click the **esc** hint button, or click outside the dialog to close.
+- The palette must **not** be visible on initial app load; it only opens on the keyboard shortcut.
+
+**Search behavior:**
+
+- With an empty query, the palette shows up to 5 recent agents, up to 5 agents, all pages, and all actions as grouped sections.
+- Typing filters all sections simultaneously by name and description.
+- Internal automation agents (`allowlist-probe`, `offline-cron`, `allow-ir-off`) must not appear.
+
+**Keyboard navigation:**
+
+- **↑ / ↓** move the highlight through all visible items across sections.
+- **Enter** activates the highlighted item and closes the palette.
+- Mouse hover also moves the highlight.
+
+**Item actions:**
+
+- **Recent / Agent** items open that agent's chat.
+- **Page** items navigate to the corresponding hash route.
+- **Actions** (New Agent, Reload Config, Toggle Focus Mode, etc.) execute immediately.
+
+**curl smoke (daemon running):**
+
+```bash
+# Verify the command palette JS is served in the page bundle
+curl -s http://127.0.0.1:4200/ | grep -c "commandPalette"
+# Expect: 1 or more
+```
+
+---
+
+## Chat UX — Sidebar & session features
+
+### Pinned agents
+
+- Hover over any agent row in the **Quick open** sidebar list — a small **pin** button appears to the left of the status dot.
+- Click it to pin; the row gains an **accent left border** to indicate pinned state (the pin button itself disappears when not hovered).
+- Pinned agents appear at the top of the **Quick open** list on next load; the order is preserved across app upgrades (stored in `localStorage` under `armaraos-pinned-agents`).
+- Click the pin button again on hover to unpin and remove the accent border.
+- The pin indicator (left border) must not overlap or obscure the green running-state dot on the right.
+
+### Chat input history
+
+- Send several messages in an agent chat.
+- Press **↑** in the empty input field — the previous message should appear.
+- Press **↑** again to go further back; **↓** to move forward through history.
+- History is per-agent, persisted in `localStorage` under `armaraos-chat-history-<agent_id>` (up to 50 entries, deduped).
+- Navigating away and back should preserve the history.
+
+### Session rename
+
+- Open an agent chat. Click the session name / title area at the top of the chat to enter edit mode (an `<input>` should appear).
+- Type a new name and press **Enter** or click away — the name should update and persist.
+- Press **Esc** to cancel without saving.
+- The renamed session title must appear in the **Sessions** page and survive a daemon restart.
+
+### Jump back in (recent agents strip)
+
+- The **Quick open** section in the sidebar shows the most recently used agents at the top, ordered by last activity time (stored in `localStorage` under `armaraos-recent-agents`).
+- After chatting with an agent, navigate away and back — that agent should be first in the strip.
+- Agents that are deleted from the system should be filtered out of the strip on next load.
+
+### Chat history and tool call persistence
+
+Tool call results, streaming activity, and full message history must survive agent-switch and page navigation without a round-trip delay.
+
+**Switch agents:**
+
+1. Open agent A, trigger a multi-tool run (e.g. ask it to read a file and search the web).
+2. While results are streaming in, switch to agent B in the sidebar.
+3. Switch back to agent A — all messages, tool cards, and partial streaming content must appear immediately (from the in-memory cache); the full history is then confirmed by the server round-trip in the background.
+
+**Navigate away and return:**
+
+1. Open agent A chat, send a message, let it complete.
+2. Navigate to **Settings** or another page via the sidebar.
+3. Navigate back to agent A — the full conversation (including any tool use cards) must be present without re-sending the message.
+
+**Application upgrade:**
+
+- Full history (including tool use blocks) is stored server-side in SQLite and reloaded on `loadSession` — it survives app upgrades.
+- In-session cache (`_agentMsgCache`) survives component destruction within the same page load; it resets on hard refresh (expected behavior).
+
+---
+
+## `/btw` — mid-loop context injection
+
+The `/btw` command lets you inject extra context into an agent loop that is already running.
+
+**Using the command:**
+
+1. Start a long-running task in an agent chat (e.g. ask it to write and test a multi-file feature).
+2. While it is working, type `/btw <your context>` in the chat input and press Enter — e.g.:
+   ```
+   /btw Also make sure to add a changelog entry for this change
+   ```
+3. A local confirmation should appear in the timeline immediately.
+4. On its next iteration, the agent should pick up the injected text as a `[btw] …` user message and incorporate it into its plan.
+
+**When the agent is idle:**
+
+- Sending `/btw` when no loop is running should show an error toast (agent not currently running — wait until it is busy, then inject).
+
+**curl smoke:**
+
+```bash
+AGENT_ID=$(curl -s http://127.0.0.1:4200/api/agents | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+
+# Send a long task first, then immediately inject:
+curl -s -X POST "http://127.0.0.1:4200/api/agents/$AGENT_ID/btw" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Also check the Cargo.lock is up to date."}'
+# Returns 200 {"status":"injected"} if loop is active,
+# or 409 {"error":"agent not running"} if idle.
+```
+
+---
+
+## Slash templates
+
+Reusable message shortcuts stored server-side in `~/.armaraos/slash-templates.json`.
+
+**Create a template:**
+
+```
+/t save standup Give me a morning standup summary: what did you do yesterday, what's today's plan, any blockers?
+```
+
+**Use a template:**
+
+```
+/t standup
+```
+
+The saved text is expanded and sent as your message.
+
+**List templates:**
+
+```
+/t list
+```
+
+Shows all saved template names.
+
+**Delete a template:**
+
+```
+/t delete standup
+```
+
+**Persistence check:**
+
+```bash
+# After saving at least one template:
+curl -s http://127.0.0.1:4200/api/slash-templates | python3 -m json.tool
+# Expect: {"templates": [...]}
+
+cat ~/.armaraos/slash-templates.json
+# Same JSON on disk — survives application upgrades and browser data clears.
+```
+
+**Overwrite (PUT) smoke:**
+
+```bash
+curl -s -X PUT http://127.0.0.1:4200/api/slash-templates \
+  -H "Content-Type: application/json" \
+  -d '{"templates":[{"name":"test","text":"This is a test template."}]}'
+# Expect: {"status":"saved","count":1}
+
+curl -s http://127.0.0.1:4200/api/slash-templates
+# Expect: {"templates":[{"name":"test","text":"This is a test template."}]}
+```

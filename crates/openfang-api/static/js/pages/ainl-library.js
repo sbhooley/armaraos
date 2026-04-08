@@ -242,7 +242,7 @@ function ainlLibraryPage() {
           OpenFangToast.error('ainl ' + mode + ' reported errors — see details');
         }
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
       }
       this.tryBusy = null;
     },
@@ -259,7 +259,7 @@ function ainlLibraryPage() {
       try {
         await ArmaraosDesktopTauriInvoke('open_ainl_library_dir');
       } catch (e) {
-        OpenFangToast.error(e.message || String(e));
+        OpenFangToast.error(openFangErrText(e) || String(e));
       }
     },
 

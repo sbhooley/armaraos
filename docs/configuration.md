@@ -229,6 +229,7 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 |-------|------|---------|-------------|
 | `home_dir` | path | `~/.armaraos` | OpenFang home directory. Stores config, agents, skills. |
 | `data_dir` | path | `~/.armaraos/data` | Directory for SQLite databases and persistent data. |
+| `config_schema_version` | integer | `0` when omitted (legacy) | On-disk config format version. The daemon may migrate legacy files in memory and append the current value to `config.toml`. The running binary also defines a constant (`CONFIG_SCHEMA_VERSION`); compare **effective** vs **binary** in **Settings** (summary under tabs), **Daemon & runtime**, `GET /api/status`, or support **`diagnostics_snapshot.json`**. Semantics and migrations: [data-directory.md](data-directory.md#config-schema-version). |
 | `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. Persisted in `config.toml` and used when the CLI daemon initializes `tracing`. **Changing this value at runtime** (e.g. via the dashboard **Logs → Daemon** save or `POST /api/config/set`) updates the file and reloads config, but **already-running tracing does not re-subscribe** — **restart the daemon** for new verbosity to apply. `RUST_LOG` still overrides the filter when set. |
 | `api_listen` | string | `"127.0.0.1:50051"` | Bind address for the HTTP/WebSocket/SSE API server. |
 | `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |
@@ -1560,7 +1561,9 @@ Configured in agent manifests via `AutonomousConfig`:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `quiet_hours` | `null` | Cron expression for quiet hours (agent pauses during this window). |
-| `max_iterations` | `50` | Maximum tool-use iterations per invocation. |
+| `max_iterations` | `80` | Maximum tool-use iterations per invocation (matches runtime default when `[autonomous]` is omitted; raise to `100`–`150` for heavy coding or multi-query web research). |
 | `max_restarts` | `10` | Maximum automatic restarts before permanent stop. |
 | `heartbeat_interval_secs` | `30` | Seconds between heartbeat health checks. |
 | `heartbeat_channel` | `null` | Channel to send heartbeat status to (e.g., `"telegram"`). |
+
+**Task persistence:** Stock specialist manifests under `agents/*/agent.toml` set `[autonomous].max_iterations` for roles that run long tool chains (read/search/edit/verify). Without `[autonomous]`, the kernel uses the runtime default (`80` LLM+tool rounds per user message). The loop guard’s global circuit breaker scales with `max_iterations` so higher limits stay usable. Use `memory_store` / `memory_recall` for cross-step state (task checklist, file paths, search queries tried). After a failed tool, the runtime injects guidance: retry with a different approach when the task is incomplete—agents should not stop at the first error unless blocked.

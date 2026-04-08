@@ -46,6 +46,61 @@ use tracing::{debug, info, trace, warn};
 /// `AINL_HOST_ADAPTER_ALLOWLIST` when intersecting IR policy with a host grant.
 const AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST: &str = "core,ext,http,bridge,sqlite,postgres,mysql,redis,dynamodb,airtable,supabase,fs,tools,db,api,cache,queue,txn,auth,wasm,memory,vector_memory,embedding_memory,code_context,tool_registry,langchain_tool,llm,llm_query,fanout,web,tiktok";
 
+/// Applies `capabilities.shell` patterns from a manifest into its effective exec policy.
+///
+/// When agents declare `shell = ["python *", "cargo *"]` in their manifest, those
+/// binary names are added to `exec_policy.allowed_commands` so the subprocess sandbox
+/// actually allows them. If the shell list contains `"*"`, the policy is upgraded to
+/// `Full` mode (unrestricted shell access).
+fn apply_shell_caps_to_exec_policy(manifest: &mut AgentManifest) {
+    let Some(ref mut policy) = manifest.exec_policy else {
+        return;
+    };
+
+    // Any agent that explicitly includes shell_exec (or the wildcard "*") in its tool
+    // list gets Full exec mode so pipes, redirects, and semicolons work naturally via
+    // sh -c.  ArmaraOS runs on a user's own machine; granting shell_exec already implies
+    // the operator trusts the agent with a shell.  Users who need stricter sandboxing can
+    // add an explicit [exec_policy] section to the agent manifest.
+    let has_shell_exec = manifest
+        .capabilities
+        .tools
+        .iter()
+        .any(|t| t == "shell_exec" || t == "*");
+    if has_shell_exec {
+        policy.mode = openfang_types::config::ExecSecurityMode::Full;
+        return;
+    }
+
+    // For agents without shell_exec: promote capabilities.shell patterns into
+    // allowed_commands so declared binaries are usable in Allowlist mode.
+    let shell = &manifest.capabilities.shell;
+    if shell.is_empty() {
+        return;
+    }
+    if shell.iter().any(|s| s == "*") {
+        policy.mode = openfang_types::config::ExecSecurityMode::Full;
+        return;
+    }
+    for pattern in shell {
+        // Extract the binary name from patterns like "python *", "git log *", "cargo test *"
+        let base = pattern
+            .split_whitespace()
+            .next()
+            .unwrap_or(pattern.as_str())
+            .trim_end_matches('*')
+            .trim();
+        if base.is_empty() {
+            continue;
+        }
+        let already_covered = policy.safe_bins.iter().any(|b| b == base)
+            || policy.allowed_commands.iter().any(|b| b == base);
+        if !already_covered {
+            policy.allowed_commands.push(base.to_string());
+        }
+    }
+}
+
 /// Resolves `AINL_HOST_ADAPTER_ALLOWLIST` for an agent entry.
 ///
 /// Returns `Some((true, csv))` when set from manifest metadata, or `Some((false, csv))`
@@ -271,6 +326,9 @@ pub struct OpenFangKernel {
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
     /// messages via Telegram). Different agents can still run in parallel.
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
+    /// Per-agent /btw injection channels — present only while a loop is running.
+    /// The UI can send context injections mid-loop without waiting for the turn to finish.
+    pub btw_channels: dashmap::DashMap<AgentId, tokio::sync::mpsc::Sender<String>>,
     /// In-flight agent-loop phase per agent (Thinking / tool / stream) for turn watchdog.
     pub agent_loop_phases: dashmap::DashMap<AgentId, crate::heartbeat::AgentLoopPhaseState>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
@@ -1208,6 +1266,7 @@ impl OpenFangKernel {
             channel_adapters: dashmap::DashMap::new(),
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
+            btw_channels: dashmap::DashMap::new(),
             agent_loop_phases: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
@@ -1251,24 +1310,47 @@ impl OpenFangKernel {
                                                 != entry.manifest.model.model
                                             || disk_manifest.capabilities.tools
                                                 != entry.manifest.capabilities.tools
+                                            || disk_manifest.capabilities.shell
+                                                != entry.manifest.capabilities.shell
                                             || disk_manifest.tool_allowlist
                                                 != entry.manifest.tool_allowlist
                                             || disk_manifest.tool_blocklist
                                                 != entry.manifest.tool_blocklist
                                             || disk_manifest.skills != entry.manifest.skills
                                             || disk_manifest.mcp_servers
-                                                != entry.manifest.mcp_servers;
+                                                != entry.manifest.mcp_servers
+                                            || disk_manifest.exec_policy
+                                                != entry.manifest.exec_policy;
                                         if changed {
                                             info!(
                                                 agent = %name,
-                                                "Agent TOML on disk differs from DB, updating"
+                                                "Agent TOML on disk differs from DB, merging \
+                                                 (structural fields from disk, user-editable \
+                                                 fields preserved from DB)"
                                             );
+                                            // Preserve user-editable fields that are only
+                                            // changed via the dashboard (PATCH /config).
+                                            // These must survive upgrades and reinstalls.
+                                            let saved_system_prompt =
+                                                entry.manifest.model.system_prompt.clone();
+                                            // identity lives on AgentEntry, not AgentManifest
+                                            let saved_identity = entry.identity.clone();
+
+                                            // Take structural / capability fields from disk so
+                                            // upgrade-driven changes (new tools, exec_policy,
+                                            // mcp_servers, etc.) propagate automatically.
                                             entry.manifest = disk_manifest;
-                                            // Persist the update back to DB
+
+                                            // Re-apply user-editable fields from SQLite.
+                                            entry.manifest.model.system_prompt =
+                                                saved_system_prompt;
+                                            entry.identity = saved_identity;
+
+                                            // Persist the merged manifest back to DB
                                             if let Err(e) = kernel.memory.save_agent(&entry) {
                                                 warn!(
                                                     agent = %name,
-                                                    "Failed to persist TOML update: {e}"
+                                                    "Failed to persist TOML merge update: {e}"
                                                 );
                                             }
                                         }
@@ -1308,11 +1390,13 @@ impl OpenFangKernel {
                     restored_entry.state = AgentState::Running;
                     restored_entry.last_active = chrono::Utc::now();
 
-                    // Inherit kernel exec_policy for agents that lack one
-                    if restored_entry.manifest.exec_policy.is_none() {
-                        restored_entry.manifest.exec_policy =
-                            Some(kernel.config.exec_policy.clone());
-                    }
+                    // Always re-apply exec_policy from the current kernel config on restore.
+                    // DB-stored exec_policy values may be stale (e.g. from before the kernel
+                    // default changed to Full).  Per-agent overrides should live in the agent's
+                    // TOML file; they are applied below via apply_shell_caps_to_exec_policy.
+                    restored_entry.manifest.exec_policy =
+                        Some(kernel.config.exec_policy.clone());
+                    apply_shell_caps_to_exec_policy(&mut restored_entry.manifest);
 
                     // Apply global budget defaults to restored agents
                     apply_budget_defaults(
@@ -1519,10 +1603,18 @@ impl OpenFangKernel {
             .map_err(KernelError::OpenFang)?;
         let session_id = session.id;
 
-        // Inherit kernel exec_policy as fallback if agent manifest doesn't have one
+        // Inherit kernel exec_policy as fallback if agent manifest doesn't have one.
+        // Track whether it was explicit so apply_shell_caps_to_exec_policy can decide
+        // whether to upgrade Allowlist → Full for shell_exec agents.
         let mut manifest = manifest;
+        let manifest_had_explicit_exec_policy = manifest.exec_policy.is_some();
         if manifest.exec_policy.is_none() {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
+        }
+        // Promote capabilities.shell patterns (and shell_exec tool presence) into
+        // exec_policy, unless the manifest author explicitly locked the mode.
+        if !manifest_had_explicit_exec_policy {
+            apply_shell_caps_to_exec_policy(&mut manifest);
         }
         info!(agent = %name, id = %agent_id, exec_mode = ?manifest.exec_policy.as_ref().map(|p| &p.mode), "Agent exec_policy resolved");
 
@@ -2207,6 +2299,11 @@ impl OpenFangKernel {
         };
         let kernel_clone = Arc::clone(self);
 
+        // Create /btw injection channel; sender stored in shared map so the API
+        // can enqueue context while the streaming loop is running.
+        let (btw_tx, btw_rx) = tokio::sync::mpsc::channel::<String>(32);
+        self.btw_channels.insert(agent_id, btw_tx);
+
         let handle = tokio::spawn(async move {
             // Auto-compact if the session is large before running the loop
             if needs_compact {
@@ -2268,8 +2365,12 @@ impl OpenFangKernel {
                 ctx_window,
                 Some(&kernel_clone.process_manager),
                 content_blocks,
+                Some(btw_rx),
             )
             .await;
+
+            // Remove the /btw channel so inject_btw returns false after this turn.
+            kernel_clone.btw_channels.remove(&agent_id);
 
             // Drop the phase callback immediately after the streaming loop
             // completes. It holds a clone of the stream sender (`tx`), which
@@ -2884,6 +2985,11 @@ impl OpenFangKernel {
             .and_then(|w| w.upgrade())
             .map(|k| OpenFangKernel::loop_phase_callback(k, agent_id, None));
 
+        // Create /btw injection channel for this turn; store sender in shared map
+        // so the HTTP handler can inject context while the loop runs.
+        let (btw_tx, btw_rx) = tokio::sync::mpsc::channel::<String>(32);
+        self.btw_channels.insert(agent_id, btw_tx);
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -2915,9 +3021,14 @@ impl OpenFangKernel {
             ctx_window,
             Some(&self.process_manager),
             content_blocks,
+            Some(btw_rx),
         )
-        .await
-        .map_err(KernelError::OpenFang)?;
+        .await;
+
+        // Always clean up the btw channel so inject_btw returns false after the turn.
+        self.btw_channels.remove(&agent_id);
+
+        let result = result.map_err(KernelError::OpenFang)?;
 
         // Append new messages to canonical session for cross-channel memory
         if session.messages.len() > messages_before {
@@ -3439,6 +3550,18 @@ impl OpenFangKernel {
         );
 
         Ok((input_tokens, output_tokens, cost))
+    }
+
+    /// Inject a /btw context message into an agent's currently running loop.
+    ///
+    /// Returns `true` if the agent is actively running and the message was queued,
+    /// `false` if no loop is currently active for this agent (caller should 409).
+    pub fn inject_btw(&self, agent_id: AgentId, text: String) -> bool {
+        if let Some(tx) = self.btw_channels.get(&agent_id) {
+            tx.try_send(text).is_ok()
+        } else {
+            false
+        }
     }
 
     /// Cancel an agent's currently running LLM task.
@@ -6913,6 +7036,22 @@ impl KernelHandle for OpenFangKernel {
         self.memory
             .structured_get(agent_id, key)
             .map_err(|e| format!("Memory recall failed: {e}"))
+    }
+
+    fn memory_list(
+        &self,
+        prefix: Option<&str>,
+    ) -> Result<Vec<(String, serde_json::Value)>, String> {
+        let agent_id = shared_memory_agent_id();
+        let all = self
+            .memory
+            .list_kv(agent_id)
+            .map_err(|e| format!("Memory list failed: {e}"))?;
+        if let Some(pfx) = prefix {
+            Ok(all.into_iter().filter(|(k, _)| k.starts_with(pfx)).collect())
+        } else {
+            Ok(all)
+        }
     }
 
     fn find_agents(&self, query: &str) -> Vec<kernel_handle::AgentInfo> {

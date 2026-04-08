@@ -367,6 +367,8 @@ document.addEventListener('alpine:init', function() {
     agentActivityLines: {},
     /** Dashboard hash route (mirrors root `page`) for unread / chat visibility. */
     dashboardPage: 'agents',
+    /** Pinned agent IDs (floated to top of Quick Open sidebar list). */
+    pinnedAgentIds: (function() { try { return JSON.parse(localStorage.getItem('armaraos-pinned-agents') || '[]'); } catch(e) { return []; } })(),
     /** When inline chat is open on #agents, the agent id being viewed (null = picker). */
     agentsPageChatAgentId: null,
     /** agentId -> count of unread assistant-side updates (replaced immutably for Alpine). */
@@ -473,6 +475,7 @@ document.addEventListener('alpine:init', function() {
       var next = Object.assign({}, prev);
       next[agentId] = (next[agentId] || 0) + 1;
       this.chatUnreadCounts = next;
+      this.updateTabTitle();
     },
 
     clearAgentChatUnread(agentId) {
@@ -482,6 +485,44 @@ document.addEventListener('alpine:init', function() {
       var next = Object.assign({}, prev);
       delete next[agentId];
       this.chatUnreadCounts = next;
+      this.updateTabTitle();
+    },
+
+    updateTabTitle() {
+      try {
+        var n = this.chatUnreadTotal;
+        document.title = n > 0 ? '(' + n + ') ArmaraOS' : 'ArmaraOS';
+      } catch (e) { /* ignore */ }
+    },
+
+    /** Pin or unpin an agent in the Quick Open sidebar list. */
+    togglePinAgent(agentId) {
+      if (!agentId) return;
+      var id = String(agentId);
+      var prev = this.pinnedAgentIds || [];
+      var next = prev.indexOf(id) >= 0
+        ? prev.filter(function(x) { return x !== id; })
+        : prev.concat([id]);
+      this.pinnedAgentIds = next;
+      try { localStorage.setItem('armaraos-pinned-agents', JSON.stringify(next)); } catch (e) { /* ignore */ }
+    },
+
+    isAgentPinned(agentId) {
+      if (!agentId) return false;
+      return (this.pinnedAgentIds || []).indexOf(String(agentId)) >= 0;
+    },
+
+    /** Record a recent agent visit for the "Jump back in" overview strip. */
+    recordRecentAgent(agent) {
+      if (!agent || !agent.id) return;
+      try {
+        var raw = localStorage.getItem('armaraos-recent-agents');
+        var list = raw ? JSON.parse(raw) : [];
+        var id = String(agent.id);
+        list = list.filter(function(x) { return x.id !== id; });
+        list.unshift({ id: id, name: agent.name || '', emoji: (agent.identity && agent.identity.emoji) || '', ts: Date.now() });
+        localStorage.setItem('armaraos-recent-agents', JSON.stringify(list.slice(0, 5)));
+      } catch (e) { /* ignore */ }
     },
 
     setAgentActivityLine(agentId, text) {
@@ -513,17 +554,26 @@ document.addEventListener('alpine:init', function() {
       } catch(e) { /* silent */ }
     },
 
-    /** User-facing agents for the sidebar (excludes internal automation / probe chats). */
+    /** User-facing agents for the sidebar (excludes internal automation / probe chats). Pinned agents float to top. */
     primaryAgentsForSidebar() {
       var agents = this.agents || [];
-      return agents.filter(function(a) {
+      var pinned = this.pinnedAgentIds || [];
+      var filtered = agents.filter(function(a) {
         return !isInternalAutomationProbeChatAgentName(a && a.name);
+      });
+      return filtered.slice().sort(function(a, b) {
+        var ap = pinned.indexOf(String(a.id)) >= 0;
+        var bp = pinned.indexOf(String(b.id)) >= 0;
+        if (ap && !bp) return -1;
+        if (!ap && bp) return 1;
+        return 0;
       });
     },
 
     /** Open inline chat for this agent (Agents page) from anywhere (e.g. sidebar). */
     openAgentChat(agent) {
       if (!agent) return;
+      this.recordRecentAgent(agent);
       this.pendingAgent = agent;
       var h = (window.location.hash || '').replace(/^#/, '');
       if (h !== 'agents') {
@@ -945,10 +995,10 @@ function app() {
 
       // Keyboard shortcuts
       document.addEventListener('keydown', function(e) {
-        // Ctrl+K — focus agent switch / go to agents
+        // Ctrl+K — open command palette
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
           e.preventDefault();
-          self.navigate('agents');
+          document.dispatchEvent(new CustomEvent('open-command-palette'));
         }
         // Ctrl+N — new agent
         if ((e.ctrlKey || e.metaKey) && e.key === 'n' && !e.shiftKey) {

@@ -6,11 +6,11 @@
 orchestration_layer_demo:
   in: key note
 
-  cached = cache.get key
+  cached = cache.GET key
   if cached:
     out cached
 
   vm_u = vector_memory.UPSERT "armaraos_demo" "turn" key note "{}"
   hits = vector_memory.SEARCH note 5
-  cache.set key note
+  cache.SET key note
   out hits

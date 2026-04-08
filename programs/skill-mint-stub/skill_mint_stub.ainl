@@ -6,7 +6,7 @@
 skill_mint_stub:
   in: frame_version op run_id intent outcome episode tier
 
-  title = core.concat "# " intent
-  prefix = core.concat title "\n\n## Episode\n\n"
-  merged = core.concat prefix episode
+  title = core.CONCAT "# " intent
+  prefix = core.CONCAT title "\n\n## Episode\n\n"
+  merged = core.CONCAT prefix episode
   out merged

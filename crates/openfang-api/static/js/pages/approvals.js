@@ -52,7 +52,7 @@ function approvalsPage() {
         OpenFangToast.success('Approved');
         await this.loadData();
       } catch(e) {
-        OpenFangToast.error(e.message);
+        OpenFangToast.error(openFangErrText(e));
       }
     },
 
@@ -64,7 +64,7 @@ function approvalsPage() {
           OpenFangToast.success('Rejected');
           await self.loadData();
         } catch(e) {
-          OpenFangToast.error(e.message);
+          OpenFangToast.error(openFangErrText(e));
         }
       });
     },

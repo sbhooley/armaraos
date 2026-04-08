@@ -10,6 +10,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
+/// Re-export for CLI and diagnostics (increment in `openfang-types` when migrations change).
+pub use openfang_types::config::CONFIG_SCHEMA_VERSION;
+
 /// Maximum include nesting depth.
 const MAX_INCLUDE_DEPTH: u32 = 10;
 
@@ -73,7 +76,7 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
 
                     match root_value.try_into::<KernelConfig>() {
                         Ok(mut config) => {
-                            migrate_legacy_openrouter_default_model(&mut config);
+                            apply_config_schema_migrations(&mut config, &config_path);
                             info!(path = %config_path.display(), "Loaded configuration");
                             return config;
                         }
@@ -110,6 +113,99 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
     }
 
     KernelConfig::default()
+}
+
+/// Run config migrations from `config.config_schema_version` up to [`CONFIG_SCHEMA_VERSION`],
+/// then best-effort persist the new schema version to the root `config.toml`.
+fn apply_config_schema_migrations(config: &mut KernelConfig, config_path: &Path) {
+    let start = config.config_schema_version;
+    if start > CONFIG_SCHEMA_VERSION {
+        tracing::warn!(
+            file = %config_path.display(),
+            on_disk = start,
+            binary = CONFIG_SCHEMA_VERSION,
+            "config.toml schema version is newer than this binary; newer keys may be ignored"
+        );
+        return;
+    }
+
+    for step in start..CONFIG_SCHEMA_VERSION {
+        if step == 0 {
+            migrate_legacy_openrouter_default_model(config);
+        }
+        // Future: `else if step == 1 { migrate_v1_to_v2(config); }`
+    }
+    config.config_schema_version = CONFIG_SCHEMA_VERSION;
+
+    if config_path.exists() && start < CONFIG_SCHEMA_VERSION {
+        match persist_config_schema_version_line(config_path, CONFIG_SCHEMA_VERSION) {
+            Ok(()) => {
+                info!(
+                    path = %config_path.display(),
+                    from = start,
+                    to = CONFIG_SCHEMA_VERSION,
+                    "Updated config.toml schema version"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %config_path.display(),
+                    "Could not persist config_schema_version to config.toml (in-memory migrations still applied)"
+                );
+            }
+        }
+    }
+}
+
+/// Append or replace the `config_schema_version = N` line in the root config file.
+///
+/// Preserves other lines and comments; does not rewrite the whole file.
+pub fn persist_config_schema_version_line(path: &Path, version: u32) -> std::io::Result<()> {
+    let raw = std::fs::read_to_string(path)?;
+    let mut replaced = false;
+    let mut out_lines: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if !t.starts_with('#')
+            && t.starts_with("config_schema_version")
+            && t.contains('=')
+        {
+            out_lines.push(format!("config_schema_version = {}", version));
+            replaced = true;
+        } else {
+            out_lines.push(line.to_string());
+        }
+    }
+    let mut out = out_lines.join("\n");
+    if raw.ends_with('\n') && !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !replaced {
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("\n# ArmaraOS: config schema version (updated automatically on upgrade)\n");
+        out.push_str(&format!("config_schema_version = {}\n", version));
+    }
+    atomic_write(path, &out)
+}
+
+fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, contents)?;
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(_first) => {
+            let _ = std::fs::remove_file(path);
+            std::fs::rename(&tmp, path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&tmp);
+            })
+        }
+    }
 }
 
 /// If `[default_model]` still has the old OpenRouter placeholder (first catalog row /
@@ -313,7 +409,9 @@ mod tests {
 
     #[test]
     fn test_load_config_defaults() {
-        let config = load_config(None);
+        // Use an explicit nonexistent path so the user's real ~/.armaraos/config.toml
+        // (which may have log_level = "debug" set) doesn't influence the test result.
+        let config = load_config(Some(Path::new("/nonexistent/config.toml")));
         assert_eq!(config.log_level, "info");
     }
 
@@ -498,5 +596,38 @@ mod tests {
 
         let config = load_config(Some(&root));
         assert_eq!(config.log_level, "trace");
+    }
+
+    #[test]
+    fn test_legacy_config_gets_schema_version_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("config.toml");
+        let mut f = std::fs::File::create(&root).unwrap();
+        writeln!(f, "log_level = \"info\"").unwrap();
+        drop(f);
+
+        let config = load_config(Some(&root));
+        assert_eq!(config.config_schema_version, super::CONFIG_SCHEMA_VERSION);
+
+        let disk = std::fs::read_to_string(&root).unwrap();
+        assert!(disk.contains("config_schema_version"));
+        assert!(disk.contains(&format!(
+            "config_schema_version = {}",
+            super::CONFIG_SCHEMA_VERSION
+        )));
+    }
+
+    #[test]
+    fn test_persist_config_schema_version_replaces_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "config_schema_version = 0\nlog_level = \"info\"\n").unwrap();
+        super::persist_config_schema_version_line(&path, super::CONFIG_SCHEMA_VERSION).unwrap();
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            disk.matches(&format!("config_schema_version = {}", super::CONFIG_SCHEMA_VERSION))
+                .count(),
+            1
+        );
     }
 }

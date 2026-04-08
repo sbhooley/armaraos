@@ -1,0 +1,26 @@
+# ArmaraOS Budget Threshold Alert
+# ==================================
+# Runs hourly. Checks current token spend against the configured budget limit.
+# If spend exceeds 80% of the limit, outputs an alert record. The kernel captures
+# this into the owning agent's session feed (inbox-style, no LLM turn triggered).
+#
+# Uses: http, core
+# Validate: ainl validate programs/budget_threshold_alert/budget_threshold_alert.ainl --strict
+
+budget_threshold_alert:
+  budget = http.GET "http://127.0.0.1:4200/api/budget"
+  ts = core.NOW 0
+
+  spent = core.GET budget total_spent_usd
+  limit = core.GET budget budget_limit_usd
+
+  if limit == 0:
+    out {alert: false, reason: "no_limit_set", checked_at: ts}
+
+  pct = core.MUL spent 100
+  threshold = core.MUL limit 80
+
+  if pct >= threshold:
+    out {alert: true, spent_usd: spent, limit_usd: limit, triggered_at: ts}
+
+  out {alert: false, spent_usd: spent, limit_usd: limit, checked_at: ts}

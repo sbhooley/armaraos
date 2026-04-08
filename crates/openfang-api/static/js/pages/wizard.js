@@ -33,6 +33,9 @@ function wizardPage() {
     step2ConnectionVerified: false,
     /** Bumped when the user switches provider or starts a new save, so stale /test responses are ignored. */
     providerVerifyToken: 0,
+    /** From GET /api/system/network-hints or provider /test (VPN/tunnel awareness). */
+    networkHints: null,
+    networkHintsBannerDismissed: false,
 
     // Step 3: Agent creation
     templates: [
@@ -44,7 +47,7 @@ function wizardPage() {
         category: 'General',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'balanced',
+        profile: 'automation',
         system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.'
       },
       {
@@ -55,7 +58,7 @@ function wizardPage() {
         category: 'Development',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'precise',
+        profile: 'coding',
         system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.'
       },
       {
@@ -66,7 +69,7 @@ function wizardPage() {
         category: 'Research',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'balanced',
+        profile: 'research',
         system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.'
       },
       {
@@ -77,7 +80,7 @@ function wizardPage() {
         category: 'Writing',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'creative',
+        profile: 'full',
         system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.'
       },
       {
@@ -88,7 +91,7 @@ function wizardPage() {
         category: 'Development',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'precise',
+        profile: 'coding',
         system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.'
       },
       {
@@ -99,7 +102,7 @@ function wizardPage() {
         category: 'Development',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'precise',
+        profile: 'coding',
         system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.'
       },
       {
@@ -110,7 +113,7 @@ function wizardPage() {
         category: 'Business',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'balanced',
+        profile: 'messaging',
         system_prompt: 'You are a professional customer support representative. Be empathetic, patient, and solution-oriented. Acknowledge concerns before offering solutions. Escalate complex issues appropriately.'
       },
       {
@@ -121,7 +124,7 @@ function wizardPage() {
         category: 'General',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'balanced',
+        profile: 'research',
         system_prompt: 'You are a patient and encouraging tutor. Explain concepts step by step, starting from fundamentals. Use analogies and examples. Check understanding before moving on. Adapt to the learner\'s pace.'
       },
       {
@@ -132,7 +135,7 @@ function wizardPage() {
         category: 'Development',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'precise',
+        profile: 'coding',
         system_prompt: 'You are an API design expert. Help users design clean, consistent RESTful APIs following best practices. Cover endpoint naming, request/response schemas, error handling, and versioning.'
       },
       {
@@ -143,7 +146,7 @@ function wizardPage() {
         category: 'Business',
         provider: 'openrouter',
         model: 'stepfun/step-3.5-flash:free',
-        profile: 'precise',
+        profile: 'automation',
         system_prompt: 'You are a meeting summarizer. When given a meeting transcript or notes, produce a structured summary with: key decisions, action items (with owners), discussion highlights, and follow-up questions.'
       }
     ],
@@ -170,10 +173,10 @@ function wizardPage() {
       minimal: { label: 'Minimal', desc: 'Read-only file access' },
       coding: { label: 'Coding', desc: 'Files + shell + web fetch' },
       research: { label: 'Research', desc: 'Web search + file read/write' },
-      balanced: { label: 'Balanced', desc: 'General-purpose tool set' },
-      precise: { label: 'Precise', desc: 'Focused tool set for accuracy' },
-      creative: { label: 'Creative', desc: 'Full tools with creative emphasis' },
-      full: { label: 'Full', desc: 'All 35+ tools' }
+      messaging: { label: 'Messaging', desc: 'Agent comms + memory' },
+      automation: { label: 'Automation', desc: 'Files + shell + web + agents + memory' },
+      full: { label: 'Full', desc: 'All 35+ tools' },
+      custom: { label: 'Custom', desc: 'Custom tool set' }
     },
     profileInfo: function(name) { return this.profileDescriptions[name] || { label: name, desc: '' }; },
 
@@ -287,6 +290,11 @@ function wizardPage() {
           } catch (e) { /* ignore */ }
         }
         await this.loadProviders();
+        try {
+          if (typeof OpenFangAPI !== 'undefined' && OpenFangAPI.getNetworkHints) {
+            this.networkHints = await OpenFangAPI.getNetworkHints();
+          }
+        } catch (e) { this.networkHints = null; }
         // Always select OpenRouter when the catalog includes it (recommended default on wizard entry).
         var providers = this.providers;
         var hasOpenRouter = providers.some(function(p) { return p.id === 'openrouter'; });
@@ -302,6 +310,14 @@ function wizardPage() {
             this.selectedProvider = providers[0].id;
           } else {
             this.selectedProvider = '';
+          }
+        }
+        // Pre-populate the Step 6 summary with any already-configured provider name so
+        // the Done screen shows something useful even if the user never saves a new key.
+        if (!this.setupSummary.provider) {
+          var selP = providers.filter(function(p) { return p.id === this.selectedProvider; }.bind(this));
+          if (selP.length > 0 && this.providerIsConfigured(selP[0])) {
+            this.setupSummary.provider = selP[0].display_name;
           }
         }
       } catch(e) {
@@ -340,7 +356,10 @@ function wizardPage() {
       }
       if (this.step === 2) {
         var self = this;
-        queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+        queueMicrotask(function() {
+          self.maybeAutoVerifyStep2Provider();
+          self.refreshNetworkHints();
+        });
       }
     },
 
@@ -353,8 +372,29 @@ function wizardPage() {
       }
       if (this.step === 2) {
         var self = this;
-        queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+        queueMicrotask(function() {
+          self.maybeAutoVerifyStep2Provider();
+          self.refreshNetworkHints();
+        });
       }
+    },
+
+    async refreshNetworkHints() {
+      try {
+        if (typeof OpenFangAPI !== 'undefined' && OpenFangAPI.getNetworkHints) {
+          this.networkHints = await OpenFangAPI.getNetworkHints();
+        }
+      } catch (e) { /* ignore */ }
+    },
+
+    dismissWizardNetworkBanner() {
+      this.networkHintsBannerDismissed = true;
+    },
+
+    get showWizardNetworkBanner() {
+      if (this.step !== 2 || this.networkHintsBannerDismissed) return false;
+      var h = this.networkHints;
+      return !!(h && h.likely_vpn);
     },
 
     async goToStep(n) {
@@ -368,7 +408,10 @@ function wizardPage() {
         this.step = n;
         if (n === 2) {
           var self = this;
-          queueMicrotask(function() { self.maybeAutoVerifyStep2Provider(); });
+          queueMicrotask(function() {
+            self.maybeAutoVerifyStep2Provider();
+            self.refreshNetworkHints();
+          });
         }
       }
     },
@@ -388,7 +431,16 @@ function wizardPage() {
       if (!p.api_key_env) {
         return this.providerIsConfigured(p);
       }
-      return this.providerIsConfigured(p) && this.step2ConnectionVerified;
+      // If verified in this session, always allow proceeding.
+      if (this.step2ConnectionVerified) return true;
+      // For a pre-configured provider, allow proceeding once the test settles (pass or fail).
+      // This handles: network blips, free-tier quota errors, or model unavailability.
+      // The test result (pass or fail) is shown to the user so they're informed.
+      if (this.providerIsConfigured(p) && !this.testingProvider) {
+        return true;
+      }
+      // Still running the initial auto-verify — not ready yet (show spinner/label).
+      return false;
     },
 
     get canGoNext() {
@@ -403,6 +455,9 @@ function wizardPage() {
       if (this.step === 2 && this.savingKey) return 'Saving and verifying…';
       if (this.step === 2 && this.testingProvider) return 'Verifying connection…';
       if (this.selectedProvider === 'claude-code') return 'Detect Claude Code to continue';
+      // Provider is configured but test is still running (initial auto-verify in progress)
+      var p = this.selectedProviderObj;
+      if (p && this.providerIsConfigured(p) && this.testingProvider) return 'Verifying connection…';
       return 'Save API key to continue';
     },
 
@@ -536,12 +591,17 @@ function wizardPage() {
             (this.testResult && this.testResult.error) ||
             (this.testResult && this.testResult.status !== 'ok' ? 'connection test failed' : '') ||
             'connection test failed';
-          OpenFangToast.error(
-            provider.display_name + ' key was saved, but verification failed: ' + detail + '. Fix the key or click Test connection, then continue.'
-          );
+          var toastErr = provider.display_name + ' key was saved, but verification failed: ' + detail + '. Fix the key or click Test connection, then continue.';
+          if (this.networkHints && this.networkHints.likely_vpn) {
+            toastErr += ' VPN or corporate firewall may block outbound LLM calls.';
+          }
+          OpenFangToast.error(toastErr);
         }
       } catch(e) {
-        OpenFangToast.error('Failed to save key: ' + e.message);
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Failed to save key: ' + msg + detail + hint);
         this.step2ConnectionVerified = false;
         this.testingProvider = false;
       }
@@ -569,6 +629,9 @@ function wizardPage() {
           return false;
         }
         this.testResult = result;
+        if (result.network_hints) {
+          this.networkHints = result.network_hints;
+        }
         ok = result.status === 'ok';
         if (ok) {
           this.step2ConnectionVerified = true;
@@ -578,7 +641,11 @@ function wizardPage() {
         } else {
           this.step2ConnectionVerified = false;
           if (errorToast) {
-            OpenFangToast.error(provider.display_name + ': ' + (result.error || 'Connection failed'));
+            var errLine = provider.display_name + ': ' + (result.error || 'Connection failed');
+            if (result.network_hints && result.network_hints.likely_vpn) {
+              errLine += ' VPN or corporate firewall? Try split tunneling or allowlisting your LLM provider.';
+            }
+            OpenFangToast.error(errLine);
           }
         }
       } catch(e) {
@@ -588,7 +655,7 @@ function wizardPage() {
         this.testResult = { status: 'error', error: e.message };
         this.step2ConnectionVerified = false;
         if (errorToast) {
-          OpenFangToast.error('Connection test failed: ' + e.message);
+          OpenFangToast.error('Connection test failed: ' + openFangErrText(e));
         }
         ok = false;
       } finally {
@@ -656,8 +723,7 @@ function wizardPage() {
         model = this.defaultModelForProvider(provider) || tpl.model;
       }
 
-      var toml = '[agent]\n';
-      toml += 'name = "' + wizardTomlBasicEscape(name) + '"\n';
+      var toml = 'name = "' + wizardTomlBasicEscape(name) + '"\n';
       toml += 'description = "' + wizardTomlBasicEscape(tpl.description) + '"\n';
       toml += 'profile = "' + tpl.profile + '"\n\n';
       toml += '[model]\nprovider = "' + provider + '"\n';
@@ -676,14 +742,14 @@ function wizardPage() {
           OpenFangToast.error('Failed: ' + (res.error || 'Unknown error'));
         }
       } catch(e) {
-        OpenFangToast.error('Failed to create agent: ' + e.message);
+        OpenFangToast.error('Failed to create agent: ' + openFangErrText(e));
       }
       this.creatingAgent = false;
     },
 
     defaultModelForProvider(providerId) {
       var defaults = {
-        anthropic: 'claude-sonnet-4-20250514',
+        anthropic: 'claude-sonnet-4-5',
         openai: 'gpt-4o',
         gemini: 'gemini-2.5-flash',
         groq: 'llama-3.3-70b-versatile',
@@ -730,14 +796,22 @@ function wizardPage() {
       try {
         // Channel configure endpoint expects canonical field keys (e.g. bot_token_env),
         // not raw env var names. It will write the secret to secrets.env and set the env var.
-        await OpenFangAPI.post('/api/channels/' + ch.name + '/configure', {
+        var result = await OpenFangAPI.post('/api/channels/' + ch.name + '/configure', {
           fields: { bot_token_env: token }
         });
         this.channelConfigured = true;
         this.setupSummary.channel = ch.display_name;
-        OpenFangToast.success(ch.display_name + ' configured and activated.');
+        if (result && result.activated === false && result.note) {
+          // Saved but not activated — surface the reason (e.g. bad token, network error)
+          OpenFangToast.warn(ch.display_name + ' saved but not activated — ' + result.note);
+        } else {
+          OpenFangToast.success(ch.display_name + ' configured and activated.');
+        }
       } catch(e) {
-        OpenFangToast.error('Failed: ' + (e.message || 'Unknown error'));
+        var msg = e.message || 'Unknown error';
+        var detail = e.detail && e.detail !== msg ? (' — ' + e.detail) : '';
+        var hint = e.hint ? (' Hint: ' + e.hint) : '';
+        OpenFangToast.error('Failed: ' + msg + detail + hint);
       }
       this.configuringChannel = false;
     },

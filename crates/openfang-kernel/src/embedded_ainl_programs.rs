@@ -11,7 +11,7 @@ use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/embedded_programs.rs"));
 
 /// Marker file with the build revision; bumped when embedded content changes meaningfully.
-pub const EMBEDDED_PROGRAMS_REVISION: &str = "3";
+pub const EMBEDDED_PROGRAMS_REVISION: &str = "4";
 
 /// `~/.armaraos/ainl-library/armaraos-programs/`
 pub fn armaraos_programs_subdir(home_dir: &Path) -> std::path::PathBuf {
@@ -119,9 +119,27 @@ mod tests {
     #[test]
     fn embedded_includes_subdirectories() {
         let paths: Vec<&str> = super::EMBEDDED_AINL_FILES.iter().map(|(p, _)| *p).collect();
+        // Core smoke programs
         assert!(
             paths.iter().any(|p| p.contains("armaraos_health_ping")),
             "expected armaraos_health_ping in embed, got: {paths:?}"
+        );
+        // New operational programs (revision 4+)
+        assert!(
+            paths.iter().any(|p| p.contains("agent_health_monitor")),
+            "expected agent_health_monitor in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("daily_budget_digest")),
+            "expected daily_budget_digest in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("budget_threshold_alert")),
+            "expected budget_threshold_alert in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("new_version_checker")),
+            "expected new_version_checker in embed, got: {paths:?}"
         );
     }
 }

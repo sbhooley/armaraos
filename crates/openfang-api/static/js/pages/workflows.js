@@ -43,7 +43,7 @@ function workflowsPage() {
         OpenFangToast.success('Workflow "' + wfName + '" created');
         await this.loadWorkflows();
       } catch(e) {
-        OpenFangToast.error('Failed to create workflow: ' + e.message);
+        OpenFangToast.error('Failed to create workflow: ' + openFangErrText(e));
       }
     },
 
@@ -63,7 +63,7 @@ function workflowsPage() {
         OpenFangToast.success('Workflow completed');
       } catch(e) {
         this.runResult = 'Error: ' + e.message;
-        OpenFangToast.error('Workflow failed: ' + e.message);
+        OpenFangToast.error('Workflow failed: ' + openFangErrText(e));
       }
       this.running = false;
     },
@@ -74,7 +74,7 @@ function workflowsPage() {
         this.runResult = JSON.stringify(runs, null, 2);
         this.runModal = wf;
       } catch(e) {
-        OpenFangToast.error('Failed to load run history: ' + e.message);
+        OpenFangToast.error('Failed to load run history: ' + openFangErrText(e));
       }
     },
 
@@ -85,7 +85,7 @@ function workflowsPage() {
         OpenFangToast.success('Workflow "' + wf.name + '" deleted');
         await this.loadWorkflows();
       } catch(e) {
-        OpenFangToast.error('Failed to delete workflow: ' + e.message);
+        OpenFangToast.error('Failed to delete workflow: ' + openFangErrText(e));
       }
     },
 
@@ -109,7 +109,7 @@ function workflowsPage() {
         }
         this.editModal = wf;
       } catch(e) {
-        OpenFangToast.error('Failed to load workflow: ' + e.message);
+        OpenFangToast.error('Failed to load workflow: ' + openFangErrText(e));
       }
     },
 
@@ -125,7 +125,7 @@ function workflowsPage() {
         OpenFangToast.success('Workflow "' + wfName + '" updated');
         await this.loadWorkflows();
       } catch(e) {
-        OpenFangToast.error('Failed to update workflow: ' + e.message);
+        OpenFangToast.error('Failed to update workflow: ' + openFangErrText(e));
       }
     }
   };
