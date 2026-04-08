@@ -240,16 +240,9 @@ fn default_curated_cron_agent_id(kernel: &OpenFangKernel) -> Option<AgentId> {
 
 fn curated_cron_schedule_matches(a: &CronSchedule, b: &CronSchedule) -> bool {
     match (a, b) {
-        (
-            CronSchedule::Cron {
-                expr: e1,
-                tz: z1,
-            },
-            CronSchedule::Cron {
-                expr: e2,
-                tz: z2,
-            },
-        ) => e1 == e2 && z1 == z2,
+        (CronSchedule::Cron { expr: e1, tz: z1 }, CronSchedule::Cron { expr: e2, tz: z2 }) => {
+            e1 == e2 && z1 == z2
+        }
         _ => false,
     }
 }

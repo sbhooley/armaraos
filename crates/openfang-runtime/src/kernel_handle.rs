@@ -61,7 +61,8 @@ pub trait KernelHandle: Send + Sync {
     fn memory_recall(&self, key: &str) -> Result<Option<serde_json::Value>, String>;
 
     /// List all keys (and values) stored in shared memory. Optional prefix filter.
-    fn memory_list(&self, prefix: Option<&str>) -> Result<Vec<(String, serde_json::Value)>, String>;
+    fn memory_list(&self, prefix: Option<&str>)
+        -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;

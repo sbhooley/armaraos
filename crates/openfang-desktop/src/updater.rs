@@ -167,16 +167,14 @@ pub fn spawn_periodic_update_check(app_handle: AppHandle) {
                         .clone()
                         .unwrap_or_else(|| "unknown".to_string());
                     let mut state = load_periodic_update_state(&app_handle);
-                    if state.last_notified_noninstallable_version.as_deref() == Some(version.as_str())
+                    if state.last_notified_noninstallable_version.as_deref()
+                        == Some(version.as_str())
                     {
                         // Already notified for this release.
                     } else {
-                        let url = info
-                            .download_url
-                            .clone()
-                            .unwrap_or_else(|| {
-                                "https://github.com/sbhooley/armaraos/releases".to_string()
-                            });
+                        let url = info.download_url.clone().unwrap_or_else(|| {
+                            "https://github.com/sbhooley/armaraos/releases".to_string()
+                        });
                         os_notify::post_from_app(
                             &app_handle,
                             "ArmaraOS Update Available",

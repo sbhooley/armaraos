@@ -33,10 +33,7 @@ fn probe_family_key(name: &str) -> Option<&'static str> {
 }
 
 fn safe_agent_dir_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains("..")
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && !name.contains("..")
 }
 
 /// Best-effort removal of `~/agents/<name>/` after a probe agent is purged from the DB.
@@ -179,7 +176,10 @@ mod tests {
 
     #[test]
     fn probe_family_groups_unique_suffixes() {
-        assert_eq!(probe_family_key("allowlist-probe-abc"), Some("allowlist-probe"));
+        assert_eq!(
+            probe_family_key("allowlist-probe-abc"),
+            Some("allowlist-probe")
+        );
         assert_eq!(probe_family_key("OFFLINE-CRON-UUID"), Some("offline-cron"));
         assert_eq!(probe_family_key("allow-ir-off-9"), Some("allow-ir-off"));
         assert_eq!(probe_family_key("assistant"), None);
@@ -187,11 +187,15 @@ mod tests {
 
     #[test]
     fn probe_name_matches_dashboard_rule() {
-        assert!(is_internal_automation_probe_agent_name("allowlist-probe-abc"));
+        assert!(is_internal_automation_probe_agent_name(
+            "allowlist-probe-abc"
+        ));
         assert!(is_internal_automation_probe_agent_name("ALLOWLIST-PROBE-1"));
         assert!(is_internal_automation_probe_agent_name("offline-cron-uuid"));
         assert!(is_internal_automation_probe_agent_name("allow-ir-off-test"));
         assert!(!is_internal_automation_probe_agent_name("assistant"));
-        assert!(!is_internal_automation_probe_agent_name("allowlist-regular"));
+        assert!(!is_internal_automation_probe_agent_name(
+            "allowlist-regular"
+        ));
     }
 }

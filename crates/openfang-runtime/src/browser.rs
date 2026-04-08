@@ -1181,10 +1181,7 @@ fn contains_top_level_return(expr: &str) -> bool {
             }
             b'r' if depth == 0 => {
                 let tail = &expr[i..];
-                if tail.starts_with("return ")
-                    || tail.starts_with("return;")
-                    || tail == "return"
-                {
+                if tail.starts_with("return ") || tail.starts_with("return;") || tail == "return" {
                     return true;
                 }
             }

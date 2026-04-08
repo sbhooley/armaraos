@@ -137,8 +137,8 @@ impl GoogleChatAdapter {
         token_uri: &str,
         private_key_pem: &str,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        use base64::Engine as _;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
 
         let now = Utc::now().timestamp();
         let exp = now + 3600;
@@ -164,11 +164,8 @@ impl GoogleChatAdapter {
         // RS256 signing using OpenSSL
         let pkey = openssl::pkey::PKey::private_key_from_pem(private_key_pem.as_bytes())
             .map_err(|e| format!("Failed to load private key: {e}"))?;
-        let mut signer = openssl::sign::Signer::new(
-            openssl::hash::MessageDigest::sha256(),
-            &pkey,
-        )
-        .map_err(|e| format!("Failed to create signer: {e}"))?;
+        let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &pkey)
+            .map_err(|e| format!("Failed to create signer: {e}"))?;
         signer
             .update(signing_input.as_bytes())
             .map_err(|e| format!("Signer update failed: {e}"))?;

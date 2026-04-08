@@ -313,12 +313,7 @@ impl ToolProfile {
     /// Expand profile to tool name list.
     pub fn tools(&self) -> Vec<String> {
         match self {
-            Self::Minimal => vec![
-                "file_read",
-                "file_list",
-                "channel_send",
-                "event_publish",
-            ],
+            Self::Minimal => vec!["file_read", "file_list", "channel_send", "event_publish"],
             Self::Coding => vec![
                 "file_read",
                 "file_write",

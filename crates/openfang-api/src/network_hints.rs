@@ -93,7 +93,10 @@ fn proxy_env_flags() -> ProxyEnv {
     let mut map = serde_json::Map::new();
     let mut any = false;
     for k in keys {
-        let set = std::env::var(k).ok().filter(|s| !s.trim().is_empty()).is_some();
+        let set = std::env::var(k)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .is_some();
         if set {
             any = true;
         }

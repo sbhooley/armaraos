@@ -570,8 +570,7 @@ fn diagnostics_zip_filename_ok(name: &str) -> bool {
     if parts[0].len() != 8 || parts[1].len() != 6 {
         return false;
     }
-    parts[0].chars().all(|c| c.is_ascii_digit())
-        && parts[1].chars().all(|c| c.is_ascii_digit())
+    parts[0].chars().all(|c| c.is_ascii_digit()) && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
 fn resolve_support_bundle_for_copy(
@@ -726,7 +725,10 @@ end run
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Could not start osascript: {e}"))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| "osascript stdin".to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "osascript stdin".to_string())?;
     stdin
         .write_all(SCRIPT)
         .map_err(|e| format!("osascript stdin: {e}"))?;
@@ -748,9 +750,7 @@ end run
 
 #[cfg(target_os = "linux")]
 fn try_compose_mail_linux_attachment(bundle: &std::path::Path) -> Result<(), String> {
-    let p = bundle
-        .to_str()
-        .ok_or_else(|| "Invalid path".to_string())?;
+    let p = bundle.to_str().ok_or_else(|| "Invalid path".to_string())?;
     let status = Command::new("xdg-email")
         .args([
             "--subject",
@@ -816,7 +816,9 @@ pub fn compose_support_email(bundle_path: Option<String>) -> Result<serde_json::
 
 /// Desktop telemetry prefs for the Setup Wizard (opt-out before first PostHog ping).
 #[tauri::command]
-pub fn get_desktop_product_analytics_prefs(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn get_desktop_product_analytics_prefs(
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
     Ok(crate::product_analytics::prefs_json(&app))
 }
 

@@ -167,10 +167,7 @@ pub fn persist_config_schema_version_line(path: &Path, version: u32) -> std::io:
     let mut out_lines: Vec<String> = Vec::new();
     for line in raw.lines() {
         let t = line.trim();
-        if !t.starts_with('#')
-            && t.starts_with("config_schema_version")
-            && t.contains('=')
-        {
+        if !t.starts_with('#') && t.starts_with("config_schema_version") && t.contains('=') {
             out_lines.push(format!("config_schema_version = {}", version));
             replaced = true;
         } else {
@@ -625,8 +622,11 @@ mod tests {
         super::persist_config_schema_version_line(&path, super::CONFIG_SCHEMA_VERSION).unwrap();
         let disk = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
-            disk.matches(&format!("config_schema_version = {}", super::CONFIG_SCHEMA_VERSION))
-                .count(),
+            disk.matches(&format!(
+                "config_schema_version = {}",
+                super::CONFIG_SCHEMA_VERSION
+            ))
+            .count(),
             1
         );
     }

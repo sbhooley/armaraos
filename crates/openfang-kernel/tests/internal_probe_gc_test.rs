@@ -30,7 +30,12 @@ async fn gc_removes_probe_agent_with_no_cron_on_next_boot() {
     }
 
     let kernel2 = OpenFangKernel::boot_with_config(config).expect("boot2");
-    let names: Vec<String> = kernel2.registry.list().into_iter().map(|e| e.name).collect();
+    let names: Vec<String> = kernel2
+        .registry
+        .list()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
     assert!(
         !names.iter().any(|n| n == "allowlist-probe-gc-unref"),
         "orphan probe should be GC'd, got {names:?}"
@@ -84,7 +89,12 @@ async fn gc_keeps_probe_agent_referenced_by_cron() {
     }
 
     let kernel2 = OpenFangKernel::boot_with_config(config).expect("boot2");
-    let names: Vec<String> = kernel2.registry.list().into_iter().map(|e| e.name).collect();
+    let names: Vec<String> = kernel2
+        .registry
+        .list()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
     assert!(
         names.iter().any(|n| n == "allowlist-probe-gc-kept"),
         "probe with cron should remain, got {names:?}"

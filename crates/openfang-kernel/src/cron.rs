@@ -402,7 +402,8 @@ impl CronScheduler {
                 if !matches!(&j.action, CronAction::AinlRun { .. }) {
                     return false;
                 }
-                let legacy = j.name.starts_with("armaraos-") || j.name.starts_with("ainl-upstream-");
+                let legacy =
+                    j.name.starts_with("armaraos-") || j.name.starts_with("ainl-upstream-");
                 legacy && !curated_names.contains(&j.name)
             })
             .map(|r| *r.key())

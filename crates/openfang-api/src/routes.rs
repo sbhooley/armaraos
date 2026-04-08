@@ -3542,7 +3542,12 @@ pub async fn test_channel(
             );
         }
         let url = format!("https://api.telegram.org/bot{token}/getMe");
-        match reqwest::Client::new().get(&url).timeout(std::time::Duration::from_secs(10)).send().await {
+        match reqwest::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
             Err(e) => {
                 return (
                     StatusCode::OK,
@@ -4168,8 +4173,8 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
     let memory = state.kernel.memory.clone();
     let db_ok = tokio::task::spawn_blocking(move || memory.sqlite_liveness_probe())
-    .await
-    .unwrap_or(false);
+        .await
+        .unwrap_or(false);
 
     let config_warnings = state.kernel.config.validate();
     let status = if db_ok { "ok" } else { "degraded" };
@@ -5933,11 +5938,8 @@ pub async fn audit_recent(
         .iter()
         .filter(|e| {
             q.as_ref().is_none_or(|needle| {
-                let hay = format!(
-                    "{:?} {} {} {}",
-                    e.action, e.detail, e.outcome, e.agent_id
-                )
-                .to_lowercase();
+                let hay = format!("{:?} {} {} {}", e.action, e.detail, e.outcome, e.agent_id)
+                    .to_lowercase();
                 hay.contains(needle.as_str())
             })
         })
@@ -6262,11 +6264,9 @@ pub async fn daemon_logs_recent(
 ) -> impl IntoResponse {
     let home = openfang_kernel::config::openfang_home();
     let path_opt = resolve_daemon_tracing_log_path(&home);
-    let rel_display = path_opt.as_ref().and_then(|p| {
-        p.strip_prefix(&home)
-            .ok()
-            .map(|s| s.display().to_string())
-    });
+    let rel_display = path_opt
+        .as_ref()
+        .and_then(|p| p.strip_prefix(&home).ok().map(|s| s.display().to_string()));
 
     let n: usize = params
         .get("lines")
@@ -6274,7 +6274,11 @@ pub async fn daemon_logs_recent(
         .unwrap_or(200)
         .clamp(1, 2000);
 
-    let min_level = params.get("level").cloned().unwrap_or_default().to_lowercase();
+    let min_level = params
+        .get("level")
+        .cloned()
+        .unwrap_or_default()
+        .to_lowercase();
     let text = params
         .get("filter")
         .cloned()
@@ -6322,7 +6326,11 @@ pub async fn daemon_logs_stream(
     use std::time::Duration;
 
     let home = openfang_kernel::config::openfang_home();
-    let min_level = params.get("level").cloned().unwrap_or_default().to_lowercase();
+    let min_level = params
+        .get("level")
+        .cloned()
+        .unwrap_or_default()
+        .to_lowercase();
     let text_filter = params
         .get("filter")
         .cloned()
@@ -6383,8 +6391,8 @@ pub async fn daemon_logs_stream(
                 if !daemon_line_matches(line, &min_level, &text_filter) {
                     continue;
                 }
-                let data = serde_json::to_string(&serde_json::json!({ "line": line }))
-                    .unwrap_or_default();
+                let data =
+                    serde_json::to_string(&serde_json::json!({ "line": line })).unwrap_or_default();
                 if tx.send(Ok(Event::default().data(data))).await.is_err() {
                     return;
                 }
@@ -9437,9 +9445,7 @@ const SLASH_TEMPLATES_FILE: &str = "slash-templates.json";
 ///
 /// Returns `{"templates": [...]}` where each entry is `{"name":"...","text":"..."}`.
 /// Returns an empty array (not 404) when the file doesn't exist yet.
-pub async fn get_slash_templates(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn get_slash_templates(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let path = state.kernel.config.home_dir.join(SLASH_TEMPLATES_FILE);
     let body = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -10670,7 +10676,10 @@ fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<()
 
     // Ensure parent directory exists
     let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "secrets.env has no parent directory")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "secrets.env has no parent directory",
+        )
     })?;
     std::fs::create_dir_all(parent)?;
 
@@ -11993,8 +12002,7 @@ fn is_allowed_diagnostics_zip_name(name: &str) -> bool {
     if parts[0].len() != 8 || parts[1].len() != 6 {
         return false;
     }
-    parts[0].chars().all(|c| c.is_ascii_digit())
-        && parts[1].chars().all(|c| c.is_ascii_digit())
+    parts[0].chars().all(|c| c.is_ascii_digit()) && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
 /// GET /api/support/diagnostics/download?name=armaraos-diagnostics-YYYYMMDD-HHMMSS.zip
@@ -12561,10 +12569,16 @@ pub async fn patch_agent_config(
 fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agent::AgentEntry) {
     use toml::Value;
 
-    let Ok(raw) = std::fs::read_to_string(path) else { return };
-    let Ok(mut doc) = raw.parse::<Value>() else { return };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut doc) = raw.parse::<Value>() else {
+        return;
+    };
 
-    let Some(root) = doc.as_table_mut() else { return };
+    let Some(root) = doc.as_table_mut() else {
+        return;
+    };
 
     // Update [model].system_prompt
     if let Some(Value::Table(model)) = root.get_mut("model") {
@@ -12603,7 +12617,9 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
         }
     }
 
-    let Ok(updated) = toml::to_string_pretty(&doc) else { return };
+    let Ok(updated) = toml::to_string_pretty(&doc) else {
+        return;
+    };
     if updated != raw {
         if let Err(e) = std::fs::write(path, &updated) {
             tracing::warn!(path = %path.display(), "Failed to write agent.toml after config patch: {e}");
@@ -12615,8 +12631,12 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
 
 fn set_toml_opt_value(tbl: &mut toml::map::Map<String, toml::Value>, key: &str, val: Option<&str>) {
     match val {
-        Some(v) if !v.is_empty() => { tbl.insert(key.to_string(), toml::Value::String(v.to_string())); }
-        _ => { tbl.remove(key); }
+        Some(v) if !v.is_empty() => {
+            tbl.insert(key.to_string(), toml::Value::String(v.to_string()));
+        }
+        _ => {
+            tbl.remove(key);
+        }
     }
 }
 

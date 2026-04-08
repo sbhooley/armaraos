@@ -12,12 +12,12 @@ mod app_menu;
 mod commands;
 mod notification_icon;
 mod os_notify;
+mod product_analytics;
 mod server;
 mod shortcuts;
 mod tray;
 mod ui_prefs;
 mod updater;
-mod product_analytics;
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::event::{EventPayload, LifecycleEvent, SystemEvent};
@@ -66,9 +66,7 @@ pub fn run() {
             .menu(crate::app_menu::build)
             .on_menu_event(|app, event| {
                 if event.id() == "help_support_email" {
-                    let _ = open::that(
-                        "mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support",
-                    );
+                    let _ = open::that("mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support");
                 } else if event.id() == "help_ainl_website" {
                     let _ = open::that("https://ainativelang.com/");
                 } else if event.id() == "help_ainl_x" {

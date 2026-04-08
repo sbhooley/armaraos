@@ -523,7 +523,10 @@ mod tests {
     use openfang_types::config::TurnWatchdogSettings;
     use std::collections::HashMap;
 
-    fn check_agents_no_phases(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<HeartbeatStatus> {
+    fn check_agents_no_phases(
+        registry: &AgentRegistry,
+        config: &HeartbeatConfig,
+    ) -> Vec<HeartbeatStatus> {
         let phases = DashMap::new();
         let tw = TurnWatchdogSettings {
             enabled: false,
@@ -827,12 +830,7 @@ mod tests {
         let registry = crate::registry::AgentRegistry::new();
         let ten_min_ago = Utc::now() - Duration::seconds(600);
         let five_min_ago = Utc::now() - Duration::seconds(300);
-        let agent = make_entry(
-            "react-opt",
-            AgentState::Running,
-            ten_min_ago,
-            five_min_ago,
-        );
+        let agent = make_entry("react-opt", AgentState::Running, ten_min_ago, five_min_ago);
         registry.register(agent).unwrap();
 
         let config = HeartbeatConfig {

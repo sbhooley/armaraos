@@ -842,8 +842,8 @@ fn init_tracing_daemon() {
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, Registry};
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(config_log_level()));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(config_log_level()));
 
     let log_dir = cli_openfang_home().join("logs");
     if std::fs::create_dir_all(&log_dir).is_err() {

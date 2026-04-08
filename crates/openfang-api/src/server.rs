@@ -223,8 +223,7 @@ pub async fn build_router(
         )
         .route(
             "/api/slash-templates",
-            axum::routing::get(routes::get_slash_templates)
-                .put(routes::put_slash_templates),
+            axum::routing::get(routes::get_slash_templates).put(routes::put_slash_templates),
         )
         .route(
             "/api/agents/{id}/model",
@@ -470,10 +469,7 @@ pub async fn build_router(
             "/api/audit/verify",
             axum::routing::get(routes::audit_verify),
         )
-        .route(
-            "/api/cron/runs",
-            axum::routing::get(routes::cron_runs),
-        )
+        .route("/api/cron/runs", axum::routing::get(routes::cron_runs))
         .route(
             "/api/observability/snapshot",
             axum::routing::get(routes::observability_snapshot),

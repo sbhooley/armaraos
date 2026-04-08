@@ -861,17 +861,14 @@ impl Default for ExecPolicy {
             mode: ExecSecurityMode::Full,
             safe_bins: vec![
                 // Basic stdin/stream utilities
-                "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail",
-                "wc", "date", "echo", "printf", "basename", "dirname", "pwd", "env",
+                "sleep", "true", "false", "cat", "sort", "uniq", "cut", "tr", "head", "tail", "wc",
+                "date", "echo", "printf", "basename", "dirname", "pwd", "env",
                 // File system navigation and inspection (read-only)
-                "ls", "find", "grep", "rg", "which", "whereis", "type",
-                "stat", "file", "diff", "cmp", "od", "xxd",
-                // Process and system info (read-only)
-                "ps", "df", "du", "uname", "arch", "hostname", "id", "whoami",
-                "lsof", "lscpu", "uptime", "lsblk",
-                // Text processing utilities
-                "awk", "sed", "jq", "xargs",
-                // Common path/string utilities
+                "ls", "find", "grep", "rg", "which", "whereis", "type", "stat", "file", "diff",
+                "cmp", "od", "xxd", // Process and system info (read-only)
+                "ps", "df", "du", "uname", "arch", "hostname", "id", "whoami", "lsof", "lscpu",
+                "uptime", "lsblk", // Text processing utilities
+                "awk", "sed", "jq", "xargs", // Common path/string utilities
                 "realpath", "readlink", "tee", "mktemp",
             ]
             .into_iter()

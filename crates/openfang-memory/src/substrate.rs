@@ -69,9 +69,10 @@ impl MemorySubstrate {
 
     /// Minimal read for HTTP `/api/health` — verifies SQLite is reachable (WAL + busy_timeout apply).
     pub fn sqlite_liveness_probe(&self) -> bool {
-        self.conn.lock().ok().is_some_and(|c| {
-            c.query_row("SELECT 1", [], |_| Ok(())).is_ok()
-        })
+        self.conn
+            .lock()
+            .ok()
+            .is_some_and(|c| c.query_row("SELECT 1", [], |_| Ok(())).is_ok())
     }
 
     /// Create the semantic store, optionally with HTTP backend.

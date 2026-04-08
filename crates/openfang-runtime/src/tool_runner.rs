@@ -1822,7 +1822,11 @@ fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, Str
             };
             output.push_str(&format!(
                 "    tools: {}{}\n",
-                shown.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                shown
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 suffix
             ));
         }

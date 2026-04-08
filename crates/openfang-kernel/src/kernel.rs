@@ -1394,8 +1394,7 @@ impl OpenFangKernel {
                     // DB-stored exec_policy values may be stale (e.g. from before the kernel
                     // default changed to Full).  Per-agent overrides should live in the agent's
                     // TOML file; they are applied below via apply_shell_caps_to_exec_policy.
-                    restored_entry.manifest.exec_policy =
-                        Some(kernel.config.exec_policy.clone());
+                    restored_entry.manifest.exec_policy = Some(kernel.config.exec_policy.clone());
                     apply_shell_caps_to_exec_policy(&mut restored_entry.manifest);
 
                     // Apply global budget defaults to restored agents
@@ -1465,7 +1464,8 @@ impl OpenFangKernel {
         }
         // Drop internal automation/probe agents that nothing schedules anymore (stale test
         // harness / reinstall leftovers). Matches dashboard "Automation & probe chats" names.
-        let pruned = crate::internal_automation_probe::gc_unreferenced_internal_probe_agents(&kernel);
+        let pruned =
+            crate::internal_automation_probe::gc_unreferenced_internal_probe_agents(&kernel);
         if pruned > 0 {
             info!(
                 count = pruned,
@@ -2054,7 +2054,9 @@ impl OpenFangKernel {
                         Ok(result)
                     }
                     Err(e) => {
-                        let _ = kernel_clone.registry.record_turn_failure(agent_id, format!("{e}"));
+                        let _ = kernel_clone
+                            .registry
+                            .record_turn_failure(agent_id, format!("{e}"));
                         kernel_clone.audit_log.record(
                             agent_id.to_string(),
                             openfang_runtime::audit::AuditAction::AgentMessage,
@@ -2472,7 +2474,9 @@ impl OpenFangKernel {
                     Ok(result)
                 }
                 Err(e) => {
-                    let _ = kernel_clone.registry.record_turn_failure(agent_id, format!("{e}"));
+                    let _ = kernel_clone
+                        .registry
+                        .record_turn_failure(agent_id, format!("{e}"));
                     kernel_clone.audit_log.record(
                         agent_id.to_string(),
                         openfang_runtime::audit::AuditAction::AgentMessage,
@@ -4135,9 +4139,7 @@ impl OpenFangKernel {
 
     /// RFC3339 time of the last cron scheduler wake (background 15s loop), if any.
     pub fn last_cron_scheduler_tick_rfc3339(&self) -> Option<String> {
-        let ms = self
-            .last_cron_scheduler_tick_ms
-            .load(Ordering::Relaxed);
+        let ms = self.last_cron_scheduler_tick_ms.load(Ordering::Relaxed);
         if ms == 0 {
             return None;
         }
@@ -4965,10 +4967,7 @@ impl OpenFangKernel {
                             .registry
                             .set_state(status.agent_id, AgentState::Crashed);
 
-                        if kernel
-                            .heartbeat_failure_gate
-                            .allow_notify(status.agent_id)
-                        {
+                        if kernel.heartbeat_failure_gate.allow_notify(status.agent_id) {
                             warn!(
                                 agent = %status.name,
                                 inactive_secs = status.inactive_secs,
@@ -6205,7 +6204,8 @@ impl OpenFangKernel {
                         {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
-                                let preview = openfang_types::truncate_str(result.response.trim(), 400);
+                                let preview =
+                                    openfang_types::truncate_str(result.response.trim(), 400);
                                 self.audit_log.record(
                                     agent_id.to_string(),
                                     openfang_runtime::audit::AuditAction::CronJobOutput,
@@ -7048,7 +7048,10 @@ impl KernelHandle for OpenFangKernel {
             .list_kv(agent_id)
             .map_err(|e| format!("Memory list failed: {e}"))?;
         if let Some(pfx) = prefix {
-            Ok(all.into_iter().filter(|(k, _)| k.starts_with(pfx)).collect())
+            Ok(all
+                .into_iter()
+                .filter(|(k, _)| k.starts_with(pfx))
+                .collect())
         } else {
             Ok(all)
         }

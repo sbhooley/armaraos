@@ -514,10 +514,7 @@ impl ClawHubClient {
         // Step 1: Fetch detail to get the expected SHA256 (may be empty if API
         // does not yet supply it — download proceeds but is marked unverified).
         let expected_sha256 = match self.get_skill(slug).await {
-            Ok(detail) => detail
-                .latest_version
-                .map(|v| v.sha256)
-                .unwrap_or_default(),
+            Ok(detail) => detail.latest_version.map(|v| v.sha256).unwrap_or_default(),
             Err(e) => {
                 warn!(slug, error = %e, "Could not fetch skill detail for checksum — proceeding without hash verification");
                 String::new()

@@ -115,10 +115,7 @@ fn phantom_action_detected(text: &str) -> bool {
 /// Detect when the LLM claims to have started/stopped a process without actually calling
 /// `process_start` or `process_kill`. Fires even when other tools were used (e.g., process_list
 /// was called but the model then claimed the process was started without calling process_start).
-fn process_phantom_detected(
-    text: &str,
-    tools_called: &std::collections::HashSet<String>,
-) -> bool {
+fn process_phantom_detected(text: &str, tools_called: &std::collections::HashSet<String>) -> bool {
     let lower = text.to_lowercase();
 
     // Phantom start: model claims process is now running without having called process_start
@@ -183,7 +180,10 @@ struct ToolErrorTracker {
 
 impl ToolErrorTracker {
     fn new() -> Self {
-        Self { last_fingerprint: None, same_fingerprint_streak: 0 }
+        Self {
+            last_fingerprint: None,
+            same_fingerprint_streak: 0,
+        }
     }
 
     /// Call when a tool round produced no errors so counters reset cleanly.
@@ -204,9 +204,12 @@ impl ToolErrorTracker {
         let all_errors: Vec<(&str, &str)> = tool_result_blocks
             .iter()
             .filter_map(|b| match b {
-                ContentBlock::ToolResult { tool_name, content, is_error: true, .. } => {
-                    Some((tool_name.as_str(), content.as_str()))
-                }
+                ContentBlock::ToolResult {
+                    tool_name,
+                    content,
+                    is_error: true,
+                    ..
+                } => Some((tool_name.as_str(), content.as_str())),
                 _ => None,
             })
             .collect();
@@ -255,10 +258,12 @@ impl ToolErrorTracker {
                         || c.contains("Missing required")
                         || c.contains("missing required")
                 });
-                let failing_tools: Vec<&str> =
-                    all_errors.iter().map(|(n, _)| *n).collect::<std::collections::HashSet<_>>()
-                        .into_iter()
-                        .collect();
+                let failing_tools: Vec<&str> = all_errors
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
                 let tool_list = failing_tools.join(", ");
 
                 if has_missing_param {
@@ -635,9 +640,9 @@ pub async fn run_agent_loop(
         if let Some(ref mut rx) = btw_rx {
             while let Ok(btw_text) = rx.try_recv() {
                 info!("Injecting /btw context ({} chars)", btw_text.len());
-                messages.push(openfang_types::message::Message::user(
-                    format!("[btw] {btw_text}"),
-                ));
+                messages.push(openfang_types::message::Message::user(format!(
+                    "[btw] {btw_text}"
+                )));
             }
         }
 
@@ -840,7 +845,7 @@ pub async fn run_agent_loop(
                         "[System: You described starting or stopping a process but did not call \
                          process_start or process_kill. You must call the appropriate process \
                          management tool to actually perform the action — do not claim the process \
-                         is running/stopped without having called the tool.]"
+                         is running/stopped without having called the tool.]",
                     ));
                     last_tools_called.clear();
                     continue;
@@ -1017,7 +1022,9 @@ pub async fn run_agent_loop(
                             .filter(|c| !c.is_control())
                             .take(64)
                             .collect();
-                        cb(LoopPhase::ToolUse { tool_name: sanitized });
+                        cb(LoopPhase::ToolUse {
+                            tool_name: sanitized,
+                        });
                     }
 
                     // Fire BeforeToolCall hook (synchronous gate — must run before dispatch)
@@ -1035,7 +1042,10 @@ pub async fn run_agent_loop(
                             dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!("Hook blocked tool '{}': {}", tool_call.name, reason),
+                                content: format!(
+                                    "Hook blocked tool '{}': {}",
+                                    tool_call.name, reason
+                                ),
                                 is_error: true,
                             }));
                             continue;
@@ -1046,11 +1056,9 @@ pub async fn run_agent_loop(
                     // tool calls before they reach the tool handler. Returns a rich error
                     // with the full field list so the LLM can self-correct in one step.
                     if let Some(def) = available_tools.iter().find(|d| d.name == tool_call.name) {
-                        if let Some(err_msg) = missing_required_params_error(
-                            &tool_call.name,
-                            &tool_call.input,
-                            def,
-                        ) {
+                        if let Some(err_msg) =
+                            missing_required_params_error(&tool_call.name, &tool_call.input, def)
+                        {
                             debug!(tool = %tool_call.name, "Pre-execution param validation failed");
                             dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
@@ -1137,7 +1145,10 @@ pub async fn run_agent_loop(
                                     warn!(tool = %tc.name, "Tool execution timed out after {}s", timeout_secs);
                                     openfang_types::tool::ToolResult {
                                         tool_use_id: tc.id.clone(),
-                                        content: format!("Tool '{}' timed out after {}s.", tc.name, timeout_secs),
+                                        content: format!(
+                                            "Tool '{}' timed out after {}s.",
+                                            tc.name, timeout_secs
+                                        ),
                                         is_error: true,
                                     }
                                 }
@@ -1158,12 +1169,14 @@ pub async fn run_agent_loop(
                                 let _ = hook_reg.fire(&ctx);
                             }
 
-                            let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-                            let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                                format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                            } else {
-                                content
-                            };
+                            let content =
+                                truncate_tool_result_dynamic(&result.content, &context_budget);
+                            let final_content =
+                                if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
+                                    format!("{content}\n\n[LOOP GUARD] {warn_msg}")
+                                } else {
+                                    content
+                                };
 
                             tool_result_blocks.push(ContentBlock::ToolResult {
                                 tool_use_id: result.tool_use_id,
@@ -2094,9 +2107,9 @@ pub async fn run_agent_loop_streaming(
         if let Some(ref mut rx) = btw_rx {
             while let Ok(btw_text) = rx.try_recv() {
                 info!("Injecting /btw context ({} chars)", btw_text.len());
-                messages.push(openfang_types::message::Message::user(
-                    format!("[btw] {btw_text}"),
-                ));
+                messages.push(openfang_types::message::Message::user(format!(
+                    "[btw] {btw_text}"
+                )));
             }
         }
 
@@ -2160,10 +2173,12 @@ pub async fn run_agent_loop_streaming(
             }
         }
         if iteration > 0 {
-            let _ = stream_tx.send(StreamEvent::PhaseChange {
-                phase: "iteration".to_string(),
-                detail: Some(format!("Step {} — thinking…", iteration + 1)),
-            }).await;
+            let _ = stream_tx
+                .send(StreamEvent::PhaseChange {
+                    phase: "iteration".to_string(),
+                    detail: Some(format!("Step {} — thinking…", iteration + 1)),
+                })
+                .await;
         }
 
         // Stream LLM call with retry, error classification, and circuit breaker
@@ -2319,7 +2334,7 @@ pub async fn run_agent_loop_streaming(
                         "[System: You described starting or stopping a process but did not call \
                          process_start or process_kill. You must call the appropriate process \
                          management tool to actually perform the action — do not claim the process \
-                         is running/stopped without having called the tool.]"
+                         is running/stopped without having called the tool.]",
                     ));
                     last_tools_called.clear();
                     continue;
@@ -2445,8 +2460,7 @@ pub async fn run_agent_loop_streaming(
                 let mut tool_result_blocks = Vec::new();
 
                 let deduped_s = deduplicate_tool_calls(&response);
-                let mut dispatches_s: Vec<ToolDispatch<'_>> =
-                    Vec::with_capacity(deduped_s.len());
+                let mut dispatches_s: Vec<ToolDispatch<'_>> = Vec::with_capacity(deduped_s.len());
 
                 for tool_call in &deduped_s {
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
@@ -2492,7 +2506,9 @@ pub async fn run_agent_loop_streaming(
                             .filter(|c| !c.is_control())
                             .take(64)
                             .collect();
-                        cb(LoopPhase::ToolUse { tool_name: sanitized });
+                        cb(LoopPhase::ToolUse {
+                            tool_name: sanitized,
+                        });
                     }
 
                     if let Some(hook_reg) = hooks {
@@ -2509,7 +2525,10 @@ pub async fn run_agent_loop_streaming(
                             dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!("Hook blocked tool '{}': {}", tool_call.name, reason),
+                                content: format!(
+                                    "Hook blocked tool '{}': {}",
+                                    tool_call.name, reason
+                                ),
                                 is_error: true,
                             }));
                             continue;
@@ -2518,11 +2537,9 @@ pub async fn run_agent_loop_streaming(
 
                     // Pre-execution required-param validation (streaming path).
                     if let Some(def) = available_tools.iter().find(|d| d.name == tool_call.name) {
-                        if let Some(err_msg) = missing_required_params_error(
-                            &tool_call.name,
-                            &tool_call.input,
-                            def,
-                        ) {
+                        if let Some(err_msg) =
+                            missing_required_params_error(&tool_call.name, &tool_call.input, def)
+                        {
                             debug!(tool = %tool_call.name, "Pre-execution param validation failed (streaming)");
                             dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
@@ -2585,9 +2602,10 @@ pub async fn run_agent_loop_streaming(
                     pending_futures_s.into_iter().unzip();
                 let parallel_results_s = futures::future::join_all(pending_futs_s).await;
 
-                let mut pending_iter_s = <Vec<&&ToolCall> as IntoIterator>::into_iter(pending_tcs_s)
-                    .zip(parallel_results_s.into_iter())
-                    .peekable();
+                let mut pending_iter_s =
+                    <Vec<&&ToolCall> as IntoIterator>::into_iter(pending_tcs_s)
+                        .zip(parallel_results_s.into_iter())
+                        .peekable();
 
                 for dispatch in &dispatches_s {
                     match dispatch {
@@ -2603,7 +2621,10 @@ pub async fn run_agent_loop_streaming(
                                     warn!(tool = %tc.name, "Tool execution timed out after {}s (streaming)", timeout_secs);
                                     openfang_types::tool::ToolResult {
                                         tool_use_id: tc.id.clone(),
-                                        content: format!("Tool '{}' timed out after {}s.", tc.name, timeout_secs),
+                                        content: format!(
+                                            "Tool '{}' timed out after {}s.",
+                                            tc.name, timeout_secs
+                                        ),
                                         is_error: true,
                                     }
                                 }
@@ -2623,12 +2644,14 @@ pub async fn run_agent_loop_streaming(
                                 let _ = hook_reg.fire(&ctx);
                             }
 
-                            let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-                            let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                                format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                            } else {
-                                content
-                            };
+                            let content =
+                                truncate_tool_result_dynamic(&result.content, &context_budget);
+                            let final_content =
+                                if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
+                                    format!("{content}\n\n[LOOP GUARD] {warn_msg}")
+                                } else {
+                                    content
+                                };
 
                             let preview: String = final_content.chars().take(300).collect();
                             if stream_tx
@@ -2685,7 +2708,11 @@ pub async fn run_agent_loop_streaming(
                         if let Some(cb) = on_phase {
                             cb(LoopPhase::Done);
                         }
-                        let _ = stream_tx.send(StreamEvent::TextDelta { text: summary.to_string() }).await;
+                        let _ = stream_tx
+                            .send(StreamEvent::TextDelta {
+                                text: summary.to_string(),
+                            })
+                            .await;
                         return Ok(AgentLoopResult {
                             response: summary.to_string(),
                             total_usage,
@@ -2827,7 +2854,11 @@ pub async fn run_agent_loop_streaming(
     session.messages.push(Message::assistant(&fallback));
 
     // Stream the fallback message so the UI displays it in the chat bubble
-    let _ = stream_tx.send(StreamEvent::TextDelta { text: fallback.clone() }).await;
+    let _ = stream_tx
+        .send(StreamEvent::TextDelta {
+            text: fallback.clone(),
+        })
+        .await;
 
     if let Err(e) = memory.save_session_async(session).await {
         warn!("Failed to save session on max iterations: {e}");
@@ -4028,11 +4059,13 @@ mod tests {
         .expect("Loop should complete without error");
 
         // On the first tool error, the tracker should inject a [System: ...] guidance block.
-        let guidance_seen = session.messages.iter().any(|msg| match &msg.content {
+        let guidance_seen = session.messages.iter().any(|msg| {
+            match &msg.content {
             MessageContent::Blocks(blocks) => blocks.iter().any(|block| {
                 matches!(block, ContentBlock::Text { text, .. } if text.starts_with("[System:"))
             }),
             _ => false,
+        }
         });
 
         assert!(

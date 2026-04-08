@@ -277,7 +277,10 @@ impl MarketplaceClient {
                     }
                 }
                 None => {
-                    warn!(skill_name, "Could not parse skill.toml for manifest security scan");
+                    warn!(
+                        skill_name,
+                        "Could not parse skill.toml for manifest security scan"
+                    );
                 }
             }
         }

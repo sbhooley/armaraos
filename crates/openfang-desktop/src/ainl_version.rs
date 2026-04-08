@@ -244,9 +244,10 @@ pub fn spawn_ainl_pypi_notify_check(app_handle: AppHandle) {
             // Silent pip upgrade when PyPI is newer (throttled in `ainl::maybe_auto_upgrade_ainl_pip`).
             if info.upgrade_available && info.pypi_error.is_none() {
                 let app_pip = app_handle.clone();
-                if let Err(e) =
-                    tokio::task::spawn_blocking(move || crate::ainl::maybe_auto_upgrade_ainl_pip(&app_pip))
-                        .await
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    crate::ainl::maybe_auto_upgrade_ainl_pip(&app_pip)
+                })
+                .await
                 {
                     tracing::warn!("AINL auto pip upgrade task failed: {e}");
                 }

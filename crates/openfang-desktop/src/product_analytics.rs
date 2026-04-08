@@ -115,7 +115,11 @@ fn save_prefs_file(path: &Path, prefs: &TelemetryPrefs) -> Result<(), String> {
 }
 
 /// Merge-update telemetry prefs from the dashboard wizard.
-pub fn save_prefs_merged(opt_out: bool, from_wizard_continue: bool, app: &AppHandle) -> Result<(), String> {
+pub fn save_prefs_merged(
+    opt_out: bool,
+    from_wizard_continue: bool,
+    app: &AppHandle,
+) -> Result<(), String> {
     let path = prefs_path(app)?;
     let mut p = load_prefs_file(&path).unwrap_or_default();
     p.opt_out = opt_out;
