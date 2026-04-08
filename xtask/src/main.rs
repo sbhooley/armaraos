@@ -30,7 +30,7 @@ enum Cmd {
     /// This step is intended to run in the release pipeline before the Tauri bundle.
     BundleAinlWheel {
         /// AINL version to download from PyPI.
-        #[arg(long, default_value = "1.4.0")]
+        #[arg(long, default_value = "1.4.1")]
         version: String,
 
         /// If set, remove any existing `ainativelang-*-py3-none-any.whl` before downloading.

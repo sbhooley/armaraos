@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-04-08
+
+### Fixed
+
+- **Release / desktop CI:** The **Bundle AINL wheel** step failed because **`ainativelang==1.4.2`** is not published on PyPI (pip reported versions through **1.4.1** only). **`AINL_PYPI_VERSION`** in [`.github/workflows/release.yml`](.github/workflows/release.yml) is pinned to **1.4.1**; [`.github/workflows/ci.yml`](.github/workflows/ci.yml) desktop bundle job and **`xtask bundle-ainl-wheel`** default match. When a newer AINL is uploaded to PyPI, bump this pin and the comment in `release.yml`.
+
 ## [0.6.7] - 2026-04-08
 
 ### Fixed
@@ -356,6 +362,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.8]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.8
 [0.6.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.7
 [0.6.6]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.6
 [0.6.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.5
