@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-04-09
+
+### Changed
+
+- **Desktop release bundle:** Pinned **`ainativelang`** wheel for Tauri resources to **1.4.2** ([PyPI](https://pypi.org/project/ainativelang/)); **`AINL_PYPI_VERSION`** in [`.github/workflows/release.yml`](.github/workflows/release.yml), the CI desktop bundle step in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), and **`xtask bundle-ainl-wheel`** default now match. (v0.6.8 temporarily used **1.4.1** because **1.4.2** was not yet published.)
+
 ## [0.6.8] - 2026-04-08
 
 ### Fixed
@@ -362,6 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.9]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.9
 [0.6.8]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.8
 [0.6.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.7
 [0.6.6]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.6
