@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-04-08
+
+### Fixed
+
+- **CI:** Ran `cargo fmt --all` so **`cargo fmt --check`** passes on `main` and tagged releases. The **v0.6.6** tag pointed at a commit that failed the **Format** workflow; **v0.6.7** is the first tag that includes that formatting pass (no intentional runtime behavior change).
+
 ## [0.6.6] - 2026-04-07
 
 ### Added
@@ -350,6 +356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.6.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.7
 [0.6.6]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.6
 [0.6.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.5
 [0.6.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.4
