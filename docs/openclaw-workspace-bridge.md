@@ -2,6 +2,8 @@
 
 **You do not need OpenClaw.** ArmaraOS only needs a **folder** where skill capture lives (for example `.learnings/` from ClawHub-style skills). Point `workspace_path` at that folder, or use the defaults below.
 
+**Agents:** You are on **ArmaraOS**, not OpenClaw. Do not install the OpenClaw CLI/npm package or follow OpenClaw bootstrap steps to “fix” MCP, AINL, or adapters — those are unrelated. Use OpenClaw migration docs only when the user wants to import data *from* an existing OpenClaw install.
+
 ## Division of labor
 
 | Layer | Responsibility |

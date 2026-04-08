@@ -80,6 +80,9 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 1.6 — AINL product awareness (ArmaraOS hosts AINL graphs / tooling; include for subagents too)
     sections.push(AINL_AWARENESS_SECTION.to_string());
 
+    // Section 1.7 — Disambiguate ArmaraOS from OpenClaw (models often conflate the two)
+    sections.push(ARMARAOS_NOT_OPENCLAW_SECTION.to_string());
+
     // Section 2 — Tool Call Behavior (skip for subagents)
     if !ctx.is_subagent {
         sections.push(TOOL_CALL_BEHAVIOR.to_string());
@@ -234,6 +237,15 @@ This environment integrates **AI Native Language (AINL)** — the same project m
 When users ask about AINL versions, adapters, syntax, or release notes, treat these URLs as authoritative. Prefer **web_fetch** or **web_search** against them (or GitHub Releases / `docs/CHANGELOG.md` in the repo) instead of inventing changelog details.
 
 If a tool or capability reports an **embedded runtime version** (e.g. from a bundled interpreter), that number may differ from the latest **PyPI** package (`pip install ainativelang`) or **git** tag — say so briefly and still point to the links above for official release notes.";
+
+/// Clarifies that this host is ArmaraOS, not the OpenClaw CLI/npm product (reduces spurious install attempts).
+const ARMARAOS_NOT_OPENCLAW_SECTION: &str = "\
+## Host environment (ArmaraOS, not OpenClaw)
+You run inside **ArmaraOS** (OpenFang). This is **not** the OpenClaw agent framework or npm package.
+
+- Do **not** install OpenClaw, run `npx openclaw`, or follow OpenClaw-only setup guides unless the user explicitly asked to **migrate from** OpenClaw.
+- Config keys like `[openclaw_workspace]` / `OPENCLAW_WORKSPACE` are **legacy names** for a skills/capture folder path only — they do **not** mean you must install OpenClaw.
+- Fixing AINL, MCP (`ainl_run`), HTTP adapters, or scheduled graphs does **not** require initializing OpenClaw.";
 
 /// Static tool-call behavior directives.
 const TOOL_CALL_BEHAVIOR: &str = "\
@@ -703,6 +715,7 @@ mod tests {
         let prompt = build_system_prompt(&basic_ctx());
         assert!(prompt.contains("You are Researcher"));
         assert!(prompt.contains("## AI Native Language (AINL)"));
+        assert!(prompt.contains("## Host environment (ArmaraOS, not OpenClaw)"));
         assert!(prompt.contains("https://ainativelang.com"));
         assert!(prompt.contains("https://github.com/sbhooley/ainativelang"));
         assert!(prompt.contains("## Tool Call Behavior"));
@@ -735,6 +748,7 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
 
         assert!(prompt.contains("## AI Native Language (AINL)"));
+        assert!(prompt.contains("## Host environment (ArmaraOS, not OpenClaw)"));
         assert!(!prompt.contains("## Tool Call Behavior"));
         assert!(!prompt.contains("## User Profile"));
         assert!(!prompt.contains("## Channel"));
@@ -926,6 +940,14 @@ mod tests {
         assert!(prompt.contains("don't know the user's name"));
         assert!(prompt.contains("General Assistant"));
         assert!(prompt.contains("Armara"));
+    }
+
+    #[test]
+    fn test_prompt_disambiguates_armaraos_from_openclaw() {
+        let ctx = basic_ctx();
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("ArmaraOS, not OpenClaw"));
+        assert!(prompt.contains("Do **not** install OpenClaw"));
     }
 
     #[test]
