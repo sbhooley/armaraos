@@ -3,6 +3,18 @@
 //! Assembles a structured, multi-section system prompt from agent context.
 //! Replaces the scattered `push_str` prompt injection throughout the codebase
 //! with a single, testable, ordered prompt builder.
+//!
+//! ## Manifest `system_prompt` vs. what the LLM sees
+//!
+//! On disk / in the API, `[model].system_prompt` is **identity and user-authored
+//! instructions only**. The kernel merges it as [`PromptContext::base_system_prompt`]
+//! and replaces `manifest.model.system_prompt` with [`build_system_prompt`] output
+//! before each LLM run (AINL awareness, host environment, tools, safety, etc.).
+//! The registry keeps the **base** text; the expanded string is not persisted.
+
+/// Metadata key: kernel set this to `true` after replacing the manifest's base
+/// `system_prompt` with [`build_system_prompt`] output for the current request.
+pub const KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY: &str = "kernel_expanded_system_prompt_v1";
 
 /// All the context needed to build a system prompt for an agent.
 #[derive(Debug, Clone, Default)]
@@ -11,7 +23,10 @@ pub struct PromptContext {
     pub agent_name: String,
     /// Agent description (from manifest).
     pub agent_description: String,
-    /// Base system prompt authored in the agent manifest.
+    /// Identity and user-authored instructions from `[model].system_prompt` in the manifest.
+    ///
+    /// This is **not** the full string sent to the LLM: [`build_system_prompt`] wraps it with
+    /// host sections (AINL, ArmaraOS vs OpenClaw, tools, memory protocol, safety, …).
     pub base_system_prompt: String,
     /// Tool names this agent has access to.
     pub granted_tools: Vec<String>,
@@ -246,6 +261,25 @@ You run inside **ArmaraOS** (OpenFang). This is **not** the OpenClaw agent frame
 - Do **not** install OpenClaw, run `npx openclaw`, or follow OpenClaw-only setup guides unless the user explicitly asked to **migrate from** OpenClaw.
 - Config keys like `[openclaw_workspace]` / `OPENCLAW_WORKSPACE` are **legacy names** for a skills/capture folder path only — they do **not** mean you must install OpenClaw.
 - Fixing AINL, MCP (`ainl_run`), HTTP adapters, or scheduled graphs does **not** require initializing OpenClaw.";
+
+const PROMPT_ANCHOR_AINL: &str = "## AI Native Language (AINL)";
+const PROMPT_ANCHOR_NOT_OPENCLAW: &str = "## Host environment (ArmaraOS, not OpenClaw)";
+
+/// Append AINL + ArmaraOS/OpenClaw anchor sections if they are missing.
+///
+/// Full prompts should come from [`build_system_prompt`] (kernel path). This exists as a
+/// safety net for callers that pass a bare identity prompt, so core host guidance is never
+/// fully absent. It does **not** add tools, MCP, safety, or operational sections.
+pub fn ensure_mandatory_host_anchor_sections(prompt: &mut String) {
+    if !prompt.contains(PROMPT_ANCHOR_AINL) {
+        prompt.push_str("\n\n");
+        prompt.push_str(AINL_AWARENESS_SECTION);
+    }
+    if !prompt.contains(PROMPT_ANCHOR_NOT_OPENCLAW) {
+        prompt.push_str("\n\n");
+        prompt.push_str(ARMARAOS_NOT_OPENCLAW_SECTION);
+    }
+}
 
 /// Static tool-call behavior directives.
 const TOOL_CALL_BEHAVIOR: &str = "\
@@ -948,6 +982,17 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("ArmaraOS, not OpenClaw"));
         assert!(prompt.contains("Do **not** install OpenClaw"));
+    }
+
+    #[test]
+    fn test_ensure_mandatory_host_anchor_sections_appends_when_missing() {
+        let mut p = "Hello.".to_string();
+        ensure_mandatory_host_anchor_sections(&mut p);
+        assert!(p.contains("## AI Native Language (AINL)"));
+        assert!(p.contains("## Host environment (ArmaraOS, not OpenClaw)"));
+        let before = p.len();
+        ensure_mandatory_host_anchor_sections(&mut p);
+        assert_eq!(p.len(), before, "second call should not duplicate sections");
     }
 
     #[test]

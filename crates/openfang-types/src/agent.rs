@@ -408,7 +408,11 @@ pub struct ModelConfig {
     pub max_tokens: u32,
     /// Sampling temperature.
     pub temperature: f32,
-    /// System prompt for the agent.
+    /// User-authored identity and instructions (manifest `[model].system_prompt`).
+    ///
+    /// The kernel does **not** send this string verbatim to the LLM: it is merged as the
+    /// identity section inside `prompt_builder::build_system_prompt`, which adds host-wide
+    /// sections (AINL, tools, safety, …). Persisted manifests store this **base** text only.
     pub system_prompt: String,
     /// Optional API key environment variable name.
     pub api_key_env: Option<String>,

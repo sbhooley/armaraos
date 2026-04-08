@@ -2278,6 +2278,11 @@ impl OpenFangKernel {
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+            manifest.metadata.insert(
+                openfang_runtime::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY
+                    .to_string(),
+                serde_json::Value::Bool(true),
+            );
             // Store canonical context separately for injection as user message
             // (keeps system prompt stable across turns for provider prompt caching)
             if let Some(cc_msg) =
@@ -2905,6 +2910,11 @@ impl OpenFangKernel {
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+            manifest.metadata.insert(
+                openfang_runtime::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY
+                    .to_string(),
+                serde_json::Value::Bool(true),
+            );
             // Store canonical context separately for injection as user message
             // (keeps system prompt stable across turns for provider prompt caching)
             if let Some(cc_msg) =

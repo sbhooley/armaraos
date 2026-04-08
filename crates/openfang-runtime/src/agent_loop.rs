@@ -409,6 +409,22 @@ fn missing_required_params_error(
     ))
 }
 
+/// `manifest.model.system_prompt` should already be the output of [`crate::prompt_builder::build_system_prompt`]
+/// (kernel sets [`crate::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY`]). If not, append minimal
+/// host anchor sections so AINL / OpenClaw guidance is not missing.
+fn loop_time_system_prompt_from_manifest(manifest: &AgentManifest) -> String {
+    let mut system_prompt = manifest.model.system_prompt.clone();
+    if !manifest
+        .metadata
+        .get(crate::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        crate::prompt_builder::ensure_mandatory_host_anchor_sections(&mut system_prompt);
+    }
+    system_prompt
+}
+
 /// Run the agent execution loop for a single user message.
 ///
 /// This is the core of OpenFang: it loads session context, recalls memories,
@@ -511,9 +527,9 @@ pub async fn run_agent_loop(
         let _ = hook_reg.fire(&ctx);
     }
 
-    // Build the system prompt — base prompt comes from kernel (prompt_builder),
-    // we append recalled memories here since they are resolved at loop time.
-    let mut system_prompt = manifest.model.system_prompt.clone();
+    // Build the system prompt — kernel expands `[model].system_prompt` via prompt_builder; we
+    // append recalled memories here since they are resolved at loop time.
+    let mut system_prompt = loop_time_system_prompt_from_manifest(manifest);
     if !memories.is_empty() {
         let mem_pairs: Vec<(String, String)> = memories
             .iter()
@@ -1985,9 +2001,9 @@ pub async fn run_agent_loop_streaming(
         let _ = hook_reg.fire(&ctx);
     }
 
-    // Build the system prompt — base prompt comes from kernel (prompt_builder),
-    // we append recalled memories here since they are resolved at loop time.
-    let mut system_prompt = manifest.model.system_prompt.clone();
+    // Build the system prompt — kernel expands `[model].system_prompt` via prompt_builder; we
+    // append recalled memories here since they are resolved at loop time.
+    let mut system_prompt = loop_time_system_prompt_from_manifest(manifest);
     if !memories.is_empty() {
         let mem_pairs: Vec<(String, String)> = memories
             .iter()
@@ -3848,14 +3864,19 @@ mod tests {
     // --- Integration tests for empty response guards ---
 
     fn test_manifest() -> AgentManifest {
-        AgentManifest {
+        let mut m = AgentManifest {
             name: "test-agent".to_string(),
             model: openfang_types::agent::ModelConfig {
                 system_prompt: "You are a test agent.".to_string(),
                 ..Default::default()
             },
             ..Default::default()
-        }
+        };
+        m.metadata.insert(
+            crate::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+        m
     }
 
     /// Mock driver that simulates: first call returns ToolUse with no text,
