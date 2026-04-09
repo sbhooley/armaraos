@@ -2119,12 +2119,169 @@ tr:hover td { background: var(--surface2); }
   overflow: hidden;
 }
 
+/* Inline chat: agent settings modal is scoped to this pane (not full viewport). */
+.agents-chat-pane-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.modal-overlay.modal-overlay--chat-pane {
+  position: absolute;
+  inset: 0;
+  z-index: 1100;
+}
+
 /* Active conversation top bar — slightly elevated for separation from transcript */
 .page-header.chat-conversation-header {
   background: var(--bg-elevated);
   border-bottom-color: var(--border-subtle);
   box-shadow: 0 1px 0 var(--border-subtle);
 }
+
+/* ── Eco mode pill button ── */
+.eco-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 20px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  background: transparent;
+}
+.eco-pill:hover { opacity: 0.85; }
+.eco-pill-off {
+  border-color: var(--border);
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+.eco-pill-off:hover { opacity: 0.75; }
+.eco-pill-bal {
+  border-color: var(--accent, #4ade80);
+  color: var(--accent, #4ade80);
+  background: rgba(74,222,128,0.07);
+}
+.eco-pill-agg {
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background: rgba(245,158,11,0.08);
+}
+
+/* ── Chat telemetry strip (below header, above messages) ── */
+.chat-telemetry-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 18px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.75;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-height: 24px;
+  transition: opacity 0.2s;
+}
+.chat-telemetry-strip:hover { opacity: 1; }
+.chat-telem-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.chat-telem-sep {
+  color: var(--border);
+  user-select: none;
+  opacity: 0.7;
+}
+.ctx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.eco-telem {
+  color: var(--accent, #4ade80);
+  font-weight: 600;
+}
+
+/* ── LLM error banner (below telemetry strip) ── */
+.chat-error-banner {
+  flex-shrink: 0;
+  padding: 0 12px;
+  background: var(--bg-elevated);
+}
+.chat-error-banner-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid;
+  margin: 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(239,68,68,0.06);
+  border-color: rgba(239,68,68,0.3);
+  color: var(--text);
+}
+.chat-error-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.chat-error-icon.rate-limited { color: #f59e0b; }
+.chat-error-icon.error { color: #ef4444; }
+.chat-error-banner-inner.rate-limited-banner { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.3); }
+.chat-error-text {
+  flex: 1;
+  color: var(--text-secondary);
+  cursor: help;
+}
+.chat-error-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.chat-error-dismiss:hover { opacity: 1; }
+
+/* ── Message footer eco badge ── */
+.eco-savings-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--accent, #4ade80);
+  border: 1px solid var(--accent, #4ade80);
+  border-radius: 4px;
+  padding: 1px 5px;
+  cursor: pointer;
+  background: rgba(74,222,128,0.07);
+  transition: background 0.15s;
+}
+.eco-savings-badge:hover { background: rgba(74,222,128,0.15); }
 
 .messages {
   flex: 1;

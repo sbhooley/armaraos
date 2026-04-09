@@ -2,6 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
 /// Request to spawn an agent from a TOML manifest string or a template name.
 #[derive(Debug, Deserialize)]
 pub struct SpawnRequest {
@@ -68,6 +73,12 @@ pub struct MessageResponse {
     /// Path when a skill draft was written (e.g. `[learn]` prefix on `POST .../message`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_draft_path: Option<String>,
+    /// Percentage of input tokens saved by the prompt compressor (0 = off / no compression).
+    #[serde(skip_serializing_if = "crate::types::is_zero_u8")]
+    pub compression_savings_pct: u8,
+    /// The compressed version of the user message (only present when savings_pct > 0; powers diff UI).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compressed_input: Option<String>,
 }
 
 /// Request to install a skill from the marketplace.

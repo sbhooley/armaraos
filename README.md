@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.6.9-green?style=flat-square" alt="v0.6.9" />
+  <img src="https://img.shields.io/badge/version-0.7.1-green?style=flat-square" alt="v0.7.1" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -63,7 +63,7 @@ armaraos start
 
 **Config and local data** default to **`~/.armaraos/`** (overrides: **`ARMARAOS_HOME`**, legacy **`OPENFANG_HOME`**; older **`~/.openfang/`** is migrated automatically when possible). Details: [`docs/data-directory.md`](docs/data-directory.md).
 
-**Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)).
+**Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)). For **code signing**, Gatekeeper, and SmartScreen (vs Tauri updater keys), see [`docs/desktop-code-signing.md`](docs/desktop-code-signing.md).
 
 ### Desktop app — anonymous product analytics (PostHog)
 
@@ -72,7 +72,7 @@ Official **desktop** builds may include a **project API key** for [PostHog](http
 - **Opt out:** In the embedded dashboard **Setup Wizard** (step 1 — Welcome), uncheck **Anonymous usage** before continuing. If you opt out, the app **does not** open network connections for this ping. A small preference file is stored under the app data directory (alongside other desktop state).
 - **Timing:** If you leave usage enabled, the ping runs after you continue past Welcome **or** after **about two minutes** if you never open the wizard (so silent launches are still counted only when allowed).
 - **Overrides:** Power users can still set **`ARMARAOS_PRODUCT_ANALYTICS=0`** to disable completely, or **`ARMARAOS_POSTHOG_KEY`** / **`ARMARAOS_POSTHOG_HOST`** at **runtime** to override the baked values (e.g. local debugging).
-- **Releases:** Maintainers configure GitHub Actions secrets **`ARMARAOS_POSTHOG_KEY`** (and optionally **`ARMARAOS_POSTHOG_HOST`**, e.g. EU ingest) so release builds embed the key automatically — **end users do not set environment variables** for normal installs.
+- **Releases:** Maintainers set **`ARMARAOS_POSTHOG_KEY`** (or org secret **`AINL_POSTHOG_KEY`**, same value as **`NEXT_PUBLIC_POSTHOG_KEY`** on ainativelangweb) and optionally **`ARMARAOS_POSTHOG_HOST`** or **`AINL_POSTHOG_HOST`** so release builds embed the key — **end users do not set environment variables** for normal installs.
 
 ---
 
@@ -134,7 +134,7 @@ Example — **`POST /api/agents`** with an empty body / missing manifest:
 
 <p align="center"><em>"Traditional agents wait for you to type. Hands work <strong>for</strong> you."</em></p>
 
-**Hands** are OpenFang's core innovation — pre-built autonomous capability packages that run independently, on schedules, without you having to prompt them. This is not a chatbot. This is an agent that wakes up at 6 AM, researches your competitors, builds a knowledge graph, scores the findings, and delivers a report to your Telegram before you've had coffee.
+**Hands** are ArmaraOS's core innovation — pre-built autonomous capability packages that run independently, on schedules, without you having to prompt them. This is not a chatbot. This is an agent that wakes up at 6 AM, researches your competitors, builds a knowledge graph, scores the findings, and delivers a report to your Telegram before you've had coffee.
 
 Each Hand bundles:
 - **HAND.toml** — Manifest declaring tools, settings, requirements, and dashboard metrics
@@ -274,7 +274,7 @@ AutoGen    ███████████░░░░░░░░░░░░
 
 ## 16 Security Systems — Defense in Depth
 
-OpenFang doesn't bolt security on after the fact. Every layer is independently testable and operates without a single point of failure.
+ArmaraOS doesn't bolt security on after the fact. Every layer is independently testable and operates without a single point of failure.
 
 | # | System | What It Does |
 |---|--------|-------------|
@@ -346,12 +346,12 @@ Each adapter supports per-channel model overrides, DM/group policies, rate limit
 
 ## WhatsApp Web Gateway (QR Code)
 
-Connect your personal WhatsApp account to OpenFang via QR code — just like WhatsApp Web. No Meta Business account required.
+Connect your personal WhatsApp account to ArmaraOS via QR code — just like WhatsApp Web. No Meta Business account required.
 
 ### Prerequisites
 
 - **Node.js >= 18** installed ([download](https://nodejs.org/))
-- OpenFang installed and initialized
+- ArmaraOS installed and initialized
 
 ### Setup
 
@@ -434,6 +434,70 @@ Once scanned, the status changes to `connected` and incoming messages are routed
 For production workloads, use the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) with a Meta Business account.
 
 
+
+---
+
+## Ultra Cost-Efficient Mode
+
+ArmaraOS compresses **user input** in Rust before each LLM call (typical **40–56 %** input savings on conversational text in **Balanced** mode; **Aggressive** targets higher savings with a wider gap on prose than on dense opcode-heavy prompts). End-to-end latency target: **under 30 ms**.
+
+**Full reference:** [docs/prompt-compression-efficient-mode.md](docs/prompt-compression-efficient-mode.md) (preserve rules, API fields, Eco Diff, tests).
+
+### Configuration
+
+In `~/.armaraos/config.toml`:
+
+```toml
+# "balanced" (default) | "aggressive" | "off"
+efficient_mode = "balanced"
+```
+
+**Dashboard:** **Settings → Budget** — card **Ultra Cost-Efficient Mode** (dropdown + guidance). **While chatting:** header button **⚡ eco** / **⚡ eco bal** / **⚡ eco agg** cycles modes and persists globally.
+
+Per-agent override (manifest **metadata** wins over global):
+
+```toml
+# In the agent manifest — example fragment
+[metadata]
+efficient_mode = "off"
+```
+
+### Before / After Example
+
+**Category:** Verbose support question about ArmaraOS dashboard agent errors (~85 tokens).  
+This is the most common pattern that gains 40–55 %: natural-language questions padded with hedging words and politeness filler.
+
+**Before** (what the user typed):
+> *"I think I would like to understand basically why the dashboard is showing me a red error badge on the agents page. Essentially, it seems like the agent is not responding and I'm not sure what steps I should take to investigate this issue. Please note that I have already tried restarting the daemon. To be honest, I'm not really sure where to look next."*
+
+**After** balanced compression (59 tokens, ↓34% — live value shown as `⚡ eco ↓34%` in chat):
+> *"Understand why the dashboard is showing me a red error badge on the agents page. it seems like the agent is not responding and I am not sure what steps I should take to investigate this issue. I have already tried restarting the daemon"*
+
+All critical context (error badge, agents page, daemon restart, investigation intent) is preserved verbatim.  
+Filler stripped: `I think I would like to`, ` basically `, `Essentially,`, `Please note that`, `To be honest,`.  
+The user's response is unchanged — only the LLM-bound copy is compressed.  
+Users continue typing normally; ArmaraOS handles compression transparently behind the scenes.
+
+> **Note:** This exact output is verified by `cargo test -p openfang-runtime -- prompt_compressor::tests::readme_dashboard_example_ratio`.
+
+### Benchmarks
+
+Tested on a 200-word React debugging question (typical real-world prompt):
+
+```
+Original:       ~67 tokens   ($0.000201 @ Sonnet 4.6)
+Balanced:       ~37 tokens   ($0.000111 @ Sonnet 4.6)  — 45 % reduction
+Aggressive:     ~27 tokens   ($0.000081 @ Sonnet 4.6)  — 60 % reduction
+Code preserved: 100 % verbatim
+Intent preserved: ✓ React, state, useEffect, re-render, infinite loop
+Latency:        under 30 ms (hot path; often much less on short prompts)
+```
+
+Live savings are logged at `INFO` level (`prompt:compressed`) with structured fields such as `savings_pct` and optional `est_savings_usd` (see runtime for exact keys).
+
+### Dashboard telemetry
+
+When compression runs, the chat meta can show **`⚡ eco ↓X%`** and a **diff** control opens the **Eco Diff** modal (original vs compressed prompt). HTTP and WebSocket responses may include **`compression_savings_pct`** and **`compressed_input`** (see [API reference](docs/api-reference.md)).
 
 ---
 
@@ -561,7 +625,9 @@ To report a security vulnerability, email **ainativelang@gmail.com**. We take al
 
 ## License
 
-MIT — use it however you want.
+Licensed under **MIT or Apache 2.0** (your choice). See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+
+ArmaraOS is based on [OpenFang](https://github.com/RightNow-AI/openfang) (MIT/Apache-2.0, Copyright © 2024 OpenFang Contributors). See [`NOTICE`](NOTICE) for full upstream attribution.
 
 ---
 

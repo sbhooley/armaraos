@@ -99,7 +99,7 @@ impl McpConnection {
 
         let client = match &config.transport {
             McpTransport::Stdio { command, args } => {
-                Self::connect_stdio(command, args, &config.env, client_info).await?
+                Self::connect_stdio(&config.name, command, args, &config.env, client_info).await?
             }
             McpTransport::Sse { url } | McpTransport::Http { url } => {
                 Self::connect_http(url, &config.headers, client_info).await?
@@ -216,6 +216,7 @@ impl McpConnection {
 
     /// Connect using stdio transport (subprocess).
     async fn connect_stdio(
+        server_name: &str,
         command: &str,
         args: &[String],
         env_whitelist: &[String],
@@ -232,6 +233,7 @@ impl McpConnection {
         let cmd_str = command.to_string();
         let args_vec: Vec<String> = args.to_vec();
         let env_list: Vec<String> = env_whitelist.to_vec();
+        let server_name = server_name.to_string();
 
         let transport = TokioChildProcess::new(Command::new(&cmd_str).configure(move |cmd| {
             for arg in &args_vec {
@@ -243,6 +245,15 @@ impl McpConnection {
                 if let Ok(val) = std::env::var(var_name) {
                     cmd.env(var_name, val);
                 }
+            }
+            // ArmaraOS default for AINL MCP: allow common safe IO tiers without
+            // requiring end users to hand-edit config. This still blocks
+            // operator-sensitive tiers (per AINL security profile definition).
+            //
+            // If an operator explicitly provided AINL_MCP_PROFILE via the env whitelist,
+            // it will already be set above and this becomes a no-op.
+            if server_name == "ainl" && std::env::var("AINL_MCP_PROFILE").is_err() {
+                cmd.env("AINL_MCP_PROFILE", "consumer_secure_default");
             }
             // Always pass PATH for binary resolution
             if let Ok(path) = std::env::var("PATH") {

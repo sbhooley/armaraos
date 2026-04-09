@@ -10,6 +10,96 @@
  */
 var _agentMsgCache = {};
 
+/**
+ * Turn raw provider/daemon errors into calm, actionable copy for the chat UI.
+ * Technical text is returned separately for tooltips / support.
+ * @returns {{ text: string, rateLimited: boolean, rawForDebug: string }}
+ */
+function humanizeChatError(raw) {
+  var s = raw == null ? '' : String(raw);
+  var trimmed = s.trim();
+  if (!trimmed) {
+    return {
+      text: 'That reply did not finish. Send your message again — nothing is wrong with your chat.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+  var once = trimmed.replace(/^(Request failed:\s*)+/i, 'Request failed: ').replace(/^(HTTP error:\s*)+/i, 'HTTP error: ');
+  var low = once.toLowerCase();
+
+  if (/429|rate limit|too many requests|resource_exhausted|resource exhausted|throttl|slow down|over capacity|capacity limit/.test(low)) {
+    return {
+      text: 'The AI service is limiting traffic right now. Wait a bit, then send again — your conversation is still here.',
+      rateLimited: true,
+      rawForDebug: s
+    };
+  }
+
+  if (/decoding response body|error decoding|failed to decode body|invalid chunk|incomplete chunked|unexpected eof|stream ended|broken pipe|connection reset/.test(low)) {
+    return {
+      text: 'The reply stream was cut off or could not be read. This is usually temporary — send again in a moment.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/timeout|timed out|deadline exceeded|context deadline|took too long/i.test(low)) {
+    return {
+      text: 'The request ran out of time. Try a shorter message or try again in a moment.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/401|403|unauthorized|invalid api key|api key not|authentication failed|permission denied|forbidden/.test(low)) {
+    return {
+      text: 'Sign-in with the AI provider failed. Check your API key under Settings, then try again.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/model.*not found|does not exist|invalid model|unknown model|no such model/.test(low)) {
+    return {
+      text: 'This model is not available. Use /model to pick another one.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/context length|maximum context|token limit|too many tokens|maximum.*tokens|input is too long/.test(low)) {
+    return {
+      text: 'This chat is too long for the model. Use /compact or /new, then continue.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/connection refused|econnrefused|network.*unreachable|no route|dns|getaddrinfo|ssl|tls|certificate|failed to connect|cannot reach/.test(low)) {
+    return {
+      text: 'Could not reach the AI service. Check your connection, VPN, or firewall, then try again.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/\b5\d\d\b|internal server error|bad gateway|service unavailable|gateway timeout|502|503|504/.test(low)) {
+    return {
+      text: 'The AI service had a brief problem. Wait a moment and send your message again.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  // Short generic: avoid echoing huge raw blobs in the main line
+  return {
+    text: 'That reply did not finish. Send your message again — if it keeps happening, check Settings → provider.',
+    rateLimited: false,
+    rawForDebug: s
+  };
+}
+
 function chatPage() {
   var msgId = 0;
   return {
@@ -37,7 +127,34 @@ function chatPage() {
     bookmarkTitle: '',
     bookmarkMsg: null,
     contextPressure: 'low', // green/yellow/orange/red indicator
+    /** Cumulative prompt/completion tokens for this chat tab (WS responses only). */
+    sessionPromptTokens: 0,
+    sessionCompletionTokens: 0,
+    /** Wall time (ms) for the last completed turn from server (`turn_wall_ms`). */
+    lastTurnWallMs: null,
+    /** Ultra Cost-Efficient Mode: "off" | "balanced" | "aggressive" (loaded from config on init). */
+    efficientMode: (function() {
+      var stored = localStorage.getItem('armaraos-eco-mode');
+      return (stored === 'off' || stored === 'balanced' || stored === 'aggressive') ? stored : 'off';
+    }()),
+    /** Rolling average compression saving % for this session (0 when none). */
+    sessionEcoSavedPct: 0,
+    _sessionEcoSavedSum: 0,
+    _sessionEcoSavedCount: 0,
+    /** Last error — friendly line for telemetry (cleared on next send / success). */
+    lastStreamError: null,
+    /** Original error string for tooltips / support (optional). */
+    lastStreamErrorTechnical: null,
+    /** True when provider rate-limits; softer badge + color in telemetry. */
+    lastStreamErrorIsRateLimited: false,
     _typingTimeout: null,
+    /** Timestamp (ms) when we last received a non-LLM event (tool/text) while sending.
+     *  Used to display "Waiting for LLM · Xs" in the header when the LLM is slow
+     *  but the agent loop is still alive. Reset on every tool_start/tool_result/text_delta. */
+    _llmWaitSince: 0,
+    /** Seconds since we started waiting purely for the LLM (no tool or token events). */
+    llmWaitSeconds: 0,
+    _llmWaitTimer: null,
     /** When false, streaming updates must not call scrollToBottom() — user scrolled up to read history */
     _chatPinnedToBottom: true,
     // Multi-session state
@@ -69,7 +186,7 @@ function chatPage() {
       { cmd: '/agents', desc: 'Switch to Agents page' },
       { cmd: '/new', desc: 'Reset session (clear history)' },
       { cmd: '/compact', desc: 'Trigger LLM session compaction' },
-      { cmd: '/model', desc: 'Show or switch model (/model [name])' },
+      { cmd: '/model', desc: 'Show or switch model — switching resets canonical session memory (/model [name])' },
       { cmd: '/stop', desc: 'Cancel current agent run' },
       { cmd: '/usage', desc: 'Show session token usage & cost' },
       { cmd: '/think', desc: 'Toggle extended thinking (/think [on|off|stream])' },
@@ -84,6 +201,7 @@ function chatPage() {
       { cmd: '/a2a', desc: 'List discovered external A2A agents' },
       { cmd: '/bookmarks', desc: 'Open saved Bookmarks' },
       { cmd: '/btw', desc: 'Inject context into the running agent loop (/btw <text>)' },
+      { cmd: '/redirect', desc: 'Override the running agent loop with a new directive — stops current plan (/redirect <new instruction>)' },
       { cmd: '/t', desc: 'Expand a saved template (/t <name> | /t save <name> | /t list | /t delete <name>)' }
     ],
     tokenCount: 0,
@@ -180,6 +298,59 @@ function chatPage() {
       }
     },
 
+    get lastStreamErrorTruncated() {
+      var s = this.lastStreamError || '';
+      return s.length > 220 ? s.slice(0, 217) + '\u2026' : s;
+    },
+
+    /** Tooltip: technical detail for hover; keeps the visible line calm. */
+    get lastStreamErrorTooltip() {
+      var tech = this.lastStreamErrorTechnical;
+      if (!tech) return this.lastStreamError || '';
+      var t = String(tech);
+      if (t.length > 700) t = t.slice(0, 697) + '\u2026';
+      return 'Technical detail: ' + t;
+    },
+
+    get lastErrorLooksRateLimited() {
+      return !!this.lastStreamErrorIsRateLimited;
+    },
+
+    _clearStreamErrorTelemetry: function() {
+      this.lastStreamError = null;
+      this.lastStreamErrorTechnical = null;
+      this.lastStreamErrorIsRateLimited = false;
+    },
+
+    _applyFriendlyError: function(raw) {
+      var h = humanizeChatError(raw);
+      this.lastStreamError = h.text;
+      this.lastStreamErrorTechnical = h.rawForDebug;
+      this.lastStreamErrorIsRateLimited = h.rateLimited;
+      return h;
+    },
+
+    _recordEcoSaving: function(pct) {
+      if (!pct || pct <= 0) return;
+      this._sessionEcoSavedSum += pct;
+      this._sessionEcoSavedCount++;
+      this.sessionEcoSavedPct = Math.round(this._sessionEcoSavedSum / this._sessionEcoSavedCount);
+    },
+
+    formatTokenShort: function(n) {
+      n = Number(n) || 0;
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 10000) return Math.round(n / 1000) + 'k';
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+      return String(n);
+    },
+
+    formatWallSeconds: function(ms) {
+      if (ms == null || ms === '') return '';
+      var s = Number(ms) / 1000;
+      return (s >= 100 ? Math.round(s) : s.toFixed(1)) + 's';
+    },
+
     get showChatNetworkBanner() {
       if (this.networkHintsBannerDismissed || !this.currentAgent) return false;
       var h = this.networkHints;
@@ -247,6 +418,15 @@ function chatPage() {
 
       // Fetch dynamic commands from server
       this.fetchCommands();
+
+      // Load efficient mode from server config — authoritative source.
+      // localStorage gives us the instant initial value while this resolves.
+      OpenFangAPI.get('/api/config').then(function(cfg) {
+        if (cfg && typeof cfg.efficient_mode === 'string' && cfg.efficient_mode) {
+          self.efficientMode = cfg.efficient_mode;
+          localStorage.setItem('armaraos-eco-mode', cfg.efficient_mode);
+        }
+      }).catch(function() {});
 
       // Ctrl+/ keyboard shortcut
       document.addEventListener('keydown', function(e) {
@@ -384,14 +564,29 @@ function chatPage() {
 
     switchModel(model) {
       if (!this.currentAgent) return;
-      if (model.id === this.currentAgent.model_name) { this.showModelSwitcher = false; return; }
+      var prov = (model.provider || '').trim();
+      var curProv = (this.currentAgent.model_provider || '').trim();
+      if (model.id === this.currentAgent.model_name && (!prov || prov === curProv)) {
+        this.showModelSwitcher = false;
+        return;
+      }
       var self = this;
+      OpenFangToast.confirm(
+        'Switch model?',
+        OpenFangToast.modelProviderChangeWarningText(),
+        function() { self._switchModelApply(model); },
+        { danger: false, confirmLabel: 'Switch' }
+      );
+    },
+
+    _switchModelApply(model) {
+      var self = this;
+      if (!this.currentAgent) return;
       this.modelSwitching = true;
       OpenFangAPI.put('/api/agents/' + this.currentAgent.id + '/model', { model: model.id }).then(function(resp) {
-        // Use server-resolved model/provider to stay in sync (fixes #387/#466)
         self.currentAgent.model_name = (resp && resp.model) || model.id;
         self.currentAgent.model_provider = (resp && resp.provider) || model.provider;
-        OpenFangToast.success('Switched to ' + (model.display_name || model.id));
+        OpenFangToast.success('Switched to ' + (model.display_name || model.id) + ' (canonical session reset)');
         self.showModelSwitcher = false;
         self.modelSwitching = false;
       }).catch(function(e) {
@@ -441,6 +636,24 @@ function chatPage() {
       if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
       this.elapsedSeconds = 0;
       this.currentIteration = 0;
+      this._stopLlmWait();
+    },
+
+    /** Start counting pure-LLM wait time (no tokens/tools arriving). */
+    _startLlmWait: function() {
+      var self = this;
+      this._llmWaitSince = Date.now();
+      if (this._llmWaitTimer) clearInterval(this._llmWaitTimer);
+      this._llmWaitTimer = setInterval(function() {
+        self.llmWaitSeconds = Math.round((Date.now() - self._llmWaitSince) / 1000);
+      }, 1000);
+    },
+
+    /** Stop and reset the LLM-wait counter (called when tokens or tool events arrive). */
+    _stopLlmWait: function() {
+      if (this._llmWaitTimer) { clearInterval(this._llmWaitTimer); this._llmWaitTimer = null; }
+      this._llmWaitSince = 0;
+      this.llmWaitSeconds = 0;
     },
 
     get elapsedDisplay() {
@@ -450,18 +663,22 @@ function chatPage() {
       return m + 'm ' + (s % 60) + 's';
     },
 
-    // Clear any stuck typing indicator after 120s
+    // Clear any stuck typing indicator after 240s of complete silence.
+    // This is deliberately generous: high-latency providers (e.g. reasoning models,
+    // OpenRouter free tier, DeepSeek R1) can take 60-180s for a single LLM call with
+    // no streaming tokens. The timeout is reset on EVERY meaningful WS event so it
+    // only fires if the connection truly goes dark (no tool_start, tool_result, phase,
+    // or text_delta for the full 4 minutes).
     _resetTypingTimeout: function() {
       var self = this;
       if (self._typingTimeout) clearTimeout(self._typingTimeout);
       self._typingTimeout = setTimeout(function() {
-        // Auto-clear stuck typing indicators
         self._stopElapsed();
         self.messages = self.messages.filter(function(m) { return !m.thinking && !m.streaming; });
         self.messages.push({ id: ++msgId, role: 'system', text: 'The agent stopped responding (timeout). The task may still be running — try sending a follow-up message to check status.', meta: '', tools: [], ts: Date.now() });
         self.sending = false;
         self.scrollToBottom(true);
-      }, 120000);
+      }, 240000);
     },
 
     _clearTypingTimeout: function() {
@@ -491,6 +708,10 @@ function chatPage() {
           if (self.currentAgent) {
             OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/session/reset', {}).then(function() {
               self.messages = [];
+              self.sessionPromptTokens = 0;
+              self.sessionCompletionTokens = 0;
+              self.lastTurnWallMs = null;
+              self._clearStreamErrorTelemetry();
               OpenFangToast.success('Session reset');
             }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Reset failed: '+msg+d+h); });
           }
@@ -535,6 +756,32 @@ function chatPage() {
                 self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Agent is not currently running — btw context not injected. Send a message first, then /btw while it\'s working.', meta: '', tools: [] });
               } else {
                 self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Injection failed: ' + msg, meta: '', tools: [] });
+              }
+              self.scrollToBottom(true);
+            });
+          break;
+        case '/redirect':
+          if (!cmdArgs.trim()) {
+            self.messages.push({ id: ++msgId, role: 'system', text: 'Usage: `/redirect <new instruction>` — Override the running agent loop. Stops the current plan and redirects to a new directive.', meta: '', tools: [] });
+            self.scrollToBottom(true);
+            break;
+          }
+          if (!self.currentAgent) {
+            self.messages.push({ id: ++msgId, role: 'system', text: 'No agent selected.', meta: '', tools: [] });
+            self.scrollToBottom(true);
+            break;
+          }
+          // Show a local indicator immediately so the user sees the redirect was sent
+          self.messages.push({ id: ++msgId, role: 'system', text: '↩ **redirect sent:** ' + cmdArgs, meta: '', tools: [] });
+          self.scrollToBottom(true);
+          OpenFangAPI.post('/api/agents/' + self.currentAgent.id + '/redirect', { text: cmdArgs })
+            .catch(function(e) {
+              var msg = e.message || 'Unknown error';
+              var isNotRunning = e.status === 409 || (msg && msg.toLowerCase().indexOf('not running') !== -1);
+              if (isNotRunning) {
+                self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Agent is not currently running — redirect not sent. Send a message first, then /redirect while it\'s working.', meta: '', tools: [] });
+              } else {
+                self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Redirect failed: ' + msg, meta: '', tools: [] });
               }
               self.scrollToBottom(true);
             });
@@ -600,15 +847,29 @@ function chatPage() {
         case '/model':
           if (self.currentAgent) {
             if (cmdArgs) {
-              OpenFangAPI.put('/api/agents/' + self.currentAgent.id + '/model', { model: cmdArgs }).then(function(resp) {
-                // Use server-resolved model/provider (fixes #387/#466)
-                var resolvedModel = (resp && resp.model) || cmdArgs;
-                var resolvedProvider = (resp && resp.provider) || '';
-                self.currentAgent.model_name = resolvedModel;
-                if (resolvedProvider) { self.currentAgent.model_provider = resolvedProvider; }
-                self.messages.push({ id: ++msgId, role: 'system', text: 'Model switched to: `' + resolvedModel + '`' + (resolvedProvider ? ' (provider: `' + resolvedProvider + '`)' : ''), meta: '', tools: [] });
+              var arg = cmdArgs.trim();
+              var ca = self.currentAgent;
+              var curCombo = ((ca.model_provider || '').trim() + '/' + (ca.model_name || '').trim()).replace(/^\/+/, '');
+              if (arg === curCombo || arg === (ca.model_name || '').trim()) {
+                self.messages.push({ id: ++msgId, role: 'system', text: 'Already using that model (`' + (ca.model_name || '') + '`).', meta: '', tools: [] });
                 self.scrollToBottom(true);
-              }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Model switch failed: '+msg+d+h); });
+                break;
+              }
+              OpenFangToast.confirm(
+                'Switch model?',
+                OpenFangToast.modelProviderChangeWarningText(),
+                function() {
+                  OpenFangAPI.put('/api/agents/' + self.currentAgent.id + '/model', { model: arg }).then(function(resp) {
+                    var resolvedModel = (resp && resp.model) || arg;
+                    var resolvedProvider = (resp && resp.provider) || '';
+                    self.currentAgent.model_name = resolvedModel;
+                    if (resolvedProvider) { self.currentAgent.model_provider = resolvedProvider; }
+                    self.messages.push({ id: ++msgId, role: 'system', text: 'Model switched to: `' + resolvedModel + '`' + (resolvedProvider ? ' (provider: `' + resolvedProvider + '`)' : '') + ' — canonical session reset.', meta: '', tools: [] });
+                    self.scrollToBottom(true);
+                  }).catch(function(e) { var msg = e.message||'Unknown error'; var d=e.detail&&e.detail!==msg?' — '+e.detail:''; var h=e.hint?' Hint: '+e.hint:''; OpenFangToast.error('Model switch failed: '+msg+d+h); });
+                },
+                { danger: false, confirmLabel: 'Switch' }
+              );
             } else {
               self.messages.push({ id: ++msgId, role: 'system', text: '**Current Model**\n- Provider: `' + (self.currentAgent.model_provider || '?') + '`\n- Model: `' + (self.currentAgent.model_name || '?') + '`', meta: '', tools: [] });
               self.scrollToBottom(true);
@@ -785,6 +1046,10 @@ function chatPage() {
       this._chatPinnedToBottom = true;
       this._wsAgent = null;
       this.currentAgent = agent;
+      this.sessionPromptTokens = 0;
+      this.sessionCompletionTokens = 0;
+      this.lastTurnWallMs = null;
+      this._clearStreamErrorTelemetry();
 
       // Restore from cache immediately (synchronous) — loadSession will refresh in background
       var cached = _agentMsgCache[agent.id];
@@ -1012,7 +1277,9 @@ function chatPage() {
               this.scrollToBottom();
             }
             this._resetTypingTimeout();
+            this._startLlmWait(); // LLM call starting — begin timing
           } else if (data.state === 'tool') {
+            this._stopLlmWait(); // tool event = LLM responded; stop the wait counter
             var toolTypIdx = this.messages.length - 1;
             var typingMsg = toolTypIdx >= 0 ? this.messages[toolTypIdx] : null;
             if (typingMsg && (typingMsg.thinking || typingMsg.streaming)) {
@@ -1022,11 +1289,17 @@ function chatPage() {
             this._resetTypingTimeout();
           } else if (data.state === 'stop') {
             this._clearTypingTimeout();
+            this._stopLlmWait();
           }
           break;
 
         case 'phase':
-          // Show tool/phase progress so the user sees the agent is working
+          // Any phase event means the server is still alive — reset the watchdog
+          this._resetTypingTimeout();
+          // iteration phase = agent loop entered a new LLM call; start the wait counter
+          if (data.phase === 'iteration' || data.phase === 'thinking') {
+            this._startLlmWait();
+          }
           var phaseIdx = this.messages.length - 1;
           var phaseMsg = phaseIdx >= 0 ? this.messages[phaseIdx] : null;
           if (phaseMsg && (phaseMsg.thinking || phaseMsg.streaming)) {
@@ -1043,19 +1316,22 @@ function chatPage() {
               // Multi-step progress: extract step number and update the thinking bubble
               var iterMatch = (data.detail || '').match(/Step\s+(\d+)/i);
               if (iterMatch) this.currentIteration = parseInt(iterMatch[1], 10);
+              var iterLine = data.detail || ('Step ' + this.currentIteration + ' — thinking…');
               if (phaseMsg.thinking) {
-                phaseMsg.text = data.detail || ('Step ' + this.currentIteration + ' — thinking…');
+                phaseMsg.text = iterLine;
+                this.messages.splice(phaseIdx, 1, phaseMsg);
+              } else if (phaseMsg.streaming && phaseMsg.role === 'agent') {
+                // After the first text token, thinking is false — keep status in phaseStatus so we do not wipe streamed body text.
+                phaseMsg.phaseStatus = iterLine;
                 this.messages.splice(phaseIdx, 1, phaseMsg);
               }
-            } else if (data.phase === 'thinking' && this.thinkingMode === 'stream') {
+            } else if (data.phase === 'thinking' && this.thinkingMode === 'stream' && phaseMsg.thinking) {
               // Stream reasoning tokens to a collapsible panel
               if (!phaseMsg._reasoning) phaseMsg._reasoning = '';
               phaseMsg._reasoning += (data.detail || '') + '\n';
               phaseMsg.text = '<details><summary>Reasoning...</summary>\n\n' + phaseMsg._reasoning + '</details>';
               this.messages.splice(phaseIdx, 1, phaseMsg);
-            } else if (phaseMsg.thinking) {
-              // Only update text on messages still in thinking state (not yet
-              // receiving streamed content) to avoid overwriting accumulated text.
+            } else {
               var phaseDetail;
               if (data.phase === 'tool_use') {
                 phaseDetail = 'Using ' + (data.detail || 'tool') + '...';
@@ -1064,14 +1340,22 @@ function chatPage() {
               } else {
                 phaseDetail = data.detail || 'Working...';
               }
-              phaseMsg.text = phaseDetail;
-              this.messages.splice(phaseIdx, 1, phaseMsg);
+              if (phaseMsg.thinking) {
+                phaseMsg.text = phaseDetail;
+                this.messages.splice(phaseIdx, 1, phaseMsg);
+              } else if (phaseMsg.streaming && phaseMsg.role === 'agent') {
+                phaseMsg.phaseStatus = phaseDetail;
+                this.messages.splice(phaseIdx, 1, phaseMsg);
+              }
             }
           }
           this.scrollToBottom();
           break;
 
         case 'text_delta':
+          // Streaming tokens are the most frequent proof of life — reset watchdog
+          this._resetTypingTimeout();
+          this._stopLlmWait(); // first token arrived — LLM responded
           var lastIdx = this.messages.length - 1;
           var last = lastIdx >= 0 ? this.messages[lastIdx] : null;
           if (last && last.streaming) {
@@ -1113,6 +1397,8 @@ function chatPage() {
           break;
 
         case 'tool_start':
+          this._resetTypingTimeout(); // LLM responded with a tool call — still live
+          this._stopLlmWait(); // tool call = LLM answered; wait counter off until next iteration
           var tsIdx = this.messages.length - 1;
           var lastMsg = tsIdx >= 0 ? this.messages[tsIdx] : null;
           if (lastMsg && lastMsg.streaming) {
@@ -1139,7 +1425,9 @@ function chatPage() {
           break;
 
         case 'tool_result':
-          // Tool execution completed — update tool card with result
+          // Tool execution completed — reset watchdog and start timing the next LLM call
+          this._resetTypingTimeout();
+          this._startLlmWait();
           var trIdx = this.messages.length - 1;
           var lastMsg3 = trIdx >= 0 ? this.messages[trIdx] : null;
           if (lastMsg3 && lastMsg3.tools) {
@@ -1207,11 +1495,19 @@ function chatPage() {
           });
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
           if (data.cost_usd != null) this.sessionCostUsd += data.cost_usd;
+          if (data.turn_wall_ms != null) this.lastTurnWallMs = data.turn_wall_ms;
+          if (data.input_tokens != null) this.sessionPromptTokens += data.input_tokens;
+          if (data.output_tokens != null) this.sessionCompletionTokens += data.output_tokens;
+          this._clearStreamErrorTelemetry();
           var meta = (data.input_tokens || 0) + ' in / ' + (data.output_tokens || 0) + ' out';
           if (data.cost_usd != null) meta += ' | $' + data.cost_usd.toFixed(4);
           if (data.iterations) meta += ' | ' + data.iterations + ' iter';
           if (data.fallback_model) meta += ' | fallback: ' + data.fallback_model;
           if (data.skill_draft_path) meta += ' | skill draft: ' + data.skill_draft_path;
+          if (self.efficientMode && self.efficientMode !== 'off') {
+            var pct = data.compression_savings_pct;
+            meta += pct > 0 ? ' | ⚡ eco ↓' + pct + '%' : ' | ⚡ eco';
+          }
           // Use server response if non-empty, otherwise preserve accumulated streamed text
           var finalText = (data.content && data.content.trim()) ? data.content : streamedText;
           // Strip raw function-call JSON that some models leak as text
@@ -1228,7 +1524,11 @@ function chatPage() {
           if (!finalText.trim()) {
             finalText = '*(The agent returned no text. If you were expecting a response, try again or check /status.)*';
           }
-          this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now() });
+          var wsCompressedInput = (data.compressed_input && data.compression_savings_pct > 0) ? data.compressed_input : null;
+          this._recordEcoSaving(data.compression_savings_pct);
+          this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
+            compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
+            savingsPct: data.compression_savings_pct || 0 });
           // Snapshot to cache so switching away and back shows the complete turn instantly
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.sending = false;
@@ -1251,8 +1551,16 @@ function chatPage() {
           this.tokenCount = 0;
           // Show a subtle system note so the user knows something happened
           if (data.cost_usd != null) this.sessionCostUsd += data.cost_usd;
+          if (data.turn_wall_ms != null) this.lastTurnWallMs = data.turn_wall_ms;
+          if (data.input_tokens != null) this.sessionPromptTokens += data.input_tokens;
+          if (data.output_tokens != null) this.sessionCompletionTokens += data.output_tokens;
+          this._clearStreamErrorTelemetry();
           var silentMeta = (data.input_tokens || 0) + ' in / ' + (data.output_tokens || 0) + ' out';
           if (data.cost_usd != null) silentMeta += ' | $' + data.cost_usd.toFixed(4);
+          if (self.efficientMode && self.efficientMode !== 'off') {
+            var sPct = data.compression_savings_pct;
+            silentMeta += sPct > 0 ? ' | ⚡ eco ↓' + sPct + '%' : ' | ⚡ eco';
+          }
           this.messages.push({ id: ++msgId, role: 'system', text: '*(No reply — agent processed the message but determined no response was needed.)*', meta: silentMeta, tools: [], ts: Date.now() });
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.scrollToBottom();
@@ -1268,9 +1576,11 @@ function chatPage() {
           this._stopElapsed();
           this._wsInFlightMsg = null;  // don't retry on explicit error from server
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
-          var errBody = 'Error: ' + data.content;
+          var rawErr = typeof data.content === 'string' ? data.content : JSON.stringify(data.content || '');
+          var friendly = this._applyFriendlyError(rawErr);
+          var errBody = friendly.text;
           if (this.networkHints && this.networkHints.likely_vpn) {
-            errBody += '\n\nTip: A VPN or strict firewall may block outbound LLM calls. Try split tunneling or allowlisting your provider.';
+            errBody += '\n\nIf this keeps happening: a VPN or firewall may block the AI provider. Try split tunneling or allowlisting.';
           }
           this.messages.push({ id: ++msgId, role: 'system', text: errBody, meta: '', tools: [], ts: Date.now() });
           this.sending = false;
@@ -1585,6 +1895,8 @@ function chatPage() {
       // Collect image references for inline rendering
       var msgImages = uploadedFiles.filter(function(f) { return f.content_type && f.content_type.startsWith('image/'); });
 
+      // Store original text for diff UI (before compression occurs on the server)
+      this._lastSentOriginal = text;
       // Always show user message immediately and update cache so switching away preserves it
       this.messages.push({ id: ++msgId, role: 'user', text: finalText, meta: '', tools: [], images: msgImages, ts: Date.now() });
       if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
@@ -1625,6 +1937,7 @@ function chatPage() {
 
     async _sendPayload(finalText, uploadedFiles, msgImages) {
       this.sending = true;
+      this._clearStreamErrorTelemetry();
       this._startElapsed();
 
       // Detect input that would be rejected by the 64KB WS / HTTP limit.
@@ -1674,20 +1987,34 @@ function chatPage() {
         if (uploadedFiles && uploadedFiles.length) httpBody.attachments = uploadedFiles;
         var res = await OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/message', httpBody);
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
+        if (res.turn_wall_ms != null) this.lastTurnWallMs = res.turn_wall_ms;
+        if (res.input_tokens != null) this.sessionPromptTokens += res.input_tokens;
+        if (res.output_tokens != null) this.sessionCompletionTokens += res.output_tokens;
+        this._clearStreamErrorTelemetry();
         var httpMeta = (res.input_tokens || 0) + ' in / ' + (res.output_tokens || 0) + ' out';
         if (res.cost_usd != null) httpMeta += ' | $' + res.cost_usd.toFixed(4);
         if (res.iterations) httpMeta += ' | ' + res.iterations + ' iter';
         if (res.skill_draft_path) httpMeta += ' | skill draft: ' + res.skill_draft_path;
-        this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: [], ts: Date.now() });
+        if (self.efficientMode && self.efficientMode !== 'off') {
+          var hPct = res.compression_savings_pct;
+          httpMeta += hPct > 0 ? ' | ⚡ eco ↓' + hPct + '%' : ' | ⚡ eco';
+        }
+        var httpCompressedInput = (res.compressed_input && res.compression_savings_pct > 0) ? res.compressed_input : null;
+        this._recordEcoSaving(res.compression_savings_pct);
+        this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: [], ts: Date.now(),
+          compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
+          savingsPct: res.compression_savings_pct || 0 });
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
-        var errMsg = e.message || 'Unknown error';
-        if (e.detail && e.detail !== errMsg) errMsg += ' — ' + e.detail;
-        if (e.hint) errMsg += ' Hint: ' + e.hint;
+        var technical = e.message || 'Unknown error';
+        if (e.detail && e.detail !== technical) technical += ' — ' + e.detail;
+        if (e.hint) technical += ' Hint: ' + e.hint;
+        var friendlyHttp = this._applyFriendlyError(technical);
+        var httpUserText = friendlyHttp.text;
         if (this.networkHints && this.networkHints.likely_vpn) {
-          errMsg += ' VPN or firewall may block outbound LLM calls; try split tunneling or allowlisting.';
+          httpUserText += '\n\nIf this keeps happening: a VPN or firewall may block the AI provider. Try split tunneling or allowlisting.';
         }
-        this.messages.push({ id: ++msgId, role: 'system', text: 'Error: ' + errMsg, meta: '', tools: [], ts: Date.now() });
+        this.messages.push({ id: ++msgId, role: 'system', text: httpUserText, meta: '', tools: [], ts: Date.now() });
       }
       this.sending = false;
       this.scrollToBottom(true);
@@ -1954,6 +2281,32 @@ function chatPage() {
     },
 
     renderMarkdown: renderMarkdown,
-    escapeHtml: escapeHtml
+    escapeHtml: escapeHtml,
+
+    // Cycle eco mode: Off → Balanced → Aggressive → Off.
+    // Persists the new value to /api/config/set so it survives page reload.
+    cycleEcoMode: async function() {
+      var next = this.efficientMode === 'off' ? 'balanced'
+               : this.efficientMode === 'balanced' ? 'aggressive'
+               : 'off';
+      this.efficientMode = next;
+      // Persist instantly to localStorage so the pill survives page reload
+      // without waiting for the async config fetch on next init.
+      try { localStorage.setItem('armaraos-eco-mode', next); } catch(e) {}
+      try {
+        await fetch('/api/config/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'efficient_mode', value: next })
+        });
+      } catch(e) { /* non-fatal — mode is already updated in memory and localStorage */ }
+    },
+
+    // Open the eco diff modal for a message that has compressedInput set.
+    openEcoDiff: function(msg) {
+      if (typeof openEcoDiffModal === 'function') {
+        openEcoDiffModal(msg.originalInput || '', msg.compressedInput || '', msg.savingsPct || 0);
+      }
+    }
   };
 }

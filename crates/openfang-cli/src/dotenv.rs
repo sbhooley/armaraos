@@ -116,22 +116,54 @@ pub fn env_file_exists() -> bool {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a single `KEY=VALUE` line. Handles optional quotes.
+/// Parse a single `KEY=VALUE` line. Handles optional quotes and inline comments.
+///
+/// Inline comments (`# …`) are stripped from unquoted values when `#` is preceded by
+/// whitespace — including the case where the entire value is a comment (e.g. `KEY= # note`).
+/// A `#` that immediately follows the `=` with no whitespace is treated as a literal value
+/// character (e.g. `COLOR=#ff0000`).
+/// Quoted values preserve their content verbatim (the surrounding quotes are removed).
 fn parse_env_line(line: &str) -> Option<(String, String)> {
     let eq_pos = line.find('=')?;
     let key = line[..eq_pos].trim().to_string();
-    let mut value = line[eq_pos + 1..].trim().to_string();
+    // Keep raw (untrimmed) so we can detect whether `#` at start was preceded by whitespace.
+    let raw_after_eq = &line[eq_pos + 1..];
+    let raw_has_leading_space = raw_after_eq
+        .chars()
+        .next()
+        .map(|c| c == ' ' || c == '\t')
+        .unwrap_or(false);
+    let mut value = raw_after_eq.trim().to_string();
 
     if key.is_empty() {
         return None;
     }
 
-    // Strip matching quotes
-    if ((value.starts_with('"') && value.ends_with('"'))
+    // Strip matching quotes — quoted values keep their literal content (no comment stripping).
+    let is_quoted = ((value.starts_with('"') && value.ends_with('"'))
         || (value.starts_with('\'') && value.ends_with('\'')))
-        && value.len() >= 2
-    {
+        && value.len() >= 2;
+
+    if is_quoted {
         value = value[1..value.len() - 1].to_string();
+    } else {
+        // Strip inline comments from unquoted values.
+        // A `#` that is preceded by whitespace (space or tab) begins a comment.
+        // A `#` at position 0 is only a comment if the raw value had leading whitespace
+        // (i.e. `KEY= # note`), not when it immediately follows `=` (e.g. `COLOR=#ff0000`).
+        for i in 0..value.len() {
+            if value.as_bytes()[i] == b'#' {
+                let preceded_by_space = if i == 0 {
+                    raw_has_leading_space
+                } else {
+                    value.as_bytes()[i - 1] == b' ' || value.as_bytes()[i - 1] == b'\t'
+                };
+                if preceded_by_space {
+                    value = value[..i].trim_end().to_string();
+                    break;
+                }
+            }
+        }
     }
 
     Some((key, value))
@@ -242,5 +274,43 @@ mod tests {
     #[test]
     fn test_parse_env_line_empty_key() {
         assert!(parse_env_line("=value").is_none());
+    }
+
+    #[test]
+    fn test_parse_env_line_inline_comment_stripped() {
+        let (k, v) = parse_env_line("API_KEY=abc123 # my key").unwrap();
+        assert_eq!(k, "API_KEY");
+        assert_eq!(v, "abc123");
+    }
+
+    #[test]
+    fn test_parse_env_line_inline_comment_tab_separator() {
+        let (k, v) = parse_env_line("FOO=bar\t# comment").unwrap();
+        assert_eq!(k, "FOO");
+        assert_eq!(v, "bar");
+    }
+
+    #[test]
+    fn test_parse_env_line_hash_without_preceding_space_kept() {
+        // `#` with no preceding whitespace is part of the value (e.g. colour codes)
+        let (k, v) = parse_env_line("COLOR=#ff0000").unwrap();
+        assert_eq!(k, "COLOR");
+        assert_eq!(v, "#ff0000");
+    }
+
+    #[test]
+    fn test_parse_env_line_quoted_value_preserves_hash() {
+        // Quoted values: inline `#` is literal, not a comment
+        let (k, v) = parse_env_line("MSG=\"hello # world\"").unwrap();
+        assert_eq!(k, "MSG");
+        assert_eq!(v, "hello # world");
+    }
+
+    #[test]
+    fn test_parse_env_line_inline_comment_only_comment() {
+        // Value is empty after stripping comment
+        let (k, v) = parse_env_line("FOO= # just a comment").unwrap();
+        assert_eq!(k, "FOO");
+        assert_eq!(v, "");
     }
 }

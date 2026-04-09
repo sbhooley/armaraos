@@ -59,7 +59,7 @@ Override frames:
 ./programs/wishlist-host-kit/run_upstream_wishlist.sh 04 /path/to/custom_frame.json
 ```
 
-## Wire into Rust / OpenFang
+## Wire into Rust / ArmaraOS
 
 Point automation at the same command (or at `POST /run` on `ainl serve`) with a JSON **frame** produced by the kernel. See [docs/learning-frame-v1.md](../../docs/learning-frame-v1.md).
 

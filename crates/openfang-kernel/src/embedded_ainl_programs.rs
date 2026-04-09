@@ -11,7 +11,7 @@ use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/embedded_programs.rs"));
 
 /// Marker file with the build revision; bumped when embedded content changes meaningfully.
-pub const EMBEDDED_PROGRAMS_REVISION: &str = "4";
+pub const EMBEDDED_PROGRAMS_REVISION: &str = "5";
 
 /// `~/.armaraos/ainl-library/armaraos-programs/`
 pub fn armaraos_programs_subdir(home_dir: &Path) -> std::path::PathBuf {

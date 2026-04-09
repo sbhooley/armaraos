@@ -92,7 +92,7 @@ Recommended health-check pattern:
 
 ## MCP and external clients
 
-When OpenFang/ArmaraOS exposes tools over **MCP** (`POST /mcp`), the same names and schemas appear in `tools/list`. Agent manifests must **grant** `document_extract` in `[capabilities].tools` where templates include it (e.g. coding / research agents).
+When ArmaraOS/ArmaraOS exposes tools over **MCP** (`POST /mcp`), the same names and schemas appear in `tools/list`. Agent manifests must **grant** `document_extract` in `[capabilities].tools` where templates include it (e.g. coding / research agents).
 
 ## Related
 

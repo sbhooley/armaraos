@@ -14,13 +14,19 @@ budget_threshold_alert:
   spent = core.GET budget total_spent_usd
   limit = core.GET budget budget_limit_usd
 
+  # Early exit: no limit configured
   if limit == 0:
     out {alert: false, reason: "no_limit_set", checked_at: ts}
+    # Note: execution continues after out; wrap remainder in limit > 0 guard
 
-  pct = core.MUL spent 100
-  threshold = core.MUL limit 80
+  # Only compute threshold when limit is set
+  if limit > 0:
+    pct = core.MUL spent 100
+    threshold = core.MUL limit 80
 
-  if pct >= threshold:
-    out {alert: true, spent_usd: spent, limit_usd: limit, triggered_at: ts}
+    if pct >= threshold:
+      out {alert: true, spent_usd: spent, limit_usd: limit, triggered_at: ts}
 
-  out {alert: false, spent_usd: spent, limit_usd: limit, checked_at: ts}
+    # pct < threshold (under threshold, no alert)
+    if pct < threshold:
+      out {alert: false, spent_usd: spent, limit_usd: limit, checked_at: ts}

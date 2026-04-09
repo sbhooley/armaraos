@@ -682,12 +682,12 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Shell tool ---
         ToolDefinition {
             name: "shell_exec".to_string(),
-            description: "Execute a shell command and return its output.".to_string(),
+            description: "Execute a shell command and return its combined stdout/stderr once it exits. Hard ceiling: 300 s. For commands that may take longer (Playwright, npm install, long Python scripts, build steps), use process_start + process_poll instead so you can read output incrementally without hitting the timeout.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The command to execute" },
-                    "timeout_seconds": { "type": "integer", "description": "Timeout in seconds (default: 30)" }
+                    "timeout_seconds": { "type": "integer", "description": "Timeout in seconds (default: 30, max: 300). If the command might run longer than 30 s, pass an explicit value up to 300. For jobs expected to take more than 5 minutes, use process_start instead." }
                 },
                 "required": ["command"]
             }),
@@ -1266,7 +1266,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Persistent process tools ---
         ToolDefinition {
             name: "process_start".to_string(),
-            description: "Start a long-running process (REPL, server, watcher). Returns a process_id for subsequent poll/write/kill operations. Max 5 processes per agent.".to_string(),
+            description: "Start a long-running or slow process (REPL, server, watcher, Playwright scraper, npm install, build step, Python script). Returns a process_id; then call process_poll repeatedly to read buffered output until the job finishes. Use this instead of shell_exec whenever the command might take more than 30 s. Max 5 processes per agent.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2914,7 +2914,7 @@ async fn tool_location_get() -> Result<String, String> {
     // Use ip-api.com (free, no API key, JSON response)
     let resp = client
         .get("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query")
-        .header("User-Agent", "OpenFang/0.1")
+        .header("User-Agent", "ArmaraOS/0.1")
         .send()
         .await
         .map_err(|e| format!("Location request failed: {e}"))?;

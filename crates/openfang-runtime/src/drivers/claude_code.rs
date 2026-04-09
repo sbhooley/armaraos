@@ -74,7 +74,7 @@ impl ClaudeCodeDriver {
             warn!(
                 "Claude Code driver: --dangerously-skip-permissions enabled. \
                  The CLI will not prompt for tool approvals. \
-                 OpenFang's own capability/RBAC system enforces access control."
+                 ArmaraOS's own capability/RBAC system enforces access control."
             );
         }
 

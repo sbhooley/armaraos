@@ -6,7 +6,7 @@
 //! Client → Server: `{"type":"message","content":"..."}`
 //! Server → Client: `{"type":"typing","state":"start|tool|stop"}`
 //! Server → Client: `{"type":"text_delta","content":"..."}`
-//! Server → Client: `{"type":"response","content":"...","input_tokens":N,"output_tokens":N,"iterations":N,"skill_draft_path":?}`
+//! Server → Client: `{"type":"response","content":"...","input_tokens":N,"output_tokens":N,"iterations":N,"turn_wall_ms":N,"skill_draft_path":?}`
 //! Server → Client: `{"type":"error","content":"..."}`
 //! Server → Client: `{"type":"agents_updated","agents":[...]}`
 //! Server → Client: `{"type":"silent_complete",...,"skill_draft_path":?}` (agent chose NO_REPLY; optional skill draft from `[learn]`)
@@ -549,6 +549,9 @@ async fn handle_text_message(
             )
             .await;
 
+            // Wall time for the full streamed turn (LLM + tools until stream closes) — shown in chat telemetry.
+            let turn_wall_t0 = std::time::Instant::now();
+
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
@@ -576,6 +579,8 @@ async fn handle_text_message(
                         let mut accumulated_text = String::new();
                         let mut stream_usage: Option<openfang_types::message::TokenUsage> = None;
                         let mut is_silent = false;
+                        let mut compression_savings_pct: u8 = 0;
+                        let mut compressed_input: Option<String> = None;
                         let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
                         let mut flush_deadline = far_future;
 
@@ -603,6 +608,14 @@ async fn handle_text_message(
                                             if let StreamEvent::ContentComplete { usage, .. } = &ev {
                                                 stream_usage = Some(*usage);
                                                 // Don't forward — handled below
+                                                continue;
+                                            }
+                                            // Capture compression stats (emitted once before any LLM call)
+                                            if let StreamEvent::CompressionStats { savings_pct, compressed_text } = &ev {
+                                                compression_savings_pct = *savings_pct;
+                                                if !compressed_text.is_empty() {
+                                                    compressed_input = Some(compressed_text.clone());
+                                                }
                                                 continue;
                                             }
 
@@ -682,7 +695,13 @@ async fn handle_text_message(
                             is_silent = true;
                         }
 
-                        (accumulated_text, stream_usage, is_silent)
+                        (
+                            accumulated_text,
+                            stream_usage,
+                            is_silent,
+                            compression_savings_pct,
+                            compressed_input,
+                        )
                     });
 
                     // Wait for the stream to finish (fast — closes as soon as
@@ -727,7 +746,13 @@ async fn handle_text_message(
 
                     // Send the response immediately from stream data
                     match stream_result {
-                        Ok((accumulated_text, stream_usage, is_silent)) => {
+                        Ok((
+                            accumulated_text,
+                            stream_usage,
+                            is_silent,
+                            compression_savings_pct,
+                            compressed_input,
+                        )) => {
                             let user_message = content.clone();
                             let agent_id_str = agent_id.to_string();
                             let home = state.kernel.config.home_dir.as_path();
@@ -743,6 +768,7 @@ async fn handle_text_message(
                             .await;
 
                             let usage = stream_usage.unwrap_or_default();
+                            let turn_wall_ms = turn_wall_t0.elapsed().as_millis() as u64;
 
                             if is_silent {
                                 let skill_path = skill_draft_path_for_learn_message(
@@ -756,9 +782,17 @@ async fn handle_text_message(
                                     "type": "silent_complete",
                                     "input_tokens": usage.input_tokens,
                                     "output_tokens": usage.output_tokens,
+                                    "turn_wall_ms": turn_wall_ms,
                                 });
                                 if let Some(p) = skill_path {
                                     silent_payload["skill_draft_path"] = serde_json::json!(p);
+                                }
+                                if compression_savings_pct > 0 {
+                                    silent_payload["compression_savings_pct"] =
+                                        serde_json::json!(compression_savings_pct);
+                                }
+                                if let Some(ref ci) = compressed_input {
+                                    silent_payload["compressed_input"] = serde_json::json!(ci);
                                 }
                                 let _ = send_json(sender, &silent_payload).await;
                                 return;
@@ -809,9 +843,17 @@ async fn handle_text_message(
                                 "iterations": 0, // Not available from stream; handle updates later if needed
                                 "cost_usd": null,
                                 "context_pressure": pressure,
+                                "turn_wall_ms": turn_wall_ms,
                             });
                             if let Some(p) = skill_path {
                                 response_payload["skill_draft_path"] = serde_json::json!(p);
+                            }
+                            if compression_savings_pct > 0 {
+                                response_payload["compression_savings_pct"] =
+                                    serde_json::json!(compression_savings_pct);
+                            }
+                            if let Some(ref ci) = compressed_input {
+                                response_payload["compressed_input"] = serde_json::json!(ci);
                             }
                             let _ = send_json(sender, &response_payload).await;
                         }

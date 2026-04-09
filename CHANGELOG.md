@@ -1,13 +1,57 @@
 # Changelog
 
-All notable changes to OpenFang will be documented in this file.
+All notable changes to ArmaraOS will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.6.9] - 2026-04-09
+## [0.7.1] - 2026-04-08
+
+Patch release after **0.7.0** — CLI compile fixes for efficient-mode telemetry, eco mode defaults and dashboard UX, and AINL wheel pin **1.4.4** in release workflow.
+
+### Fixed
+
+- **CLI (`openfang-cli`):** `StreamEvent::CompressionStats` variant not handled in `chat_runner.rs` and `tui/mod.rs` match arms — caused compile failure for `cargo test`. `AgentLoopResult` struct initializers in `tui/event.rs` were also missing the new `compression_savings_pct` / `compressed_input` fields.
+- **Dashboard → Chat:** Eco mode quick-toggle pill now persists to **`localStorage`** (`armaraos-eco-mode`) immediately on every click, and the initial value is read from `localStorage` before the async `GET /api/config` resolves — prevents the mode resetting to Balanced on page reload or after app update. Default changed from `'balanced'` to `'off'` for clean installs. **Settings → Budget** `saveEfficientMode` also writes to `localStorage`.
+- **Runtime config:** `efficient_mode` Rust default corrected from `"balanced"` to `"off"` — a fresh `config.toml` (or no config) no longer silently enables prompt compression. Dashboard JS and Rust default now agree on `"off"` as the out-of-the-box state.
+- **Release workflow:** `AINL_PYPI_VERSION` bumped from `1.4.3` to `1.4.4` so desktop bundles embed the latest AINL wheel.
+- **Dashboard → Chat telemetry strip:** Tokens in/out, latency, and message count items were hidden by `x-show` until after the first reply. All items now render immediately with `—` placeholders; they fill in live once data is available.
+
+### Changed
+
+- **Dashboard → Chat:** Eco mode button restyled as a rounded pill (`.eco-pill` / `.eco-pill-off` / `.eco-pill-bal` / `.eco-pill-agg`) with a ⚡ bolt icon — matches the badge/chip visual language of the rest of the dashboard instead of appearing as a gray square.
+- **Dashboard → Chat:** Added persistent **telemetry strip** below the chat header: context pressure dot (`ctx ok / mid / high / full`), session tokens in/out, last-turn latency, message count, and rolling eco compression savings % when active.
+- **Dashboard → Chat:** Added **LLM error banner** (slides in below telemetry strip on any provider error) using existing `humanizeChatError` friendly-message logic — rate-limit errors show amber, other errors show red; hover for raw technical detail; dismissable with ×.
+- **Dashboard → Chat:** Per-message eco diff button restyled as `.eco-savings-badge` green pill.
+
+## [0.7.0] - 2026-04-08
+
+This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below for intervening fixes. **0.7.0** ships the items below (dashboard, API, efficient mode, release tooling).
+
+### Added
+
+- **Ultra Cost-Efficient Mode (runtime):** Heuristic **prompt compression** in **`openfang-runtime`** ([`prompt_compressor.rs`](crates/openfang-runtime/src/prompt_compressor.rs)) — wired into the agent loop; global **`efficient_mode`** in config and per-agent metadata override (`balanced` / `aggressive` / off). Chat shows **eco** indicators; response meta may include compression stats. See [docs/prompt-compression-efficient-mode.md](docs/prompt-compression-efficient-mode.md).
+- **HTTP API:** **`GET /api/ui-prefs`** and **`PUT /api/ui-prefs`** — persist dashboard UI preferences to **`~/.armaraos/ui-prefs.json`** (atomic write; same pattern as slash templates). Currently stores **`pinned_agents`** (sidebar Quick open) so pins survive desktop reinstalls that clear WebView `localStorage`.
+- **Dashboard:** **Settings** at-a-glance **Config schema** line appends **`⚠ mismatch`** when effective `config_schema_version` ≠ binary constant (`static/js/pages/settings.js`).
+
+### Fixed
+
+- **Dashboard → Chat:** **Agent settings** (gear) opens the Info/Files/Config modal from **inline chat** as well as from the agent picker — single modal in **`agentsPage`** scope (`index_body.html`).
+
+### Changed
+
+- **Release / desktop:** PostHog compile-time env accepts **`ARMARAOS_POSTHOG_KEY`** / **`ARMARAOS_POSTHOG_HOST`** or falls back to **`AINL_POSTHOG_KEY`** / **`AINL_POSTHOG_HOST`** (same `phc_…` as ainativelang.com `NEXT_PUBLIC_POSTHOG_KEY`). See `docs/release-desktop.md`.
+- **Desktop bundle:** **`AINL_PYPI_VERSION`** (release workflow), desktop bundle CI, and **`xtask bundle-ainl-wheel`** default pin raised to **`ainativelang` 1.4.3**.
+
+### Documentation
+
+- **Ultra Cost-Efficient Mode:** [docs/prompt-compression-efficient-mode.md](docs/prompt-compression-efficient-mode.md) (canonical); [configuration.md](docs/configuration.md) (`efficient_mode`), [api-reference.md](docs/api-reference.md) (message + WebSocket + config), [dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md) (Budget + chat eco), [dashboard-testing.md](docs/dashboard-testing.md) (QA **7b**), [docs/README.md](docs/README.md), root [README.md](README.md).
+- **UI prefs, pinned agents, agent detail modal, config schema mismatch:** [api-reference.md](docs/api-reference.md) (**UI Preferences** section + endpoint summary), [data-directory.md](docs/data-directory.md) (`ui-prefs.json`, `slash-templates.json` row), [troubleshooting.md](docs/troubleshooting.md), [dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md), [configuration.md](docs/configuration.md), [getting-started.md](docs/getting-started.md) (config schema triage), [dashboard-testing.md](docs/dashboard-testing.md) (QA for gear modal + pins), [docs/README.md](docs/README.md), root [CLAUDE.md](CLAUDE.md).
+- **Desktop code signing:** [docs/desktop-code-signing.md](docs/desktop-code-signing.md).
+
+## [0.6.9] - 2026-04-08
 
 ### Changed
 
@@ -367,7 +411,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prometheus metrics for monitoring
 - Config hot-reload without restart
 
-[0.1.0]: https://github.com/RightNow-AI/openfang/releases/tag/v0.1.0
+[0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.1]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.1
+[0.7.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.0
 [0.6.9]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.9
 [0.6.8]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.8
 [0.6.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.7

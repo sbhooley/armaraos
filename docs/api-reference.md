@@ -1,8 +1,8 @@
 # API Reference
 
-OpenFang exposes a REST API, WebSocket endpoints, and SSE streaming when the daemon is running. The default listen address is `http://127.0.0.1:4200`.
+ArmaraOS exposes a REST API, WebSocket endpoints, and SSE streaming when the daemon is running. The default listen address is `http://127.0.0.1:4200`.
 
-All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. OpenFang implements 16 security systems including Merkle audit trails, taint tracking, WASM dual metering, Ed25519 manifest signing, SSRF protection, subprocess sandboxing, and secret zeroization.
+All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. ArmaraOS implements 16 security systems including Merkle audit trails, taint tracking, WASM dual metering, Ed25519 manifest signing, SSRF protection, subprocess sandboxing, and secret zeroization.
 
 ## Table of Contents
 
@@ -24,6 +24,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Migration Endpoints](#migration-endpoints)
 - [Session Management Endpoints](#session-management-endpoints)
 - [Slash Templates Endpoints](#slash-templates-endpoints)
+- [UI Preferences Endpoints](#ui-preferences-endpoints)
 - [Cron/Scheduler Endpoints](#cronscheduler-endpoints)
 - [Support diagnostics bundle](#support-diagnostics-redacted-bundle)
 - [ArmaraOS Home Browser Endpoints](#armaraos-home-browser-endpoints)
@@ -326,9 +327,13 @@ Send a message to an agent and receive the complete response.
   "response": "Here are the files in the current directory:\n- Cargo.toml\n- README.md\n...",
   "input_tokens": 142,
   "output_tokens": 87,
-  "iterations": 1
+  "iterations": 1,
+  "compression_savings_pct": 34,
+  "compressed_input": "Understand why the dashboard…"
 }
 ```
+
+When **Ultra Cost-Efficient Mode** is active and the prompt compressor saves tokens, **`compression_savings_pct`** (1–100) and **`compressed_input`** (the text sent to the LLM) may be present. Omitted when there is no compression or zero savings. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
 
 ### GET /api/agents/{id}/session
 
@@ -934,7 +939,7 @@ Detailed kernel status including all agents. Includes `config_schema_version` (e
 ```json
 {
   "status": "running",
-  "version": "0.6.9",
+  "version": "0.7.1",
   "agent_count": 2,
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
@@ -984,8 +989,8 @@ Build and version information.
 
 ```json
 {
-  "tag_name": "v0.6.9",
-  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.6.9",
+  "tag_name": "v0.7.1",
+  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.7.1",
   "published_at": "2026-01-01T12:00:00Z"
 }
 ```
@@ -1066,6 +1071,7 @@ Retrieve current kernel configuration (secrets are redacted). Includes `config_s
   "data_dir": "/home/user/.armaraos/data",
   "config_schema_version": 1,
   "api_key": "***",
+  "efficient_mode": "balanced",
   "default_model": {
     "provider": "groq",
     "model": "llama-3.3-70b-versatile",
@@ -1076,6 +1082,56 @@ Retrieve current kernel configuration (secrets are redacted). Includes `config_s
   }
 }
 ```
+
+To change **one** field and persist it without hand-editing the file, use **`POST /api/config/set`** below.
+
+### POST /api/config/set
+
+Set a **single** configuration value, write it to **`{home_dir}/config.toml`**, and trigger an in-process **`reload_config()`**.
+
+**Request body** (JSON):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `path` | string (required) | Dot-separated TOML path. **One** segment = top-level key (e.g. `efficient_mode`). **Two** segments = `[first].second` (e.g. `memory.decay_rate`). **Three** segments = nested table (max depth **3** levels — deeper paths return `400`). |
+| `value` | string / number / boolean (required) | Serialized into TOML. Other JSON types are stringified. |
+
+**Example — Ultra Cost-Efficient Mode:**
+
+```json
+{
+  "path": "efficient_mode",
+  "value": "balanced"
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "applied",
+  "path": "efficient_mode"
+}
+```
+
+`status` is one of:
+
+| Value | Meaning |
+|-------|---------|
+| `applied` | Written and reload succeeded without requiring full process restart. |
+| `applied_partial` | Written; reload reported `restart_required` (some changes may need a daemon restart). |
+| `saved_reload_failed` | File written but `reload_config()` failed — verify daemon logs. |
+
+**Errors:**
+
+- **`400`** — missing `path` or `value`; or `path` has more than three dot-separated segments (`path too deep (max 3 levels)`).
+- **`500`** — TOML serialize failure or filesystem write error.
+
+**Auth:** Same as other POST routes when `api_key` is set (Bearer), unless your deployment allows open access.
+
+**Audit:** A config-change audit entry is recorded with the path.
+
+**Dashboard:** **Settings → Budget** (eco mode dropdown) and the chat header **⚡ eco** button use this endpoint (see [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md)).
 
 ### POST /api/config/reload
 
@@ -1169,7 +1225,7 @@ Delete a specific session and its conversation history.
 
 ## Model Catalog Endpoints
 
-OpenFang maintains a built-in catalog of 51+ models across 20 providers. These endpoints allow you to browse available models, check provider authentication status, and resolve model aliases.
+ArmaraOS maintains a built-in catalog of 51+ models across 20 providers. These endpoints allow you to browse available models, check provider authentication status, and resolve model aliases.
 
 ### GET /api/models
 
@@ -1567,7 +1623,7 @@ Get detailed information about a specific ClawHub skill.
 
 ### POST /api/clawhub/install
 
-Install a skill from ClawHub. Downloads, verifies SHA256 checksum, scans for prompt injection, and converts SKILL.md format to OpenFang skill.toml automatically.
+Install a skill from ClawHub. Downloads, verifies SHA256 checksum, scans for prompt injection, and converts SKILL.md format to ArmaraOS skill.toml automatically.
 
 **Request Body**:
 
@@ -1592,7 +1648,7 @@ Install a skill from ClawHub. Downloads, verifies SHA256 checksum, scans for pro
 
 ## MCP & A2A Protocol Endpoints
 
-OpenFang supports both Model Context Protocol (MCP) for tool interoperability and Agent-to-Agent (A2A) protocol for cross-system agent communication.
+ArmaraOS supports both Model Context Protocol (MCP) for tool interoperability and Agent-to-Agent (A2A) protocol for cross-system agent communication.
 
 ### GET /api/mcp/servers
 
@@ -1627,7 +1683,7 @@ List configured and connected MCP servers with their available tools.
 
 ### POST /mcp
 
-MCP HTTP transport endpoint. Accepts JSON-RPC 2.0 requests and exposes OpenFang tools via the MCP protocol to external clients.
+MCP HTTP transport endpoint. Accepts JSON-RPC 2.0 requests and exposes ArmaraOS tools via the MCP protocol to external clients.
 
 **Request Body** (JSON-RPC 2.0):
 
@@ -1670,8 +1726,8 @@ A2A agent card discovery endpoint. Returns the server's A2A agent card, which de
 
 ```json
 {
-  "name": "OpenFang",
-  "description": "OpenFang Agent Operating System",
+  "name": "ArmaraOS",
+  "description": "ArmaraOS Agent Operating System",
   "url": "http://127.0.0.1:4200",
   "version": "0.1.0",
   "capabilities": {
@@ -1778,7 +1834,7 @@ Cancel a running A2A task.
 
 ## Audit & Security Endpoints
 
-OpenFang maintains a Merkle hash chain audit trail for all security-relevant operations. These endpoints allow inspection and verification of the audit log integrity.
+ArmaraOS maintains a Merkle hash chain audit trail for all security-relevant operations. These endpoints allow inspection and verification of the audit log integrity.
 
 ### GET /api/audit/recent
 
@@ -1834,7 +1890,7 @@ Verify the integrity of the Merkle hash chain audit trail. Walks the entire chai
 
 ### GET /api/logs/daemon/recent
 
-Returns recent **lines** from the CLI daemon tracing file: prefers **`{home}/logs/daemon.log`**, otherwise **`{home}/tui.log`** if that file exists (`home` is the kernel’s OpenFang/Armaraos data directory, same as `ARMARAOS_HOME` / `~/.armaraos`).
+Returns recent **lines** from the CLI daemon tracing file: prefers **`{home}/logs/daemon.log`**, otherwise **`{home}/tui.log`** if that file exists (`home` is the kernel’s ArmaraOS/Armaraos data directory, same as `ARMARAOS_HOME` / `~/.armaraos`).
 
 **Query parameters:**
 
@@ -2221,6 +2277,50 @@ Save the full list of slash templates, replacing any existing file. The body mus
 
 ---
 
+## UI Preferences Endpoints
+
+Arbitrary dashboard UI state that must survive **desktop reinstalls** (which can clear embedded WebView `localStorage`) is stored in **`~/.armaraos/ui-prefs.json`**. The file is a single JSON object; the dashboard currently uses:
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `pinned_agents` | array of strings (agent IDs) | Order of pinned rows in the sidebar **Quick open** list |
+
+Writes use the same atomic **`.json.tmp` → rename** pattern as slash templates.
+
+### GET /api/ui-prefs
+
+Load persisted UI preferences. Returns **`{}`** when the file does not exist yet.
+
+**Response** `200 OK`:
+
+```json
+{
+  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"]
+}
+```
+
+### PUT /api/ui-prefs
+
+Replace the entire preferences object on disk. The body **must** be a JSON **object** (not an array or scalar).
+
+**Request body** (example):
+
+```json
+{
+  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"]
+}
+```
+
+**Response** `200 OK`:
+
+```json
+{ "status": "ok" }
+```
+
+**Dashboard:** On load, the app merges server `pinned_agents` into `localStorage` (`armaraos-pinned-agents`). Each pin/unpin updates both `localStorage` and `PUT /api/ui-prefs`.
+
+---
+
 ## Cron/Scheduler Endpoints
 
 Manage recurring and one-shot scheduled jobs. Jobs can trigger agent turns, system events, or workflow runs on a schedule.
@@ -2470,9 +2570,13 @@ Plain text (non-JSON) is also accepted and treated as a message.
   "input_tokens": 245,
   "output_tokens": 32,
   "iterations": 2,
-  "cost_usd": 0.0012
+  "cost_usd": 0.0012,
+  "compression_savings_pct": 34,
+  "compressed_input": "…"
 }
 ```
+
+**Compression:** When input compression ran with non-zero savings, **`compression_savings_pct`** and **`compressed_input`** may be included (same semantics as **`POST /api/agents/{id}/message`**). The stream may also emit internal compression stats before LLM tokens for dashboard telemetry.
 
 **Error:**
 
@@ -2594,7 +2698,7 @@ SSE stream of kernel **`Event`** values (JSON per message): live bus traffic plu
 
 ## OpenAI-Compatible API
 
-OpenFang exposes an OpenAI-compatible API for drop-in integration with tools that support the OpenAI API format (Cursor, Continue, Open WebUI, etc.).
+ArmaraOS exposes an OpenAI-compatible API for drop-in integration with tools that support the OpenAI API format (Cursor, Continue, Open WebUI, etc.).
 
 ### POST /v1/chat/completions
 
@@ -2615,7 +2719,7 @@ Send a chat completion request using the OpenAI message format.
 }
 ```
 
-**Model resolution** (the `model` field maps to an OpenFang agent):
+**Model resolution** (the `model` field maps to an ArmaraOS agent):
 
 | Format | Example | Behavior |
 |--------|---------|----------|
@@ -2768,7 +2872,7 @@ The `Retry-After` header indicates the window duration in seconds.
 
 ## Endpoint Summary
 
-**81+ endpoints total** across 15 groups (approximate; generated list may lag new routes).
+**83+ endpoints total** across 15 groups (approximate; generated list may lag new routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -2784,6 +2888,8 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/tools` | List available tools |
 | GET | `/api/config` | Configuration (secrets redacted) |
 | POST | `/api/config/reload` | Reload config from disk (hot reload + restart hints) |
+| GET | `/api/ui-prefs` | Dashboard UI preferences (`~/.armaraos/ui-prefs.json`; e.g. pinned agents) |
+| PUT | `/api/ui-prefs` | Save UI preferences (full JSON object replace; atomic write) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
 | GET | `/api/agents` | List agents (includes `system_prompt`, `identity`) |

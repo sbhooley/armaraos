@@ -179,6 +179,9 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .map(|ks| tooltip_for_kernel(&ks.kernel))
         .unwrap_or_else(|| "ArmaraOS Agent OS".to_string());
 
+    // Clone for event handler to update visual state after toggle
+    let launch_at_login_clone = launch_at_login.clone();
+
     let tray = TrayIconBuilder::new()
         .icon(tray_image)
         .menu(&menu)
@@ -249,10 +252,10 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Err(e) = manager.enable() {
                     warn!("Failed to enable autostart: {e}");
                 }
-                info!(
-                    "Autostart toggled: {}",
-                    manager.is_enabled().unwrap_or(false)
-                );
+                let new_state = manager.is_enabled().unwrap_or(false);
+                info!("Autostart toggled: {new_state}");
+                // Update checkbox visual state
+                let _ = launch_at_login_clone.set_checked(new_state);
             }
             "check_updates" => {
                 let app_handle = app.clone();
@@ -308,7 +311,41 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
             "quit" => {
                 info!("Quit requested from system tray");
-                app.exit(0);
+
+                // Check if agents are running
+                let agent_count = app
+                    .try_state::<crate::KernelState>()
+                    .map(|ks| ks.kernel.registry.list().len())
+                    .unwrap_or(0);
+
+                if agent_count > 0 {
+                    // Show confirmation dialog
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+                        let answer = app_handle
+                            .dialog()
+                            .message(format!(
+                                "{} agent{} currently running.\n\nQuit anyway?",
+                                agent_count,
+                                if agent_count == 1 { " is" } else { "s are" }
+                            ))
+                            .title("Quit ArmaraOS?")
+                            .kind(MessageDialogKind::Warning)
+                            .blocking_show();
+
+                        if answer {
+                            info!("User confirmed quit with {agent_count} agent(s) running");
+                            app_handle.exit(0);
+                        } else {
+                            info!("User cancelled quit");
+                        }
+                    });
+                } else {
+                    // No agents running, quit immediately
+                    app.exit(0);
+                }
             }
             _ => {}
         })
@@ -332,10 +369,41 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ks) = app.try_state::<crate::KernelState>() {
         let tray_bg = tray.clone();
         let kernel_bg: Arc<OpenFangKernel> = Arc::clone(&ks.kernel);
+        let agents_info_bg = agents_info.clone();
+        let status_info_bg = status_info.clone();
+        let oc_info_bg = oc_info.clone();
+        let started_at = ks.started_at;
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(90));
             let tip = tooltip_for_kernel(kernel_bg.as_ref());
             let _ = tray_bg.set_tooltip(Some(tip.as_str()));
+
+            // Update agent count
+            let count = kernel_bg.registry.list().len();
+            let _ = agents_info_bg.set_text(format!("Agents: {count} running"));
+
+            // Update uptime
+            let uptime_str = format_uptime(started_at.elapsed().as_secs());
+            let _ = status_info_bg.set_text(format!("Status: Running ({uptime_str})"));
+
+            // Update skills workspace pending count
+            let (oc_total, oc_enabled) = {
+                let en = kernel_bg.config.openclaw_workspace.enabled;
+                if !en {
+                    (0u32, false)
+                } else {
+                    let root =
+                        openclaw_workspace::resolve_openclaw_workspace_root(&kernel_bg.config);
+                    let t = openclaw_workspace::read_pipeline_pending_total(&root).unwrap_or(0);
+                    (t, true)
+                }
+            };
+            let oc_text = if oc_enabled {
+                format!("Skills workspace: {oc_total} pending")
+            } else {
+                "Skills workspace: off (see config)".to_string()
+            };
+            let _ = oc_info_bg.set_text(oc_text);
         });
     }
 

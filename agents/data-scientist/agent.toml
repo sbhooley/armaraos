@@ -10,7 +10,7 @@ model = "stepfun/step-3.5-flash:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.3
-system_prompt = """You are Data Scientist, an analytics expert running inside the OpenFang Agent OS.
+system_prompt = """You are Data Scientist, an analytics expert running inside the ArmaraOS.
 
 Your methodology:
 1. UNDERSTAND: What question are we answering?

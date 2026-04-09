@@ -42,6 +42,7 @@ function settingsPage() {
     // -- Desktop (Tauri) AINL status (synced via Alpine.store('ainl').desktop) --
     ainlDesktopLoading: false,
     ainlDesktopError: '',
+    ainlBootstrapProgress: '',
     ainlVersionInfo: null,
     ainlVersionLoading: false,
     ainlUpgradeLoading: false,
@@ -68,7 +69,10 @@ function settingsPage() {
       var a = this.sysInfo.config_schema_version;
       var b = this.sysInfo.config_schema_version_binary;
       if (a == null && b == null) return '—';
-      return String(a != null ? a : '?') + ' (binary ' + String(b != null ? b : '?') + ')';
+      var effective = a != null ? a : '?';
+      var binary = b != null ? b : '?';
+      var mismatch = (a != null && b != null && a !== b) ? ' ⚠ mismatch' : '';
+      return String(effective) + ' (binary ' + String(binary) + ')' + mismatch;
     },
 
     // -- Dynamic config state --
@@ -336,6 +340,17 @@ function settingsPage() {
       try {
         this.config = await OpenFangAPI.get('/api/config');
       } catch(e) { this.config = {}; }
+    },
+
+    async saveEfficientMode() {
+      var mode = (this.config && this.config.efficient_mode) || 'off';
+      try {
+        await OpenFangAPI.post('/api/config/set', { path: 'efficient_mode', value: mode });
+        try { localStorage.setItem('armaraos-eco-mode', mode); } catch(e2) {}
+        OpenFangToast && OpenFangToast.success('Efficient mode saved — takes effect on next message');
+      } catch(e) {
+        OpenFangToast && OpenFangToast.error('Failed to save: ' + (e && e.message ? e.message : String(e)));
+      }
     },
 
     async loadProviders() {
@@ -728,10 +743,20 @@ function settingsPage() {
       this.ainlUpgradeLoading = false;
     },
 
+    init() {
+      // Set up AINL bootstrap progress event listener for desktop
+      if (this.isDesktopShell && window.__TAURI__) {
+        window.__TAURI__.event.listen('ainl-bootstrap-progress', (event) => {
+          this.ainlBootstrapProgress = event.payload || '';
+        }).catch(err => console.warn('Failed to listen for AINL progress:', err));
+      }
+    },
+
     async retryAinlBootstrap() {
       if (!this.isDesktopShell) return;
       this.ainlDesktopLoading = true;
       this.ainlDesktopError = '';
+      this.ainlBootstrapProgress = 'Starting bootstrap...';
       try {
         var st = await ArmaraosDesktopTauriInvoke('ensure_ainl_installed');
         this._setAinlDesktopStore(st);
@@ -747,6 +772,7 @@ function settingsPage() {
         OpenFangToast.error(this.ainlDesktopError);
       }
       this.ainlDesktopLoading = false;
+      this.ainlBootstrapProgress = '';
     },
 
     async retryAinlHostOnly() {

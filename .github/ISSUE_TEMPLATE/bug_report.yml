@@ -34,7 +34,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenFang Version
+      label: ArmaraOS Version
       description: Output of `openfang -V`
       placeholder: "0.3.23"
     validations:

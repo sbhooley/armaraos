@@ -1,6 +1,6 @@
-# OpenFang Configuration Reference
+# ArmaraOS Configuration Reference
 
-Complete reference for `config.toml`, covering every configurable field in the OpenFang Agent OS.
+Complete reference for `config.toml`, covering every configurable field in the ArmaraOS Agent OS.
 
 ---
 
@@ -29,7 +29,7 @@ Complete reference for `config.toml`, covering every configurable field in the O
 
 ## Overview
 
-OpenFang reads its configuration from a single TOML file:
+ArmaraOS reads its configuration from a single TOML file:
 
 ```
 ~/.armaraos/config.toml
@@ -50,7 +50,7 @@ On Windows, `~` resolves to `C:\Users\<username>`. If the home directory cannot 
 
 ## Minimal Configuration
 
-The simplest working configuration only needs an LLM provider API key set as an environment variable. With no config file at all, OpenFang boots with Anthropic as the default provider:
+The simplest working configuration only needs an LLM provider API key set as an environment variable. With no config file at all, ArmaraOS boots with Anthropic as the default provider:
 
 ```toml
 # ~/.armaraos/config.toml
@@ -79,7 +79,7 @@ api_key_env = ""
 
 ```toml
 # ============================================================
-# OpenFang Agent OS -- Complete Configuration Reference
+# ArmaraOS Agent OS -- Complete Configuration Reference
 # ============================================================
 
 # --- Top-level fields ---
@@ -92,6 +92,7 @@ api_key = ""                         # API Bearer token (empty = unauthenticated
 mode = "default"                     # stable | default | dev
 language = "en"                      # Locale for CLI/messages
 usage_footer = "full"                # off | tokens | cost | full
+# efficient_mode = "off"               # off | balanced | aggressive — input compression before LLM (see docs/prompt-compression-efficient-mode.md)
 
 # --- Default LLM Provider ---
 [default_model]
@@ -227,9 +228,9 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `home_dir` | path | `~/.armaraos` | OpenFang home directory. Stores config, agents, skills. |
+| `home_dir` | path | `~/.armaraos` | ArmaraOS home directory. Stores config, agents, skills. |
 | `data_dir` | path | `~/.armaraos/data` | Directory for SQLite databases and persistent data. |
-| `config_schema_version` | integer | `0` when omitted (legacy) | On-disk config format version. The daemon may migrate legacy files in memory and append the current value to `config.toml`. The running binary also defines a constant (`CONFIG_SCHEMA_VERSION`); compare **effective** vs **binary** in **Settings** (summary under tabs), **Daemon & runtime**, `GET /api/status`, or support **`diagnostics_snapshot.json`**. Semantics and migrations: [data-directory.md](data-directory.md#config-schema-version). |
+| `config_schema_version` | integer | `0` when omitted (legacy) | On-disk config format version. The daemon may migrate legacy files in memory and append the current value to `config.toml`. The running binary also defines a constant (`CONFIG_SCHEMA_VERSION`); compare **effective** vs **binary** in **Settings** (summary under tabs shows **`⚠ mismatch`** when they differ), **Daemon & runtime**, `GET /api/status`, or support **`diagnostics_snapshot.json`**. Semantics and migrations: [data-directory.md](data-directory.md#config-schema-version). |
 | `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. Persisted in `config.toml` and used when the CLI daemon initializes `tracing`. **Changing this value at runtime** (e.g. via the dashboard **Logs → Daemon** save or `POST /api/config/set`) updates the file and reloads config, but **already-running tracing does not re-subscribe** — **restart the daemon** for new verbosity to apply. `RUST_LOG` still overrides the filter when set. |
 | `api_listen` | string | `"127.0.0.1:50051"` | Bind address for the HTTP/WebSocket/SSE API server. |
 | `network_enabled` | bool | `false` | Enable the OFP peer-to-peer network layer. |
@@ -237,6 +238,7 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 | `mode` | string | `"default"` | Kernel operating mode. See below. |
 | `language` | string | `"en"` | Language/locale code for CLI output and system messages. |
 | `usage_footer` | string | `"full"` | Controls usage info appended to responses. See below. |
+| `efficient_mode` | string | `"off"` | Ultra Cost-Efficient Mode — compress user input before each LLM call (`off` \| `balanced` \| `aggressive`). See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md) and [efficient_mode (top-level detail)](#efficient_mode-top-level-detail). |
 
 **`mode` values:**
 
@@ -254,6 +256,22 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 | `tokens` | Show token counts only. |
 | `cost` | Show estimated cost only. |
 | `full` | Show both token counts and estimated cost (default). |
+
+### efficient_mode (top-level detail)
+
+Controls **input** token compression before LLM calls (Rust heuristic; not the AINL Python CLI).
+
+| Value | Meaning |
+|-------|---------|
+| `off` | Disable compression. |
+| `balanced` | Default — ~55 % token retention; soft-preserve rules apply (see doc). |
+| `aggressive` | ~35 % token retention; larger savings on conversational text; smaller gap vs Balanced when prompts are dense with opcodes/URLs. |
+
+**Per-agent:** set `efficient_mode` in the agent manifest **metadata** to override the global value for that agent only.
+
+**Dashboard:** **Settings → Budget** (dropdown + description) and **Chat** header **⚡ eco** cycle button (persists via `POST /api/config/set`).
+
+Full behavior: [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
 
 ---
 
@@ -1202,7 +1220,7 @@ url = "https://mcp.example.com/sse"
 
 ### `[a2a]`
 
-Agent-to-Agent protocol configuration, enabling inter-agent communication across OpenFang instances.
+Agent-to-Agent protocol configuration, enabling inter-agent communication across ArmaraOS instances.
 
 ```toml
 [a2a]

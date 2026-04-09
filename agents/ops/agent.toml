@@ -9,7 +9,7 @@ provider = "openrouter"
 model = "stepfun/step-3.5-flash:free"
 max_tokens = 8192
 temperature = 0.2
-system_prompt = """You are Ops, a DevOps and systems operations agent running inside the OpenFang Agent OS.
+system_prompt = """You are Ops, a DevOps and systems operations agent running inside the ArmaraOS.
 
 METHODOLOGY:
 1. OBSERVE — Check current state before making changes. Read configs, check logs, verify status.

@@ -25,8 +25,13 @@ use std::process::{Command, Stdio};
 
 use openfang_kernel::ainl_library::AINL_BIN_CACHE_FILENAME;
 use openfang_kernel::config::openfang_home;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tracing::warn;
+
+/// Emit a bootstrap progress event to the frontend.
+fn emit_progress(app: &AppHandle, message: &str) {
+    let _ = app.emit("ainl-bootstrap-progress", message);
+}
 
 /// Default spec for online install; override at runtime with `ARMARAOS_AINL_PYPI_SPEC`.
 const DEFAULT_AINL_PYPI_SPEC: &str = "ainativelang[mcp]>=1.3.0,<2";
@@ -366,7 +371,11 @@ fn remove_venv_if_python_below_minimum(venv: &Path) -> Result<(), String> {
         Some((a, b)) => {
             fs::remove_dir_all(venv).map_err(|e| {
                 format!(
-                    "Removed AINL venv: Python {a}.{b} is too old (need {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR}+ for PyPI ainativelang 1.3+). {e}"
+                    "Cleaned up old Python environment: Python {a}.{b} is too old.\n\n\
+                    → AINL requires Python {MIN_PYTHON_MAJOR}.{MIN_PYTHON_MINOR} or newer.\n\
+                    → Install the latest Python from python.org/downloads\n\
+                    → Then click Bootstrap AINL again.\n\n\
+                    Technical detail: {e}"
                 )
             })?;
             Ok(())
@@ -484,21 +493,87 @@ fn find_bundled_wheel(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
+/// Humanize common pip/Python errors for desktop users.
+fn humanize_command_error(stderr: &str, stdout: &str, exit_code: i32) -> String {
+    let combined = format!("{stderr} {stdout}").to_lowercase();
+
+    // Network/offline errors
+    if combined.contains("could not find a version")
+        || combined.contains("no matching distribution")
+        || combined.contains("connection")
+        || combined.contains("network")
+        || combined.contains("timeout")
+        || combined.contains("temporary failure")
+    {
+        return format!(
+            "Installation failed: Cannot reach the Python package server.\n\n\
+            → Check your internet connection and try again.\n\
+            → If you're offline, use an ArmaraOS build with bundled Python/AINL.\n\n\
+            Technical detail (exit {exit_code}):\n{stderr}"
+        );
+    }
+
+    // Python version mismatch
+    if combined.contains("requires-python")
+        || combined.contains("requires python")
+        || combined.contains("unsupported python")
+    {
+        return format!(
+            "Installation failed: Python version is too old.\n\n\
+            → AINL requires Python 3.10 or newer.\n\
+            → Install the latest Python from python.org/downloads\n\
+            → On Windows: check \"Add python.exe to PATH\" during install.\n\
+            → Then restart ArmaraOS and try Bootstrap AINL again.\n\n\
+            Technical detail (exit {exit_code}):\n{stderr}"
+        );
+    }
+
+    // Permission errors
+    if combined.contains("permission denied")
+        || combined.contains("access is denied")
+        || combined.contains("errno 13")
+    {
+        return format!(
+            "Installation failed: Permission denied.\n\n\
+            → Close other programs that might be using Python.\n\
+            → On Windows: try running ArmaraOS as Administrator.\n\
+            → On macOS/Linux: check that your user can write to the app data folder.\n\n\
+            Technical detail (exit {exit_code}):\n{stderr}"
+        );
+    }
+
+    // Disk space
+    if combined.contains("no space") || combined.contains("disk full") {
+        return format!(
+            "Installation failed: Not enough disk space.\n\n\
+            → Free up some disk space and try again.\n\n\
+            Technical detail (exit {exit_code}):\n{stderr}"
+        );
+    }
+
+    // Generic fallback with hint
+    format!(
+        "Installation failed (exit code {exit_code}).\n\n\
+        Common fixes:\n\
+        → Check your internet connection\n\
+        → Make sure Python 3.10+ is installed (python.org/downloads)\n\
+        → Restart ArmaraOS and try again\n\n\
+        Technical details:\n{stderr}\n{stdout}"
+    )
+}
+
 fn run(cmd: &mut Command) -> Result<(), String> {
-    let out = cmd
-        .output()
-        .map_err(|e| format!("Failed to run {cmd:?}: {e}"))?;
+    let out = cmd.output().map_err(|e| {
+        format!("Failed to start command: {e}\n\nMake sure Python is installed and accessible.")
+    })?;
     if out.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    Err(format!(
-        "Command failed (exit={})\nstdout:\n{}\nstderr:\n{}",
-        out.status.code().unwrap_or(-1),
-        stdout,
-        stderr
-    ))
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let exit_code = out.status.code().unwrap_or(-1);
+
+    Err(humanize_command_error(&stderr, &stdout, exit_code))
 }
 
 fn venv_bin_dir(venv: &Path) -> PathBuf {
@@ -567,10 +642,22 @@ fn run_armaraos_host_bootstrap(venv: &Path) -> Result<String, String> {
         return Ok(detail);
     }
     Err(format!(
-        "armaraos host bootstrap failed (exit={}): stdout={:?} stderr={:?}",
+        "AINL MCP server registration failed.\n\n\
+        This usually means the AINL installation is incomplete or damaged.\n\
+        → Try clicking Bootstrap AINL again.\n\
+        → If the problem persists, restart ArmaraOS.\n\n\
+        Technical details (exit {}):\n{}\n{}",
         out.status.code().unwrap_or(-1),
-        stdout,
-        stderr
+        if !stderr.is_empty() {
+            &stderr
+        } else {
+            "(no error output)"
+        },
+        if !stdout.is_empty() {
+            format!("Output: {stdout}")
+        } else {
+            String::new()
+        }
     ))
 }
 
@@ -628,12 +715,14 @@ pub fn ensure_armaraos_ainl_host(app: &AppHandle) -> Result<ArmaraosHostStatus, 
 }
 
 pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
+    emit_progress(app, "Checking AINL status...");
     let venv = venv_dir(app)?;
     remove_venv_if_python_below_minimum(&venv)?;
 
     // Fast path: if we already have a working venv with ainl + ainl-mcp, only refresh ArmaraOS host config.
     if let Ok(st) = ainl_status(app) {
         if st.ok {
+            emit_progress(app, "AINL already installed, updating configuration...");
             let mut out = AinlStatus {
                 detail: "AINL already installed in internal venv".to_string(),
                 armaraos_host_ok: None,
@@ -644,11 +733,20 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
             sync_ainl_executable_cache(&venv);
             apply_armaraos_host_bootstrap(app, &mut out);
             crate::ainl_upstream::apply_library_sync(app, &mut out);
+            emit_progress(app, "Bootstrap complete");
             return Ok(out);
         }
     }
 
-    std::fs::create_dir_all(&venv).map_err(|e| format!("Failed to create venv dir: {e}"))?;
+    std::fs::create_dir_all(&venv).map_err(|e| {
+        format!(
+            "Could not create the AINL installation directory.\n\n\
+            → Make sure ArmaraOS has permission to write to your app data folder.\n\
+            → On Windows: try running as Administrator.\n\
+            → On macOS/Linux: check folder permissions.\n\n\
+            Technical detail: {e}"
+        )
+    })?;
 
     let wheel = find_bundled_wheel(app)?;
     let wheel_path_str = wheel.as_ref().map(|w| w.display().to_string());
@@ -656,21 +754,29 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
     // Create venv if python not present yet.
     let py = venv_python(&venv);
     if !py.exists() {
+        emit_progress(app, "Creating Python virtual environment...");
         create_venv_with_bootstrap_python(app, &venv)?;
     }
 
     let py = venv_python(&venv);
     if !py.exists() {
         return Err(
-            "Virtualenv was not created: Python executable missing. Install Python 3.10 or newer (or set ARMARAOS_PYTHON), then try Bootstrap AINL again."
+            "Bootstrap failed: Could not create Python environment.\n\n\
+            → Make sure Python 3.10 or newer is installed.\n\
+            → Download from python.org/downloads\n\
+            → On Windows: check \"Add python.exe to PATH\" during install.\n\
+            → Then restart ArmaraOS and try Bootstrap AINL again.\n\n\
+            Advanced: Set ARMARAOS_PYTHON environment variable to point to a Python 3.10+ executable."
                 .to_string(),
         );
     }
 
+    emit_progress(app, "Upgrading pip...");
     run(Command::new(&py).args(["-m", "pip", "install", "--upgrade", "pip"]))?;
 
     let install_detail: String;
     if let Some(ref w) = wheel {
+        emit_progress(app, "Installing AINL from bundled wheel (offline)...");
         run(Command::new(&py)
             .args(["-m", "pip", "install", "--no-deps"])
             .arg(w))?;
@@ -678,6 +784,7 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
         install_detail = "AINL installed from bundled wheel (offline)".to_string();
         let _ = write_auto_pip_upgrade_marker(app);
     } else {
+        emit_progress(app, "Downloading AINL from PyPI (requires internet)...");
         let spec = pypi_spec();
         run(
             Command::new(&py)
@@ -686,15 +793,9 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
                 .env("PIP_DISABLE_PIP_VERSION_CHECK", "1"),
         )
         .map_err(|e| {
-            let mut msg = format!(
-                "{e} (Bundled wheel was missing and PyPI install failed. Connect to the internet once, or set ARMARAOS_AINL_PYPI_SPEC / bundle a wheel under resources/ainl/.)"
-            );
-            if e.contains("Requires-Python") || e.contains("no matching distribution") {
-                msg.push_str(
-                    " PyPI `ainativelang` 1.3+ needs Python 3.10+. Install it, set ARMARAOS_PYTHON to a 3.10+ interpreter, or click Bootstrap AINL again after removing an old venv.",
-                );
-            }
-            msg
+            format!(
+                "{e}\n\nNote: No bundled AINL wheel was found. For offline installation, use an ArmaraOS build with bundled components."
+            )
         })?;
         let _ = write_install_source(app, "pypi");
         install_detail = format!(
@@ -739,11 +840,14 @@ pub fn ensure_ainl_installed(app: &AppHandle) -> Result<AinlStatus, String> {
         library_mirror: None,
         upstream_commit: None,
     };
+    emit_progress(app, "Registering AINL MCP server...");
     apply_armaraos_host_bootstrap(app, &mut status);
+    emit_progress(app, "Syncing AINL library from GitHub...");
     crate::ainl_upstream::apply_library_sync(app, &mut status);
     if status.ok {
         sync_ainl_executable_cache(&venv);
     }
+    emit_progress(app, "Bootstrap complete");
     Ok(status)
 }
 

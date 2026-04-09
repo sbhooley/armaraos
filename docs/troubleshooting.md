@@ -1,6 +1,6 @@
 # Troubleshooting & FAQ
 
-Common issues, diagnostics, and answers to frequently asked questions about OpenFang.
+Common issues, diagnostics, and answers to frequently asked questions about ArmaraOS.
 
 Paths use the default data directory **`~/.armaraos/`** (see [data-directory.md](data-directory.md) for `ARMARAOS_HOME`, `OPENFANG_HOME`, and migration from `~/.openfang`).
 
@@ -56,9 +56,9 @@ curl http://127.0.0.1:4200/api/health/detail  # Requires auth
 
 To compare **effective** config file versioning with the **binary’s** built-in schema constant (useful after upgrades):
 
-- **Settings** (`#settings`): Immediately **below the tab bar** (all Settings tabs), a summary line shows **Daemon** version, **Config schema** (formatted like `1 (binary 1)`), **API** listen address, **Log** level, and **Home** directory. **Settings → System** also has a **Config schema** stat card with the same value.
-- **Monitor → Daemon & runtime** (`#runtime`): The system overview includes **Config schema** in the same `effective (binary N)` style.
-- **API:** `GET /api/status` exposes `config_schema_version` (effective after load) and `config_schema_version_binary` (constant in the running binary). `GET /api/config` includes `config_schema_version`. See [data-directory.md](data-directory.md#config-schema-version) for what the numbers mean on disk.
+- **Settings** (`#settings`): Immediately **below the tab bar** (all Settings tabs), a summary line shows **Daemon** version, **Config schema** (formatted like `1 (binary 1)`), **API** listen address, **Log** level, and **Home** directory. When the effective on-disk version and the binary’s built-in constant differ, the UI appends **`⚠ mismatch`** (for example after a downgrade or an old `config.toml` kept across an upgrade). **Settings → System** also has a **Config schema** stat card with the same value.
+- **Monitor → Daemon & runtime** (`#runtime`): The system overview includes **Config schema** in the same `effective (binary N)` style (including the mismatch suffix when applicable).
+- **API:** `GET /api/status` exposes `config_schema_version` (effective after load) and `config_schema_version_binary` (constant in the running binary). `GET /api/config` includes `config_schema_version`. See [data-directory.md](data-directory.md#config-schema-version) for what the numbers mean on disk. If the dashboard shows **`—`** for config schema, the running daemon may be older than the UI (missing those fields in `/api/status`); upgrade the daemon to match the dashboard.
 
 ### Dashboard support bundle (redacted `.zip`)
 
@@ -81,7 +81,7 @@ If you ever need **remote** support bundles (e.g. field support over the interne
 
 ### View Logs
 
-OpenFang uses `tracing` for structured logging.
+ArmaraOS uses `tracing` for structured logging.
 
 **CLI daemon (`openfang start`, `openfang gateway start`):** Logs go to **stderr** and to **`~/.armaraos/logs/daemon.log`** (under `ARMARAOS_HOME` when set). Open the dashboard **Logs → Daemon** to tail or filter without reading the file on disk. The **Live** tab is the **audit** trail (agent actions, tools, etc.), not the same as Rust tracing.
 
@@ -92,7 +92,7 @@ OpenFang uses `tracing` for structured logging.
 ```bash
 RUST_LOG=info openfang start          # Default-style filter
 RUST_LOG=debug openfang start         # Verbose
-RUST_LOG=openfang=debug openfang start  # Only OpenFang debug, deps at info
+RUST_LOG=openfang=debug openfang start  # Only ArmaraOS debug, deps at info
 ```
 
 ---
@@ -130,7 +130,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 ### Docker container won't start
 
 **Common causes**:
-- No API key provided: `docker run -e GROQ_API_KEY=... ghcr.io/RightNow-AI/openfang`
+- No API key provided: `docker run -e GROQ_API_KEY=... ghcr.io/sbhooley/armaraos`
 - Port already in use: change the port mapping `-p 3001:4200`
 - Permission denied on volume mount: check directory permissions
 
@@ -355,7 +355,7 @@ See [agent-automation-hardening.md — Cross-workspace writes](agent-automation-
 
 **Cause**: The agent is repeatedly calling the same tool with the same parameters.
 
-**Automatic protection**: OpenFang has a built-in loop guard:
+**Automatic protection**: ArmaraOS has a built-in loop guard:
 - **Warn** at 3 identical tool calls
 - **Block** at 5 identical tool calls
 - **Circuit breaker** at 30 total blocked calls (stops the agent)
@@ -566,20 +566,24 @@ api_key_env = "GROQ_API_KEY"
 
 Yes. Each agent can use a different provider via its manifest `[model]` section. The kernel creates a dedicated driver per unique provider configuration.
 
+### Why does Aggressive mode save only a little more than Balanced on some prompts?
+
+**Ultra Cost-Efficient Mode** compresses **input** before the LLM. Sentences that contain opcodes, URLs, error context, and similar markers are **always kept** (or, for some identifiers, kept in Balanced and only score-boosted in Aggressive). Changelog-style or AINL-heavy prompts therefore show a **smaller gap** between Balanced and Aggressive than everyday conversational text. This is expected. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
+
 ### How do I add a new channel?
 
 1. Add the channel config to `~/.armaraos/config.toml` under `[channels]`
 2. Set the required environment variables (tokens, secrets)
 3. Restart the daemon
 
-### How do I update OpenFang?
+### How do I update ArmaraOS?
 
 ```bash
 # From source
 cd openfang && git pull && cargo install --path crates/openfang-cli
 
 # Docker
-docker pull ghcr.io/RightNow-AI/openfang:latest
+docker pull ghcr.io/sbhooley/armaraos:latest
 ```
 
 ### Can agents talk to each other?
@@ -605,7 +609,7 @@ rm -rf ~/.armaraos
 armaraos init  # Start fresh
 ```
 
-### Can I run OpenFang without an internet connection?
+### Can I run ArmaraOS without an internet connection?
 
 Yes, if you use a local LLM provider:
 - **Ollama**: `ollama serve` + `ollama pull llama3.2`
@@ -619,9 +623,9 @@ provider = "ollama"
 model = "llama3.2"
 ```
 
-### What's the difference between OpenFang and OpenClaw?
+### What's the difference between ArmaraOS and OpenClaw?
 
-| Aspect | OpenFang | OpenClaw |
+| Aspect | ArmaraOS | OpenClaw |
 |--------|----------|----------|
 | Language | Rust | Python |
 | Channels | 40 | 38 |
@@ -631,7 +635,7 @@ model = "llama3.2"
 | Binary size | ~30 MB | ~200 MB |
 | Startup | <200 ms | ~3 s |
 
-OpenFang can import OpenClaw configs: `openfang migrate --from openclaw`
+ArmaraOS can import OpenClaw configs: `openfang migrate --from openclaw`
 
 ### How do I report a bug or request a feature?
 
@@ -655,7 +659,7 @@ OpenFang can import OpenClaw configs: `openfang migrate --from openclaw`
 RUST_LOG=openfang_runtime=debug,openfang_channels=info openfang start
 ```
 
-### Can I use OpenFang as a library?
+### Can I use ArmaraOS as a library?
 
 Yes. Each crate is independently usable:
 ```toml
@@ -670,30 +674,26 @@ The `openfang-kernel` crate assembles everything, but you can use individual cra
 
 ## Common Community Questions
 
-### How do I update OpenFang?
+### How do I update ArmaraOS?
 
-Re-run the install script to get the latest release:
-```bash
-curl -fsSL https://openfang.sh/install | sh
-```
-Or build from source:
+The desktop app updates automatically. To update a source build:
 ```bash
 git pull origin main
 cargo build --release -p openfang-cli
 ```
 
-### How do I run OpenFang in Docker?
+### How do I run ArmaraOS in Docker?
 
 ```bash
 docker run -d --name openfang \
   -e GROQ_API_KEY=your_key_here \
   -p 4200:4200 \
-  ghcr.io/rightnow-ai/openfang:latest
+  ghcr.io/sbhooley/armaraos:latest
 ```
 
 ### How do I protect the dashboard with a password?
 
-OpenFang has built-in dashboard authentication. Enable it in `~/.armaraos/config.toml`:
+ArmaraOS has built-in dashboard authentication. Enable it in `~/.armaraos/config.toml`:
 
 ```toml
 [auth]
@@ -763,7 +763,7 @@ api_key_env = "MOONSHOT_API_KEY"
 
 ### Can I use multiple Telegram bots?
 
-Not yet — each channel type currently supports one bot. Multi-bot routing is tracked as a feature request (#586). As a workaround, run multiple OpenFang instances on different ports with different configs.
+Not yet — each channel type currently supports one bot. Multi-bot routing is tracked as a feature request (#586). As a workaround, run multiple ArmaraOS instances on different ports with different configs.
 
 ### Claude Code integration shows errors
 

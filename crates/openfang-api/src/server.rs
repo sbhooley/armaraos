@@ -222,8 +222,16 @@ pub async fn build_router(
             axum::routing::post(routes::inject_btw),
         )
         .route(
+            "/api/agents/{id}/redirect",
+            axum::routing::post(routes::inject_redirect),
+        )
+        .route(
             "/api/slash-templates",
             axum::routing::get(routes::get_slash_templates).put(routes::put_slash_templates),
+        )
+        .route(
+            "/api/ui-prefs",
+            axum::routing::get(routes::get_ui_prefs).put(routes::put_ui_prefs),
         )
         .route(
             "/api/agents/{id}/model",
@@ -905,7 +913,7 @@ pub async fn run_daemon(
         }
     }
 
-    info!("OpenFang API server listening on http://{addr}");
+    info!("ArmaraOS API server listening on http://{addr}");
     info!("WebChat UI available at http://{addr}/",);
     info!("WebSocket endpoint: ws://{addr}/api/agents/{{id}}/ws",);
 

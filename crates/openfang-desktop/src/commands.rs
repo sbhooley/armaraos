@@ -544,12 +544,39 @@ pub fn open_external_url(url: String) -> Result<(), String> {
         || url.starts_with("https://ainativelang.com/")
         || url == "https://github.com/sbhooley/armaraos/releases"
         || url.starts_with("https://github.com/sbhooley/armaraos/releases/")
+        || url.starts_with("https://github.com/sbhooley/ainativelang")
+        || url.starts_with("https://x.com/ainativelang")
+        || url.starts_with("https://t.me/")
+        || url.starts_with("https://pypi.org/")
         || url.starts_with("https://www.python.org/")
         || url.starts_with("https://python.org/");
     if !ok {
         return Err("Invalid URL".to_string());
     }
     open::that(&url).map_err(|e| e.to_string())
+}
+
+/// Return a destination path that does not already exist by appending `(N)` before the extension.
+///
+/// `dir/file.zip` → `dir/file (2).zip` → `dir/file (3).zip` …
+fn unique_dest(dir: &std::path::Path, fname: &str) -> std::path::PathBuf {
+    let candidate = dir.join(fname);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = match fname.rfind('.') {
+        Some(dot) => (&fname[..dot], &fname[dot..]),
+        None => (fname, ""),
+    };
+    for n in 2u32.. {
+        let name = format!("{stem} ({n}){ext}");
+        let p = dir.join(&name);
+        if !p.exists() {
+            return p;
+        }
+    }
+    // Unreachable in practice
+    dir.join(fname)
 }
 
 /// Same rules as `openfang_api::routes::is_allowed_diagnostics_zip_name` (no path segments).
@@ -651,7 +678,7 @@ pub fn copy_diagnostics_to_downloads(bundle_path: String) -> Result<serde_json::
         .ok_or_else(|| "Bad filename".to_string())?;
     let dest_dir =
         dirs::download_dir().ok_or_else(|| "Could not locate Downloads folder".to_string())?;
-    let dest = dest_dir.join(fname);
+    let dest = unique_dest(&dest_dir, fname);
     std::fs::copy(&canon, &dest).map_err(|e| format!("Copy to Downloads failed: {e}"))?;
     Ok(serde_json::json!({
         "downloads_path": dest.display().to_string(),
@@ -687,7 +714,7 @@ pub fn copy_home_file_to_downloads(relative_path: String) -> Result<serde_json::
         .ok_or_else(|| "Bad filename".to_string())?;
     let dest_dir =
         dirs::download_dir().ok_or_else(|| "Could not locate Downloads folder".to_string())?;
-    let dest = dest_dir.join(fname);
+    let dest = unique_dest(&dest_dir, fname);
     std::fs::copy(&canon, &dest).map_err(|e| format!("Copy to Downloads failed: {e}"))?;
     Ok(serde_json::json!({
         "downloads_path": dest.display().to_string(),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-check a running ArmaraOS / OpenFang API.
+# Smoke-check a running ArmaraOS / ArmaraOS API.
 # Default base URL is http://127.0.0.1:4200 — use the URL printed by `openfang start`
 # (e.g. http://127.0.0.1:50051) if your config binds a different port.
 # Covers health, status, schedules, support zip + downloads, spawn error shape, session digest,

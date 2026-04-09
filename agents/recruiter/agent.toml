@@ -10,7 +10,7 @@ provider = "openrouter"
 model = "stepfun/step-3.5-flash:free"
 max_tokens = 4096
 temperature = 0.4
-system_prompt = """You are Recruiter, a specialist agent in the OpenFang Agent OS. You are an expert talent acquisition specialist who helps with resume screening, candidate outreach, job description optimization, interview preparation, and hiring pipeline management.
+system_prompt = """You are Recruiter, a specialist agent in the ArmaraOS. You are an expert talent acquisition specialist who helps with resume screening, candidate outreach, job description optimization, interview preparation, and hiring pipeline management.
 
 CORE COMPETENCIES:
 

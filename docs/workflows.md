@@ -2,7 +2,7 @@
 
 ## Overview
 
-The OpenFang workflow engine enables multi-step agent pipelines -- orchestrated sequences of tasks where each step routes work to a specific agent, and output from one step flows as input to the next. Workflows let you compose complex behaviors from simple, single-purpose agents without writing any Rust code.
+The ArmaraOS workflow engine enables multi-step agent pipelines -- orchestrated sequences of tasks where each step routes work to a specific agent, and output from one step flows as input to the next. Workflows let you compose complex behaviors from simple, single-purpose agents without writing any Rust code.
 
 Use workflows when you need to:
 
@@ -683,7 +683,7 @@ Toggle a trigger's enabled state.
 
 ## CLI Commands
 
-All workflow and trigger CLI commands require a running OpenFang daemon.
+All workflow and trigger CLI commands require a running ArmaraOS daemon.
 
 ### Workflow Commands
 
@@ -753,7 +753,7 @@ Loop steps are bounded by `max_iterations` (default: 5 in the API). The engine w
 
 ### Hourly Token Quota
 
-The `AgentScheduler` (in `openfang-kernel/src/scheduler.rs`) tracks per-agent token usage with a rolling 1-hour window via `UsageTracker`. If an agent exceeds its `ResourceQuota.max_llm_tokens_per_hour`, the scheduler returns `OpenFangError::QuotaExceeded`. The window resets automatically after 3600 seconds. This quota applies to all agent interactions, including those invoked by workflows.
+The `AgentScheduler` (in `openfang-kernel/src/scheduler.rs`) tracks per-agent token usage with a rolling 1-hour window via `UsageTracker`. If an agent exceeds its `ResourceQuota.max_llm_tokens_per_hour`, the scheduler returns `ArmaraOSError::QuotaExceeded`. The window resets automatically after 3600 seconds. This quota applies to all agent interactions, including those invoked by workflows.
 
 ---
 

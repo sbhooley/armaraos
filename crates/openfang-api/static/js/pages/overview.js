@@ -24,6 +24,7 @@ function overviewPage() {
     health: {},
     status: {},
     usageSummary: {},
+    budget: {},
     recentAudit: [],
     channels: [],
     providers: [],
@@ -107,6 +108,7 @@ function overviewPage() {
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
+          this.loadBudget(),
           this.loadAudit(),
           this.loadChannels(),
           this.loadSchedules(),
@@ -136,6 +138,7 @@ function overviewPage() {
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
+          this.loadBudget(),
           this.loadAudit(),
           this.loadChannels(),
           this.loadSchedules(),
@@ -225,6 +228,14 @@ function overviewPage() {
         };
       } catch(e) {
         this.usageSummary = { total_tokens: 0, total_tools: 0, total_cost: 0, agent_count: 0 };
+      }
+    },
+
+    async loadBudget() {
+      try {
+        this.budget = await OpenFangAPI.get('/api/budget');
+      } catch(e) {
+        this.budget = { total_spent_usd: 0, budget_limit_usd: 0, period: 'monthly' };
       }
     },
 

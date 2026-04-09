@@ -1,6 +1,6 @@
 # Desktop release smoke (Tauri)
 
-Use this after changes that touch the embedded dashboard, AINL bootstrap, or SSE. For architecture and updater signing, see [`desktop.md`](desktop.md). For AINL venv/bootstrap checks only, see [`DESKTOP_AINL_SMOKE.md`](DESKTOP_AINL_SMOKE.md).
+Use this after changes that touch the embedded dashboard, AINL bootstrap, or SSE. For architecture and updater signing, see [`desktop.md`](desktop.md). For **OS trust prompts** (macOS Gatekeeper, Windows SmartScreen) and signing options, see **[desktop-code-signing.md](desktop-code-signing.md)**. For AINL venv/bootstrap checks only, see [`DESKTOP_AINL_SMOKE.md`](DESKTOP_AINL_SMOKE.md).
 
 ## Build
 
@@ -29,12 +29,12 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 
 | Tag shape | Example | Website behavior |
 |-----------|---------|------------------|
-| **Stable** (no semver pre-release segment) | `v0.6.9` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
-| **Prerelease** (semver pre-release after `-`) | `v0.7.0-beta.1` | Updates **`beta.json`** and copies new binaries; **does not** delete or overwrite **`latest.json`**, so stable users stay on the previous stable until you ship a stable tag. |
+| **Stable** (no semver pre-release segment) | `v0.7.1` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
+| **Prerelease** (semver pre-release after `-`) | `v0.7.1-beta.1` | Updates **`beta.json`** and copies new binaries; **does not** delete or overwrite **`latest.json`**, so stable users stay on the previous stable until you ship a stable tag. |
 
 **One-time setup (armaraos repo secrets):** add **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with **Contents: Read and write** on repository **`sbhooley/ainativelangweb`** only. Without this secret, the sync job fails (desktop builds and GitHub Release still succeed).
 
-**Optional — PostHog (install analytics):** add repository secret **`ARMARAOS_POSTHOG_KEY`** (PostHog project API key, same family as the marketing site’s public key). The **Build and bundle Tauri desktop app** step passes it as a compile-time env var so release binaries embed the key; omit it and builds still succeed (no automatic ping). Optional **`ARMARAOS_POSTHOG_HOST`** (e.g. `https://eu.i.posthog.com`) overrides the default US ingest URL.
+**Optional — PostHog (install analytics):** add **`ARMARAOS_POSTHOG_KEY`** or org/repo secret **`AINL_POSTHOG_KEY`** — use the **same** PostHog project API key as **`NEXT_PUBLIC_POSTHOG_KEY`** on **ainativelangweb** (ainativelang.com). The compiler repo (**ainativelang**) does not store this value; configure it in GitHub Actions or org secrets. The **Build and bundle Tauri desktop app** step passes it as a compile-time env var so release binaries embed the key; omit both and builds still succeed (no automatic ping). Optional ingest: **`ARMARAOS_POSTHOG_HOST`** or **`AINL_POSTHOG_HOST`** (e.g. `https://eu.i.posthog.com`); default US ingest when unset.
 
 ### Why “Publish updater to ainativelang.com” is skipped or red
 
@@ -74,6 +74,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 4. **Get started + Settings + Runtime** — **Quick actions** include **App Store** → `#ainl-library`; with **`openfang-onboarded`** set, confirm **Setup Wizard** is hidden until **Run setup again** or a second sidebar **Get started** click; **Settings** shows subtitle + rounded tab toolbar; **Runtime** shows subtitle + wrapping stat tiles and panel styling (see **[dashboard-overview-ui.md](dashboard-overview-ui.md)**, **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)**).
 5. **Core flows** — Spawn an agent, send a message, open **Logs** (**Live** audit stream, **Daemon** tracing file when the daemon was started via CLI, **Audit Trail**), and Scheduler as needed for your release.
 6. **Dashboard errors** — Disconnect daemon or force a 401; on **Get started** (`#overview`), **Chat (agents)**, and **Settings**, confirm structured error text, **Retry**, **Copy debug info**, and **Generate + copy bundle** behave as expected.
+
+## See also
+
+- **[desktop.md](desktop.md)** — Product analytics (PostHog), env overrides
+- **[production-checklist.md](production-checklist.md)** — Optional GitHub secrets for PostHog
 
 ## API tests (non-desktop)
 

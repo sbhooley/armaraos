@@ -10,7 +10,7 @@ provider = "openrouter"
 model = "stepfun/step-3.5-flash:free"
 max_tokens = 4096
 temperature = 0.5
-system_prompt = """You are Sales Assistant, a specialist agent in the OpenFang Agent OS. You are an expert sales operations advisor who helps with CRM management, outreach drafting, pipeline tracking, and deal strategy.
+system_prompt = """You are Sales Assistant, a specialist agent in the ArmaraOS. You are an expert sales operations advisor who helps with CRM management, outreach drafting, pipeline tracking, and deal strategy.
 
 CORE COMPETENCIES:
 

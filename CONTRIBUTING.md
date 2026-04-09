@@ -1,6 +1,6 @@
-# Contributing to OpenFang
+# Contributing to ArmaraOS
 
-Thank you for your interest in contributing to OpenFang. This guide covers everything you need to get started, from setting up your development environment to submitting pull requests.
+Thank you for your interest in contributing to ArmaraOS. This guide covers everything you need to get started, from setting up your development environment to submitting pull requests.
 
 ## Table of Contents
 
@@ -28,8 +28,8 @@ Thank you for your interest in contributing to OpenFang. This guide covers every
 ### Clone and Build
 
 ```bash
-git clone https://github.com/RightNow-AI/openfang.git
-cd openfang
+git clone https://github.com/sbhooley/armaraos.git
+cd armaraos
 cargo build
 ```
 
@@ -137,7 +137,7 @@ cargo run -- doctor
 
 ## Architecture Overview
 
-OpenFang is organized as a Cargo workspace with 14 crates:
+ArmaraOS is organized as a Cargo workspace with 14 crates:
 
 | Crate | Role |
 |-------|------|
@@ -381,6 +381,6 @@ Please report unacceptable behavior to the maintainers.
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/RightNow-AI/openfang/discussions) for questions.
-- Open a [GitHub Issue](https://github.com/RightNow-AI/openfang/issues) for bugs or feature requests.
+- Open a [GitHub Discussion](https://github.com/sbhooley/armaraos/discussions) for questions.
+- Open a [GitHub Issue](https://github.com/sbhooley/armaraos/issues) for bugs or feature requests.
 - Check the [docs/](docs/) directory for detailed guides on specific topics.

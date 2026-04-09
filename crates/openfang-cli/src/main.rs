@@ -81,7 +81,7 @@ const AFTER_HELP: &str = "\
   3. openfang chat              Start chatting!
 
 \x1b[1;36mMore:\x1b[0m
-  Docs:       https://github.com/RightNow-AI/openfang
+  Docs:       https://github.com/sbhooley/armaraos
   Dashboard:  http://127.0.0.1:4200/ (when daemon is running)";
 
 /// OpenFang — the open-source Agent Operating System.
@@ -1337,7 +1337,7 @@ fn cmd_init_quick(openfang_dir: &std::path::Path) {
     write_config_if_missing(openfang_dir, provider, model, api_key_env);
 
     ui::blank();
-    ui::success("OpenFang initialized (quick mode)");
+    ui::success("ArmaraOS initialized (quick mode)");
     ui::kv("Provider", provider);
     ui::kv("Model", model);
     ui::blank();
@@ -1360,7 +1360,7 @@ fn cmd_init_interactive(openfang_dir: &std::path::Path) {
         } => {
             // Print summary after TUI restores terminal
             ui::blank();
-            ui::success("OpenFang initialized!");
+            ui::success("ArmaraOS initialized!");
             ui::kv("Provider", &provider);
             ui::kv("Model", &model);
 
@@ -1530,7 +1530,7 @@ fn write_config_if_missing(
         let schema = openfang_types::config::CONFIG_SCHEMA_VERSION;
         let default_config = format!(
             r#"# OpenFang Agent OS configuration
-# See https://github.com/RightNow-AI/openfang for documentation
+# See https://github.com/sbhooley/armaraos for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENFANG_LISTEN env var.
 api_listen = "127.0.0.1:4200"
@@ -2059,7 +2059,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
             return;
         }
 
-        ui::section("OpenFang Daemon Status");
+        ui::section("ArmaraOS Daemon Status");
         ui::blank();
         ui::kv_ok("Status", body["status"].as_str().unwrap_or("?"));
         ui::kv(
@@ -2112,7 +2112,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
             return;
         }
 
-        ui::section("OpenFang Status (in-process)");
+        ui::section("ArmaraOS Status (in-process)");
         ui::blank();
         ui::kv("Agents", &agent_count.to_string());
         ui::kv("Provider", &kernel.config.default_model.provider);
@@ -2149,12 +2149,12 @@ fn cmd_doctor(json: bool, repair: bool) {
         // --- Check 1: OpenFang directory ---
         if openfang_dir.exists() {
             if !json {
-                ui::check_ok(&format!("OpenFang directory: {}", openfang_dir.display()));
+                ui::check_ok(&format!("ArmaraOS directory: {}", openfang_dir.display()));
             }
             checks.push(serde_json::json!({"check": "openfang_dir", "status": "ok", "path": openfang_dir.display().to_string()}));
         } else if repair {
             if !json {
-                ui::check_fail("OpenFang directory not found.");
+                ui::check_fail("ArmaraOS directory not found.");
             }
             let answer = prompt_input("    Create it now? [Y/n] ");
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
@@ -2164,7 +2164,7 @@ fn cmd_doctor(json: bool, repair: bool) {
                         let _ = std::fs::create_dir_all(openfang_dir.join(sub));
                     }
                     if !json {
-                        ui::check_ok("Created OpenFang directory");
+                        ui::check_ok("Created ArmaraOS directory");
                     }
                     repaired = true;
                 } else {
@@ -2179,7 +2179,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             checks.push(serde_json::json!({"check": "openfang_dir", "status": if repaired { "repaired" } else { "fail" }}));
         } else {
             if !json {
-                ui::check_fail("OpenFang directory not found. Run `openfang init` first.");
+                ui::check_fail("ArmaraOS directory not found. Run `openfang init` first.");
             }
             checks.push(serde_json::json!({"check": "openfang_dir", "status": "fail"}));
             all_ok = false;
@@ -2289,7 +2289,7 @@ fn cmd_doctor(json: bool, repair: bool) {
                 let (provider, api_key_env, model) = detect_best_provider();
                 let default_config = format!(
                     r#"# OpenFang Agent OS configuration
-# See https://github.com/RightNow-AI/openfang for documentation
+# See https://github.com/sbhooley/armaraos for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENFANG_LISTEN env var.
 api_listen = "127.0.0.1:4200"
@@ -3886,7 +3886,7 @@ capabilities = []
     let entry_content = match runtime.as_str() {
         "python" => format!(
             r#"#!/usr/bin/env python3
-"""OpenFang skill: {name}"""
+"""ArmaraOS skill: {name}"""
 import json
 import sys
 
@@ -6506,7 +6506,7 @@ fn cmd_system_info(json: bool) {
             );
             return;
         }
-        ui::section("OpenFang System Info");
+        ui::section("ArmaraOS System Info");
         ui::blank();
         ui::kv("Version", env!("CARGO_PKG_VERSION"));
         ui::kv("Status", body["status"].as_str().unwrap_or("?"));
@@ -6533,7 +6533,7 @@ fn cmd_system_info(json: bool) {
             );
             return;
         }
-        ui::section("OpenFang System Info");
+        ui::section("ArmaraOS System Info");
         ui::blank();
         ui::kv("Version", env!("CARGO_PKG_VERSION"));
         ui::kv_warn("Daemon", "NOT RUNNING");
@@ -6693,7 +6693,7 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
     }
 
     println!();
-    ui::success("OpenFang has been uninstalled. Goodbye!");
+    ui::success("ArmaraOS has been uninstalled. Goodbye!");
 }
 
 /// Remove auto-start / launch-agent / systemd entries.
@@ -6707,7 +6707,7 @@ fn remove_autostart_entries(home: &std::path::Path) {
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                 "/v",
-                "OpenFang",
+                "ArmaraOS",
                 "/f",
             ])
             .output();
@@ -6736,7 +6736,7 @@ fn remove_autostart_entries(home: &std::path::Path) {
 
     #[cfg(target_os = "linux")]
     {
-        let desktop_file = home.join(".config/autostart/OpenFang.desktop");
+        let desktop_file = home.join(".config/autostart/ArmaraOS.desktop");
         if desktop_file.exists() {
             match std::fs::remove_file(&desktop_file) {
                 Ok(()) => ui::success("Removed Linux autostart entry"),

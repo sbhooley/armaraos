@@ -441,6 +441,8 @@ pub fn spawn_daemon_stream(
             directives: Default::default(),
             latency_ms: None,
             llm_fallback_note: None,
+            compression_savings_pct: 0,
+            compressed_input: None,
         })));
     });
 }
@@ -477,6 +479,8 @@ fn daemon_fallback(
             cost_usd: body["cost_usd"].as_f64(),
             silent: false,
             directives: Default::default(),
+            compression_savings_pct: body["compression_savings_pct"].as_u64().unwrap_or(0) as u8,
+            compressed_input: body["compressed_input"].as_str().map(|s| s.to_string()),
             latency_ms: body["latency_ms"].as_u64(),
             llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
         })

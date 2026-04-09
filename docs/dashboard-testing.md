@@ -44,6 +44,8 @@ Run the daemon, open the **Dashboard** URL from `openfang start` (default is oft
 
 7. **Settings and Runtime pages — layout polish** — Open **Settings**: elevated header with subtitle; tab bar is a rounded card with accent top stripe and pill-style active tab. **Below the tab bar**, confirm the **at-a-glance** line shows **Daemon**, **Config schema** (`N (binary M)`), **API**, **Log**, and **Home**. Open **Settings → System** and confirm the **Config schema** stat tile matches that line. Open **Runtime**: header subtitle; stat tiles wrap in a responsive grid on a narrow window; **Config schema** appears in the stat grid; **System** and **Providers** panels use uppercase section titles and readable tables. **Runtime** footer: **Refresh**, **Reload config**, **Reload channels**, **Reload integrations**, **Shut down** (see [Daemon lifecycle & GitHub version check](#daemon-lifecycle--github-version-check) below).
 
+7b. **Ultra Cost-Efficient Mode (Budget + Chat)** — Open **Settings → Budget** and confirm the **Ultra Cost-Efficient Mode** card and dropdown (Off / Balanced / Aggressive) with helper copy. Change the mode, reload **`GET /api/config`** (or re-open Settings) and confirm **`efficient_mode`** persisted. Open **Chat** with an agent: confirm the **⚡ eco** header pill cycles modes and that after a long user message (≥80 estimated tokens with compression enabled) the response meta can show **`⚡ eco ↓X%`** and the **diff** control opens the Eco Diff modal with **Original** vs **Compressed**. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
+
 8. **Settings → System Info → Support** — Use **Generate diagnostics bundle** (same redacted `.zip` as the API). Confirm the UI mentions `.zip`, **README.txt** / **diagnostics_snapshot.json** in the Support copy, and the generated path matches a file on disk. Unzip once and confirm **`README.txt`** and **`diagnostics_snapshot.json`** exist and JSON includes `config_schema_version` / `config_schema_version_binary` under `daemon`. On **desktop**, confirm a copy lands in **Downloads** (or use the fallback download if copy fails). With `api_key` set, confirm the browser/WebView still completes save (loopback GET download + `token` query).
 
 9. **Home folder → `support/`** — Open **Home folder** in the nav, go to **`support`**, find a diagnostics `.zip`. Use row **Download** (green) or **View** then **Download** in the modal header. Large zips may show a preview error; **Download** must still save the full file. On desktop, row **Download** uses Tauri **`copy_home_file_to_downloads`** (`relativePath`).
@@ -127,6 +129,17 @@ curl -sS -N "http://127.0.0.1:4200/api/logs/stream?level=info" | head -n 5
 - **Navigate away from `#agents`:** The socket may stay open; `OpenFangAPI.wsClearUiCallbacks()` drops Alpine chat handlers so destroyed components are not called. Returning to the same agent reattaches handlers and may **reuse** the connection.
 - **Session switch / new session:** Chat code calls `wsDisconnect()` before reconnect so the server session binding stays correct.
 
+## Agents page → Agent detail modal (gear icon)
+
+The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scope (not the inline **`chatPage`** scope), so one template covers **both** the agent picker and an open inline chat.
+
+**Manual checks:**
+
+1. From **Chat** with **no** agent selected (picker / grid): open an agent’s detail (row actions or card), confirm the modal opens; close with **×** or overlay click.
+2. Open an agent’s **inline chat** (conversation view). Click the **gear** (agent settings) in the header — the **same** modal must open (tabs **Info**, **Files**, **Config**).
+3. While **in** inline chat, confirm the modal’s primary **Chat** action is **hidden** (you are already chatting). From the picker-only flow, **Chat** should still be visible and navigate into chat.
+4. Optional: `curl -s http://127.0.0.1:4200/api/ui-prefs` after pinning — expect `pinned_agents` in JSON (see [api-reference.md](api-reference.md#ui-preferences-endpoints)).
+
 ## Agents page → Config tab (identity, prompt, tool filters)
 
 **API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
@@ -199,7 +212,7 @@ curl -s http://127.0.0.1:4200/ | grep -c "commandPalette"
 
 - Hover over any agent row in the **Quick open** sidebar list — a small **pin** button appears to the left of the status dot.
 - Click it to pin; the row gains an **accent left border** to indicate pinned state (the pin button itself disappears when not hovered).
-- Pinned agents appear at the top of the **Quick open** list on next load; the order is preserved across app upgrades (stored in `localStorage` under `armaraos-pinned-agents`).
+- Pinned agents appear at the top of the **Quick open** list. The client seeds from `localStorage` (`armaraos-pinned-agents`) for instant display, then **`GET /api/ui-prefs`** loads the authoritative list from **`~/.armaraos/ui-prefs.json`** (so pins survive **desktop reinstalls** that wipe WebView storage). Each toggle runs **`PUT /api/ui-prefs`** with `{ "pinned_agents": [...] }`.
 - Click the pin button again on hover to unpin and remove the accent border.
 - The pin indicator (left border) must not overlap or obscure the green running-state dot on the right.
 

@@ -45,12 +45,24 @@ Tab labels and behavior (lazy loads for Security, Network, etc.) are unchanged; 
 Below the Settings tab bar (visible on **every** Settings tab once load succeeds), a compact line shows:
 
 - **Daemon** — package version (`GET /api/version` / `GET /api/status`).
-- **Config schema** — effective file schema vs binary constant, e.g. `1 (binary 1)` (from `GET /api/status`).
+- **Config schema** — effective file schema vs binary constant, e.g. `1 (binary 1)` (from `GET /api/status`). If the two numbers differ, the line adds **`⚠ mismatch`** for quick triage after upgrades or mixed versions.
 - **API** — `api_listen`.
 - **Log** — daemon `log_level`.
 - **Home** — resolved `home_dir`.
 
 **System** tab: the stat grid includes a **Config schema** tile with the same formatting. See [troubleshooting.md](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance) for user-facing triage notes.
+
+### Budget tab — Ultra Cost-Efficient Mode
+
+- **Where:** **Settings → Budget** — card at the bottom of the Budget tab (after global budget meters / agent ranking).
+- **Markup / logic:** `index_body.html` — `<select>` bound to `config.efficient_mode`, `@change="saveEfficientMode()"`; `static/js/pages/settings.js`.
+- **Options:** Off, Balanced (~40–56 % typical savings, recommended), Aggressive (~60–74 % typical savings; may trim nuance on dense technical text). Copy notes that **gap between modes is smaller** when prompts are full of opcodes and URLs (those lines are protected).
+- **Reference:** [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
+
+### Chat header — eco quick-toggle
+
+- **Where:** Inline **Chat** with an agent open — header row beside session cost / session switcher (`index_body.html` + `chatPage` Alpine data).
+- **Behavior:** Pill button cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`), persists with **`POST /api/config/set`** (`path: efficient_mode`). Label: `⚡ eco` / `⚡ eco bal` / `⚡ eco agg`.
 
 ## Runtime
 

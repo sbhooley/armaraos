@@ -1,6 +1,6 @@
 # Scheduled AINL graphs (cron)
 
-Scheduled jobs whose action is **`ainl_run`** execute `ainl run …` as a subprocess of the ArmaraOS/OpenFang daemon. This page explains how **secrets**, **adapter policy**, and **manifest metadata** interact so you do not have to reinstall the app or re-enter keys for every schedule change.
+Scheduled jobs whose action is **`ainl_run`** execute `ainl run …` as a subprocess of the ArmaraOS/ArmaraOS daemon. This page explains how **secrets**, **adapter policy**, and **manifest metadata** interact so you do not have to reinstall the app or re-enter keys for every schedule change.
 
 ## Where secrets live
 

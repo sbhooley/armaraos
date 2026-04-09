@@ -115,7 +115,7 @@ async function startConnection() {
     }
   });
 
-  // Incoming messages → forward to OpenFang
+  // Incoming messages → forward to ArmaraOS
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
@@ -161,9 +161,9 @@ async function startConnection() {
         console.log(`[gateway] Incoming from ${pushName} (${phone}): ${text.substring(0, 80)}`);
       }
 
-      // Forward to OpenFang agent
+      // Forward to ArmaraOS agent
       try {
-        const response = await forwardToOpenFang(text, phone, pushName, metadata);
+        const response = await forwardToArmaraOS(text, phone, pushName, metadata);
         if (response && sock) {
           // Reply in the same context: group → group, DM → DM
           const replyJid = isGroup ? remoteJid : senderJid.replace(/@.*$/, '') + '@s.whatsapp.net';
@@ -178,9 +178,9 @@ async function startConnection() {
 }
 
 // ---------------------------------------------------------------------------
-// Forward incoming message to OpenFang API, return agent response
+// Forward incoming message to ArmaraOS API, return agent response
 // ---------------------------------------------------------------------------
-function forwardToOpenFang(text, phone, pushName, metadata) {
+function forwardToArmaraOS(text, phone, pushName, metadata) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
       message: text,
@@ -231,7 +231,7 @@ function forwardToOpenFang(text, phone, pushName, metadata) {
 }
 
 // ---------------------------------------------------------------------------
-// Send a message via Baileys (called by OpenFang for outgoing)
+// Send a message via Baileys (called by ArmaraOS for outgoing)
 // ---------------------------------------------------------------------------
 async function sendMessage(to, text) {
   if (!sock || connStatus !== 'connected') {

@@ -1,6 +1,6 @@
-# Migrating to OpenFang / ArmaraOS
+# Migrating to ArmaraOS
 
-This guide covers migrating from OpenClaw (and other frameworks) to OpenFang. The migration engine handles config conversion, agent import, memory transfer, channel re-configuration, and skill scanning.
+This guide covers migrating from OpenClaw (and other frameworks) to ArmaraOS. The migration engine handles config conversion, agent import, memory transfer, channel re-configuration, and skill scanning.
 
 **Data directory:** New installs use **`~/.armaraos/`** as the default home (see [docs/data-directory.md](docs/data-directory.md)). **`ARMARAOS_HOME`** / **`OPENFANG_HOME`** override it. Destinations in this document use **`~/.armaraos/`**; if you still have only **`~/.armaraos/`**, the CLI migrates it automatically when possible, or you can treat paths below as equivalent under your configured home.
 
@@ -75,7 +75,7 @@ OpenClaw skills (Node.js) are detected and listed in the migration report but no
 openfang skill install <skill-name-or-path>
 ```
 
-OpenFang automatically detects OpenClaw-format skills and converts them during installation.
+ArmaraOS automatically detects OpenClaw-format skills and converts them during installation.
 
 ---
 
@@ -83,7 +83,7 @@ OpenFang automatically detects OpenClaw-format skills and converts them during i
 
 If you prefer migrating by hand (or need to handle edge cases), follow these steps:
 
-### 1. Initialize OpenFang
+### 1. Initialize ArmaraOS
 
 ```bash
 openfang init
@@ -105,7 +105,7 @@ memory:
   decay_rate: 0.05
 ```
 
-**OpenFang** (`~/.armaraos/config.toml`):
+**ArmaraOS** (`~/.armaraos/config.toml`):
 ```toml
 [default_model]
 provider = "anthropic"
@@ -138,7 +138,7 @@ tags:
   - dev
 ```
 
-**OpenFang** (`~/.armaraos/agents/coder/agent.toml`):
+**ArmaraOS** (`~/.armaraos/agents/coder/agent.toml`):
 ```toml
 name = "coder"
 version = "0.1.0"
@@ -168,7 +168,7 @@ allowed_users:
   - "123456789"
 ```
 
-**OpenFang** (add to `~/.armaraos/config.toml`):
+**ArmaraOS** (add to `~/.armaraos/config.toml`):
 ```toml
 [channels.telegram]
 bot_token_env = "TELEGRAM_BOT_TOKEN"
@@ -178,7 +178,7 @@ allowed_users = ["123456789"]
 
 ### 5. Import Memory
 
-Copy any `MEMORY.md` files from OpenClaw agents to OpenFang agent directories:
+Copy any `MEMORY.md` files from OpenClaw agents to ArmaraOS agent directories:
 
 ```bash
 cp ~/.openclaw/agents/coder/MEMORY.md ~/.armaraos/agents/coder/imported_memory.md
@@ -190,7 +190,7 @@ The kernel will ingest these on first boot.
 
 ## Config Format Differences
 
-| Aspect | OpenClaw | OpenFang |
+| Aspect | OpenClaw | ArmaraOS |
 |--------|----------|----------|
 | Format | YAML | TOML |
 | Config location | `~/.openclaw/config.yaml` | `~/.armaraos/config.toml` |
@@ -207,9 +207,9 @@ The kernel will ingest these on first boot.
 
 ## Tool Name Mapping
 
-Tools were renamed between OpenClaw and OpenFang for consistency. The migration engine handles this automatically.
+Tools were renamed between OpenClaw and ArmaraOS for consistency. The migration engine handles this automatically.
 
-| OpenClaw Tool | OpenFang Tool | Notes |
+| OpenClaw Tool | ArmaraOS Tool | Notes |
 |---------------|---------------|-------|
 | `read_file` | `file_read` | Noun-first naming |
 | `write_file` | `file_write` | |
@@ -227,7 +227,7 @@ Tools were renamed between OpenClaw and OpenFang for consistency. The migration 
 | `agents_list` | `agent_list` | |
 | `agent_list` | `agent_list` | |
 
-### New Tools in OpenFang
+### New Tools in ArmaraOS
 
 These tools have no OpenClaw equivalent:
 
@@ -253,7 +253,7 @@ These tools have no OpenClaw equivalent:
 
 OpenClaw's tool profiles map to explicit tool lists:
 
-| OpenClaw Profile | OpenFang Tools |
+| OpenClaw Profile | ArmaraOS Tools |
 |------------------|----------------|
 | `minimal` | `file_read`, `file_list` |
 | `coding` | `file_read`, `file_write`, `file_list`, `shell_exec`, `web_fetch` |
@@ -265,7 +265,7 @@ OpenClaw's tool profiles map to explicit tool lists:
 
 ## Provider Mapping
 
-| OpenClaw Name | OpenFang Name | API Key Env Var |
+| OpenClaw Name | ArmaraOS Name | API Key Env Var |
 |---------------|---------------|-----------------|
 | `anthropic` | `anthropic` | `ANTHROPIC_API_KEY` |
 | `claude` | `anthropic` | `ANTHROPIC_API_KEY` |
@@ -279,7 +279,7 @@ OpenClaw's tool profiles map to explicit tool lists:
 | `mistral` | `mistral` | `MISTRAL_API_KEY` |
 | `fireworks` | `fireworks` | `FIREWORKS_API_KEY` |
 
-### New Providers in OpenFang
+### New Providers in ArmaraOS
 
 | Provider | Description |
 |----------|-------------|
@@ -290,7 +290,7 @@ OpenClaw's tool profiles map to explicit tool lists:
 
 ## Feature Comparison
 
-| Feature | OpenClaw | OpenFang |
+| Feature | OpenClaw | ArmaraOS |
 |---------|----------|----------|
 | **Language** | Node.js / TypeScript | Rust |
 | **Config format** | YAML | TOML |

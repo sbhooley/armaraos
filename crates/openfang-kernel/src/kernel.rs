@@ -329,6 +329,10 @@ pub struct OpenFangKernel {
     /// Per-agent /btw injection channels — present only while a loop is running.
     /// The UI can send context injections mid-loop without waiting for the turn to finish.
     pub btw_channels: dashmap::DashMap<AgentId, tokio::sync::mpsc::Sender<String>>,
+    /// Per-agent /redirect injection channels — present only while a loop is running.
+    /// Unlike /btw (which appends a user note), /redirect injects a high-priority system
+    /// message and prunes recent assistant messages to break the agent's current momentum.
+    pub redirect_channels: dashmap::DashMap<AgentId, tokio::sync::mpsc::Sender<String>>,
     /// In-flight agent-loop phase per agent (Thinking / tool / stream) for turn watchdog.
     pub agent_loop_phases: dashmap::DashMap<AgentId, crate::heartbeat::AgentLoopPhaseState>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
@@ -1267,6 +1271,7 @@ impl OpenFangKernel {
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
             btw_channels: dashmap::DashMap::new(),
+            redirect_channels: dashmap::DashMap::new(),
             agent_loop_phases: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
@@ -2295,6 +2300,12 @@ impl OpenFangKernel {
             }
         }
 
+        // Inject Ultra Cost-Efficient Mode from global config (per-agent metadata wins if set).
+        manifest
+            .metadata
+            .entry("efficient_mode".to_string())
+            .or_insert_with(|| serde_json::Value::String(self.config.efficient_mode.clone()));
+
         let memory = Arc::clone(&self.memory);
         // Build link context from user message (auto-extract URLs for the agent)
         let message_owned = if let Some(link_ctx) =
@@ -2310,6 +2321,11 @@ impl OpenFangKernel {
         // can enqueue context while the streaming loop is running.
         let (btw_tx, btw_rx) = tokio::sync::mpsc::channel::<String>(32);
         self.btw_channels.insert(agent_id, btw_tx);
+
+        // Create /redirect injection channel; sender stored in shared map so the API
+        // can enqueue high-priority override directives mid-loop.
+        let (redirect_tx, redirect_rx) = tokio::sync::mpsc::channel::<String>(8);
+        self.redirect_channels.insert(agent_id, redirect_tx);
 
         let handle = tokio::spawn(async move {
             // Auto-compact if the session is large before running the loop
@@ -2373,11 +2389,13 @@ impl OpenFangKernel {
                 Some(&kernel_clone.process_manager),
                 content_blocks,
                 Some(btw_rx),
+                Some(redirect_rx),
             )
             .await;
 
-            // Remove the /btw channel so inject_btw returns false after this turn.
+            // Remove the /btw and /redirect channels so inject_* returns false after this turn.
             kernel_clone.btw_channels.remove(&agent_id);
+            kernel_clone.redirect_channels.remove(&agent_id);
 
             // Drop the phase callback immediately after the streaming loop
             // completes. It holds a clone of the stream sender (`tx`), which
@@ -2591,6 +2609,8 @@ impl OpenFangKernel {
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
+                    compression_savings_pct: 0,
+                    compressed_input: None,
                 })
             }
             Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
@@ -2672,6 +2692,8 @@ impl OpenFangKernel {
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
+                    compression_savings_pct: 0,
+                    compressed_input: None,
                 })
             }
             Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
@@ -3004,6 +3026,11 @@ impl OpenFangKernel {
         let (btw_tx, btw_rx) = tokio::sync::mpsc::channel::<String>(32);
         self.btw_channels.insert(agent_id, btw_tx);
 
+        // Create /redirect injection channel for this turn; store sender in shared map
+        // so the HTTP handler can inject high-priority overrides while the loop runs.
+        let (redirect_tx, redirect_rx) = tokio::sync::mpsc::channel::<String>(8);
+        self.redirect_channels.insert(agent_id, redirect_tx);
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -3036,11 +3063,13 @@ impl OpenFangKernel {
             Some(&self.process_manager),
             content_blocks,
             Some(btw_rx),
+            Some(redirect_rx),
         )
         .await;
 
-        // Always clean up the btw channel so inject_btw returns false after the turn.
+        // Always clean up the btw and redirect channels so inject_* returns false after the turn.
         self.btw_channels.remove(&agent_id);
+        self.redirect_channels.remove(&agent_id);
 
         let result = result.map_err(KernelError::OpenFang)?;
 
@@ -3578,6 +3607,22 @@ impl OpenFangKernel {
         }
     }
 
+    /// Inject a /redirect override into an agent's currently running loop.
+    ///
+    /// Unlike `/btw` (which appends a mild user note), `/redirect` injects a
+    /// high-priority system message and prunes recent assistant messages at the
+    /// start of the next iteration, breaking the agent's current momentum.
+    ///
+    /// Returns `true` if the agent is actively running and the redirect was queued,
+    /// `false` if no loop is currently active for this agent (caller should 409).
+    pub fn inject_redirect(&self, agent_id: AgentId, text: String) -> bool {
+        if let Some(tx) = self.redirect_channels.get(&agent_id) {
+            tx.try_send(text).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Cancel an agent's currently running LLM task.
     pub fn stop_agent_run(&self, agent_id: AgentId) -> KernelResult<bool> {
         if let Some((_, handle)) = self.running_tasks.remove(&agent_id) {
@@ -4096,7 +4141,16 @@ impl OpenFangKernel {
                     phase: phase_str.clone(),
                     detail: detail.clone(),
                 };
-                let _ = tx.try_send(event);
+                match tx.try_send(event) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(ev)) => {
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(ev).await;
+                        });
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                }
             }
             if matches!(phase, LoopPhase::Done | LoopPhase::Error) {
                 return;

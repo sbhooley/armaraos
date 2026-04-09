@@ -12,6 +12,8 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 | `~/.armaraos/logs/daemon.log` | **CLI daemon** (`openfang start` / `openfang gateway start`): `tracing` output mirrored here and on stderr (created with the `logs/` directory when the daemon starts). The dashboard **Logs → Daemon** tab reads this file via the API. |
 | `~/.armaraos/tui.log` | **TUI / `openfang chat`** sessions: tracing is written here so the terminal UI is not corrupted. If `daemon.log` is absent, the daemon log API falls back to this file when present. |
 | `~/.armaraos/.env`, `~/.armaraos/secrets.env` | Optional API keys (loaded by CLI and desktop; not committed) |
+| `~/.armaraos/ui-prefs.json` | Dashboard UI preferences persisted by the daemon (e.g. **pinned agent** IDs for the sidebar Quick open list). Atomic write (same pattern as `slash-templates.json`). Survives desktop reinstalls that clear WebView `localStorage`. |
+| `~/.armaraos/slash-templates.json` | Slash message templates (`/t …`); see [api-reference.md](api-reference.md#slash-templates-endpoints) |
 
 ## Overrides
 

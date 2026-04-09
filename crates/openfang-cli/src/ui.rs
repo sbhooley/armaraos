@@ -44,11 +44,7 @@ pub fn error(msg: &str) {
 
 /// Brand banner: ">> OpenFang Agent OS"
 pub fn banner() {
-    println!(
-        "  {} {}",
-        ">>".bright_cyan().bold(),
-        "OpenFang Agent OS".bold()
-    );
+    println!("  {} {}", ">>".bright_cyan().bold(), "ArmaraOS".bold());
     println!("     {}", "The open-source agent operating system".dimmed());
 }
 

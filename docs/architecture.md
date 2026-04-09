@@ -1,6 +1,6 @@
-# OpenFang Architecture
+# ArmaraOS Architecture
 
-This document describes the internal architecture of OpenFang, the open-source Agent Operating System built in Rust. It covers the crate structure, kernel boot sequence, agent lifecycle, memory substrate, LLM driver abstraction, capability-based security model, the OFP wire protocol, the security hardening stack, the channel and skill systems, and the agent stability subsystems.
+This document describes the internal architecture of ArmaraOS, the open-source Agent Operating System built in Rust. It covers the crate structure, kernel boot sequence, agent lifecycle, memory substrate, LLM driver abstraction, capability-based security model, the OFP wire protocol, the security hardening stack, the channel and skill systems, and the agent stability subsystems.
 
 Default on-disk paths use **`~/.armaraos/`** as the data home (see [`data-directory.md`](data-directory.md)).
 
@@ -35,7 +35,7 @@ See **[AINL first (policy)](ainl-first-language.md)** for the full principle, ex
 
 ## Crate Structure
 
-OpenFang is organized as a Cargo workspace with 14 crates (13 code crates + xtask). Dependencies flow downward (lower crates depend on nothing above them).
+ArmaraOS is organized as a Cargo workspace with 14 crates (13 code crates + xtask). Dependencies flow downward (lower crates depend on nothing above them).
 
 ```
 openfang-cli            CLI interface, daemon auto-detect, MCP server
@@ -62,7 +62,7 @@ openfang-types          Shared types: Agent, Capability, Event, Memory, Message,
 
 | Crate | Description |
 |-------|-------------|
-| **openfang-types** | Core type definitions used across all crates. Defines `AgentManifest`, `AgentId`, `Capability`, `Event`, `ToolDefinition`, `KernelConfig`, `OpenFangError`, taint tracking (`TaintLabel`, `TaintSet`), Ed25519 manifest signing, model catalog types (`ModelCatalogEntry`, `ProviderInfo`, `ModelTier`), tool compatibility mappings (21 OpenClaw-to-OpenFang), MCP/A2A config types, and web config types. All config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
+| **openfang-types** | Core type definitions used across all crates. Defines `AgentManifest`, `AgentId`, `Capability`, `Event`, `ToolDefinition`, `KernelConfig`, `ArmaraOSError`, taint tracking (`TaintLabel`, `TaintSet`), Ed25519 manifest signing, model catalog types (`ModelCatalogEntry`, `ProviderInfo`, `ModelTier`), tool compatibility mappings (21 OpenClaw-to-ArmaraOS), MCP/A2A config types, and web config types. All config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
 | **openfang-memory** | SQLite-backed memory substrate (schema v5). Uses `Arc<Mutex<Connection>>` with `spawn_blocking` for async bridge. Provides structured KV storage, semantic search with vector embeddings, knowledge graph (entities and relations), session management, task board, usage event persistence (`usage_events` table, `UsageStore`), and canonical sessions for cross-channel memory. Five schema versions: V1 core, V2 collab, V3 embeddings, V4 usage, V5 canonical_sessions. |
 | **openfang-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, and embedding driver. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
 | **openfang-kernel** | The central coordinator. `OpenFangKernel` assembles all subsystems: `AgentRegistry`, `AgentScheduler`, `CapabilityManager`, `EventBus`, `Supervisor`, `WorkflowEngine`, `TriggerEngine`, `BackgroundExecutor`, `WasmSandbox`, `ModelCatalog`, `MeteringEngine`, `ModelRouter`, `AuthManager` (RBAC), `HeartbeatMonitor`, `SetupWizard`, `SkillRegistry`, MCP connections, and `WebToolsContext`. Implements `KernelHandle` for inter-agent operations. Handles agent spawn/kill, message dispatch, workflow execution, trigger evaluation, capability inheritance validation, and graceful shutdown with state persistence. |
@@ -350,7 +350,7 @@ pub trait LlmDriver: Send + Sync {
         system_prompt: &str,
         messages: &[Message],
         tools: &[ToolDefinition],
-    ) -> Result<LlmResponse, OpenFangError>;
+    ) -> Result<LlmResponse, ArmaraOSError>;
 
     async fn send_message_streaming(
         &self,
@@ -359,7 +359,7 @@ pub trait LlmDriver: Send + Sync {
         messages: &[Message],
         tools: &[ToolDefinition],
         tx: mpsc::Sender<StreamEvent>,
-    ) -> Result<LlmResponse, OpenFangError>;
+    ) -> Result<LlmResponse, ArmaraOSError>;
 
     fn key_required(&self) -> bool;
 }
@@ -523,7 +523,7 @@ The tool runner also enforces capabilities by filtering the tool list before pas
 
 ## Security Hardening
 
-OpenFang implements 16 security systems organized into critical fixes and state-of-the-art defenses:
+ArmaraOS implements 16 security systems organized into critical fixes and state-of-the-art defenses:
 
 ### Path Traversal Prevention
 
@@ -646,10 +646,10 @@ All skills pass through a security pipeline before activation:
 
 ### Ecosystem Bridges
 
-- **FangHub**: Native OpenFang marketplace (`FangHubClient`).
+- **FangHub**: Native ArmaraOS marketplace (`FangHubClient`).
 - **ClawHub**: Cross-ecosystem compatibility (`ClawHubClient` connects to clawhub.ai).
 - **SKILL.md Parser**: Auto-converts OpenClaw SKILL.md format (YAML frontmatter + Markdown body) to `skill.toml`.
-- **Tool Compat**: 21 OpenClaw-to-OpenFang tool name mappings in `tool_compat.rs`.
+- **Tool Compat**: 21 OpenClaw-to-ArmaraOS tool name mappings in `tool_compat.rs`.
 
 ---
 
@@ -657,10 +657,10 @@ All skills pass through a security pipeline before activation:
 
 ### Model Context Protocol (MCP)
 
-OpenFang implements both MCP client and server:
+ArmaraOS implements both MCP client and server:
 
 - **MCP Client** (`mcp.rs`): JSON-RPC 2.0 over stdio or SSE transports. Connects to external MCP servers. Tools are namespaced as `mcp_{server}_{tool}` to prevent collisions. Background connection in `start_background_agents()`.
-- **MCP Server** (`mcp_server.rs`): Exposes OpenFang's 23 built-in tools via the MCP protocol. Enables external tools to use OpenFang as a tool provider.
+- **MCP Server** (`mcp_server.rs`): Exposes ArmaraOS's 23 built-in tools via the MCP protocol. Enables external tools to use ArmaraOS as a tool provider.
 - **Configuration**: `KernelConfig.mcp_servers` (Vec of `McpServerConfigEntry` with name, command, args, env, transport).
 - **API**: `/api/mcp/servers` returns configured and connected servers with their tool lists.
 
@@ -759,7 +759,7 @@ OFP operations require capabilities:
 
 ## Desktop Application
 
-The desktop app (`openfang-desktop`) wraps the full OpenFang stack in a native Tauri 2.0 application.
+The desktop app (`openfang-desktop`) wraps the full ArmaraOS stack in a native Tauri 2.0 application.
 
 ### Architecture
 

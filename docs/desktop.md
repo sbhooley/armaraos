@@ -25,7 +25,7 @@ The desktop app follows a straightforward embedded-server pattern:
 |  | (main)    |    | channel bridges    |  |
 |  |           |    | background agents  |  |
 |  | System    |    |                    |  |
-|  | Tray      |    | OpenFang Kernel    |  |
+|  | Tray      |    | ArmaraOS Kernel    |  |
 |  +-----------+    +--------------------+  |
 |       |                    |              |
 |       |   http://127.0.0.1:{port}        |
@@ -95,15 +95,15 @@ The system tray (defined in `src/tray.rs`) provides quick access without bringin
 | **Launch at Login** | Checkbox — toggles OS-level auto-start via `tauri-plugin-autostart` |
 | **Check for Updates...** | Checks for updates, downloads, installs, and restarts if available. Shows notifications for progress/success/failure |
 | **Open Config Directory** | Opens `~/.armaraos/` in the OS file manager |
-| **Quit OpenFang** | Logs the quit event and calls `app.exit(0)` |
+| **Quit ArmaraOS** | Logs the quit event and calls `app.exit(0)` |
 
-The tray tooltip reads **"OpenFang Agent OS"**.
+The tray tooltip reads **"ArmaraOS Agent OS"**.
 
 **Left-click on tray icon** shows the main window (same as "Show Window" menu item). This is implemented via `on_tray_icon_event` listening for `MouseButton::Left` with `MouseButtonState::Up`.
 
 ### Single-Instance Enforcement
 
-On desktop platforms, `tauri-plugin-single-instance` prevents multiple copies of OpenFang from running simultaneously. When a second instance attempts to launch, the existing instance's main window is shown, unminimized, and focused:
+On desktop platforms, `tauri-plugin-single-instance` prevents multiple copies of ArmaraOS from running simultaneously. When a second instance attempts to launch, the existing instance's main window is shown, unminimized, and focused:
 
 ```rust
 #[cfg(desktop)]
@@ -134,7 +134,7 @@ Closing the window does not quit the application. Instead, the window is hidden 
 })
 ```
 
-To actually quit, use the **"Quit OpenFang"** option in the system tray menu.
+To actually quit, use the **"Quit ArmaraOS"** option in the system tray menu.
 
 ### Native OS Notifications
 
@@ -151,6 +151,14 @@ The app subscribes to the kernel's event bus and forwards selected events as nat
 **Not toasted:** `SystemEvent::HealthCheckFailed` is intentionally **skipped** (too noisy during recovery); use logs and the Web UI for health issues. Most other bus events are also skipped.
 
 The notification listener runs as an async task spawned via `tauri::async_runtime::spawn` and handles broadcast lag gracefully (logs a warning and continues).
+
+---
+
+## Product analytics (PostHog)
+
+Release builds may embed a PostHog **project API key** at compile time so the app can send **at most one** anonymous event per machine (`armaraos_desktop_first_open`: app version, OS, architecture). **Tagged release CI** passes **`ARMARAOS_POSTHOG_KEY`** or org/repo **`AINL_POSTHOG_KEY`** from GitHub Actions (same `phc_…` value as **`NEXT_PUBLIC_POSTHOG_KEY`** on [ainativelang.com](https://ainativelang.com)); see **[release-desktop.md](release-desktop.md)** and the root **README**. Runtime env **`ARMARAOS_POSTHOG_*`** / **`AINL_POSTHOG_*`** overrides the baked values for debugging; **`ARMARAOS_PRODUCT_ANALYTICS=0`** disables pings. Users can opt out in the Setup Wizard (Welcome step).
+
+Implementation: `crates/openfang-desktop/src/product_analytics.rs`.
 
 ---
 
@@ -201,7 +209,7 @@ Opens a native file picker for skill files (`.md`, `.toml`, `.py`, `.js`, `.wasm
 
 ### `get_autostart` / `set_autostart`
 
-Check or toggle whether OpenFang launches at OS login. Uses `tauri-plugin-autostart` (launchd on macOS, registry on Windows, systemd on Linux).
+Check or toggle whether ArmaraOS launches at OS login. Uses `tauri-plugin-autostart` (launchd on macOS, registry on Windows, systemd on Linux).
 
 ### `check_for_updates`
 
@@ -258,7 +266,7 @@ The main window is created programmatically in the `setup` closure (not via `tau
 | Property | Value |
 |----------|-------|
 | Window label | `"main"` |
-| Title | `"OpenFang"` |
+| Title | `"ArmaraOS"` |
 | URL | `http://127.0.0.1:{port}` (external) |
 | Inner size | 1280 x 800 |
 | Minimum inner size | 800 x 600 |
@@ -283,9 +291,9 @@ The app checks for updates 10 seconds after startup. If an update is available, 
 
 **Marketing site (browser downloads):** **[ainativelang.com](https://ainativelang.com)** and **`/download`** surface the same installer set when `latest.json` is present under **`/downloads/armaraos/`**; otherwise they fall back to GitHub release assets (tag pinned in **ainativelangweb** `config/site.ts`). Details in **`docs/release-desktop.md`** (Marketing site installers).
 
-**Signing:** Every release bundle is signed with `TAURI_SIGNING_PRIVATE_KEY` (GitHub Secret). The `tauri-action` generates `latest.json` containing download URLs and signatures for each platform.
+**Signing (updater):** Every release bundle is signed with `TAURI_SIGNING_PRIVATE_KEY` (GitHub Secret). The `tauri-action` generates `latest.json` containing download URLs and signatures for each platform. That proves **update integrity**; it does **not** replace **macOS Developer ID / notarization** or **Windows Authenticode** for install-time trust.
 
-See [Production Checklist](production-checklist.md) for key generation and setup instructions.
+See [Production Checklist](production-checklist.md) for key generation and setup instructions. For Gatekeeper, SmartScreen, Azure Artifact Signing, SignPath OSS, and CI notes, see **[desktop-code-signing.md](desktop-code-signing.md)**.
 
 ### CSP
 
@@ -340,6 +348,25 @@ The release binary suppresses the console window on Windows via:
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 ```
 
+### Offline-Capable Builds
+
+The desktop app can run completely offline on first launch when properly bundled with:
+
+1. **Bundled Python** — Place portable Python under `resources/python/<target-triple>/python/` (e.g., `x86_64-pc-windows-msvc/python/python.exe` on Windows). Use `cargo xtask bundle-portable-python` to download and package the official Python distribution for each platform.
+
+2. **Bundled AINL Wheel** — Place `ainativelang-*-py3-none-any.whl` under `resources/ainl/`. The bootstrap will install from the wheel instead of downloading from PyPI.
+
+3. **Disable Library Sync** — Set `ARMARAOS_AINL_LIBRARY_SYNC=0` to skip downloading demo/examples from GitHub. Embedded intelligence overlays are always materialized from the binary regardless of this setting.
+
+When bundled this way, the first-run experience requires zero network access:
+- Python venv is created using the bundled interpreter
+- AINL is installed from the bundled wheel
+- Library sync fails gracefully with a user-friendly message
+- Intelligence overlays are materialized from embedded data
+- The app is fully functional for local agent automation
+
+Without bundled components, the app requires internet on first run to download Python packages from PyPI and optionally sync the AINL library from GitHub.
+
 ### Bundle Configuration
 
 From `tauri.conf.json`:
@@ -373,7 +400,7 @@ The `"targets": "all"` setting generates every available package format for the 
 | `tauri-plugin-single-instance` | 2 | Prevents multiple instances (desktop only) |
 | `tauri-plugin-autostart` | 2 | Launch at OS login (desktop only) |
 | `tauri-plugin-updater` | 2 | Signed auto-updates from GitHub Releases (desktop only) |
-| `tauri-plugin-global-shortcut` | 2 | Ctrl+Shift+O/N/C shortcuts (desktop only) |
+| `tauri-plugin-global-shortcut` | 2 | Ctrl+Alt+Space/A/H shortcuts (desktop only) |
 
 ### Capabilities
 
@@ -443,5 +470,8 @@ crates/openfang-desktop/
 | Variable | Effect |
 |----------|--------|
 | `RUST_LOG` | Controls tracing verbosity. Defaults to `openfang=info,tauri=info` if unset. |
+| `ARMARAOS_POSTHOG_KEY` / `ARMARAOS_POSTHOG_HOST` | Optional runtime override of compile-time PostHog settings (see **Product analytics** above). |
+| `AINL_POSTHOG_KEY` / `AINL_POSTHOG_HOST` | Same override names accepted by the desktop binary for parity with CI secret names. |
+| `ARMARAOS_PRODUCT_ANALYTICS` | Set to `0` to disable optional product analytics entirely. |
 
-All other OpenFang environment variables (API keys, configuration) apply as normal since the desktop app boots the same kernel as the headless daemon.
+All other ArmaraOS environment variables (API keys, configuration) apply as normal since the desktop app boots the same kernel as the headless daemon.

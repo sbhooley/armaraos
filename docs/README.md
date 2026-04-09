@@ -1,6 +1,6 @@
-# OpenFang Documentation
+# ArmaraOS Documentation
 
-Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operating System -- 14 Rust crates, 40 channels, 60 skills, 20 LLM providers, 80+ HTTP/WebSocket/SSE endpoints (see [API Reference](api-reference.md)), and 16 security systems in a single binary.
+Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operating System -- 14 Rust crates, 40 channels, 60 skills, 20 LLM providers, 80+ HTTP/WebSocket/SSE endpoints (see [API Reference](api-reference.md)), and 16 security systems in a single binary.
 
 ---
 
@@ -39,7 +39,9 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
+| [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
+| [Desktop code signing](desktop-code-signing.md) | Install-time trust (macOS / Windows), Tauri updater vs OS signing, Azure / SignPath notes |
 
 ## Release & Operations
 
@@ -47,13 +49,14 @@ Welcome to the OpenFang documentation. OpenFang is the open-source Agent Operati
 |-------|-------------|
 | [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
 | [Production Checklist](production-checklist.md) | Every step before tagging v0.1.0 -- signing keys, secrets, verification |
-| [Desktop release smoke](release-desktop.md) | Tauri build, updater, AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
+| [Desktop code signing](desktop-code-signing.md) | Gatekeeper, SmartScreen, `TAURI_SIGNING_PRIVATE_KEY` vs Authenticode / notarization, GitHub Actions secrets, Azure Artifact Signing, SignPath OSS |
+| [Desktop release smoke](release-desktop.md) | Tauri build, updater, optional PostHog (`ARMARAOS_POSTHOG_KEY` / `AINL_POSTHOG_KEY`), AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |
-| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download; **`README.txt`** + **`diagnostics_snapshot.json`** triage), Home folder preview vs download, chat unread + digest, kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility + **end-to-end `#wizard` QA**, **App Store** section title, **Settings / Runtime** layout smoke (**Settings** at-a-glance config schema line), **daemon lifecycle** + **GitHub-latest** QA, **Agents → Config** QA, Playwright notes |
+| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download; **`README.txt`** + **`diagnostics_snapshot.json`** triage), Home folder preview vs download, chat unread + digest, kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility + **end-to-end `#wizard` QA**, **App Store** section title, **Settings / Runtime** layout smoke (**Settings** at-a-glance config schema line + mismatch suffix), **daemon lifecycle** + **GitHub-latest** QA, **Agents → Agent detail modal (gear)** + **Config** QA, **`/api/ui-prefs`** pinned agents, Playwright notes |
 | [Dashboard Home folder](dashboard-home-folder.md) | Home browser API + **dashboard UI** (row/modal Download, symlinks, large files when preview hits 512 KiB cap) |
 | [Dashboard Get started UI](dashboard-overview-ui.md) | `#overview` landing: layout, **Quick actions** (incl. **App Store**, **Daemon & runtime** → `#runtime`), **Comms** under **Monitor**, Setup Wizard gating (`openfang-onboarded`, `navigateOverview`), setup checklist, seven-tile skeleton, CSS and source map |
 | [Dashboard Setup Wizard](dashboard-setup-wizard.md) | `#wizard` first-run flow: provider test / Next rules, flat `manifest_toml` for `POST /api/agents`, valid `ToolProfile` values, static embed + rebuild note, links to overview and API |
-| [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md) | `#settings` / `#runtime` plus shared **`dashboard-page-*`** shell on **Skills**, **Channels**, **Hands**, **Home folder**, **Analytics**; **`dashboard-toolbar-tabs`**, **Channels** filter card, **Analytics** stat grid; **Settings** summary line (config schema, API, log, home); daemon **Reload** / **Shut down**, **`daemon_lifecycle.js`** — class map and files |
+| [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md) | `#settings` / `#runtime` plus shared **`dashboard-page-*`** shell on **Skills**, **Channels**, **Hands**, **Home folder**, **Analytics**; **`dashboard-toolbar-tabs`**, **Channels** filter card, **Analytics** stat grid; **Settings** summary line (config schema, API, log, home); **Budget** tab **Ultra Cost-Efficient Mode** card + **Chat** header **⚡ eco** toggle; daemon **Reload** / **Shut down**, **`daemon_lifecycle.js`** — class map and files |
 | [Scheduled AINL](scheduled-ainl.md) | Cron `ainl run`, `~/.armaraos/.env`, `AINL_HOST_ADAPTER_ALLOWLIST`, `AINL_ALLOW_IR_DECLARED_ADAPTERS`, editing jobs |
 
 ## Additional Resources

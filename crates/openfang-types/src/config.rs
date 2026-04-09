@@ -1190,6 +1190,14 @@ pub struct KernelConfig {
     /// Web dashboard options (Home folder editor allowlist, etc.).
     #[serde(default)]
     pub dashboard: DashboardConfig,
+    /// Ultra Cost-Efficient Mode for prompt compression.
+    /// "off" | "balanced" (default, ~50–60 % reduction) | "aggressive" (~60 % reduction).
+    #[serde(default = "default_efficient_mode")]
+    pub efficient_mode: String,
+}
+
+fn default_efficient_mode() -> String {
+    "off".to_string()
 }
 
 /// Skill capture workspace (`[openclaw_workspace]` or `[skills_workspace]` in config.toml).
@@ -1514,6 +1522,7 @@ impl Default for KernelConfig {
             turn_watchdog: TurnWatchdogSettings::default(),
             openclaw_workspace: OpenclawWorkspaceConfig::default(),
             dashboard: DashboardConfig::default(),
+            efficient_mode: default_efficient_mode(),
         }
     }
 }

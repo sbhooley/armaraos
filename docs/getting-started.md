@@ -1,6 +1,6 @@
-# Getting Started with OpenFang
+# Getting Started with ArmaraOS
 
-This guide walks you through installing OpenFang, configuring your first LLM provider, spawning an agent, and chatting with it.
+This guide walks you through installing ArmaraOS, configuring your first LLM provider, spawning an agent, and chatting with it.
 
 Config and state default to **`~/.armaraos/`** (see [data-directory.md](data-directory.md) for env overrides and legacy **`~/.openfang`** migration).
 
@@ -20,7 +20,7 @@ Config and state default to **`~/.armaraos/`** (see [data-directory.md](data-dir
 
 ### Option 1: Desktop App (Windows / macOS / Linux)
 
-Download the installer for your platform from the [latest release](https://github.com/RightNow-AI/openfang/releases/latest):
+Download the installer for your platform from **[ainativelang.com](https://ainativelang.com)**:
 
 | Platform | File |
 |---|---|
@@ -28,37 +28,21 @@ Download the installer for your platform from the [latest release](https://githu
 | macOS | `.dmg` disk image |
 | Linux | `.AppImage` or `.deb` |
 
-The desktop app includes the full OpenFang system with a native window, system tray, auto-updates, and OS notifications. Updates are installed automatically in the background.
+The desktop app includes the full ArmaraOS system with a native window, system tray, auto-updates, and OS notifications. Updates are installed automatically in the background.
 
-### Option 2: Shell Installer (Linux / macOS)
-
-```bash
-curl -sSf https://openfang.sh | sh
-```
-
-This downloads the latest CLI binary and installs it to `~/.armaraos/bin/`.
-
-### Option 3: PowerShell Installer (Windows)
-
-```powershell
-irm https://openfang.sh/install.ps1 | iex
-```
-
-Downloads the latest CLI binary, verifies its SHA256 checksum, and adds it to your user PATH.
-
-### Option 4: Cargo Install (Any Platform)
+### Option 2: Cargo Install (Any Platform)
 
 Requires Rust 1.75+:
 
 ```bash
-cargo install --git https://github.com/RightNow-AI/openfang openfang-cli
+cargo install --git https://github.com/sbhooley/armaraos openfang-cli
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/RightNow-AI/openfang.git
-cd openfang
+git clone https://github.com/sbhooley/armaraos.git
+cd armaraos
 cargo install --path crates/openfang-cli
 ```
 
@@ -82,8 +66,8 @@ The image sets **`OPENFANG_LISTEN=0.0.0.0:50051`** so the API is reachable from 
 Or use Docker Compose:
 
 ```bash
-git clone https://github.com/RightNow-AI/openfang.git
-cd openfang
+git clone https://github.com/sbhooley/armaraos.git
+cd armaraos
 # Set your API keys in environment or .env file
 docker compose up -d
 ```
@@ -117,7 +101,7 @@ This creates:
 
 ### Set Up an API Key
 
-OpenFang needs at least one LLM provider API key. Set it as an environment variable:
+ArmaraOS needs at least one LLM provider API key. Set it as an environment variable:
 
 ```bash
 # Anthropic (Claude)
@@ -165,7 +149,7 @@ This checks that your config exists, API keys are set, and the toolchain is avai
 
 ### Using a Built-in Template
 
-OpenFang ships with 30 agent templates. Spawn the hello-world agent:
+ArmaraOS ships with 30 agent templates. Spawn the hello-world agent:
 
 ```bash
 openfang agent spawn agents/hello-world/agent.toml
@@ -249,7 +233,7 @@ Chat session started (daemon mode). Type 'exit' or Ctrl+C to quit.
 
 you> Hello! What can you do?
 
-agent> I'm the hello-world agent running on OpenFang. I can:
+agent> I'm the hello-world agent running on ArmaraOS. I can:
 - Read files from the filesystem
 - List directory contents
 - Fetch web pages
@@ -286,8 +270,8 @@ openfang start
 Output:
 
 ```
-Starting OpenFang daemon...
-OpenFang daemon running on http://127.0.0.1:4200
+Starting ArmaraOS daemon...
+ArmaraOS daemon running on http://127.0.0.1:4200
 Press Ctrl+C to stop.
 ```
 
@@ -323,7 +307,7 @@ http://127.0.0.1:4200/
 
 The embedded WebChat UI allows you to:
 - Open **Get started** from the sidebar (first section, above **Chat**; **Comms** is under **Monitor**) for the landing dashboard: **Quick actions** at the top (agents, skills, **App Store**, channels, workflows, settings, **Daemon & runtime** → reload/shutdown controls on **Runtime**), system stats, provider status, optional **setup checklist**, and **Setup Wizard** entry in the header (after onboarding, use **Run setup again** or click **Get started** in the sidebar a second time to reopen the wizard — see [Dashboard Get started UI](dashboard-overview-ui.md)). The guided **Setup Wizard** (`#wizard`): steps, provider rules, and how agents are created — [dashboard-setup-wizard.md](dashboard-setup-wizard.md). Layout and source map: [dashboard-overview-ui.md](dashboard-overview-ui.md). Manual QA and `localStorage` notes: [Dashboard testing](dashboard-testing.md). **Settings** and **Runtime** pages use the same polished shell as other top-level routes, including **daemon lifecycle** actions — [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md).
-- **Config schema at a glance:** Open **Settings** — the line under the tab bar shows **Config schema** as `effective (binary N)` plus API, log level, and home path; **System** repeats it as a stat tile, and **Daemon & runtime** shows the same schema line. Details: [Troubleshooting — Config schema in the dashboard](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance).
+- **Config schema at a glance:** Open **Settings** — the line under the tab bar shows **Config schema** as `effective (binary N)` (with **`⚠ mismatch`** when the file and binary disagree) plus API, log level, and home path; **System** repeats it as a stat tile, and **Daemon & runtime** shows the same schema line. Details: [Troubleshooting — Config schema in the dashboard](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance).
 - View all running agents
 - Chat with any agent in real-time (via WebSocket)
 - See streaming responses as they are generated
@@ -335,7 +319,7 @@ The default landing route in the SPA is still `#overview`; bookmarks and links u
 
 ## Next Steps
 
-Now that you have OpenFang running:
+Now that you have ArmaraOS running:
 
 - **Explore agent templates**: Browse the `agents/` directory for 30 pre-built agents (coder, researcher, writer, ops, analyst, security-auditor, and more).
 - **Create custom agents**: Write your own `agent.toml` manifests. See the [Architecture guide](architecture) for details on capabilities and scheduling.

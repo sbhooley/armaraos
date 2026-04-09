@@ -678,6 +678,8 @@ pub async fn send_message(
                     latency_ms: result.latency_ms,
                     llm_fallback_note: result.llm_fallback_note.clone(),
                     skill_draft_path,
+                    compression_savings_pct: result.compression_savings_pct,
+                    compressed_input: result.compressed_input.clone(),
                 })),
             )
         }
@@ -9523,6 +9525,87 @@ pub async fn put_slash_templates(
     (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response()
 }
 
+const UI_PREFS_FILE: &str = "ui-prefs.json";
+
+/// GET /api/ui-prefs — Load persisted dashboard UI preferences from disk.
+///
+/// Returns a JSON object of arbitrary key/value pairs (e.g. `{"pinned_agents":["id1","id2"]}`).
+/// Returns `{}` (not 404) when the file doesn't exist yet.
+pub async fn get_ui_prefs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let path = state.kernel.config.home_dir.join(UI_PREFS_FILE);
+    let body = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (StatusCode::OK, Json(serde_json::json!({}))).into_response();
+        }
+        Err(e) => {
+            tracing::warn!("Failed to read ui-prefs.json: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => {
+            tracing::warn!("ui-prefs.json is invalid JSON: {e}");
+            (StatusCode::OK, Json(serde_json::json!({}))).into_response()
+        }
+    }
+}
+
+/// PUT /api/ui-prefs — Persist dashboard UI preferences to disk.
+///
+/// Body: any JSON object. Existing keys are replaced wholesale (full overwrite).
+/// Writes atomically via a temp file to avoid corruption on crash.
+pub async fn put_ui_prefs(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if !body.is_object() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "body must be a JSON object" })),
+        )
+            .into_response();
+    }
+
+    let path = state.kernel.config.home_dir.join(UI_PREFS_FILE);
+    let json = match serde_json::to_string_pretty(&body) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let tmp_path = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp_path, &json) {
+        tracing::warn!("Failed to write ui-prefs.json.tmp: {e}");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, &path) {
+        tracing::warn!("Failed to rename ui-prefs.json.tmp: {e}");
+        let _ = std::fs::remove_file(&tmp_path);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/agents/{id}/btw`.
@@ -9586,6 +9669,73 @@ pub async fn inject_btw(
             PATH,
             "Agent not running",
             "No agent loop is currently active for this agent. Send a normal message first, then use /btw while it is running.".to_string(),
+            None,
+        )
+        .into_response()
+    }
+}
+
+/// Request body for `POST /api/agents/{id}/redirect`.
+#[derive(serde::Deserialize)]
+pub struct RedirectRequest {
+    pub text: String,
+}
+
+/// POST /api/agents/{id}/redirect — Override the running agent loop with a new directive.
+///
+/// Stronger than `/btw`: injects a high-priority system message and prunes recent
+/// assistant messages to break the agent's current momentum. Works only while the
+/// agent is mid-run. Returns 409 Conflict if no loop is active.
+pub async fn inject_redirect(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<RedirectRequest>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/redirect";
+
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
+            )
+            .into_response()
+        }
+    };
+
+    let text = req.text.trim().to_string();
+    if text.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Empty directive",
+            "text must not be empty.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if state.kernel.inject_redirect(agent_id, text) {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "redirected" })),
+        )
+            .into_response()
+    } else {
+        api_json_error(
+            StatusCode::CONFLICT,
+            &rid,
+            PATH,
+            "Agent not running",
+            "No agent loop is currently active for this agent. Send a normal message first, then use /redirect while it is running.".to_string(),
             None,
         )
         .into_response()
@@ -11593,7 +11743,7 @@ pub async fn create_diagnostics_bundle(
             PATH,
             "Failed to create support directory",
             format!("{e}"),
-            Some("Check permissions on the OpenFang home directory."),
+            Some("Check permissions on the ArmaraOS home directory."),
         );
     }
 

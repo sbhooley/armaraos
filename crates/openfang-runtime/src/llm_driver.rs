@@ -140,6 +140,13 @@ pub enum StreamEvent {
         result_preview: String,
         is_error: bool,
     },
+    /// Prompt compression stats (emitted once per turn, before any LLM call, when > 0).
+    CompressionStats {
+        /// Percentage of input tokens saved (0 when no compression occurred).
+        savings_pct: u8,
+        /// The compressed text (for diff UI in dashboard).
+        compressed_text: String,
+    },
 }
 
 /// Trait for LLM drivers.

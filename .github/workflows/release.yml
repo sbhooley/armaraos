@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   # Must match a version published on PyPI: https://pypi.org/project/ainativelang/
   # Bump after uploading a new wheel: cd AI_Native_Lang && python -m build && twine upload dist/*
-  AINL_PYPI_VERSION: "1.4.2"
+  AINL_PYPI_VERSION: "1.4.4"
 
 jobs:
   # ── Tauri Desktop App (Windows + macOS + Linux) ───────────────────────────

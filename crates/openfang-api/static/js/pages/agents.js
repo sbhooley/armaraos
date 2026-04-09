@@ -742,16 +742,32 @@ function agentsPage() {
     },
 
     // ── Model switch ──
-    async changeModel() {
+    changeModel() {
+      if (!this.detailAgent || !this.newModelValue.trim()) return;
+      var cur = ((this.detailAgent.model_provider || '').trim() + '/' + (this.detailAgent.model_name || '').trim()).replace(/^\/+/, '');
+      var next = this.newModelValue.trim();
+      if (next === cur) {
+        this.editingModel = false;
+        return;
+      }
+      var self = this;
+      OpenFangToast.confirm(
+        'Switch model?',
+        OpenFangToast.modelProviderChangeWarningText(),
+        function() { self._changeModelApply(); },
+        { danger: false, confirmLabel: 'Switch' }
+      );
+    },
+
+    async _changeModelApply() {
       if (!this.detailAgent || !this.newModelValue.trim()) return;
       this.modelSaving = true;
       try {
         var resp = await OpenFangAPI.put('/api/agents/' + this.detailAgent.id + '/model', { model: this.newModelValue.trim() });
         var providerInfo = (resp && resp.provider) ? ' (provider: ' + resp.provider + ')' : '';
-        OpenFangToast.success('Model changed' + providerInfo + ' (memory reset)');
+        OpenFangToast.success('Model changed' + providerInfo + ' (canonical session reset)');
         this.editingModel = false;
         await Alpine.store('app').refreshAgents();
-        // Refresh detailAgent
         var agents = Alpine.store('app').agents;
         for (var i = 0; i < agents.length; i++) {
           if (agents[i].id === this.detailAgent.id) { this.detailAgent = agents[i]; break; }
@@ -763,13 +779,28 @@ function agentsPage() {
     },
 
     // ── Provider switch ──
-    async changeProvider() {
+    changeProvider() {
+      if (!this.detailAgent || !this.newProviderValue.trim()) return;
+      if (this.newProviderValue.trim() === (this.detailAgent.model_provider || '').trim()) {
+        this.editingProvider = false;
+        return;
+      }
+      var self = this;
+      OpenFangToast.confirm(
+        'Switch provider?',
+        OpenFangToast.modelProviderChangeWarningText(),
+        function() { self._changeProviderApply(); },
+        { danger: false, confirmLabel: 'Switch' }
+      );
+    },
+
+    async _changeProviderApply() {
       if (!this.detailAgent || !this.newProviderValue.trim()) return;
       this.modelSaving = true;
       try {
         var combined = this.newProviderValue.trim() + '/' + this.detailAgent.model_name;
         var resp = await OpenFangAPI.put('/api/agents/' + this.detailAgent.id + '/model', { model: combined });
-        OpenFangToast.success('Provider changed to ' + (resp && resp.provider ? resp.provider : this.newProviderValue.trim()));
+        OpenFangToast.success('Provider changed to ' + (resp && resp.provider ? resp.provider : this.newProviderValue.trim()) + ' (canonical session reset)');
         this.editingProvider = false;
         await Alpine.store('app').refreshAgents();
         var agents = Alpine.store('app').agents;

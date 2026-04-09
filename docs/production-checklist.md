@@ -60,29 +60,39 @@ Go to **GitHub repo → Settings → Secrets and variables → Actions → New r
 | `TAURI_SIGNING_PRIVATE_KEY` | Contents of `~/.tauri/openfang.key` | Yes |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password you set during keygen (or empty string) | Yes |
 
-### Optional — macOS Code Signing
+### Optional — macOS code signing and notarization
 
-Without these, macOS users will see "app from unidentified developer" warnings. Requires an Apple Developer account ($99/year).
+Without these, macOS users may see **unidentified developer** warnings and builds may skip **notarization**. Requires an Apple Developer account ($99/year). Canonical secret names match **`.github/workflows/release.yml`** (the `desktop` job).
 
 | Secret Name | Value |
 |---|---|
-| `APPLE_CERTIFICATE` | Base64-encoded `.p12` certificate file |
-| `APPLE_CERTIFICATE_PASSWORD` | Password for the .p12 file |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
-| `APPLE_ID` | Your Apple ID email |
-| `APPLE_PASSWORD` | App-specific password from appleid.apple.com |
-| `APPLE_TEAM_ID` | Your 10-character Team ID |
+| `MAC_CERT_BASE64` | Base64-encoded **Developer ID Application** `.p12` |
+| `MAC_CERT_PASSWORD` | Password for the `.p12` export |
+| `MAC_NOTARIZE_APPLE_ID` | Apple ID email |
+| `MAC_NOTARIZE_PASSWORD` | App-specific password (appleid.apple.com) |
+| `MAC_NOTARIZE_TEAM_ID` | 10-character Team ID |
 
 To generate the base64 certificate:
 ```bash
 base64 -i Certificates.p12 | pbcopy
 ```
 
-### Optional — Windows Code Signing
+See **[desktop-code-signing.md](desktop-code-signing.md)** for the full trust / Gatekeeper picture.
 
-Without this, Windows SmartScreen may warn users. Requires an EV code signing certificate.
+### Optional — Windows code signing
 
-Set `certificateThumbprint` in `tauri.conf.json` under `bundle.windows` and add the certificate to the Windows runner in CI.
+Without Authenticode signing, Windows may show **Unknown publisher** and **SmartScreen** friction. Options include a **PFX** on the runner (set `bundle.windows.certificateThumbprint` in `crates/openfang-desktop/tauri.conf.json` or inject at build time), **Azure Artifact Signing**, or a **SignPath** (or similar) pipeline. Overview and trade-offs: **[desktop-code-signing.md](desktop-code-signing.md)**.
+
+### Optional — PostHog (desktop install analytics)
+
+Not required for builds. To embed a PostHog project key in **release** desktop binaries (anonymous first-open event; same project as the marketing site), add one of:
+
+| Secret name | Notes |
+|-------------|--------|
+| `ARMARAOS_POSTHOG_KEY` | PostHog project API key (`phc_…`) |
+| `AINL_POSTHOG_KEY` | Same value; used if `ARMARAOS_POSTHOG_KEY` is unset (org-wide single secret) |
+
+Optional ingest host: **`ARMARAOS_POSTHOG_HOST`** or **`AINL_POSTHOG_HOST`** (e.g. EU: `https://eu.i.posthog.com`). Details: **[release-desktop.md](release-desktop.md)**, root **README**.
 
 ---
 
@@ -113,23 +123,12 @@ convert icon.svg -resize 256x256 -define icon:auto-resize=256,128,64,48,32,16 ic
 
 ---
 
-## 5. Set Up the `openfang.sh` Domain
+## 5. Verify Desktop Downloads on ainativelang.com
 
-**Status:** BLOCKING for install scripts — users run `curl -sSf https://openfang.sh | sh`.
+**Status:** VERIFY — confirm desktop installers are live on the homepage.
 
-Options:
-- **GitHub Pages**: Point `openfang.sh` to a GitHub Pages site that redirects `/` to `scripts/install.sh` and `/install.ps1` to `scripts/install.ps1` from the repo's latest release.
-- **Cloudflare Workers / Vercel**: Serve the install scripts with proper `Content-Type: text/plain` headers.
-- **Raw GitHub redirect**: Use `openfang.sh` as a CNAME to `raw.githubusercontent.com/RightNow-AI/openfang/main/scripts/install.sh` (less reliable).
-
-The install scripts reference:
-- `https://openfang.sh` → serves `scripts/install.sh`
-- `https://openfang.sh/install.ps1` → serves `scripts/install.ps1`
-
-Until the domain is set up, users can install via:
-```bash
-curl -sSf https://raw.githubusercontent.com/RightNow-AI/openfang/main/scripts/install.sh | sh
-```
+- [ ] Visit [ainativelang.com](https://ainativelang.com) and verify download links resolve for Windows (`.msi`), macOS (`.dmg`), and Linux (`.AppImage` / `.deb`).
+- [ ] Confirm `latest.json` and `beta.json` auto-update manifests are reachable at `https://ainativelang.com/downloads/armaraos/`.
 
 ---
 
@@ -253,11 +252,11 @@ After `sync-desktop-updates-to-website` succeeds, verify the Amplify-hosted copi
 
 ### Docker Image
 ```bash
-docker pull ghcr.io/RightNow-AI/openfang:latest
-docker pull ghcr.io/RightNow-AI/openfang:0.1.0
+docker pull ghcr.io/sbhooley/armaraos:latest
+docker pull ghcr.io/sbhooley/armaraos:0.1.0
 
 # Verify both architectures
-docker run --rm ghcr.io/RightNow-AI/openfang:latest --version
+docker run --rm ghcr.io/sbhooley/armaraos:latest --version
 ```
 
 ### Desktop App Auto-Update (test with v0.1.1)
@@ -265,20 +264,16 @@ docker run --rm ghcr.io/RightNow-AI/openfang:latest --version
 2. Tag v0.1.1 and push
 3. Wait for release workflow to complete
 4. Open the v0.1.0 app — after 10 seconds it should:
-   - Show "OpenFang Updating..." notification
+   - Show "ArmaraOS Updating..." notification
    - Download and install v0.1.1
    - Restart automatically to v0.1.1
 5. Right-click tray → "Check for Updates" → should show "Up to Date"
 
-### Install Scripts
-```bash
-# Linux/macOS
-curl -sSf https://openfang.sh | sh
-openfang --version  # Should print v0.1.0
+### Desktop App Download
 
-# Windows PowerShell
-irm https://openfang.sh/install.ps1 | iex
-openfang --version
+Verify installers are downloadable from [ainativelang.com](https://ainativelang.com) for all three platforms, then run:
+```bash
+openfang --version  # Should print the release version
 ```
 
 ---

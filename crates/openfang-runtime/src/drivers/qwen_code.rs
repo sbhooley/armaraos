@@ -59,7 +59,7 @@ impl QwenCodeDriver {
             warn!(
                 "Qwen Code driver: --yolo enabled. \
                  The CLI will not prompt for tool approvals. \
-                 OpenFang's own capability/RBAC system enforces access control."
+                 ArmaraOS's own capability/RBAC system enforces access control."
             );
         }
 

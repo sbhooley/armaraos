@@ -42,8 +42,10 @@ const MAX_RETRIES: u32 = 3;
 const BASE_RETRY_DELAY_MS: u64 = 1000;
 
 /// Timeout for individual tool executions (seconds).
-/// Raised from 60s to 120s for browser automation and long-running builds.
-const TOOL_TIMEOUT_SECS: u64 = 120;
+/// Raised from 120s to 300s so that shell_exec commands with a user-specified
+/// timeout_seconds up to 300 are not silently capped by the outer tokio wrapper.
+/// Long-running jobs (>300s) should use process_start/process_poll instead.
+const TOOL_TIMEOUT_SECS: u64 = 300;
 
 /// Timeout for inter-agent tool calls (seconds).
 /// Agent delegation (agent_send, agent_spawn) can involve a full agent loop on the
@@ -80,6 +82,10 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
             Duration::from_secs(30)
         }
+        // shell_exec: the inner tool respects LLM-specified timeout_seconds (up to 300s).
+        // This outer cap must be at least as large as the inner maximum so the agent loop
+        // wrapper never kills a command that the model legitimately asked to run longer.
+        "shell_exec" => Duration::from_secs(TOOL_TIMEOUT_SECS),
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -354,6 +360,10 @@ pub struct AgentLoopResult {
     pub latency_ms: Option<u64>,
     /// When a fallback model or OpenRouter free-tier path was used instead of the primary.
     pub llm_fallback_note: Option<String>,
+    /// Input token reduction percentage achieved by the prompt compressor (0 when off/passthrough).
+    pub compression_savings_pct: u8,
+    /// The compressed version of the user message (only set when savings_pct > 0; for diff UI).
+    pub compressed_input: Option<String>,
 }
 
 /// Check whether a tool call is missing any required parameters.
@@ -455,6 +465,7 @@ pub async fn run_agent_loop(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -539,13 +550,56 @@ pub async fn run_agent_loop(
         system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
     }
 
+    // Ultra Cost-Efficient Mode: compress user message before storing in session / LLM context.
+    // Memory recall above intentionally uses the original `user_message` for semantic similarity.
+    // Per-agent metadata `efficient_mode` wins over the global config (injected by kernel via
+    // `.entry().or_insert_with()` so the manifest value is never overwritten).
+    let mut compression_savings_pct: u8 = 0;
+    let _compressed_msg: Option<String> = {
+        let mode = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .map(crate::prompt_compressor::EfficientMode::parse_config)
+            .unwrap_or_default();
+        if mode != crate::prompt_compressor::EfficientMode::Off {
+            let r = crate::prompt_compressor::compress(user_message, mode);
+            if r.tokens_saved() > 0 {
+                let ratio_pct = 100u64.saturating_sub(
+                    (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
+                );
+                compression_savings_pct = ratio_pct.min(100) as u8;
+                // $3/M input is the Claude Sonnet 4.6 list price; actual savings vary by model.
+                let est_savings_usd = r.tokens_saved() as f64 / 1_000_000.0 * 3.0;
+                info!(
+                    orig_tok = r.original_tokens,
+                    compressed_tok = r.compressed_tokens,
+                    saved_tok = r.tokens_saved(),
+                    savings_pct = ratio_pct,
+                    est_savings_usd = format!("{est_savings_usd:.6}"),
+                    "prompt:compressed"
+                );
+            }
+            Some(r.text)
+        } else {
+            None
+        }
+    };
+    // Keep the compressed text for diff UI (returned in AgentLoopResult for dashboard).
+    let compressed_input: Option<String> = if compression_savings_pct > 0 {
+        _compressed_msg.clone()
+    } else {
+        None
+    };
+    let session_user_message: &str = _compressed_msg.as_deref().unwrap_or(user_message);
+
     // Add the user message to session history.
     // When content blocks are provided (e.g. text + image from a channel),
     // use multimodal message format so the LLM receives the image for vision.
     if let Some(blocks) = user_content_blocks {
         session.messages.push(Message::user_with_blocks(blocks));
     } else {
-        session.messages.push(Message::user(user_message));
+        session.messages.push(Message::user(session_user_message));
     }
 
     // Build the messages for the LLM, filtering system messages
@@ -648,6 +702,7 @@ pub async fn run_agent_loop(
     let mut llm_fallback_note: Option<String> = None;
 
     let mut btw_rx = btw_rx;
+    let mut redirect_rx = redirect_rx;
     for iteration in 0..max_iterations {
         debug!(iteration, "Agent loop iteration");
 
@@ -658,6 +713,37 @@ pub async fn run_agent_loop(
                 info!("Injecting /btw context ({} chars)", btw_text.len());
                 messages.push(openfang_types::message::Message::user(format!(
                     "[btw] {btw_text}"
+                )));
+            }
+        }
+
+        // Drain any /redirect override the user sent. Unlike /btw, a redirect prunes
+        // recent assistant and tool messages to break the agent's current momentum,
+        // then injects a high-priority system message with the new directive.
+        if let Some(ref mut rx) = redirect_rx {
+            if let Ok(redirect_text) = rx.try_recv() {
+                info!(
+                    "Applying /redirect override ({} chars)",
+                    redirect_text.len()
+                );
+                // Prune the last ~8 assistant messages from the working context.
+                // We walk backwards and remove up to 8 assistant-role messages so the
+                // LLM doesn't simply continue its previous plan.
+                let mut pruned = 0usize;
+                let mut i = messages.len();
+                while i > 0 && pruned < 8 {
+                    i -= 1;
+                    if messages[i].role == Role::Assistant {
+                        messages.remove(i);
+                        pruned += 1;
+                    }
+                }
+                if pruned > 0 {
+                    info!("Pruned {pruned} assistant messages for /redirect");
+                }
+                // Inject the override as a system message so it carries maximum weight.
+                messages.push(Message::system(format!(
+                    "[REDIRECT] STOP your current plan immediately. Do not continue previous steps. New directive from user: {redirect_text}"
                 )));
             }
         }
@@ -782,6 +868,8 @@ pub async fn run_agent_loop(
                         },
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                        compression_savings_pct,
+                        compressed_input: compressed_input.clone(),
                     });
                 }
 
@@ -961,6 +1049,8 @@ pub async fn run_agent_loop(
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
+                    compression_savings_pct,
+                    compressed_input: compressed_input.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -1247,6 +1337,8 @@ pub async fn run_agent_loop(
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
+                            compression_savings_pct,
+                            compressed_input: compressed_input.clone(),
                         });
                     }
                 }
@@ -1356,6 +1448,8 @@ pub async fn run_agent_loop(
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                        compression_savings_pct,
+                        compressed_input: compressed_input.clone(),
                     });
                 }
                 // Model hit token limit — add partial response and continue
@@ -1410,6 +1504,8 @@ pub async fn run_agent_loop(
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
+        compression_savings_pct,
+        compressed_input,
     })
 }
 
@@ -1929,6 +2025,7 @@ pub async fn run_agent_loop_streaming(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
 ) -> OpenFangResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting streaming agent loop");
 
@@ -2013,13 +2110,61 @@ pub async fn run_agent_loop_streaming(
         system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
     }
 
+    // Ultra Cost-Efficient Mode: compress user message before LLM context (streaming path).
+    // See run_agent_loop for the full explanation; same logic applies here.
+    let mut compression_savings_pct: u8 = 0;
+    let _compressed_msg_s: Option<String> = {
+        let mode = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .map(crate::prompt_compressor::EfficientMode::parse_config)
+            .unwrap_or_default();
+        if mode != crate::prompt_compressor::EfficientMode::Off {
+            let r = crate::prompt_compressor::compress(user_message, mode);
+            if r.tokens_saved() > 0 {
+                let ratio_pct = 100u64.saturating_sub(
+                    (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
+                );
+                compression_savings_pct = ratio_pct.min(100) as u8;
+                info!(
+                    orig_tok = r.original_tokens,
+                    compressed_tok = r.compressed_tokens,
+                    savings_pct = ratio_pct,
+                    "prompt:compressed (streaming)"
+                );
+            }
+            Some(r.text)
+        } else {
+            None
+        }
+    };
+    let compressed_input: Option<String> = if compression_savings_pct > 0 {
+        _compressed_msg_s.clone()
+    } else {
+        None
+    };
+    let session_user_message_s: &str = _compressed_msg_s.as_deref().unwrap_or(user_message);
+
+    // Emit compression stats as the first stream event so the client can display
+    // the reduction percentage and diff button before the response arrives.
+    if compression_savings_pct > 0 {
+        let compressed_text_for_event = compressed_input.clone().unwrap_or_default();
+        let _ = stream_tx
+            .send(StreamEvent::CompressionStats {
+                savings_pct: compression_savings_pct,
+                compressed_text: compressed_text_for_event,
+            })
+            .await;
+    }
+
     // Add the user message to session history.
     // When content blocks are provided (e.g. text + image from a channel),
     // use multimodal message format so the LLM receives the image for vision.
     if let Some(blocks) = user_content_blocks {
         session.messages.push(Message::user_with_blocks(blocks));
     } else {
-        session.messages.push(Message::user(user_message));
+        session.messages.push(Message::user(session_user_message_s));
     }
 
     let llm_messages: Vec<Message> = session
@@ -2116,6 +2261,7 @@ pub async fn run_agent_loop_streaming(
     let mut llm_fallback_note: Option<String> = None;
 
     let mut btw_rx = btw_rx;
+    let mut redirect_rx = redirect_rx;
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
 
@@ -2125,6 +2271,35 @@ pub async fn run_agent_loop_streaming(
                 info!("Injecting /btw context ({} chars)", btw_text.len());
                 messages.push(openfang_types::message::Message::user(format!(
                     "[btw] {btw_text}"
+                )));
+            }
+        }
+
+        // Drain any /redirect override the user sent. Unlike /btw, a redirect prunes
+        // recent assistant and tool messages to break the agent's current momentum,
+        // then injects a high-priority system message with the new directive.
+        if let Some(ref mut rx) = redirect_rx {
+            if let Ok(redirect_text) = rx.try_recv() {
+                info!(
+                    "Applying /redirect override ({} chars)",
+                    redirect_text.len()
+                );
+                // Prune the last ~8 assistant messages from the working context.
+                let mut pruned = 0usize;
+                let mut i = messages.len();
+                while i > 0 && pruned < 8 {
+                    i -= 1;
+                    if messages[i].role == Role::Assistant {
+                        messages.remove(i);
+                        pruned += 1;
+                    }
+                }
+                if pruned > 0 {
+                    info!("Pruned {pruned} assistant messages for /redirect");
+                }
+                // Inject the override as a system message so it carries maximum weight.
+                messages.push(Message::system(format!(
+                    "[REDIRECT] STOP your current plan immediately. Do not continue previous steps. New directive from user: {redirect_text}"
                 )));
             }
         }
@@ -2275,6 +2450,8 @@ pub async fn run_agent_loop_streaming(
                         },
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                        compression_savings_pct,
+                        compressed_input: compressed_input.clone(),
                     });
                 }
 
@@ -2448,6 +2625,8 @@ pub async fn run_agent_loop_streaming(
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
+                    compression_savings_pct,
+                    compressed_input: compressed_input.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -2616,7 +2795,39 @@ pub async fn run_agent_loop_streaming(
 
                 let (pending_tcs_s, pending_futs_s): (Vec<&&ToolCall>, Vec<_>) =
                     pending_futures_s.into_iter().unzip();
-                let parallel_results_s = futures::future::join_all(pending_futs_s).await;
+                let parallel_results_s = if pending_futs_s.is_empty() {
+                    Vec::new()
+                } else {
+                    let detail_base = pending_tcs_s
+                        .iter()
+                        .map(|tc| tc.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let detail_base = if detail_base.is_empty() {
+                        "tools".to_string()
+                    } else {
+                        detail_base
+                    };
+                    let mut interval = tokio::time::interval(Duration::from_secs(4));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    interval.tick().await;
+                    let join_fut = futures::future::join_all(pending_futs_s);
+                    tokio::pin!(join_fut);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            res = &mut join_fut => break res,
+                            _ = interval.tick() => {
+                                let _ = stream_tx
+                                    .send(StreamEvent::PhaseChange {
+                                        phase: "tool_use".to_string(),
+                                        detail: Some(format!("{detail_base} — still running…")),
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                };
 
                 let mut pending_iter_s =
                     <Vec<&&ToolCall> as IntoIterator>::into_iter(pending_tcs_s)
@@ -2738,6 +2949,8 @@ pub async fn run_agent_loop_streaming(
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
+                            compression_savings_pct,
+                            compressed_input: compressed_input.clone(),
                         });
                     }
                 }
@@ -2843,6 +3056,8 @@ pub async fn run_agent_loop_streaming(
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                        compression_savings_pct,
+                        compressed_input: compressed_input.clone(),
                     });
                 }
                 let text = response.text();
@@ -2902,6 +3117,8 @@ pub async fn run_agent_loop_streaming(
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
+        compression_savings_pct,
+        compressed_input,
     })
 }
 
@@ -3827,7 +4044,7 @@ mod tests {
 
     #[test]
     fn test_tool_timeout_constant() {
-        assert_eq!(TOOL_TIMEOUT_SECS, 120);
+        assert_eq!(TOOL_TIMEOUT_SECS, 300);
         assert_eq!(AGENT_TOOL_TIMEOUT_SECS, 600);
     }
 
@@ -3851,9 +4068,9 @@ mod tests {
         // Persistent process tools
         assert_eq!(tool_timeout_for("process_start"), Duration::from_secs(30));
         assert_eq!(tool_timeout_for("process_poll"), Duration::from_secs(30));
-        // Standard tools
-        assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
-        assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
+        // Standard tools use TOOL_TIMEOUT_SECS (300s)
+        assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(300));
+        assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(300));
     }
 
     #[test]
@@ -4020,6 +4237,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -4075,6 +4293,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -4133,6 +4352,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -4188,6 +4408,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should complete without error");
@@ -4236,6 +4457,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4362,6 +4584,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should recover via retry");
@@ -4411,6 +4634,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Loop should complete with fallback");
@@ -4468,6 +4692,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -5446,6 +5671,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Agent loop should complete");
@@ -5518,6 +5744,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -5592,6 +5819,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Normal loop should complete");
@@ -5657,6 +5885,7 @@ mod tests {
             None, // process_manager
             None, // user_content_blocks
             None, // btw_rx
+            None, // redirect_rx
         )
         .await
         .expect("Streaming loop should complete");

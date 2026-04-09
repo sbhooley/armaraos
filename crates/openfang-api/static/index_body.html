@@ -704,6 +704,42 @@
             </div>
           </div>
 
+          <!-- Token Economics card -->
+          <div class="card mb-4 animate-entry stagger-6" style="border-left:3px solid var(--accent)" x-show="budget && (budget.budget_limit_usd > 0 || budget.total_spent_usd > 0)">
+            <div class="flex justify-between items-center mb-3">
+              <div class="card-header" style="margin:0">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                Token Economics
+              </div>
+              <span class="text-xs text-dim" x-text="budget.period || 'monthly'"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px">
+              <div>
+                <div class="text-xs text-dim mb-1">Spent</div>
+                <div style="font-size:20px;font-weight:600;color:var(--accent)" x-text="formatCost(budget.total_spent_usd || 0)"></div>
+              </div>
+              <div x-show="budget.budget_limit_usd > 0">
+                <div class="text-xs text-dim mb-1">Budget Limit</div>
+                <div style="font-size:20px;font-weight:600" x-text="formatCost(budget.budget_limit_usd || 0)"></div>
+              </div>
+              <div x-show="budget.budget_limit_usd > 0">
+                <div class="text-xs text-dim mb-1">Remaining</div>
+                <div style="font-size:20px;font-weight:600" :class="(budget.budget_limit_usd - budget.total_spent_usd) <= 0 ? 'stat-value-error' : 'stat-value-success'" x-text="formatCost(Math.max(0, budget.budget_limit_usd - budget.total_spent_usd))"></div>
+              </div>
+              <div x-show="budget.budget_limit_usd > 0">
+                <div class="text-xs text-dim mb-1">Usage</div>
+                <div style="font-size:20px;font-weight:600" x-text="budget.budget_limit_usd > 0 ? Math.round((budget.total_spent_usd / budget.budget_limit_usd) * 100) + '%' : '—'"></div>
+              </div>
+            </div>
+            <div x-show="budget.budget_limit_usd > 0" class="progress-bar mt-3" style="height:6px;border-radius:3px">
+              <div class="progress-bar-fill" :style="'width:' + Math.min(100, (budget.total_spent_usd / budget.budget_limit_usd) * 100) + '%;background:' + ((budget.total_spent_usd / budget.budget_limit_usd) >= 0.9 ? 'var(--error)' : (budget.total_spent_usd / budget.budget_limit_usd) >= 0.8 ? 'var(--warning)' : 'var(--accent)')"></div>
+            </div>
+            <div class="flex gap-2 mt-3">
+              <button type="button" class="btn btn-ghost btn-sm" @click="location.hash='usage'">View Usage</button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="location.hash='settings'; setTimeout(() => Alpine.store('settingsPage') && (Alpine.store('settingsPage').tab = 'budget'), 100)">Configure Budget</button>
+            </div>
+          </div>
+
           <div class="card mb-4 overview-snapshot-card" x-show="observability && observability.agent_count !== undefined">
             <div class="card-header" style="margin:0">Operations snapshot</div>
             <div class="text-xs text-dim" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px;line-height:1.5">
@@ -881,7 +917,7 @@
 
     <!-- Page: Agents -->
     <template x-if="page === 'agents'">
-      <div x-data="agentsPage" x-init="init()" @close-chat.window="closeChat()" @page-leave.window="onAgentsPageLeave()">
+      <div x-data="agentsPage" x-init="init()" @close-chat.window="closeChat()" @page-leave.window="onAgentsPageLeave()" @open-agent-detail-from-chat="$event.detail && $event.detail.agent && showDetail($event.detail.agent)">
         <div x-show="loading" class="loading-state" style="padding:32px"><div class="spinner"></div><span>Loading agents…</span></div>
         <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s;padding:24px">
           <div class="empty-state-icon">
@@ -907,6 +943,7 @@
 
         <!-- MODE 1: Inline Chat (agent selected) -->
         <template x-if="activeChatAgent">
+          <div class="agents-chat-pane-root">
           <div x-data="chatPage" class="chat-wrapper">
             <!-- Chat header with back button -->
             <div class="page-header chat-conversation-header" x-show="currentAgent">
@@ -918,7 +955,7 @@
                 <div style="min-width:0">
                   <div class="font-bold" x-text="currentAgent ? currentAgent.name : ''"></div>
                   <div class="text-xs text-dim truncate" style="font-family:var(--font-mono);font-size:11px" x-text="currentAgent ? currentAgent.model_provider + ':' + currentAgent.model_name : ''"></div>
-                  <div class="text-xs truncate" style="max-width:min(420px,55vw);color:var(--accent);margin-top:2px" x-show="currentAgent && $store.app.agentActivityLines[currentAgent.id]" x-text="$store.app.agentActivityLines[currentAgent.id].text"></div>
+                  <div class="text-xs truncate" style="max-width:min(420px,55vw);color:var(--accent);margin-top:2px" x-show="currentAgent && $store.app.agentActivityLines[currentAgent.id]" x-text="currentAgent && $store.app.agentActivityLines[currentAgent.id] ? $store.app.agentActivityLines[currentAgent.id].text : ''"></div>
                 </div>
               </div>
               <div class="flex gap-2 items-center">
@@ -927,10 +964,26 @@
                 </span>
                 <span class="badge badge-suspended" x-show="sending" style="animation:fadeIn 0.2s;gap:4px">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite;flex-shrink:0"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                  <span x-text="currentIteration > 1 ? 'Step ' + currentIteration + ' · ' + elapsedDisplay : (elapsedSeconds > 3 ? 'Working · ' + elapsedDisplay : 'Generating...')"></span>
+                  <span x-text="
+                    currentIteration > 1
+                      ? 'Step ' + currentIteration + (llmWaitSeconds > 5 ? ' · Waiting for LLM · ' + llmWaitSeconds + 's' : ' · ' + elapsedDisplay)
+                      : (llmWaitSeconds > 5
+                          ? 'Waiting for LLM · ' + llmWaitSeconds + 's'
+                          : (elapsedSeconds > 3 ? 'Working · ' + elapsedDisplay : 'Generating...'))
+                  "></span>
                 </span>
                 <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' queued'"></span>
                 <span x-show="sessionCostUsd > 0" :title="'Session cost: $' + sessionCostUsd.toFixed(6)" style="font-size:11px;font-family:var(--font-mono);opacity:0.55;cursor:default;padding:2px 6px;border-radius:6px;background:var(--surface-raised)" x-text="'$' + sessionCostUsd.toFixed(4)"></span>
+                <!-- Eco mode quick-toggle: cycles Off → Balanced → Aggressive → Off -->
+                <button
+                  @click="cycleEcoMode()"
+                  :title="efficientMode === 'off' ? 'Compressor off — click to enable Balanced (↓40–56%)' : efficientMode === 'balanced' ? 'Compressor: Balanced (↓40–56%) — click for Aggressive' : 'Compressor: Aggressive (↓60–74%) — click to turn off'"
+                  class="eco-pill"
+                  :class="efficientMode === 'off' ? 'eco-pill-off' : efficientMode === 'balanced' ? 'eco-pill-bal' : 'eco-pill-agg'"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>
+                  <span x-text="efficientMode === 'off' ? 'eco' : efficientMode === 'balanced' ? 'eco bal' : 'eco agg'"></span>
+                </button>
                 <!-- Session switcher -->
                 <div style="position:relative">
                   <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
@@ -960,7 +1013,62 @@
                 <button class="btn btn-ghost btn-sm" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g x-show="!$store.app.focusMode"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g><g x-show="$store.app.focusMode"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></g></svg>
                 </button>
+                <button type="button" class="btn btn-ghost btn-sm" x-show="currentAgent" @click="$dispatch('open-agent-detail-from-chat', { agent: currentAgent })" title="Agent settings">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
                 <button class="btn btn-danger btn-sm" @click="killAgent()">Stop</button>
+              </div>
+            </div>
+
+            <!-- Chat telemetry strip: always visible when agent open -->
+            <div class="chat-telemetry-strip" x-show="currentAgent">
+              <!-- Context window pressure -->
+              <span class="chat-telem-item" :title="'Context window: ' + contextPressure">
+                <span class="ctx-dot" :style="'background:' + contextDotColor"></span>
+                <span
+                  x-text="contextPressure === 'low' ? 'ctx ok' : contextPressure === 'medium' ? 'ctx mid' : contextPressure === 'high' ? 'ctx high' : 'ctx full'"
+                  :style="contextPressure === 'critical' ? 'color:#ef4444;font-weight:600' : contextPressure === 'high' ? 'color:#f97316' : contextPressure === 'medium' ? 'color:#eab308' : ''"
+                ></span>
+              </span>
+              <span class="chat-telem-sep">·</span>
+              <!-- Tokens in / out -->
+              <span class="chat-telem-item" title="Session tokens: input / output">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5;flex-shrink:0"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="12" height="4" rx="1"/><rect x="3" y="17" width="7" height="4" rx="1"/></svg>
+                <span x-text="(sessionPromptTokens > 0 || sessionCompletionTokens > 0) ? formatTokenShort(sessionPromptTokens) + ' in / ' + formatTokenShort(sessionCompletionTokens) + ' out' : '— in / — out'"></span>
+              </span>
+              <span class="chat-telem-sep">·</span>
+              <!-- Last turn latency -->
+              <span class="chat-telem-item" :title="lastTurnWallMs != null ? 'Last turn: ' + lastTurnWallMs + 'ms' : 'Latency — no reply yet'">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5;flex-shrink:0"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/></svg>
+                <span x-text="lastTurnWallMs != null ? formatWallSeconds(lastTurnWallMs) : '—'"></span>
+              </span>
+              <span class="chat-telem-sep">·</span>
+              <!-- Message count -->
+              <span class="chat-telem-item" title="Messages in this session">
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5;flex-shrink:0"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span x-text="messages.filter(function(m){return m.role==='user'||m.role==='agent';}).length + ' msgs'"></span>
+              </span>
+              <!-- Eco savings — only shown when eco is active and savings recorded -->
+              <template x-if="efficientMode !== 'off' && sessionEcoSavedPct > 0">
+                <span style="display:contents">
+                  <span class="chat-telem-sep">·</span>
+                  <span class="chat-telem-item eco-telem" :title="'Avg compression saving this session (' + efficientMode + ')'">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>
+                    <span x-text="'↓' + sessionEcoSavedPct + '% saved'"></span>
+                  </span>
+                </span>
+              </template>
+            </div>
+
+            <!-- LLM provider error banner — friendly message with actionable tip -->
+            <div class="chat-error-banner" x-show="lastStreamError" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 transform -translate-y-1" x-transition:enter-end="opacity-100 transform translate-y-0">
+              <div class="chat-error-banner-inner" :class="lastErrorLooksRateLimited ? 'rate-limited-banner' : ''">
+                <span class="chat-error-icon" :class="lastErrorLooksRateLimited ? 'rate-limited' : 'error'">
+                  <svg x-show="lastErrorLooksRateLimited" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <svg x-show="!lastErrorLooksRateLimited" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                </span>
+                <span class="chat-error-text" :title="lastStreamErrorTooltip" x-text="lastStreamErrorTruncated"></span>
+                <button class="chat-error-dismiss" @click="_clearStreamErrorTelemetry()" title="Dismiss">&times;</button>
               </div>
             </div>
 
@@ -1114,9 +1222,21 @@
                           </div>
                         </template>
                         <!-- Timestamp + meta row -->
-                        <div class="message-footer-meta" style="display:flex;align-items:center;flex-wrap:wrap">
+                        <div class="message-footer-meta" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
                           <div class="message-time" x-text="formatTime(msg.ts)" x-show="msg.ts && !msg.thinking"></div>
-                          <div class="message-meta" x-text="msg.meta" x-show="msg.meta"></div>
+                          <template x-if="msg.meta && !msg.compressedInput">
+                            <div class="message-meta" x-text="msg.meta"></div>
+                          </template>
+                          <template x-if="msg.meta && msg.compressedInput">
+                            <div class="message-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                              <span x-text="msg.meta.replace(/⚡ eco[^|]*/,'').replace(/\|\s*$/,'').trim()"></span>
+                              <button
+                                @click="openEcoDiff(msg)"
+                                title="Show original vs compressed prompt — click to diff"
+                                class="eco-savings-badge"
+                              ><svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>↓<span x-text="msg.savingsPct"></span>% — diff</button>
+                            </div>
+                          </template>
                         </div>
                       </div>
                     </div>
@@ -1295,96 +1415,11 @@
                 </div>
               </div>
             </template>
+
+          </div>
           </div>
         </template>
-
-        <!-- MODE 2: Agent picker + Templates (no agent chatting) -->
-        <div x-show="!activeChatAgent" class="chat-wrapper">
-        <div class="page-header">
-          <h2 class="chat-page-heading">Chat <span class="chat-page-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread across agents"></span></h2>
-          <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" @click="openSpawnWizard()">+ New Agent</button>
-            <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
-          </div>
-        </div>
-        <div class="page-body chat-agents-page-body" style="overflow-y:auto;padding:24px">
-
-          <!-- Running agents — click to chat (user agents first; probe/cron agents collapsible below) -->
-          <div class="agents-running-block" x-show="agents.length">
-            <div x-show="chatPickerPrimaryAgents.length">
-              <div class="agents-section-label">Your Agents</div>
-              <div class="agent-picker-grid">
-                <template x-for="agent in chatPickerPrimaryAgents" :key="agent.id">
-                  <div class="agent-card-picker" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
-                    <div class="agent-card-picker-avatar">
-                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
-                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
-                    </div>
-                    <div class="agent-card-picker-body">
-                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
-                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
-                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
-                    </div>
-                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
-                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    </button>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <div x-show="chatPickerSystemAgents.length" :style="chatPickerPrimaryAgents.length ? 'margin-top:22px' : ''">
-              <button type="button" class="chat-section-toggle" @click="systemChatAgentsExpanded = !systemChatAgentsExpanded" :aria-expanded="systemChatAgentsExpanded">
-                <span class="chat-section-toggle-chevron" :style="systemChatAgentsExpanded ? 'transform:rotate(90deg)' : ''">&rsaquo;</span>
-                <span>Automation &amp; probe chats</span>
-                <span class="font-mono normal-case" style="font-size:10px;font-weight:500;opacity:0.85" x-text="'(' + chatPickerSystemAgents.length + ')'"></span>
-              </button>
-              <p class="text-xs text-dim" style="margin:-2px 0 12px 22px;line-height:1.45;max-width:520px" x-show="!systemChatAgentsExpanded">Allowlist probe, offline cron, and IR-off allow sessions — expand to open their chats.</p>
-              <div class="agent-picker-grid" x-show="systemChatAgentsExpanded" x-transition>
-                <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
-                  <div class="agent-card-picker agent-card-picker--muted" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
-                    <div class="agent-card-picker-avatar">
-                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
-                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
-                    </div>
-                    <div class="agent-card-picker-body">
-                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
-                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
-                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
-                    </div>
-                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
-                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    </button>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-
-          <!-- Quick-start templates — spawn + chat in one click -->
-          <div>
-            <div class="agents-section-label" style="margin-bottom:12px" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
-            <div class="card-grid">
-              <template x-for="t in builtinTemplates" :key="t.name">
-                <div class="card chat-template-card" style="cursor:pointer" @click="t.manifest_toml ? spawnFromTemplate(t) : spawnBuiltin(t)">
-                  <div class="flex justify-between items-center mb-1">
-                    <div class="card-header" style="margin:0;font-size:14px;font-weight:600" x-text="t.name"></div>
-                    <span class="badge badge-dim" x-text="t.category"></span>
-                  </div>
-                  <div class="text-sm" style="line-height:1.5;color:var(--text-dim)" x-text="t.description"></div>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <!-- Custom spawn modal still available -->
-          </div>
-
-          <!-- Agent detail modal with tabs (Info / Files / Config) -->
+          <!-- Agent detail modal — works inside and outside agent chat (agentsPage scope) -->
           <template x-if="showDetailModal && detailAgent">
             <div class="modal-overlay" @click.self="showDetailModal = false" @keydown.escape.window="showDetailModal = false">
               <div class="modal" style="max-width:700px">
@@ -1502,7 +1537,7 @@
                     </div>
                   </div>
                   <div class="flex gap-2 mt-4">
-                    <button class="btn btn-primary" @click="chatWithAgent(detailAgent); showDetailModal = false">Chat</button>
+                    <button class="btn btn-primary" x-show="!activeChatAgent" @click="chatWithAgent(detailAgent); showDetailModal = false">Chat</button>
                     <button class="btn btn-ghost" @click="cloneAgent(detailAgent)">Clone</button>
                     <button class="btn btn-ghost" @click="clearHistory(detailAgent)">Clear History</button>
                     <button class="btn btn-danger" @click="killAgent(detailAgent)">Stop</button>
@@ -1608,6 +1643,93 @@
               </div>
             </div>
           </template>
+
+        <!-- MODE 2: Agent picker + Templates (no agent chatting) -->
+        <div x-show="!activeChatAgent" class="chat-wrapper">
+        <div class="page-header">
+          <h2 class="chat-page-heading">Chat <span class="chat-page-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread across agents"></span></h2>
+          <div class="flex gap-2">
+            <button class="btn btn-ghost btn-sm" @click="openSpawnWizard()">+ New Agent</button>
+            <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
+          </div>
+        </div>
+        <div class="page-body chat-agents-page-body" style="overflow-y:auto;padding:24px">
+
+          <!-- Running agents — click to chat (user agents first; probe/cron agents collapsible below) -->
+          <div class="agents-running-block" x-show="agents.length">
+            <div x-show="chatPickerPrimaryAgents.length">
+              <div class="agents-section-label">Your Agents</div>
+              <div class="agent-picker-grid">
+                <template x-for="agent in chatPickerPrimaryAgents" :key="agent.id">
+                  <div class="agent-card-picker" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
+                    <div class="agent-card-picker-avatar">
+                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                    </div>
+                    <div class="agent-card-picker-body">
+                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
+                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
+                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
+                    </div>
+                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
+                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div x-show="chatPickerSystemAgents.length" :style="chatPickerPrimaryAgents.length ? 'margin-top:22px' : ''">
+              <button type="button" class="chat-section-toggle" @click="systemChatAgentsExpanded = !systemChatAgentsExpanded" :aria-expanded="systemChatAgentsExpanded">
+                <span class="chat-section-toggle-chevron" :style="systemChatAgentsExpanded ? 'transform:rotate(90deg)' : ''">&rsaquo;</span>
+                <span>Automation &amp; probe chats</span>
+                <span class="font-mono normal-case" style="font-size:10px;font-weight:500;opacity:0.85" x-text="'(' + chatPickerSystemAgents.length + ')'"></span>
+              </button>
+              <p class="text-xs text-dim" style="margin:-2px 0 12px 22px;line-height:1.45;max-width:520px" x-show="!systemChatAgentsExpanded">Allowlist probe, offline cron, and IR-off allow sessions — expand to open their chats.</p>
+              <div class="agent-picker-grid" x-show="systemChatAgentsExpanded" x-transition>
+                <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
+                  <div class="agent-card-picker agent-card-picker--muted" @click="chatWithAgent(agent)" role="button" tabindex="0" @keydown.enter.prevent="chatWithAgent(agent)" @keydown.space.prevent="chatWithAgent(agent)">
+                    <div class="agent-card-picker-avatar">
+                      <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                      <svg x-show="!agent.identity || !agent.identity.emoji" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                      <span class="agent-card-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                    </div>
+                    <div class="agent-card-picker-body">
+                      <div class="agent-card-picker-title truncate" x-text="agent.name"></div>
+                      <div class="agent-card-picker-model truncate" x-text="agent.model_name"></div>
+                      <div class="agent-card-picker-activity" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></div>
+                    </div>
+                    <span class="badge" :class="agent.state === 'Crashed' ? 'badge-muted' : ('badge-' + agent.state.toLowerCase())" x-text="agent.state === 'Crashed' ? 'idle' : agent.state" style="font-size:10px;flex-shrink:0"></span>
+                    <button type="button" class="agent-card-picker-config-btn" @click.stop="showDetail(agent)" title="Agent settings">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick-start templates — spawn + chat in one click -->
+          <div>
+            <div class="agents-section-label" style="margin-bottom:12px" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
+            <div class="card-grid">
+              <template x-for="t in builtinTemplates" :key="t.name">
+                <div class="card chat-template-card" style="cursor:pointer" @click="t.manifest_toml ? spawnFromTemplate(t) : spawnBuiltin(t)">
+                  <div class="flex justify-between items-center mb-1">
+                    <div class="card-header" style="margin:0;font-size:14px;font-weight:600" x-text="t.name"></div>
+                    <span class="badge badge-dim" x-text="t.category"></span>
+                  </div>
+                  <div class="text-sm" style="line-height:1.5;color:var(--text-dim)" x-text="t.description"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Custom spawn modal still available -->
+          </div>
+
 
           <!-- Multi-step Spawn Wizard -->
           <template x-if="showSpawnModal">
@@ -4756,6 +4878,27 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div class="text-xs text-dim" x-show="!agentRanking.length">No spending recorded today.</div>
               </div>
             </template>
+
+            <!-- Ultra Cost-Efficient Mode card (bottom of Budget tab) -->
+            <div class="card" style="margin-top:20px">
+              <h4 style="margin-bottom:4px">⚡ Ultra Cost-Efficient Mode</h4>
+              <p class="text-xs text-dim" style="margin-bottom:14px">
+                Compresses input tokens before each LLM call. Users type normally — compression runs transparently in Rust.
+                Gap between modes is wider on conversational text; dense technical prompts (with opcodes and URLs) compress less because critical content is always preserved.
+              </p>
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <select class="form-select" style="width:auto"
+                  x-model="config.efficient_mode"
+                  @change="saveEfficientMode()">
+                  <option value="off">Off — no compression</option>
+                  <option value="balanced">Balanced — ~40–56% savings · recommended</option>
+                  <option value="aggressive">Aggressive — ~60–74% savings · may trim nuance on dense text</option>
+                </select>
+                <span class="text-xs text-dim" x-show="config.efficient_mode && config.efficient_mode !== 'off'">
+                  Active · look for <strong>⚡ eco ↓X%</strong> and the <em>diff</em> button in chat responses
+                </span>
+              </div>
+            </div>
           </div>
 
           <!-- Migration tab -->
@@ -4857,7 +5000,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <p class="text-sm text-dim" style="line-height:1.7;margin-bottom:12px">
                 On launch, the desktop app <strong>automatically</strong> creates the internal venv and installs AINL (you do not need to open this tab). Release builds can ship <strong>portable Python</strong> under <code style="font-size:11px">resources/python/</code> so most users never install Python. If setup fails, your Mac or PC may only have an <strong>older</strong> Python (for example 3.9): AINL needs <strong>3.10 or newer</strong>. Use <strong>Get Python</strong> below for a one-click link to the official installer, then restart the app. Dev builds use Python 3.10+ from PATH or <code style="font-size:11px">ARMARAOS_PYTHON</code>. It writes <code style="font-size:11px">~/.armaraos/config.toml</code> <code style="font-size:11px">ainl-mcp</code> like <code style="font-size:11px">ainl install armaraos</code>. PyPI <code style="font-size:11px">ainativelang</code> 1.3+ require <strong>Python 3.10+</strong> in the venv; if setup fails, use <strong>Bootstrap AINL</strong> or set <code style="font-size:11px">ARMARAOS_PYTHON</code>. Set <code style="font-size:11px">ARMARAOS_AINL_AUTO_BOOTSTRAP=0</code> to skip automatic install on startup. After AINL is ready, it also pulls <code style="font-size:11px">demo/</code>, <code style="font-size:11px">examples/</code>, and <code style="font-size:11px">intelligence/</code> from <a href="https://github.com/sbhooley/ainativelang" target="_blank" rel="noopener noreferrer">sbhooley/ainativelang</a> (mirrored to <code style="font-size:11px">~/.armaraos/ainl-library/</code>). Set <code style="font-size:11px">ARMARAOS_AINL_LIBRARY_SYNC=0</code> to disable. First-time PyPI installs need network access; air-gapped builds should bundle the wheel under <code style="font-size:11px">resources/ainl/</code> or point pip at an internal index (<code style="font-size:11px">PIP_INDEX_URL</code>).
               </p>
-              <div x-show="ainlDesktopLoading" class="text-sm text-dim">Checking AINL…</div>
+              <div x-show="ainlDesktopLoading" class="text-sm text-dim">
+                <span x-text="ainlBootstrapProgress || 'Checking AINL…'"></span>
+              </div>
               <div x-show="!ainlDesktopLoading && $store.ainl && $store.ainl.bootstrapping && (!ainlDesktop || !ainlDesktop.ok)" class="text-sm text-dim mb-2">Installing or updating AINL in the background (runs automatically when the app starts).</div>
               <div x-show="ainlDesktopError && !ainlDesktopLoading" class="text-sm" style="color:var(--error)" x-text="ainlDesktopError"></div>
 
@@ -6885,5 +7030,50 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
 <!-- Toast notification container -->
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+<!-- Eco Diff Modal: shows original vs compressed prompt side-by-side -->
+<div id="eco-diff-modal" style="display:none;position:fixed;inset:0;z-index:9990;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface,#1a1a2e);border:1px solid var(--border,#2d2d44);border-radius:12px;max-width:860px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2d2d44)">
+      <div>
+        <span style="font-weight:600;font-size:14px">⚡ Eco Diff</span>
+        <span id="eco-diff-savings" style="margin-left:6px;font-size:13px;font-weight:600;color:var(--accent,#4ade80)"></span>
+      </div>
+      <button onclick="closeEcoDiffModal()" style="background:none;border:none;color:inherit;font-size:18px;cursor:pointer;opacity:0.6;line-height:1;padding:0 4px" title="Close (Esc)">✕</button>
+    </div>
+    <div style="padding:8px 18px;background:rgba(74,222,128,0.06);border-bottom:1px solid var(--border,#2d2d44);font-size:12px;opacity:0.75">
+      Input was compressed to reduce API costs while preserving all critical details. Users continue typing normally — ArmaraOS handles this transparently.
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;overflow:hidden">
+      <div style="padding:14px 16px;border-right:1px solid var(--border,#2d2d44);overflow-y:auto">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;opacity:0.45;margin-bottom:8px">Original</div>
+        <div id="eco-diff-original" style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;opacity:0.9"></div>
+      </div>
+      <div style="padding:14px 16px;overflow-y:auto">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--accent,#4ade80);margin-bottom:8px">Compressed</div>
+        <div id="eco-diff-compressed" style="font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;opacity:0.9"></div>
+      </div>
+    </div>
+    <div style="padding:10px 18px;border-top:1px solid var(--border,#2d2d44);font-size:11px;opacity:0.4;text-align:center">
+      Compression is extractive: sentences are kept or dropped verbatim, never rewritten. Code blocks always preserved.
+    </div>
+  </div>
+</div>
+<script>
+function openEcoDiffModal(original, compressed, savingsPct) {
+  document.getElementById('eco-diff-original').textContent = original || '';
+  document.getElementById('eco-diff-compressed').textContent = compressed || '';
+  // Show savings in the title: "⚡ Eco Diff — ↓43%"
+  document.getElementById('eco-diff-savings').textContent = savingsPct > 0 ? '— ↓' + savingsPct + '%' : '';
+  var m = document.getElementById('eco-diff-modal');
+  m.style.display = 'flex';
+  document.addEventListener('keydown', ecoDiffEscHandler);
+}
+function closeEcoDiffModal() {
+  document.getElementById('eco-diff-modal').style.display = 'none';
+  document.removeEventListener('keydown', ecoDiffEscHandler);
+}
+function ecoDiffEscHandler(e) { if (e.key === 'Escape') closeEcoDiffModal(); }
+</script>
 
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}</script>

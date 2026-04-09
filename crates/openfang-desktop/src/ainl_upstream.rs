@@ -26,6 +26,8 @@ use crate::ainl::app_ainl_root;
 use crate::ainl::AinlStatus;
 
 const UPSTREAM_MANIFEST: &str = "upstream_manifest.json";
+const SHA_CACHE_FILE: &str = "github_sha_cache.json";
+const SHA_CACHE_TTL_SECS: u64 = 3600; // 1 hour
 const GITHUB_REPO: &str = "sbhooley/ainativelang";
 const MAIN_BRANCH: &str = "main";
 const MAIN_TARBALL_URL: &str =
@@ -43,6 +45,12 @@ struct UpstreamManifest {
     synced_at_unix: u64,
     app_data_root: String,
     mirror_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ShaCacheEntry {
+    sha: String,
+    cached_at_unix: u64,
 }
 
 /// Enrich `AinlStatus` with `library_*` fields from `upstream_manifest.json` on disk.
@@ -90,7 +98,23 @@ pub fn apply_library_sync(app: &AppHandle, status: &mut AinlStatus) {
         Err(e) => {
             warn!("AINL upstream library sync failed: {e}");
             status.library_sync_ok = Some(false);
-            status.library_sync_detail = Some(e);
+            // Humanize network/offline errors for users
+            let user_msg = if e.contains("network")
+                || e.contains("connection")
+                || e.contains("timeout")
+                || e.contains("GitHub")
+                || e.contains("download")
+            {
+                format!(
+                    "Could not download AINL library from GitHub (offline or network issue).\n\
+                    This is optional - AINL will work without it.\n\
+                    Connect to the internet and restart ArmaraOS to sync demo/examples programs.\n\n\
+                    Technical detail: {e}"
+                )
+            } else {
+                e
+            };
+            status.library_sync_detail = Some(user_msg);
         }
     }
     if let Err(e) = materialize_intelligence_overlays(&openfang_home()) {
@@ -102,31 +126,106 @@ fn github_user_agent() -> String {
     format!("ArmaraOS-Desktop/{}", env!("CARGO_PKG_VERSION"))
 }
 
-/// Public `main` commit SHA for `sbhooley/ainativelang` (e.g. version UI).
-pub fn fetch_main_commit_sha() -> Result<String, String> {
-    let resp = ureq::get(COMMITS_API_MAIN)
-        .set("User-Agent", &github_user_agent())
-        .set("Accept", "application/vnd.github+json")
-        .timeout(Duration::from_secs(45))
-        .call()
-        .map_err(|e| format!("GitHub commits API: {e}"))?;
-    if resp.status() != 200 {
-        return Err(format!(
-            "GitHub commits API HTTP {} (rate limit or network)",
-            resp.status()
-        ));
+fn read_sha_cache() -> Option<ShaCacheEntry> {
+    let cache_path = openfang_home().join(SHA_CACHE_FILE);
+    let bytes = fs::read(&cache_path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_sha_cache(sha: &str) {
+    let cache_path = openfang_home().join(SHA_CACHE_FILE);
+    let entry = ShaCacheEntry {
+        sha: sha.to_string(),
+        cached_at_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&entry) {
+        let _ = fs::write(cache_path, json);
     }
-    let mut body = String::new();
-    resp.into_reader()
-        .read_to_string(&mut body)
-        .map_err(|e| format!("read GitHub body: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("parse GitHub JSON: {e}"))?;
-    let sha = v
-        .get("sha")
-        .and_then(|s| s.as_str())
-        .ok_or_else(|| "no sha in GitHub response".to_string())?
-        .to_string();
+}
+
+fn is_cache_fresh(entry: &ShaCacheEntry) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(entry.cached_at_unix) < SHA_CACHE_TTL_SECS
+}
+
+/// Fetch with retry and exponential backoff when rate-limited.
+fn fetch_sha_from_github_with_retry() -> Result<String, String> {
+    let mut backoff_ms = 2000u64;
+    for attempt in 1..=3 {
+        let resp = ureq::get(COMMITS_API_MAIN)
+            .set("User-Agent", &github_user_agent())
+            .set("Accept", "application/vnd.github+json")
+            .timeout(Duration::from_secs(45))
+            .call();
+
+        match resp {
+            Ok(r) => {
+                if r.status() == 200 {
+                    let mut body = String::new();
+                    r.into_reader()
+                        .read_to_string(&mut body)
+                        .map_err(|e| format!("read GitHub body: {e}"))?;
+                    let v: serde_json::Value = serde_json::from_str(&body)
+                        .map_err(|e| format!("parse GitHub JSON: {e}"))?;
+                    let sha = v
+                        .get("sha")
+                        .and_then(|s| s.as_str())
+                        .ok_or_else(|| "no sha in GitHub response".to_string())?
+                        .to_string();
+                    return Ok(sha);
+                }
+                // Rate limit or other HTTP error
+                if (r.status() == 403 || r.status() == 429) && attempt < 3 {
+                    info!(
+                        "GitHub rate limit (HTTP {}), retry in {}ms",
+                        r.status(),
+                        backoff_ms
+                    );
+                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    backoff_ms *= 2;
+                    continue;
+                }
+                return Err(format!(
+                    "GitHub commits API HTTP {} (rate limit or network)",
+                    r.status()
+                ));
+            }
+            Err(e) => {
+                if attempt < 3 {
+                    info!(
+                        "GitHub API error (attempt {}/3): {e}, retry in {}ms",
+                        attempt, backoff_ms
+                    );
+                    std::thread::sleep(Duration::from_millis(backoff_ms));
+                    backoff_ms *= 2;
+                    continue;
+                }
+                return Err(format!("GitHub commits API: {e}"));
+            }
+        }
+    }
+    Err("GitHub API retry exhausted".to_string())
+}
+
+/// Public `main` commit SHA for `sbhooley/ainativelang` (e.g. version UI).
+/// Uses a 1-hour cache to avoid hitting rate limits.
+pub fn fetch_main_commit_sha() -> Result<String, String> {
+    // Check cache first
+    if let Some(entry) = read_sha_cache() {
+        if is_cache_fresh(&entry) {
+            return Ok(entry.sha);
+        }
+    }
+
+    // Cache miss or stale: fetch with retry
+    let sha = fetch_sha_from_github_with_retry()?;
+    write_sha_cache(&sha);
     Ok(sha)
 }
 

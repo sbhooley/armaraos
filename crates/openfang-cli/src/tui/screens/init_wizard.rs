@@ -1113,7 +1113,7 @@ complex_threshold = 500
     let schema = openfang_types::config::CONFIG_SCHEMA_VERSION;
     let config = format!(
         r#"# OpenFang Agent OS configuration
-# See https://github.com/RightNow-AI/openfang for documentation
+# See https://github.com/sbhooley/armaraos for documentation
 
 api_listen = "127.0.0.1:4200"
 config_schema_version = {schema}
@@ -1202,10 +1202,10 @@ fn draw(f: &mut Frame, area: Rect, state: &mut State) {
     ])
     .split(content);
 
-    // Header: "OpenFang Init  Step X of 7"
+    // Header: "ArmaraOS Init  Step X of 7"
     let header = Line::from(vec![
         Span::styled(
-            "OpenFang",
+            "ArmaraOS",
             Style::default()
                 .fg(theme::ACCENT)
                 .add_modifier(Modifier::BOLD),

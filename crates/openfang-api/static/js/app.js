@@ -367,7 +367,9 @@ document.addEventListener('alpine:init', function() {
     agentActivityLines: {},
     /** Dashboard hash route (mirrors root `page`) for unread / chat visibility. */
     dashboardPage: 'agents',
-    /** Pinned agent IDs (floated to top of Quick Open sidebar list). */
+    /** Pinned agent IDs (floated to top of Quick Open sidebar list).
+     * Seeded from localStorage for instant display; authoritative copy is server-side
+     * in ui-prefs.json so it survives reinstalls and upgrades. */
     pinnedAgentIds: (function() { try { return JSON.parse(localStorage.getItem('armaraos-pinned-agents') || '[]'); } catch(e) { return []; } })(),
     /** When inline chat is open on #agents, the agent id being viewed (null = picker). */
     agentsPageChatAgentId: null,
@@ -495,6 +497,23 @@ document.addEventListener('alpine:init', function() {
       } catch (e) { /* ignore */ }
     },
 
+    /** Load UI preferences from server (pinned agents etc.) and merge into local state. */
+    async loadUiPrefs() {
+      try {
+        var prefs = await OpenFangAPI.get('/api/ui-prefs');
+        if (Array.isArray(prefs.pinned_agents)) {
+          this.pinnedAgentIds = prefs.pinned_agents;
+          try { localStorage.setItem('armaraos-pinned-agents', JSON.stringify(prefs.pinned_agents)); } catch(e) { /* ignore */ }
+        }
+      } catch(e) { /* keep localStorage-seeded values on failure */ }
+    },
+
+    /** Persist current UI prefs to the server (fire-and-forget). */
+    _saveUiPrefs() {
+      var prefs = { pinned_agents: this.pinnedAgentIds || [] };
+      OpenFangAPI.put('/api/ui-prefs', prefs).catch(function() { /* ignore */ });
+    },
+
     /** Pin or unpin an agent in the Quick Open sidebar list. */
     togglePinAgent(agentId) {
       if (!agentId) return;
@@ -505,6 +524,7 @@ document.addEventListener('alpine:init', function() {
         : prev.concat([id]);
       this.pinnedAgentIds = next;
       try { localStorage.setItem('armaraos-pinned-agents', JSON.stringify(next)); } catch (e) { /* ignore */ }
+      this._saveUiPrefs();
     },
 
     isAgentPinned(agentId) {
@@ -1026,6 +1046,7 @@ function app() {
       Alpine.store('app').refreshApprovals();
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
+      Alpine.store('app').loadUiPrefs();
       setInterval(function() {
         self.pollStatus();
         Alpine.store('app').refreshApprovals();

@@ -107,13 +107,19 @@ var OpenFangToast = (function() {
     okBtn.focus();
   }
 
+  /** Shown before PUT /api/agents/:id/model (kernel clears canonical session). */
+  function modelProviderChangeWarningText() {
+    return 'Changing the model or provider clears this agent\'s canonical session memory (unlike editing the system prompt or tool filters). Your chat transcript usually stays on screen, but model-side session continuity resets. Continue?';
+  }
+
   return {
     toast: toast,
     success: success,
     error: error,
     warn: warn,
     info: info,
-    confirm: confirm
+    confirm: confirm,
+    modelProviderChangeWarningText: modelProviderChangeWarningText
   };
 })();
 

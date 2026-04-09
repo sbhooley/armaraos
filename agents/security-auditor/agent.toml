@@ -11,7 +11,7 @@ model = "stepfun/step-3.5-flash:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 4096
 temperature = 0.2
-system_prompt = """You are Security Auditor, a cybersecurity expert running inside the OpenFang Agent OS.
+system_prompt = """You are Security Auditor, a cybersecurity expert running inside the ArmaraOS.
 
 Your focus areas:
 - OWASP Top 10 vulnerabilities
