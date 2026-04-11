@@ -1,6 +1,6 @@
 # Desktop release smoke (Tauri)
 
-Use this after changes that touch the embedded dashboard, AINL bootstrap, or SSE. For architecture and updater signing, see [`desktop.md`](desktop.md). For **OS trust prompts** (macOS Gatekeeper, Windows SmartScreen) and signing options, see **[desktop-code-signing.md](desktop-code-signing.md)**. For AINL venv/bootstrap checks only, see [`DESKTOP_AINL_SMOKE.md`](DESKTOP_AINL_SMOKE.md).
+Use this after changes that touch the embedded dashboard, AINL bootstrap, or SSE. For **bump → tag → changelog** workflow, see **[RELEASING.md](RELEASING.md)**. For architecture and updater signing, see [`desktop.md`](desktop.md). For **OS trust prompts** (macOS Gatekeeper, Windows SmartScreen) and signing options, see **[desktop-code-signing.md](desktop-code-signing.md)**. For AINL venv/bootstrap checks only, see [`DESKTOP_AINL_SMOKE.md`](DESKTOP_AINL_SMOKE.md).
 
 ## Build
 
@@ -29,8 +29,8 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 
 | Tag shape | Example | Website behavior |
 |-----------|---------|------------------|
-| **Stable** (no semver pre-release segment) | `v0.7.1` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
-| **Prerelease** (semver pre-release after `-`) | `v0.7.1-beta.1` | Updates **`beta.json`** and copies new binaries; **does not** delete or overwrite **`latest.json`**, so stable users stay on the previous stable until you ship a stable tag. |
+| **Stable** (no semver pre-release segment) | `v0.7.2` | Replaces the whole `public/downloads/armaraos/` tree (except `README.md`), writes **`latest.json`** and **`beta.json`** (same manifest until you split feeds). |
+| **Prerelease** (semver pre-release after `-`) | `v0.7.2-beta.1` | Updates **`beta.json`** and copies new binaries; **does not** delete or overwrite **`latest.json`**, so stable users stay on the previous stable until you ship a stable tag. |
 
 **One-time setup (armaraos repo secrets):** add **`AINLATIVELANGWEB_DEPLOY_TOKEN`** — a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with **Contents: Read and write** on repository **`sbhooley/ainativelangweb`** only. Without this secret, the sync job fails (desktop builds and GitHub Release still succeed).
 

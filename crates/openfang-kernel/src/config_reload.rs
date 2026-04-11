@@ -1,7 +1,7 @@
 //! Config hot-reload — diffs two `KernelConfig` instances and produces a `ReloadPlan`.
 //!
 //! **Hot-reload safe**: channels, skills, usage footer, web config, browser,
-//! approval policy, cron settings, webhook triggers, extensions.
+//! approval policy, cron settings, webhook triggers, extensions, `[runtime_limits]`, `[llm]`.
 //!
 //! **No-op** (informational only): log_level, language, mode, dashboard (Home folder editor).
 //!
@@ -45,6 +45,10 @@ pub enum HotAction {
     ReloadProviderUrls,
     /// Default model changed — update in-place without restart.
     UpdateDefaultModel,
+    /// `[runtime_limits]` changed — update live snapshot for new agent turns.
+    UpdateRuntimeLimits,
+    /// `[llm]` changed — refresh driver factory timeouts / isolation and clear LRU.
+    UpdateLlmConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +219,14 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
 
     if old.max_cron_jobs != new.max_cron_jobs {
         plan.hot_actions.push(HotAction::UpdateCronConfig);
+    }
+
+    if field_changed(&old.runtime_limits, &new.runtime_limits) {
+        plan.hot_actions.push(HotAction::UpdateRuntimeLimits);
+    }
+
+    if field_changed(&old.llm, &new.llm) {
+        plan.hot_actions.push(HotAction::UpdateLlmConfig);
     }
 
     if field_changed(&old.webhook_triggers, &new.webhook_triggers) {
@@ -465,6 +477,26 @@ mod tests {
         let plan = build_reload_plan(&a, &b);
         assert!(!plan.restart_required);
         assert!(plan.hot_actions.contains(&HotAction::UpdateCronConfig));
+    }
+
+    #[test]
+    fn test_runtime_limits_hot_reload() {
+        let a = default_cfg();
+        let mut b = default_cfg();
+        b.runtime_limits.max_iterations = 50;
+        let plan = build_reload_plan(&a, &b);
+        assert!(!plan.restart_required);
+        assert!(plan.hot_actions.contains(&HotAction::UpdateRuntimeLimits));
+    }
+
+    #[test]
+    fn test_llm_config_hot_reload() {
+        let a = default_cfg();
+        let mut b = default_cfg();
+        b.llm.client_timeout_ms = 60_000;
+        let plan = build_reload_plan(&a, &b);
+        assert!(!plan.restart_required);
+        assert!(plan.hot_actions.contains(&HotAction::UpdateLlmConfig));
     }
 
     #[test]

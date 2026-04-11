@@ -19,7 +19,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.7.1-green?style=flat-square" alt="v0.7.1" />
+  <img src="https://img.shields.io/badge/version-0.7.2-green?style=flat-square" alt="v0.7.2" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -63,7 +63,7 @@ armaraos start
 
 **Config and local data** default to **`~/.armaraos/`** (overrides: **`ARMARAOS_HOME`**, legacy **`OPENFANG_HOME`**; older **`~/.openfang/`** is migrated automatically when possible). Details: [`docs/data-directory.md`](docs/data-directory.md).
 
-**Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)). For **code signing**, Gatekeeper, and SmartScreen (vs Tauri updater keys), see [`docs/desktop-code-signing.md`](docs/desktop-code-signing.md).
+**Desktop installers (GUI app):** Builds are attached to [GitHub Releases](https://github.com/sbhooley/armaraos/releases). After each stable tag, CI can mirror **`latest.json`** and binaries to **[ainativelang.com](https://ainativelang.com)** under **`/downloads/armaraos/`**; the marketing homepage and **`/download`** page list installers from that manifest (see [`docs/release-desktop.md`](docs/release-desktop.md)). **Routine version bumps and tags:** [`docs/RELEASING.md`](docs/RELEASING.md). For **code signing**, Gatekeeper, and SmartScreen (vs Tauri updater keys), see [`docs/desktop-code-signing.md`](docs/desktop-code-signing.md).
 
 ### Desktop app — anonymous product analytics (PostHog)
 

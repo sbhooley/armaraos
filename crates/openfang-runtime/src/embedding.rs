@@ -89,6 +89,14 @@ struct EmbedData {
 impl OpenAIEmbeddingDriver {
     /// Create a new OpenAI-compatible embedding driver.
     pub fn new(config: EmbeddingConfig) -> Result<Self, EmbeddingError> {
+        Self::with_http_client(config, reqwest::Client::new())
+    }
+
+    /// Same as [`Self::new`] with an explicit HTTP client (timeouts from `[llm]`).
+    pub fn with_http_client(
+        config: EmbeddingConfig,
+        client: reqwest::Client,
+    ) -> Result<Self, EmbeddingError> {
         // Infer dimensions from model name (common models)
         let dims = infer_dimensions(&config.model);
 
@@ -96,7 +104,7 @@ impl OpenAIEmbeddingDriver {
             api_key: Zeroizing::new(config.api_key),
             base_url: config.base_url,
             model: config.model,
-            client: reqwest::Client::new(),
+            client,
             dims,
         })
     }
@@ -181,6 +189,24 @@ pub fn create_embedding_driver(
     api_key_env: &str,
     custom_base_url: Option<&str>,
 ) -> Result<Box<dyn EmbeddingDriver + Send + Sync>, EmbeddingError> {
+    create_embedding_driver_with_http(
+        provider,
+        model,
+        api_key_env,
+        custom_base_url,
+        reqwest::Client::new(),
+    )
+}
+
+/// Create an embedding driver with the same resolution rules as [`create_embedding_driver`],
+/// using the given HTTP client (e.g. from [`crate::drivers::build_llm_http_client`]).
+pub fn create_embedding_driver_with_http(
+    provider: &str,
+    model: &str,
+    api_key_env: &str,
+    custom_base_url: Option<&str>,
+    http_client: reqwest::Client,
+) -> Result<Box<dyn EmbeddingDriver + Send + Sync>, EmbeddingError> {
     let api_key = if api_key_env.is_empty() {
         String::new()
     } else {
@@ -245,7 +271,7 @@ pub fn create_embedding_driver(
         base_url,
     };
 
-    let driver = OpenAIEmbeddingDriver::new(config)?;
+    let driver = OpenAIEmbeddingDriver::with_http_client(config, http_client)?;
     Ok(Box::new(driver))
 }
 

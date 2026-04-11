@@ -32,11 +32,11 @@ Curated jobs are defined in `crates/openfang-kernel/src/curated_ainl_cron.json`.
 
 | Job name | Schedule | Program | Purpose |
 |----------|----------|---------|---------|
-| `armaraos-agent-health-monitor` | `*/15 * * * *` | `agent_health_monitor.ainl` | Polls `/api/health` + `/api/agents` every 15 min; writes health status to `memory`. |
-| `armaraos-daily-budget-digest` | `0 8 * * *` | `daily_budget_digest.ainl` | Fetches token spend at 08:00 daily; writes structured digest to `memory`. |
-| `armaraos-budget-threshold-alert` | `0 * * * *` | `budget_threshold_alert.ainl` | Hourly: if spend ≥ 80% of limit, writes an alert record to `memory`. |
-| `armaraos-new-version-checker` | `0 10 * * 6` | `new_version_checker.ainl` | Weekly Saturday: checks GitHub + PyPI for new ArmaraOS/AINL versions. |
-| `armaraos-channel-session-digest` | `0 */6 * * *` | `channel_session_digest.ainl` | Every 6h: snapshots agent session activity counts to `memory`. |
+| `armaraos-agent-health-monitor` | `*/15 * * * *` | `agent_health_monitor.ainl` | Polls `/api/health` + `/api/agents` every 15 min; **JSON stdout appended to the target agent session**. |
+| `armaraos-daily-budget-digest` | `0 8 * * *` | `daily_budget_digest.ainl` | Fetches token spend at 08:00 daily; **JSON appended to the target agent session**. |
+| `armaraos-budget-threshold-alert` | `0 * * * *` | `budget_threshold_alert.ainl` | Hourly spend vs 80% of limit; **JSON appended to the target agent session**. |
+| `armaraos-new-version-checker` | `0 10 * * 6` | `new_version_checker.ainl` | Weekly Saturday: GitHub + PyPI vs local version; **JSON appended to the target agent session**. |
+| `armaraos-channel-session-digest` | `0 */6 * * *` | `channel_session_digest.ainl` | Every 6h: digest of daemon, agents, channels catalog, workflows; **JSON appended to the target agent session**. |
 | `armaraos-ainl-health-weekly` | `0 9 * * 7` | `armaraos_health_ping.ainl` | Sunday: minimal `core` smoke test confirming AINL runtime is operational. |
 | `armaraos-learning-frame-echo-quarterly` | `0 12 1 */3 *` | `learning_frame_echo.ainl` | Quarterly: validates learning-frame handling end-to-end. |
 
@@ -44,10 +44,15 @@ Curated jobs are defined in `crates/openfang-kernel/src/curated_ainl_cron.json`.
 
 | Job name | Program | Notes |
 |----------|---------|-------|
+| `armaraos-system-health-monitor` | `system_health_monitor.ainl` | Combined local health + upstream versions (does not replace `agent_health_monitor` / `new_version_checker`). |
+| `armaraos-lead-gen-pipeline` | `lead_gen_pipeline.ainl` | Monday lead-gen showcase; LearningFrame `extra` carries `seed_company` / `use_llm`. See [ainl-showcases.md](ainl-showcases.md). |
+| `armaraos-research-pipeline` | `research_pipeline.ainl` | Tuesday research showcase; `extra.research_query` must be URL-safe. |
 | `armaraos-weekly-usage-report` | `weekly_usage_report.ainl` | LLM-generated Sunday summary — requires LLM adapter enabled. |
 | `armaraos-skill-mint-stub-monthly` | `skill_mint_stub.ainl` | **Opt-in** monthly template: schedule `0 10 2 * *` (10:00 2nd of month). Passes a learning frame with `op: skill_mint` via `--frame-json`. The graph emits a minimal Markdown body (`# intent` + Episode); full SKILL Meta for interactive flows is added by the host (`skills_staging::render_skill_draft_markdown`). See [agent-automation-hardening.md](agent-automation-hardening.md#curated-ainl-skill-mint-stub-reference). |
 
-Agents can read `memory.GET "armaraos.health.*"`, `memory.GET "armaraos.budget.*"`, and `memory.GET "armaraos.updates.*"` for live operational data populated by the enabled programs above.
+**Where output goes:** scheduled `ainl run` with `json_output: true` captures **stdout** and appends it to the **owning agent’s session** (see kernel `append_cron_output_to_agent_session`). Graphs do **not** automatically call the AINL `memory` adapter or `PUT /api/memory/...` unless you add that in the `.ainl` source. For structured KV, use the HTTP memory API or agent tools from an interactive session.
+
+**Showcase index:** [ainl-showcases.md](ainl-showcases.md) lists all five operator-facing programs and sample JSON.
 
 Disable all curated registration with `ARMARAOS_DISABLE_CURATED_AINL_CRON=1`.
 

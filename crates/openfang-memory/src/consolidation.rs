@@ -3,32 +3,31 @@
 //! Reduces confidence of old, unaccessed memories and merges
 //! duplicate/similar memories.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::ConsolidationReport;
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
 
 /// Memory consolidation engine.
 #[derive(Clone)]
 pub struct ConsolidationEngine {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
     /// Decay rate: how much to reduce confidence per consolidation cycle.
     decay_rate: f32,
 }
 
 impl ConsolidationEngine {
     /// Create a new consolidation engine.
-    pub fn new(conn: Arc<Mutex<Connection>>, decay_rate: f32) -> Self {
-        Self { conn, decay_rate }
+    pub fn new(pool: MemorySqlitePool, decay_rate: f32) -> Self {
+        Self { pool, decay_rate }
     }
 
     /// Run a consolidation cycle: decay old memories.
     pub fn consolidate(&self) -> OpenFangResult<ConsolidationReport> {
         let start = std::time::Instant::now();
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         // Decay confidence of memories not accessed in the last 7 days
@@ -56,12 +55,12 @@ impl ConsolidationEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> ConsolidationEngine {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        ConsolidationEngine::new(Arc::new(Mutex::new(conn)), 0.1)
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        ConsolidationEngine::new(pool, 0.1)
     }
 
     #[test]
@@ -74,7 +73,7 @@ mod tests {
     #[test]
     fn test_consolidation_decays_old_memories() {
         let engine = setup();
-        let conn = engine.conn.lock().unwrap();
+        let conn = engine.pool.get().unwrap();
         // Insert an old memory
         let old_date = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
         conn.execute(
@@ -88,7 +87,7 @@ mod tests {
         assert_eq!(report.memories_decayed, 1);
 
         // Verify confidence was reduced
-        let conn = engine.conn.lock().unwrap();
+        let conn = engine.pool.get().unwrap();
         let confidence: f64 = conn
             .query_row(
                 "SELECT confidence FROM memories WHERE id = 'test-id'",

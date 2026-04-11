@@ -2,6 +2,8 @@
 
 Everything that must be done before tagging `v0.1.0` and shipping to users. Items are ordered by dependency — complete them top to bottom.
 
+**Routine semver releases** (version bump, `CHANGELOG`, tag, CI) after you already ship desktop builds: use **[RELEASING.md](RELEASING.md)** instead of re-walking every one-time setup item below.
+
 ---
 
 ## 1. Generate Tauri Signing Keypair

@@ -89,7 +89,7 @@ api_key_env = "OPENROUTER_API_KEY"
 max_llm_tokens_per_hour = 50000
 
 [capabilities]
-tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "channel_send", "channel_stream", "system_time", "agent_list", "agent_find"]
+tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "channels_list", "channel_send", "channel_stream", "system_time", "agent_list", "agent_find"]
 memory_read = ["*"]
 memory_write = ["self.*"]
 shell = ["*"]

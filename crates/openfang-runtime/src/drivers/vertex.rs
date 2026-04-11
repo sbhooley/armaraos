@@ -87,11 +87,15 @@ impl VertexAIDriver {
     /// * `project_id` - GCP project ID
     /// * `region` - GCP region (e.g., `us-central1`)
     pub fn new(project_id: String, region: String) -> Self {
+        Self::with_client(project_id, region, reqwest::Client::new())
+    }
+
+    pub fn with_client(project_id: String, region: String, client: reqwest::Client) -> Self {
         Self {
             project_id,
             region,
             token_cache: Arc::new(RwLock::new(TokenCache::new())),
-            client: reqwest::Client::new(),
+            client,
         }
     }
 

@@ -1,28 +1,27 @@
 //! SQLite structured store for key-value pairs and agent persistence.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::agent::{AgentEntry, AgentId};
 use openfang_types::error::{OpenFangError, OpenFangResult};
-use rusqlite::Connection;
-use std::sync::{Arc, Mutex};
 
 /// Structured store backed by SQLite for key-value operations and agent storage.
 #[derive(Clone)]
 pub struct StructuredStore {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
 }
 
 impl StructuredStore {
-    /// Create a new structured store wrapping the given connection.
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    /// Create a new structured store wrapping the given pool.
+    pub fn new(pool: MemorySqlitePool) -> Self {
+        Self { pool }
     }
 
     /// Get a value from the key-value store.
     pub fn get(&self, agent_id: AgentId, key: &str) -> OpenFangResult<Option<serde_json::Value>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT value FROM kv_store WHERE agent_id = ?1 AND key = ?2")
@@ -50,8 +49,8 @@ impl StructuredStore {
         value: serde_json::Value,
     ) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let blob =
             serde_json::to_vec(&value).map_err(|e| OpenFangError::Serialization(e.to_string()))?;
@@ -68,8 +67,8 @@ impl StructuredStore {
     /// Delete a value from the key-value store.
     pub fn delete(&self, agent_id: AgentId, key: &str) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM kv_store WHERE agent_id = ?1 AND key = ?2",
@@ -82,8 +81,8 @@ impl StructuredStore {
     /// List all key-value pairs for an agent.
     pub fn list_kv(&self, agent_id: AgentId) -> OpenFangResult<Vec<(String, serde_json::Value)>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT key, value FROM kv_store WHERE agent_id = ?1 ORDER BY key")
@@ -113,8 +112,8 @@ impl StructuredStore {
     /// Save an agent entry to the database.
     pub fn save_agent(&self, entry: &AgentEntry) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         // Use named-field encoding so new fields with #[serde(default)] are
         // handled gracefully when the struct evolves between versions.
@@ -160,8 +159,8 @@ impl StructuredStore {
     /// Load an agent entry from the database.
     pub fn load_agent(&self, agent_id: AgentId) -> OpenFangResult<Option<AgentEntry>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let mut stmt = conn
@@ -243,8 +242,8 @@ impl StructuredStore {
     /// Remove an agent from the database.
     pub fn remove_agent(&self, agent_id: AgentId) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM agents WHERE id = ?1",
@@ -262,8 +261,8 @@ impl StructuredStore {
     /// are deduplicated (first occurrence wins).
     pub fn load_all_agents(&self) -> OpenFangResult<Vec<AgentEntry>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         // Try with identity+session_id columns first, fall back gracefully
@@ -418,8 +417,8 @@ impl StructuredStore {
     /// List all agents in the database.
     pub fn list_agents(&self) -> OpenFangResult<Vec<(String, String, String)>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT id, name, state FROM agents")
@@ -444,12 +443,12 @@ impl StructuredStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> StructuredStore {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        StructuredStore::new(Arc::new(Mutex::new(conn)))
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        StructuredStore::new(pool)
     }
 
     #[test]

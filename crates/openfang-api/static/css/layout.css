@@ -298,6 +298,119 @@
   padding: 6px 10px !important;
 }
 
+/* Persistent notification center (bell) — sibling of main, fixed top-right */
+.notify-center-root {
+  position: fixed;
+  top: 10px;
+  right: 14px;
+  z-index: 102;
+  pointer-events: none;
+}
+.notify-center-root > * {
+  pointer-events: auto;
+}
+.notify-center-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.35);
+}
+.notify-bell-btn {
+  position: relative;
+  z-index: 103;
+  padding: 6px 10px !important;
+  border-radius: var(--radius-md, 8px);
+}
+.notify-bell-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  background: var(--error, #ef4444);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--bg, #0f0f14);
+}
+.notify-panel {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  z-index: 103;
+  width: min(380px, calc(100vw - 28px));
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: var(--shadow-md, 0 8px 28px rgba(0, 0, 0, 0.35));
+}
+.notify-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.notify-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.notify-panel-body {
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+  max-height: calc(70vh - 52px);
+}
+.notify-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--border);
+  background: var(--surface1, rgba(255, 255, 255, 0.03));
+}
+.notify-row--error {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.notify-row--warn {
+  border-color: rgba(250, 204, 21, 0.28);
+}
+.notify-row-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.notify-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.app-layout.focus-mode .notify-center-root {
+  display: none !important;
+}
+
+/* Visually hidden; kept in DOM for aria-live announcements */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Wide desktop — larger card grids */
 @media (min-width: 1400px) {
   .card-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }

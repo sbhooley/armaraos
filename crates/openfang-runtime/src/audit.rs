@@ -8,10 +8,10 @@
 //! the `audit_entries` table (schema V8) so the trail survives daemon restarts.
 
 use chrono::Utc;
-use rusqlite::Connection;
+use openfang_memory::MemorySqlitePool;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 /// Categories of auditable actions within the agent runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,8 @@ pub enum AuditAction {
     AuthAttempt,
     WireConnect,
     ConfigChange,
+    /// Full agent manifest applied via `PUT /api/agents/:id/update`.
+    AgentManifestUpdate,
     /// Scheduler/cron job executed.
     CronJobRun,
     /// Scheduler/cron job produced output.
@@ -95,8 +97,8 @@ fn compute_entry_hash(
 pub struct AuditLog {
     entries: Mutex<Vec<AuditEntry>>,
     tip: Mutex<String>,
-    /// Optional database connection for persistent storage.
-    db: Option<Arc<Mutex<Connection>>>,
+    /// Optional SQLite pool for persistent storage (shared with memory substrate).
+    db: Option<MemorySqlitePool>,
 }
 
 impl AuditLog {
@@ -111,17 +113,17 @@ impl AuditLog {
         }
     }
 
-    /// Creates an audit log backed by a database connection.
+    /// Creates an audit log backed by the kernel memory SQLite pool.
     ///
     /// On construction, loads all existing entries from the `audit_entries`
     /// table and verifies the Merkle chain integrity. New entries are written
     /// to both the in-memory chain and the database.
-    pub fn with_db(conn: Arc<Mutex<Connection>>) -> Self {
+    pub fn with_db(pool: MemorySqlitePool) -> Self {
         let mut entries = Vec::new();
         let mut tip = "0".repeat(64);
 
         // Load existing entries from database
-        if let Ok(db) = conn.lock() {
+        if let Ok(db) = pool.get() {
             let result = db.prepare(
                 "SELECT seq, timestamp, agent_id, action, detail, outcome, prev_hash, hash FROM audit_entries ORDER BY seq ASC",
             );
@@ -141,6 +143,7 @@ impl AuditLog {
                         "AuthAttempt" => AuditAction::AuthAttempt,
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
+                        "AgentManifestUpdate" => AuditAction::AgentManifestUpdate,
                         "CronJobRun" => AuditAction::CronJobRun,
                         "CronJobOutput" => AuditAction::CronJobOutput,
                         "CronJobFailure" => AuditAction::CronJobFailure,
@@ -172,7 +175,7 @@ impl AuditLog {
         let log = Self {
             entries: Mutex::new(entries),
             tip: Mutex::new(tip),
-            db: Some(conn),
+            db: Some(pool),
         };
 
         // Verify chain integrity on load
@@ -226,8 +229,8 @@ impl AuditLog {
         };
 
         // Persist to database if available
-        if let Some(ref db) = self.db {
-            if let Ok(conn) = db.lock() {
+        if let Some(ref pool) = self.db {
+            if let Ok(conn) = pool.get() {
                 let _ = conn.execute(
                     "INSERT INTO audit_entries (seq, timestamp, agent_id, action, detail, outcome, prev_hash, hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
@@ -389,39 +392,29 @@ mod tests {
 
     #[test]
     fn test_audit_persists_to_db() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE audit_entries (
-                seq INTEGER PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                action TEXT NOT NULL,
-                detail TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                prev_hash TEXT NOT NULL,
-                hash TEXT NOT NULL
-            )",
-        )
-        .unwrap();
+        use openfang_memory::open_in_memory_pool;
+        use openfang_types::config::MemoryConfig;
 
-        let db = Arc::new(Mutex::new(conn));
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
 
         // Record entries with DB
-        let log = AuditLog::with_db(Arc::clone(&db));
+        let log = AuditLog::with_db(pool.clone());
         log.record("agent-1", AuditAction::AgentSpawn, "spawn test", "ok");
         log.record("agent-1", AuditAction::ShellExec, "ls", "ok");
         assert_eq!(log.len(), 2);
 
         // Verify entries in database
-        let db_conn = db.lock().unwrap();
+        let db_conn = pool.get().unwrap();
         let count: i64 = db_conn
-            .query_row("SELECT COUNT(*) FROM audit_entries", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM audit_entries", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .unwrap();
         assert_eq!(count, 2);
         drop(db_conn);
 
         // Simulate restart: create new AuditLog from same DB
-        let log2 = AuditLog::with_db(Arc::clone(&db));
+        let log2 = AuditLog::with_db(pool);
         assert_eq!(log2.len(), 2);
         assert!(log2.verify_integrity().is_ok());
 

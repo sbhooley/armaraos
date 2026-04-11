@@ -227,6 +227,9 @@ impl LlmDriver for StubDriver {
 pub struct OpenFangKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
+    /// Live `[runtime_limits]` (hot-reloaded); in-flight agent loops keep the snapshot from turn start.
+    pub runtime_limits_live:
+        std::sync::Arc<std::sync::RwLock<openfang_types::runtime_limits::RuntimeLimitsConfig>>,
     /// Agent registry.
     pub registry: AgentRegistry,
     /// Capability manager.
@@ -251,6 +254,8 @@ pub struct OpenFangKernel {
     pub metering: Arc<MeteringEngine>,
     /// Default LLM driver (from kernel config).
     default_driver: Arc<dyn LlmDriver>,
+    /// LLM driver factory (LRU + HTTP timeouts + per-provider metrics).
+    pub llm_factory: Arc<openfang_runtime::drivers::LlmDriverFactory>,
     /// WASM sandbox engine (shared across all WASM agent executions).
     wasm_sandbox: WasmSandbox,
     /// RBAC authentication manager.
@@ -773,6 +778,11 @@ impl OpenFangKernel {
             openfang_extensions::credentials::CredentialResolver::new(vault, Some(&dotenv_path))
         };
 
+        let llm_factory = Arc::new(openfang_runtime::drivers::LlmDriverFactory::new(
+            config.llm.clone(),
+            Arc::new(openfang_runtime::drivers::LlmCallMetrics::new()),
+        ));
+
         // Create LLM driver.
         // For the API key, try: 1) credential resolver (vault → dotenv → env var),
         // 2) provider_api_keys mapping, 3) convention {PROVIDER}_API_KEY.
@@ -796,10 +806,11 @@ impl OpenFangKernel {
                     .cloned()
             }),
             skip_permissions: true,
+            ..Default::default()
         };
         // Primary driver failure is non-fatal: the dashboard should remain accessible
         // even if the LLM provider is misconfigured. Users can fix config via dashboard.
-        let primary_result = drivers::create_driver(&driver_config);
+        let primary_result = llm_factory.get_driver(&driver_config);
         let mut driver_chain: Vec<Arc<dyn LlmDriver>> = Vec::new();
 
         match &primary_result {
@@ -819,8 +830,9 @@ impl OpenFangKernel {
                             .map(|z: zeroize::Zeroizing<String>| z.to_string()),
                         base_url: config.provider_urls.get(provider).cloned(),
                         skip_permissions: true,
+                        ..Default::default()
                     };
-                    match drivers::create_driver(&auto_config) {
+                    match llm_factory.get_driver(&auto_config) {
                         Ok(d) => {
                             info!(
                                 provider = %provider,
@@ -867,8 +879,9 @@ impl OpenFangKernel {
                     .clone()
                     .or_else(|| config.provider_urls.get(&fb.provider).cloned()),
                 skip_permissions: true,
+                ..Default::default()
             };
-            match drivers::create_driver(&fb_config) {
+            match llm_factory.get_driver(&fb_config) {
                 Ok(d) => {
                     info!(
                         provider = %fb.provider,
@@ -1035,7 +1048,15 @@ impl OpenFangKernel {
         let embedding_driver: Option<
             Arc<dyn openfang_runtime::embedding::EmbeddingDriver + Send + Sync>,
         > = {
-            use openfang_runtime::embedding::create_embedding_driver;
+            use openfang_runtime::embedding::create_embedding_driver_with_http;
+            let embedding_http = openfang_runtime::drivers::build_llm_http_client(&config.llm)
+                .unwrap_or_else(|e| {
+                    warn!(
+                        error = %e,
+                        "Embedding: build_llm_http_client failed — using reqwest::Client::new()"
+                    );
+                    reqwest::Client::new()
+                });
             let configured_model = &config.memory.embedding_model;
             if let Some(ref provider) = config.memory.embedding_provider {
                 // Explicit config takes priority — use the configured embedding model.
@@ -1052,7 +1073,13 @@ impl OpenFangKernel {
                     .provider_urls
                     .get(provider.as_str())
                     .map(|s| s.as_str());
-                match create_embedding_driver(provider, model, api_key_env, custom_url) {
+                match create_embedding_driver_with_http(
+                    provider,
+                    model,
+                    api_key_env,
+                    custom_url,
+                    embedding_http.clone(),
+                ) {
                     Ok(d) => {
                         info!(provider = %provider, model = %model, "Embedding driver configured from memory config");
                         Some(Arc::from(d))
@@ -1084,7 +1111,13 @@ impl OpenFangKernel {
                             configured_model.as_str()
                         };
                         let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
-                        match create_embedding_driver(provider, model, env_var, custom_url) {
+                        match create_embedding_driver_with_http(
+                            provider,
+                            model,
+                            env_var,
+                            custom_url,
+                            embedding_http.clone(),
+                        ) {
                             Ok(d) => {
                                 info!(provider = %provider, model = %model, "Embedding driver auto-detected via {}", env_var);
                                 Some(Arc::from(d))
@@ -1111,7 +1144,13 @@ impl OpenFangKernel {
                             configured_model.as_str()
                         };
                         let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
-                        match create_embedding_driver(provider, model, "", custom_url) {
+                        match create_embedding_driver_with_http(
+                            provider,
+                            model,
+                            "",
+                            custom_url,
+                            embedding_http.clone(),
+                        ) {
                             Ok(d) => {
                                 info!(provider = %provider, model = %model, "Embedding driver auto-detected: {} (local)", provider);
                                 local_result = Some(Arc::from(d));
@@ -1221,9 +1260,13 @@ impl OpenFangKernel {
         let initial_broadcast = config.broadcast.clone();
         let auto_reply_engine = crate::auto_reply::AutoReplyEngine::new(config.auto_reply.clone());
 
+        let runtime_limits_live =
+            std::sync::Arc::new(std::sync::RwLock::new(config.runtime_limits.clone()));
+        let agent_home = config.home_dir.clone();
         let kernel = Self {
             config,
-            registry: AgentRegistry::new(),
+            runtime_limits_live,
+            registry: AgentRegistry::with_agent_home(agent_home),
             capabilities: CapabilityManager::new(),
             event_bus: EventBus::new(),
             scheduler: AgentScheduler::new(),
@@ -1235,6 +1278,7 @@ impl OpenFangKernel {
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
             metering,
             default_driver: driver,
+            llm_factory,
             wasm_sandbox,
             auth,
             model_catalog: std::sync::RwLock::new(model_catalog),
@@ -1325,31 +1369,33 @@ impl OpenFangKernel {
                                             || disk_manifest.mcp_servers
                                                 != entry.manifest.mcp_servers
                                             || disk_manifest.exec_policy
-                                                != entry.manifest.exec_policy;
+                                                != entry.manifest.exec_policy
+                                            || disk_manifest.tags != entry.manifest.tags
+                                            || disk_manifest.generate_identity_files
+                                                != entry.manifest.generate_identity_files
+                                            || disk_manifest.workspace != entry.manifest.workspace
+                                            || disk_manifest.priority != entry.manifest.priority;
                                         if changed {
                                             info!(
                                                 agent = %name,
                                                 "Agent TOML on disk differs from DB, merging \
-                                                 (structural fields from disk, user-editable \
-                                                 fields preserved from DB)"
+                                                 (structural fields from disk, dashboard-held \
+                                                 manifest fields preserved from DB)"
                                             );
-                                            // Preserve user-editable fields that are only
-                                            // changed via the dashboard (PATCH /config).
-                                            // These must survive upgrades and reinstalls.
-                                            let saved_system_prompt =
-                                                entry.manifest.model.system_prompt.clone();
-                                            // identity lives on AgentEntry, not AgentManifest
+                                            // Snapshot SQLite-backed manifest + identity before
+                                            // applying the newer on-disk template.
+                                            let prev_manifest = entry.manifest.clone();
                                             let saved_identity = entry.identity.clone();
 
-                                            // Take structural / capability fields from disk so
-                                            // upgrade-driven changes (new tools, exec_policy,
-                                            // mcp_servers, etc.) propagate automatically.
+                                            // Take structural fields from disk (capabilities,
+                                            // exec_policy, module, schedule, shipped tags, …).
                                             entry.manifest = disk_manifest;
-
-                                            // Re-apply user-editable fields from SQLite.
-                                            entry.manifest.model.system_prompt =
-                                                saved_system_prompt;
+                                            apply_disk_template_merge_retain_dashboard_state(
+                                                &mut entry.manifest,
+                                                &prev_manifest,
+                                            );
                                             entry.identity = saved_identity;
+                                            entry.tags.clone_from(&entry.manifest.tags);
 
                                             // Persist the merged manifest back to DB
                                             if let Err(e) = kernel.memory.save_agent(&entry) {
@@ -2327,6 +2373,13 @@ impl OpenFangKernel {
         let (redirect_tx, redirect_rx) = tokio::sync::mpsc::channel::<String>(8);
         self.redirect_channels.insert(agent_id, redirect_tx);
 
+        let runtime_limits_turn = {
+            let g = self.runtime_limits_live.read().unwrap();
+            openfang_types::runtime_limits::EffectiveRuntimeLimits::from_global_and_manifest(
+                &g, &manifest,
+            )
+        };
+
         let handle = tokio::spawn(async move {
             // Auto-compact if the session is large before running the loop
             if needs_compact {
@@ -2390,6 +2443,7 @@ impl OpenFangKernel {
                 content_blocks,
                 Some(btw_rx),
                 Some(redirect_rx),
+                runtime_limits_turn,
             )
             .await;
 
@@ -3031,6 +3085,13 @@ impl OpenFangKernel {
         let (redirect_tx, redirect_rx) = tokio::sync::mpsc::channel::<String>(8);
         self.redirect_channels.insert(agent_id, redirect_tx);
 
+        let runtime_limits_turn = {
+            let g = self.runtime_limits_live.read().unwrap();
+            openfang_types::runtime_limits::EffectiveRuntimeLimits::from_global_and_manifest(
+                &g, &manifest,
+            )
+        };
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -3064,6 +3125,7 @@ impl OpenFangKernel {
             content_blocks,
             Some(btw_rx),
             Some(redirect_rx),
+            runtime_limits_turn,
         )
         .await;
 
@@ -3553,6 +3615,97 @@ impl OpenFangKernel {
             "Agent tool filters updated"
         );
         Ok(())
+    }
+
+    /// Path to `~/.armaraos/agents/<name>/agent.toml` using this kernel's configured home directory.
+    pub fn agent_toml_path(&self, agent_name: &str) -> PathBuf {
+        self.config
+            .home_dir
+            .join("agents")
+            .join(agent_name)
+            .join("agent.toml")
+    }
+
+    /// Apply a full manifest from validated TOML (`PUT /api/agents/:id/update`).
+    ///
+    /// Preserves identity, onboarding, and turn stats. Updates capabilities, scheduler
+    /// quotas, SQLite persistence, and clears the canonical session. Refreshes proactive
+    /// triggers and restarts continuous/periodic background loops when the kernel was booted
+    /// with [`Self::set_self_handle`] (normal daemon).
+    pub fn apply_agent_manifest_update(
+        &self,
+        agent_id: AgentId,
+        mut manifest: AgentManifest,
+    ) -> KernelResult<AgentEntry> {
+        let entry = self.registry.get(agent_id).ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
+        })?;
+        if manifest.name != entry.name {
+            return Err(KernelError::OpenFang(OpenFangError::Config(format!(
+                "manifest name '{}' must match the agent's registered name '{}'",
+                manifest.name, entry.name
+            ))));
+        }
+        if manifest.workspace.is_none() {
+            manifest.workspace = entry.manifest.workspace.clone();
+        }
+        apply_budget_defaults(&self.config.budget, &mut manifest.resources);
+        apply_shell_caps_to_exec_policy(&mut manifest);
+
+        self.registry
+            .replace_manifest(agent_id, manifest)
+            .map_err(KernelError::OpenFang)?;
+
+        self.capabilities.revoke_all(agent_id);
+        let entry = self.registry.get(agent_id).ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
+        })?;
+        let caps = manifest_to_capabilities(&entry.manifest);
+        self.capabilities.grant(agent_id, caps);
+        self.scheduler
+            .register(agent_id, entry.manifest.resources.clone());
+
+        self.triggers.remove_agent_triggers(agent_id);
+        self.background.stop_agent(agent_id);
+
+        self.memory
+            .save_agent(&entry)
+            .map_err(KernelError::OpenFang)?;
+        let _ = self.memory.delete_canonical_session(agent_id);
+
+        if let Some(kernel) = self.self_handle.get().and_then(|weak| weak.upgrade()) {
+            if !matches!(entry.manifest.schedule, ScheduleMode::Reactive) {
+                kernel.start_background_for_agent(agent_id, &entry.name, &entry.manifest.schedule);
+                info!(
+                    agent_id = %agent_id,
+                    name = %entry.name,
+                    schedule = ?entry.manifest.schedule,
+                    "Reloaded background schedule after manifest PUT"
+                );
+            }
+        } else if let ScheduleMode::Proactive { conditions } = &entry.manifest.schedule {
+            // Without a daemon-style `Arc` handle, only proactive triggers can be refreshed
+            // (continuous/periodic loops require `start_background_for_agent`).
+            for condition in conditions {
+                if let Some(pattern) = background::parse_condition(condition) {
+                    let prompt = format!(
+                        "[PROACTIVE ALERT] Condition '{condition}' matched: {{{{event}}}}. \
+                         Review and take appropriate action. Agent: {}",
+                        entry.name
+                    );
+                    self.triggers.register(agent_id, pattern, prompt, 0);
+                }
+            }
+        }
+
+        self.audit_log.record(
+            agent_id.to_string(),
+            openfang_runtime::audit::AuditAction::AgentManifestUpdate,
+            format!("PUT agent manifest update name={}", entry.name),
+            "ok",
+        );
+
+        Ok(entry)
     }
 
     /// Get session token usage and estimated cost for an agent.
@@ -4219,11 +4372,13 @@ impl OpenFangKernel {
 
         // Read and parse config file (using load_config to process $include directives)
         let config_path = self.config.home_dir.join("config.toml");
-        let new_config = if config_path.exists() {
+        let mut new_config = if config_path.exists() {
             crate::config::load_config(Some(&config_path))
         } else {
             return Err("Config file not found".to_string());
         };
+
+        new_config.clamp_bounds();
 
         // Validate new config
         if let Err(errors) = validate_config_for_reload(&new_config) {
@@ -4283,6 +4438,15 @@ impl OpenFangKernel {
                         .write()
                         .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
                     *guard = Some(new_config.default_model.clone());
+                }
+                HotAction::UpdateRuntimeLimits => {
+                    info!("Hot-reload: updating runtime_limits snapshot");
+                    let mut w = self.runtime_limits_live.write().unwrap();
+                    *w = new_config.runtime_limits.clone();
+                }
+                HotAction::UpdateLlmConfig => {
+                    info!("Hot-reload: updating LLM driver factory ([llm])");
+                    self.llm_factory.apply_llm_config(new_config.llm.clone());
                 }
                 _ => {
                     // Other hot actions (channels, web, browser, extensions, etc.)
@@ -4374,9 +4538,13 @@ impl OpenFangKernel {
         workflow_id: WorkflowId,
         input: String,
     ) -> KernelResult<(WorkflowRunId, String)> {
+        let retention = {
+            let g = self.runtime_limits_live.read().unwrap();
+            openfang_types::runtime_limits::WorkflowRetentionLimits::from_global_config(&g)
+        };
         let run_id = self
             .workflows
-            .create_run(workflow_id, input)
+            .create_run(workflow_id, input, retention)
             .await
             .ok_or_else(|| {
                 KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
@@ -5387,9 +5555,10 @@ impl OpenFangKernel {
                 api_key,
                 base_url,
                 skip_permissions: true,
+                ..Default::default()
             };
 
-            match drivers::create_driver(&driver_config) {
+            match self.llm_factory.get_driver(&driver_config) {
                 Ok(d) => d,
                 Err(e) => {
                     // If fresh driver creation fails (e.g. key not yet set for this
@@ -5453,8 +5622,9 @@ impl OpenFangKernel {
                         .or_else(|| dm.base_url.clone())
                         .or_else(|| self.lookup_provider_url(&fb_provider)),
                     skip_permissions: true,
+                    ..Default::default()
                 };
-                match drivers::create_driver(&config) {
+                match self.llm_factory.get_driver(&config) {
                     Ok(d) => chain.push((d, strip_provider_prefix(&fb_model_name, &fb_provider))),
                     Err(e) => {
                         warn!("Fallback driver '{}' failed to init: {e}", fb_provider);
@@ -6138,6 +6308,16 @@ impl OpenFangKernel {
                  by the user.",
             );
         }
+        if servers.contains_key("ainl") {
+            summary.push_str(
+                "AINL MCP: Prefer mcp_ainl_ainl_validate (strict=true) on every .ainl edit before \
+                 mcp_ainl_ainl_run. Use response fields (primary_diagnostic, agent_repair_steps, \
+                 source_context) to fix errors instead of grepping random .ainl examples. Call \
+                 mcp_ainl_ainl_capabilities before inventing adapter verbs. mcp_ainl_ainl_run requires \
+                 an adapters payload when the graph uses http, fs, cache, or sqlite (not registered by default). \
+                 mcp_ainl_ainl_list_ecosystem / mcp_ainl_ainl_import_* help bootstrap new graphs.",
+            );
+        }
         summary
     }
 
@@ -6692,6 +6872,35 @@ fn append_cron_output_to_agent_session(
     }
 }
 
+/// After `dst` was replaced with a newer on-disk [`AgentManifest`], restore fields that
+/// operators edit from the dashboard / API so application upgrades do not clobber them.
+///
+/// Shipped template fields (`capabilities`, `exec_policy`, `module`, `schedule`, `tags`,
+/// …) remain from `dst` (disk); everything listed here is taken from `prev` (SQLite).
+fn apply_disk_template_merge_retain_dashboard_state(dst: &mut AgentManifest, prev: &AgentManifest) {
+    dst.name.clone_from(&prev.name);
+    dst.description.clone_from(&prev.description);
+    dst.model.clone_from(&prev.model);
+    dst.skills.clone_from(&prev.skills);
+    dst.mcp_servers.clone_from(&prev.mcp_servers);
+    dst.tool_allowlist.clone_from(&prev.tool_allowlist);
+    dst.tool_blocklist.clone_from(&prev.tool_blocklist);
+    dst.resources.clone_from(&prev.resources);
+    dst.fallback_models.clone_from(&prev.fallback_models);
+    dst.routing.clone_from(&prev.routing);
+    dst.pinned_model.clone_from(&prev.pinned_model);
+    dst.autonomous.clone_from(&prev.autonomous);
+    dst.metadata.clone_from(&prev.metadata);
+    dst.workspace.clone_from(&prev.workspace);
+    dst.generate_identity_files = prev.generate_identity_files;
+    dst.profile.clone_from(&prev.profile);
+    dst.priority = prev.priority;
+    dst.tags.clone_from(&prev.tags);
+    for (k, v) in &prev.tools {
+        dst.tools.insert(k.clone(), v.clone());
+    }
+}
+
 /// Convert a manifest's capability declarations into Capability enums.
 ///
 /// If a `profile` is set and the manifest has no explicit tools, the profile's
@@ -7081,6 +7290,19 @@ impl KernelHandle for OpenFangKernel {
         }
     }
 
+    fn live_llm_config(&self) -> Option<openfang_types::config::LlmConfig> {
+        Some(self.llm_factory.live_llm_config())
+    }
+
+    fn get_llm_driver(
+        &self,
+        config: &openfang_runtime::llm_driver::DriverConfig,
+    ) -> Result<std::sync::Arc<dyn openfang_runtime::llm_driver::LlmDriver>, String> {
+        self.llm_factory
+            .get_driver(config)
+            .map_err(|e| e.to_string())
+    }
+
     fn kill_agent(&self, agent_id: &str) -> Result<(), String> {
         let id: AgentId = agent_id
             .parse()
@@ -7322,6 +7544,49 @@ impl KernelHandle for OpenFangKernel {
         }
 
         Ok(())
+    }
+
+    fn list_channels_summary(&self) -> String {
+        let mut keys: Vec<String> = self
+            .channel_adapters
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
+        keys.sort();
+        if keys.is_empty() {
+            return "No channel adapters are registered yet. Enable a channel in ~/.armaraos/config.toml, reload config, then use channel_send / cron delivery with the adapter name (e.g. telegram, discord).".to_string();
+        }
+        let mut out = String::from(
+            "Registered outbound channel adapters (use the `channel` string with channel_send, channel_stream, or cron job `delivery`):\n",
+        );
+        for k in keys {
+            let hint = match k.as_str() {
+                "telegram" => self
+                    .config
+                    .channels
+                    .telegram
+                    .as_ref()
+                    .and_then(|c| c.default_chat_id.as_ref())
+                    .map(|_| "default_chat_id is set — recipient may be omitted in channel_send")
+                    .unwrap_or(
+                        "set [channels.telegram].default_chat_id to omit recipient in channel_send",
+                    ),
+                "discord" => self
+                    .config
+                    .channels
+                    .discord
+                    .as_ref()
+                    .and_then(|c| c.default_channel_id.as_ref())
+                    .map(|_| "default_channel_id is set")
+                    .unwrap_or("pass recipient explicitly"),
+                _ => "pass `recipient` unless your integration defines a default",
+            };
+            out.push_str(&format!("  • {k} — {hint}\n"));
+        }
+        out.push_str(
+            "\nCron `delivery` examples: {\"kind\":\"none\"}, {\"kind\":\"last_channel\"}, {\"kind\":\"channel\",\"channel\":\"telegram\",\"to\":\"<id>\"}.",
+        );
+        out
     }
 
     async fn hand_list(&self) -> Result<Vec<serde_json::Value>, String> {

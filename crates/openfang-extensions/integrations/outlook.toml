@@ -1,0 +1,32 @@
+id = "outlook"
+name = "Outlook / Office 365"
+description = "Read, send, and manage Outlook emails through Microsoft Graph API via MCP server"
+category = "productivity"
+icon = "📨"
+tags = ["email", "microsoft", "office365", "messaging", "inbox", "communication"]
+
+[transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-outlook"]
+
+[oauth]
+provider = "microsoft"
+scopes = ["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send"]
+auth_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+
+[health_check]
+interval_secs = 60
+unhealthy_threshold = 3
+
+setup_instructions = """
+1. Click 'Connect' to initiate the OAuth flow with your Microsoft account.
+2. Grant OpenFang permission to read and send emails when prompted.
+3. The connection will be established automatically after authorization.
+
+Note: This integration requires an MCP server for Outlook. If not available,
+you can use the standard email channel with IMAP/SMTP instead:
+- IMAP: outlook.office365.com:993 (TLS)
+- SMTP: smtp.office365.com:587 (STARTTLS)
+"""

@@ -39,9 +39,14 @@ The **ArmaraOS desktop** app (after AINL is installed in its internal venv) down
 - Disable with **`ARMARAOS_AINL_LIBRARY_SYNC=0`**.
 - These graphs are **reference material** for `ainl run` / MCP — they are **not** automatically wired into the Rust kernel scheduler unless you add that separately. Some programs assume a workspace layout (e.g. `memory/`); see `README_ARMARAOS.md` inside the mirror.
 
+## Shipped ArmaraOS showcases
+
+The repo [`programs/`](../programs/) tree embeds into `~/.armaraos/ainl-library/armaraos-programs/` and pairs with **curated Scheduler** jobs (`crates/openfang-kernel/src/curated_ainl_cron.json`). For a single index of the five operator-facing graphs (lead-gen, research, multi-channel digest, budget alert, system health), sample JSON, and manual `ainl validate` commands, see **[ainl-showcases.md](ainl-showcases.md)** and **[ootb-ainl.md](ootb-ainl.md)**.
+
 ## Related
 
 - [OOTB AINL](ootb-ainl.md) — embedded `programs/`, curated cron, env flags  
+- [AINL showcases](ainl-showcases.md) — five embedded graphs + curated job names  
 - [Architecture](architecture.md) — crate layout and kernel responsibilities  
 - [Desktop](desktop.md) — bundled AINL install and MCP  
 - Upstream AINL: [AI Native Lang](https://github.com/sbhooley/ainativelang) (compiler + runtime)

@@ -1209,6 +1209,8 @@ url = "https://mcp.example.com/sse"
 | `timeout_secs` | u64 | `30` | Request timeout in seconds. |
 | `env` | list of strings | `[]` | Environment variable names to pass through to the subprocess (stdio transport only). |
 
+**AINL MCP:** `ainl install-mcp --host armaraos` registers an `ainl` server whose `env` entry forwards `AINL_MCP_EXPOSURE_PROFILE`, `AINL_MCP_TOOLS`, `AINL_MCP_TOOLS_EXCLUDE`, `AINL_MCP_RESOURCES`, and `AINL_MCP_RESOURCES_EXCLUDE` from the parent process. Set values in `~/.armaraos/.env` (for example `AINL_MCP_EXPOSURE_PROFILE=inspect_only` for read-first tooling and the `ainl://authoring-cheatsheet` resource) without editing this file; leave `AINL_MCP_EXPOSURE_PROFILE` unset for the full MCP tool list.
+
 **Transport variants** (tagged union on `type`):
 
 | `type` | Fields | Description |

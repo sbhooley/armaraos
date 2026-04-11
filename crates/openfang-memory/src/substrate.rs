@@ -5,11 +5,12 @@
 
 use crate::consolidation::ConsolidationEngine;
 use crate::knowledge::KnowledgeStore;
-use crate::migration::run_migrations;
+use crate::pool::{open_file_pool, open_in_memory_pool};
 use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
 use crate::structured::StructuredStore;
 use crate::usage::UsageStore;
+use crate::MemorySqlitePool;
 
 use async_trait::async_trait;
 use openfang_types::agent::{AgentEntry, AgentId, SessionId};
@@ -19,16 +20,14 @@ use openfang_types::memory::{
     ConsolidationReport, Entity, ExportFormat, GraphMatch, GraphPattern, ImportReport, Memory,
     MemoryFilter, MemoryFragment, MemoryId, MemorySource, Relation,
 };
-use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
 /// The unified memory substrate. Implements the `Memory` trait by delegating
-/// to specialized stores backed by a shared SQLite connection.
+/// to specialized stores backed by a shared SQLite pool (`r2d2`).
 pub struct MemorySubstrate {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
     structured: StructuredStore,
     semantic: SemanticStore,
     knowledge: KnowledgeStore,
@@ -48,36 +47,33 @@ impl MemorySubstrate {
         decay_rate: f32,
         memory_config: &MemoryConfig,
     ) -> OpenFangResult<Self> {
-        let conn = Connection::open(db_path).map_err(|e| OpenFangError::Memory(e.to_string()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
-            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
-        run_migrations(&conn).map_err(|e| OpenFangError::Memory(e.to_string()))?;
-        let shared = Arc::new(Mutex::new(conn));
+        let pool = open_file_pool(db_path, memory_config)?;
+        let pool_shared = pool.clone();
 
-        let semantic = Self::create_semantic_store(Arc::clone(&shared), memory_config);
+        let semantic = Self::create_semantic_store(pool.clone(), memory_config);
 
         Ok(Self {
-            conn: Arc::clone(&shared),
-            structured: StructuredStore::new(Arc::clone(&shared)),
+            pool,
+            structured: StructuredStore::new(pool_shared.clone()),
             semantic,
-            knowledge: KnowledgeStore::new(Arc::clone(&shared)),
-            sessions: SessionStore::new(Arc::clone(&shared)),
-            usage: UsageStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(shared, decay_rate),
+            knowledge: KnowledgeStore::new(pool_shared.clone()),
+            sessions: SessionStore::new(pool_shared.clone()),
+            usage: UsageStore::new(pool_shared.clone()),
+            consolidation: ConsolidationEngine::new(pool_shared, decay_rate),
         })
     }
 
     /// Minimal read for HTTP `/api/health` — verifies SQLite is reachable (WAL + busy_timeout apply).
     pub fn sqlite_liveness_probe(&self) -> bool {
-        self.conn
-            .lock()
+        self.pool
+            .get()
             .ok()
             .is_some_and(|c| c.query_row("SELECT 1", [], |_| Ok(())).is_ok())
     }
 
     /// Create the semantic store, optionally with HTTP backend.
     fn create_semantic_store(
-        conn: Arc<Mutex<Connection>>,
+        pool: MemorySqlitePool,
         memory_config: &MemoryConfig,
     ) -> SemanticStore {
         #[cfg(feature = "http-memory")]
@@ -94,7 +90,7 @@ impl MemorySubstrate {
                                 warn!(url = %url, error = %e, "HTTP memory backend health check failed, will retry on use")
                             }
                         }
-                        return SemanticStore::new_with_http(conn, client);
+                        return SemanticStore::new_with_http(pool, client);
                     }
                     Err(e) => {
                         warn!(error = %e, "Failed to create HTTP memory client, falling back to SQLite");
@@ -108,24 +104,31 @@ impl MemorySubstrate {
         #[cfg(not(feature = "http-memory"))]
         let _ = memory_config;
 
-        SemanticStore::new(conn)
+        SemanticStore::new(pool)
     }
 
     /// Create an in-memory substrate (for testing). Always uses SQLite backend.
     pub fn open_in_memory(decay_rate: f32) -> OpenFangResult<Self> {
-        let conn =
-            Connection::open_in_memory().map_err(|e| OpenFangError::Memory(e.to_string()))?;
-        run_migrations(&conn).map_err(|e| OpenFangError::Memory(e.to_string()))?;
-        let shared = Arc::new(Mutex::new(conn));
+        let memory_config = MemoryConfig::default();
+        Self::open_in_memory_with_config(decay_rate, &memory_config)
+    }
 
+    /// In-memory substrate with explicit pool / pragma settings (tests).
+    pub fn open_in_memory_with_config(
+        decay_rate: f32,
+        memory_config: &MemoryConfig,
+    ) -> OpenFangResult<Self> {
+        let pool = open_in_memory_pool(memory_config)?;
+        let pool_shared = pool.clone();
+        let semantic = Self::create_semantic_store(pool.clone(), memory_config);
         Ok(Self {
-            conn: Arc::clone(&shared),
-            structured: StructuredStore::new(Arc::clone(&shared)),
-            semantic: SemanticStore::new(Arc::clone(&shared)),
-            knowledge: KnowledgeStore::new(Arc::clone(&shared)),
-            sessions: SessionStore::new(Arc::clone(&shared)),
-            usage: UsageStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(shared, decay_rate),
+            pool,
+            structured: StructuredStore::new(pool_shared.clone()),
+            semantic,
+            knowledge: KnowledgeStore::new(pool_shared.clone()),
+            sessions: SessionStore::new(pool_shared.clone()),
+            usage: UsageStore::new(pool_shared.clone()),
+            consolidation: ConsolidationEngine::new(pool_shared, decay_rate),
         })
     }
 
@@ -134,9 +137,14 @@ impl MemorySubstrate {
         &self.usage
     }
 
-    /// Get the shared database connection (for constructing stores from outside).
-    pub fn usage_conn(&self) -> Arc<Mutex<Connection>> {
-        Arc::clone(&self.conn)
+    /// Clone the shared SQLite pool (metering, audit, auxiliary `UsageStore` wrappers).
+    pub fn sqlite_pool(&self) -> MemorySqlitePool {
+        self.pool.clone()
+    }
+
+    /// Historical name — same as [`Self::sqlite_pool`].
+    pub fn usage_conn(&self) -> MemorySqlitePool {
+        self.sqlite_pool()
     }
 
     /// Save an agent entry to persistent storage.
@@ -329,8 +337,8 @@ impl MemorySubstrate {
     /// Load all paired devices from the database.
     pub fn load_paired_devices(&self) -> OpenFangResult<Vec<serde_json::Value>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT device_id, display_name, platform, paired_at, last_seen, push_token FROM paired_devices"
@@ -365,8 +373,8 @@ impl MemorySubstrate {
         push_token: Option<&str>,
     ) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         conn.execute(
             "INSERT OR REPLACE INTO paired_devices (device_id, display_name, platform, paired_at, last_seen, push_token) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -378,8 +386,8 @@ impl MemorySubstrate {
     /// Remove a paired device from the database.
     pub fn remove_paired_device(&self, device_id: &str) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         conn.execute(
             "DELETE FROM paired_devices WHERE device_id = ?1",
@@ -482,7 +490,7 @@ impl MemorySubstrate {
         assigned_to: Option<&str>,
         created_by: Option<&str>,
     ) -> OpenFangResult<String> {
-        let conn = Arc::clone(&self.conn);
+        let pool = self.pool.clone();
         let title = title.to_string();
         let description = description.to_string();
         let assigned_to = assigned_to.unwrap_or("").to_string();
@@ -491,7 +499,7 @@ impl MemorySubstrate {
         tokio::task::spawn_blocking(move || {
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
-            let db = conn.lock().map_err(|e| OpenFangError::Internal(e.to_string()))?;
+            let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
             db.execute(
                 "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by)
                  VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9)",
@@ -506,11 +514,11 @@ impl MemorySubstrate {
 
     /// Claim the next pending task (optionally for a specific assignee). Returns task JSON or None.
     pub async fn task_claim(&self, agent_id: &str) -> OpenFangResult<Option<serde_json::Value>> {
-        let conn = Arc::clone(&self.conn);
+        let pool = self.pool.clone();
         let agent_id = agent_id.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let db = conn.lock().map_err(|e| OpenFangError::Internal(e.to_string()))?;
+            let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
             // Find first pending task assigned to this agent, or any unassigned pending task
             let mut stmt = db.prepare(
                 "SELECT id, title, description, assigned_to, created_by, created_at
@@ -559,13 +567,13 @@ impl MemorySubstrate {
 
     /// Mark a task as completed with a result string.
     pub async fn task_complete(&self, task_id: &str, result: &str) -> OpenFangResult<()> {
-        let conn = Arc::clone(&self.conn);
+        let pool = self.pool.clone();
         let task_id = task_id.to_string();
         let result = result.to_string();
 
         tokio::task::spawn_blocking(move || {
             let now = chrono::Utc::now().to_rfc3339();
-            let db = conn.lock().map_err(|e| OpenFangError::Internal(e.to_string()))?;
+            let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
             let rows = db.execute(
                 "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1",
                 rusqlite::params![task_id, result, now],
@@ -581,11 +589,11 @@ impl MemorySubstrate {
 
     /// List tasks, optionally filtered by status.
     pub async fn task_list(&self, status: Option<&str>) -> OpenFangResult<Vec<serde_json::Value>> {
-        let conn = Arc::clone(&self.conn);
+        let pool = self.pool.clone();
         let status = status.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
-            let db = conn.lock().map_err(|e| OpenFangError::Internal(e.to_string()))?;
+            let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
             let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match &status {
                 Some(s) => (
                     "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE status = ?1 ORDER BY created_at DESC",
@@ -828,5 +836,35 @@ mod tests {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
         let claimed = substrate.task_claim("nobody").await.unwrap();
         assert!(claimed.is_none());
+    }
+
+    /// Hammer the pooled SQLite substrate from many concurrent async tasks (file-backed DB;
+    /// shared `:memory:` can still throw `SQLITE_LOCKED` under extreme parallel writers).
+    #[tokio::test]
+    async fn test_concurrent_kv_sets() {
+        use openfang_types::config::MemoryConfig;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("concurrent_kv.db");
+        let mc = MemoryConfig {
+            max_connections: 32,
+            busy_timeout_ms: 30_000,
+            ..Default::default()
+        };
+        let substrate =
+            std::sync::Arc::new(MemorySubstrate::open(&db_path, 0.1, &mc).expect("open substrate"));
+        let mut handles = Vec::new();
+        for i in 0..24u32 {
+            let s = substrate.clone();
+            handles.push(tokio::task::spawn(async move {
+                let agent_id = AgentId::new();
+                let key = format!("k{i}");
+                s.set(agent_id, &key, serde_json::json!(i)).await.unwrap();
+                let v = s.get(agent_id, &key).await.unwrap();
+                assert_eq!(v, Some(serde_json::json!(i)));
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
     }
 }

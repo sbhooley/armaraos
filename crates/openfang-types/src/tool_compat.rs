@@ -76,11 +76,21 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "task_list"
             | "event_publish"
             | "channel_stream"
+            | "channel_send"
+            | "channels_list"
+            | "cron_create"
+            | "cron_list"
+            | "cron_cancel"
             | "schedule_create"
             | "schedule_list"
             | "schedule_delete"
             | "image_analyze"
             | "location_get"
+            | "email_send"
+            | "email_read"
+            | "email_search"
+            | "email_reply"
+            | "email_draft"
     )
 }
 
@@ -179,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_is_known_openfang_tool() {
-        // Core built-in tools + location_get (not exhaustive vs. full runtime list)
+        // Core built-in tools + location_get + email tools (not exhaustive vs. full runtime list)
         let known = [
             "file_read",
             "file_write",
@@ -208,6 +218,11 @@ mod tests {
             "schedule_delete",
             "image_analyze",
             "location_get",
+            "email_send",
+            "email_read",
+            "email_search",
+            "email_reply",
+            "email_draft",
         ];
         for tool in &known {
             assert!(is_known_openfang_tool(tool), "Expected {tool} to be known");

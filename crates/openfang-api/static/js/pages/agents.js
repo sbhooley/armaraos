@@ -16,6 +16,16 @@ function tomlBasicEscape(s) {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
 }
 
+/** Fast client checks before spawn or PUT /update (server still validates). */
+function validateManifestToml(toml) {
+  var s = (toml || '').trim();
+  if (!s) return 'Manifest is empty.';
+  if (!/^\s*name\s*=/m.test(s)) return 'Manifest must include a top-level name = line.';
+  var triples = (s.match(/"""/g) || []).length;
+  if (triples % 2 !== 0) return 'Unclosed triple-quoted string (""") in manifest.';
+  return '';
+}
+
 var SPAWN_DEFAULT_PROVIDER = 'openrouter';
 var SPAWN_DEFAULT_MODEL = 'stepfun/step-3.5-flash:free';
 
@@ -91,6 +101,10 @@ function agentsPage() {
     filesLoading: false,
     configForm: {},
     configSaving: false,
+    fullManifestToml: '',
+    fullManifestLoading: false,
+    fullManifestSaving: false,
+    fullManifestSectionOpen: false,
     // -- Tool filters --
     toolFilters: { tool_allowlist: [], tool_blocklist: [] },
     toolFiltersLoading: false,
@@ -393,6 +407,7 @@ function agentsPage() {
         vibe: idn.vibe || '',
         max_iterations: (agent && agent.max_iterations) || null
       };
+      this.fullManifestToml = '';
       this.toolFilters = { tool_allowlist: [], tool_blocklist: [] };
     },
 
@@ -428,6 +443,7 @@ function agentsPage() {
         tool_allowlist: (full.tool_allowlist || []).slice(),
         tool_blocklist: (full.tool_blocklist || []).slice()
       };
+      this.fullManifestToml = full.manifest_toml != null ? String(full.manifest_toml) : '';
     },
 
     formatTurnErrorRate(ts) {
@@ -580,6 +596,12 @@ function agentsPage() {
         OpenFangToast.warn('Manifest is empty \u2014 enter agent config first');
         return;
       }
+      var spawnErr = validateManifestToml(toml);
+      if (spawnErr) {
+        this.spawning = false;
+        OpenFangToast.warn(spawnErr);
+        return;
+      }
 
       try {
         var res = await OpenFangAPI.post('/api/agents', { manifest_toml: toml });
@@ -673,7 +695,7 @@ function agentsPage() {
       this.configSaving = true;
       try {
         await OpenFangAPI.patch('/api/agents/' + this.detailAgent.id + '/config', this.configForm);
-        OpenFangToast.success('Config updated');
+        OpenFangToast.success('Config updated (partial — chat session preserved)');
         try {
           var full = await OpenFangAPI.get('/api/agents/' + this.detailAgent.id);
           this.applyAgentDetail(full);
@@ -683,6 +705,67 @@ function agentsPage() {
         OpenFangToast.error('Failed to save config: ' + openFangErrText(e));
       }
       this.configSaving = false;
+    },
+
+    async reloadFullManifestToml() {
+      if (!this.detailAgent) return;
+      this.fullManifestLoading = true;
+      try {
+        var full = await OpenFangAPI.get('/api/agents/' + this.detailAgent.id);
+        this.applyAgentDetail(full);
+      } catch (e) {
+        OpenFangToast.error('Could not load manifest: ' + openFangErrText(e));
+      }
+      this.fullManifestLoading = false;
+    },
+
+    promptApplyFullManifest() {
+      var self = this;
+      var err = validateManifestToml(this.fullManifestToml);
+      if (err) {
+        OpenFangToast.warn(err);
+        return;
+      }
+      var msg =
+        'Replace the entire running manifest for "' + (this.detailAgent && this.detailAgent.name) + '"?\n\n' +
+        '• Clears this agent\'s canonical session memory (chat transcript may still appear in the UI).\n' +
+        '• Reloads autonomous schedules in-process (no daemon restart).\n' +
+        '• Writes an audit entry (AgentManifestUpdate) for compliance.\n\n' +
+        'For small edits (prompt, model, identity), use Save Config above instead — it does not clear the session.';
+      OpenFangToast.confirm(
+        'Apply full manifest?',
+        msg,
+        function() { self.applyFullManifestPut(); },
+        { danger: true, confirmLabel: 'Apply full manifest' }
+      );
+    },
+
+    async applyFullManifestPut() {
+      if (!this.detailAgent) return;
+      var err = validateManifestToml(this.fullManifestToml);
+      if (err) {
+        OpenFangToast.warn(err);
+        return;
+      }
+      this.fullManifestSaving = true;
+      try {
+        var res = await OpenFangAPI.put('/api/agents/' + this.detailAgent.id + '/update', {
+          manifest_toml: this.fullManifestToml
+        });
+        var line1 = 'Full manifest applied.';
+        if (res && res.note) line1 += '\n' + res.note;
+        var line2 =
+          '\nAudit: Logs → Audit trail, or GET /api/audit/recent (AgentManifestUpdate).';
+        OpenFangToast.success(line1 + line2, 10000);
+        try {
+          var full = await OpenFangAPI.get('/api/agents/' + this.detailAgent.id);
+          this.applyAgentDetail(full);
+        } catch (e2) { /* ignore */ }
+        await Alpine.store('app').refreshAgents();
+      } catch (e) {
+        OpenFangToast.error('Full manifest apply failed: ' + openFangErrText(e));
+      }
+      this.fullManifestSaving = false;
     },
 
     // ── Clone agent ──

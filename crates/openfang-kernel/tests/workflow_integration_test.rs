@@ -159,9 +159,12 @@ memory_write = ["self.*"]
     assert_eq!(beta.unwrap().id, beta_id);
 
     // Verify workflow run can be created
+    let retention = openfang_types::runtime_limits::WorkflowRetentionLimits::from_global_config(
+        &kernel.runtime_limits_live.read().unwrap(),
+    );
     let run_id = kernel
         .workflows
-        .create_run(wf_id, "test input".to_string())
+        .create_run(wf_id, "test input".to_string(), retention)
         .await;
     assert!(run_id.is_some());
 
@@ -219,9 +222,12 @@ memory_write = ["self.*"]
     let wf_id = kernel.register_workflow(workflow).await;
 
     // Can create run (agent resolution happens at execute time)
+    let retention = openfang_types::runtime_limits::WorkflowRetentionLimits::from_global_config(
+        &kernel.runtime_limits_live.read().unwrap(),
+    );
     let run_id = kernel
         .workflows
-        .create_run(wf_id, "hello".to_string())
+        .create_run(wf_id, "hello".to_string(), retention)
         .await;
     assert!(run_id.is_some());
 

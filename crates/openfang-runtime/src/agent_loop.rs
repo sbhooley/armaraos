@@ -18,11 +18,13 @@ use openfang_memory::session::Session;
 use openfang_memory::MemorySubstrate;
 use openfang_skills::registry::SkillRegistry;
 use openfang_types::agent::{AgentManifest, FallbackModel};
+use openfang_types::config::LlmConfig;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{Memory, MemoryFilter, MemorySource};
 use openfang_types::message::{
     ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage,
 };
+use openfang_types::runtime_limits::EffectiveRuntimeLimits;
 use openfang_types::tool::{ToolCall, ToolDefinition};
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,10 +32,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-
-/// Maximum iterations in the agent loop before giving up (when manifest has no `[autonomous].max_iterations`).
-/// Multi-step coding and web research often need >50 tool rounds; specialists should set `[autonomous]` explicitly.
-const MAX_ITERATIONS: u32 = 80;
 
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
@@ -89,13 +87,6 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
-
-/// Maximum consecutive MaxTokens continuations before returning partial response.
-/// Raised from 3 to 5 to allow longer-form generation.
-const MAX_CONTINUATIONS: u32 = 5;
-
-/// Maximum message history size before auto-trimming to prevent context overflow.
-const MAX_HISTORY_MESSAGES: usize = 60;
 
 /// Detect when the LLM claims to have performed an action (sent, posted, emailed)
 /// without actually calling any tools. Prevents hallucinated completions.
@@ -158,6 +149,45 @@ fn process_phantom_detected(text: &str, tools_called: &std::collections::HashSet
     }
 
     false
+}
+
+/// User asked to register recurring / kernel work; model implied it did so without `schedule_*` / `cron_*` tools.
+fn scheduling_phantom_detected(
+    user_message: &str,
+    assistant_text: &str,
+    tools_called: &std::collections::HashSet<String>,
+) -> bool {
+    const SCHED: &[&str] = &[
+        "schedule_create",
+        "schedule_list",
+        "schedule_delete",
+        "cron_create",
+        "cron_list",
+        "cron_cancel",
+    ];
+    if tools_called.iter().any(|n| SCHED.contains(&n.as_str())) {
+        return false;
+    }
+    let u = user_message.to_lowercase();
+    let user_intent = (u.contains("schedule") || u.contains("cron"))
+        && (u.contains("every ")
+            || u.contains("daily")
+            || u.contains("weekly")
+            || u.contains("recurring")
+            || u.contains("attach")
+            || u.contains("ainl")
+            || u.contains("timer"));
+    if !user_intent {
+        return false;
+    }
+    let a = assistant_text.to_lowercase();
+    a.contains("scheduled")
+        || a.contains("cron job")
+        || a.contains("set up a schedule")
+        || (a.contains("added to") && (a.contains("scheduler") || a.contains("schedule")))
+        || a.contains("will run every")
+        || a.contains("runs every")
+        || (a.contains("created") && a.contains("job") && a.contains("recur"))
 }
 
 /// Returns true when the agent response text indicates an intentional silent completion.
@@ -466,8 +496,17 @@ pub async fn run_agent_loop(
     user_content_blocks: Option<Vec<ContentBlock>>,
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    runtime_limits: EffectiveRuntimeLimits,
 ) -> OpenFangResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting agent loop");
+    tool_runner::MAX_AGENT_CALL_DEPTH_LIMIT
+        .scope(
+            std::cell::Cell::new(runtime_limits.max_agent_call_depth),
+            async {
+                info!(agent = %manifest.name, "Starting agent loop");
+
+                let live_llm = kernel
+                    .as_ref()
+                    .and_then(|k| k.live_llm_config());
 
     // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
     let hand_allowed_env: Vec<String> = manifest
@@ -653,8 +692,8 @@ pub async fn run_agent_loop(
     // Safety valve: trim excessively long message histories to prevent context overflow.
     // The full compaction system handles sophisticated summarization, but this prevents
     // the catastrophic case where 200+ messages cause instant context overflow.
-    if messages.len() > MAX_HISTORY_MESSAGES {
-        let trim_count = messages.len() - MAX_HISTORY_MESSAGES;
+    if messages.len() > runtime_limits.max_history_messages {
+        let trim_count = messages.len() - runtime_limits.max_history_messages;
         warn!(
             agent = %manifest.name,
             total_messages = messages.len(),
@@ -668,12 +707,12 @@ pub async fn run_agent_loop(
         messages = crate::session_repair::validate_and_repair(&messages);
     }
 
-    // Use autonomous config max_iterations if set, else default
+    // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
     let max_iterations = manifest
         .autonomous
         .as_ref()
         .map(|a| a.max_iterations)
-        .unwrap_or(MAX_ITERATIONS);
+        .unwrap_or(runtime_limits.max_iterations);
 
     // Initialize loop guard — scale circuit breaker for autonomous agents
     let loop_guard_config = {
@@ -790,12 +829,17 @@ pub async fn run_agent_loop(
 
         // Call LLM with retry, error classification, and circuit breaker
         let provider_name = manifest.model.provider.as_str();
+        let llm_fb = LlmFallbackContext {
+            llm_http: live_llm.as_ref(),
+            llm_kernel: kernel.as_ref(),
+        };
         let (mut response, fb_note) = call_with_retry(
             &*driver,
             request,
             Some(provider_name),
             None,
             &manifest.fallback_models,
+            &llm_fb,
         )
         .await?;
         if fb_note.is_some() {
@@ -935,6 +979,24 @@ pub async fn run_agent_loop(
                          You must use the appropriate tool (e.g., channel_send, web_fetch, file_write) \
                          to actually perform the action. Do not claim completion without executing tools.]"
                     ));
+                    continue;
+                } else {
+                    text
+                };
+                // Scheduling: user asked for kernel cron / recurring work; model claimed success without schedule_* / cron_*.
+                let text = if scheduling_phantom_detected(
+                    session_user_message,
+                    &text,
+                    &last_tools_called,
+                ) {
+                    warn!(agent = %manifest.name, "Scheduling phantom detected — re-prompting for schedule_create/cron_create");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: The user asked to register recurring / scheduled work with the ArmaraOS kernel scheduler. \
+                         You must call schedule_create or cron_create (or schedule_list / cron_list first). \
+                         Jobs persist under ~/.armaraos/cron_jobs.json. Do not claim crontab, launchd, or memory-only storage alone is sufficient.]",
+                    ));
+                    last_tools_called.clear();
                     continue;
                 } else {
                     text
@@ -1409,7 +1471,7 @@ pub async fn run_agent_loop(
             }
             StopReason::MaxTokens => {
                 consecutive_max_tokens += 1;
-                if consecutive_max_tokens >= MAX_CONTINUATIONS {
+                if consecutive_max_tokens >= runtime_limits.max_continuations {
                     // Return partial response instead of continuing forever
                     let text = response.text();
                     let text = if text.trim().is_empty() {
@@ -1507,6 +1569,40 @@ pub async fn run_agent_loop(
         compression_savings_pct,
         compressed_input,
     })
+            }
+        )
+        .await
+}
+
+/// Live `[llm]` timeouts and optional kernel factory for rare fallback driver paths.
+struct LlmFallbackContext<'a> {
+    llm_http: Option<&'a LlmConfig>,
+    llm_kernel: Option<&'a Arc<dyn KernelHandle>>,
+}
+
+/// Attach `[llm]` HTTP timeouts to a one-off driver config (OpenRouter fallbacks, manifest fallbacks).
+fn driver_config_with_llm_http(
+    mut cfg: DriverConfig,
+    llm_http: Option<&LlmConfig>,
+) -> DriverConfig {
+    let llm = llm_http.cloned().unwrap_or_default();
+    if let Ok(client) = crate::drivers::build_llm_http_client(&llm) {
+        cfg.http_client = Some(Arc::new(client));
+    }
+    cfg
+}
+
+/// Rare fallback drivers: use the kernel `LlmDriverFactory` when available (metrics + LRU),
+/// else `create_driver` with `[llm]` HTTP timeouts from `llm_http` / defaults.
+fn resolve_adhoc_driver(
+    fb: &LlmFallbackContext<'_>,
+    cfg: DriverConfig,
+) -> Result<Arc<dyn LlmDriver>, LlmError> {
+    if let Some(k) = fb.llm_kernel {
+        return k.get_llm_driver(&cfg).map_err(LlmError::Http);
+    }
+    let cfg = driver_config_with_llm_http(cfg, fb.llm_http);
+    crate::drivers::create_driver(&cfg)
 }
 
 /// Call an LLM driver with automatic retry on rate-limit and overload errors.
@@ -1522,6 +1618,7 @@ async fn call_with_retry(
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
+    llm_fb: &LlmFallbackContext<'_>,
 ) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     // Check circuit breaker before calling
@@ -1560,7 +1657,7 @@ async fn call_with_retry(
                     }
                     // Final attempt hit a retryable throttling error — try OpenRouter free-model
                     // fallbacks to keep UX flowing even when the primary provider is rate limited.
-                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
+                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone(), llm_fb).await {
                         return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
@@ -1582,7 +1679,7 @@ async fn call_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
-                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone()).await {
+                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone(), llm_fb).await {
                         return Ok((resp, Some(OR_NOTE.to_string())));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
@@ -1639,8 +1736,9 @@ async fn call_with_retry(
                             api_key,
                             base_url: fb.base_url.clone(),
                             skip_permissions: true,
+                            ..Default::default()
                         };
-                        let fb_driver = match crate::drivers::create_driver(&fb_config) {
+                        let fb_driver = match resolve_adhoc_driver(llm_fb, fb_config) {
                             Ok(d) => d,
                             Err(driver_err) => {
                                 warn!(
@@ -1708,6 +1806,7 @@ async fn call_with_retry(
 
 async fn try_openrouter_free_fallbacks(
     request: CompletionRequest,
+    llm_fb: &LlmFallbackContext<'_>,
 ) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
     // Models requested by product default strategy.
     const FB_MODELS: [&str; 2] = [
@@ -1721,8 +1820,9 @@ async fn try_openrouter_free_fallbacks(
         api_key,
         base_url: None,
         skip_permissions: true,
+        ..Default::default()
     };
-    let driver = crate::drivers::create_driver(&cfg).map_err(|e| {
+    let driver = resolve_adhoc_driver(llm_fb, cfg).map_err(|e| {
         OpenFangError::LlmDriver(format!("OpenRouter fallback driver init failed: {e}"))
     })?;
 
@@ -1759,6 +1859,7 @@ async fn stream_with_retry(
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
+    llm_fb: &LlmFallbackContext<'_>,
 ) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     // Check circuit breaker before calling
@@ -1798,7 +1899,8 @@ async fn stream_with_retry(
                         cooldown.record_failure(provider, false);
                     }
                     if let Ok(resp) =
-                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
+                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone(), llm_fb)
+                            .await
                     {
                         return Ok((resp, Some(OR_NOTE.to_string())));
                     }
@@ -1822,7 +1924,8 @@ async fn stream_with_retry(
                         cooldown.record_failure(provider, false);
                     }
                     if let Ok(resp) =
-                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone()).await
+                        try_openrouter_free_fallbacks_stream(request.clone(), tx.clone(), llm_fb)
+                            .await
                     {
                         return Ok((resp, Some(OR_NOTE.to_string())));
                     }
@@ -1877,8 +1980,9 @@ async fn stream_with_retry(
                             api_key,
                             base_url: fb.base_url.clone(),
                             skip_permissions: true,
+                            ..Default::default()
                         };
-                        let fb_driver = match crate::drivers::create_driver(&fb_config) {
+                        let fb_driver = match resolve_adhoc_driver(llm_fb, fb_config) {
                             Ok(d) => d,
                             Err(driver_err) => {
                                 warn!(
@@ -1944,6 +2048,7 @@ async fn stream_with_retry(
 async fn try_openrouter_free_fallbacks_stream(
     request: CompletionRequest,
     tx: mpsc::Sender<StreamEvent>,
+    llm_fb: &LlmFallbackContext<'_>,
 ) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
     const FB_MODELS: [&str; 2] = [
         "stepfun/step-3.5-flash:free",
@@ -1956,8 +2061,9 @@ async fn try_openrouter_free_fallbacks_stream(
         api_key,
         base_url: None,
         skip_permissions: true,
+        ..Default::default()
     };
-    let driver = crate::drivers::create_driver(&cfg).map_err(|e| {
+    let driver = resolve_adhoc_driver(llm_fb, cfg).map_err(|e| {
         OpenFangError::LlmDriver(format!("OpenRouter fallback driver init failed: {e}"))
     })?;
 
@@ -2026,8 +2132,17 @@ pub async fn run_agent_loop_streaming(
     user_content_blocks: Option<Vec<ContentBlock>>,
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    runtime_limits: EffectiveRuntimeLimits,
 ) -> OpenFangResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting streaming agent loop");
+    tool_runner::MAX_AGENT_CALL_DEPTH_LIMIT
+        .scope(
+            std::cell::Cell::new(runtime_limits.max_agent_call_depth),
+            async {
+                info!(agent = %manifest.name, "Starting streaming agent loop");
+
+                let live_llm = kernel
+                    .as_ref()
+                    .and_then(|k| k.live_llm_config());
 
     // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
     let hand_allowed_env: Vec<String> = manifest
@@ -2212,8 +2327,8 @@ pub async fn run_agent_loop_streaming(
     let final_response;
 
     // Safety valve: trim excessively long message histories to prevent context overflow.
-    if messages.len() > MAX_HISTORY_MESSAGES {
-        let trim_count = messages.len() - MAX_HISTORY_MESSAGES;
+    if messages.len() > runtime_limits.max_history_messages {
+        let trim_count = messages.len() - runtime_limits.max_history_messages;
         warn!(
             agent = %manifest.name,
             total_messages = messages.len(),
@@ -2227,12 +2342,12 @@ pub async fn run_agent_loop_streaming(
         messages = crate::session_repair::validate_and_repair(&messages);
     }
 
-    // Use autonomous config max_iterations if set, else default
+    // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
     let max_iterations = manifest
         .autonomous
         .as_ref()
         .map(|a| a.max_iterations)
-        .unwrap_or(MAX_ITERATIONS);
+        .unwrap_or(runtime_limits.max_iterations);
 
     // Initialize loop guard — scale circuit breaker for autonomous agents
     let loop_guard_config = {
@@ -2374,6 +2489,10 @@ pub async fn run_agent_loop_streaming(
 
         // Stream LLM call with retry, error classification, and circuit breaker
         let provider_name = manifest.model.provider.as_str();
+        let llm_fb = LlmFallbackContext {
+            llm_http: live_llm.as_ref(),
+            llm_kernel: kernel.as_ref(),
+        };
         let (mut response, fb_note) = stream_with_retry(
             &*driver,
             request,
@@ -2381,6 +2500,7 @@ pub async fn run_agent_loop_streaming(
             Some(provider_name),
             None,
             &manifest.fallback_models,
+            &llm_fb,
         )
         .await?;
         if fb_note.is_some() {
@@ -2514,6 +2634,23 @@ pub async fn run_agent_loop_streaming(
                          You must use the appropriate tool (e.g., channel_send, web_fetch, file_write) \
                          to actually perform the action. Do not claim completion without executing tools.]"
                     ));
+                    continue;
+                } else {
+                    text
+                };
+                let text = if scheduling_phantom_detected(
+                    session_user_message_s,
+                    &text,
+                    &last_tools_called,
+                ) {
+                    warn!(agent = %manifest.name, "Scheduling phantom detected (streaming) — re-prompting");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: The user asked to register recurring / scheduled work with the ArmaraOS kernel scheduler. \
+                         You must call schedule_create or cron_create (or schedule_list / cron_list first). \
+                         Jobs persist under ~/.armaraos/cron_jobs.json. Do not claim crontab, launchd, or memory-only storage alone is sufficient.]",
+                    ));
+                    last_tools_called.clear();
                     continue;
                 } else {
                     text
@@ -3018,7 +3155,7 @@ pub async fn run_agent_loop_streaming(
             }
             StopReason::MaxTokens => {
                 consecutive_max_tokens += 1;
-                if consecutive_max_tokens >= MAX_CONTINUATIONS {
+                if consecutive_max_tokens >= runtime_limits.max_continuations {
                     let text = response.text();
                     let text = if text.trim().is_empty() {
                         "[Partial response — token limit reached with no text output.]".to_string()
@@ -3120,6 +3257,9 @@ pub async fn run_agent_loop_streaming(
         compression_savings_pct,
         compressed_input,
     })
+            }
+        )
+        .await
 }
 
 /// Recover tool calls that LLMs output as plain text instead of the proper
@@ -3989,12 +4129,13 @@ mod tests {
     use super::*;
     use crate::llm_driver::{CompletionResponse, LlmError};
     use async_trait::async_trait;
+    use openfang_types::runtime_limits::EffectiveRuntimeLimits;
     use openfang_types::tool::ToolCall;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
-    fn test_max_iterations_constant() {
-        assert_eq!(MAX_ITERATIONS, 80);
+    fn test_max_iterations_default_limits() {
+        assert_eq!(EffectiveRuntimeLimits::legacy_defaults().max_iterations, 80);
     }
 
     #[test]
@@ -4038,8 +4179,11 @@ mod tests {
     }
 
     #[test]
-    fn test_max_continuations_constant() {
-        assert_eq!(MAX_CONTINUATIONS, 5);
+    fn test_max_continuations_default_limits() {
+        assert_eq!(
+            EffectiveRuntimeLimits::legacy_defaults().max_continuations,
+            5
+        );
     }
 
     #[test]
@@ -4074,8 +4218,42 @@ mod tests {
     }
 
     #[test]
-    fn test_max_history_messages() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 60);
+    fn test_max_history_messages_default_limits() {
+        assert_eq!(
+            EffectiveRuntimeLimits::legacy_defaults().max_history_messages,
+            60
+        );
+    }
+
+    #[test]
+    fn scheduling_phantom_triggers_without_schedule_tools() {
+        let tools = std::collections::HashSet::new();
+        assert!(scheduling_phantom_detected(
+            "Please schedule my ainl to run daily at 9am",
+            "Done — I've scheduled it and it will run every morning.",
+            &tools,
+        ));
+    }
+
+    #[test]
+    fn scheduling_phantom_suppressed_when_schedule_tool_ran() {
+        let mut tools = std::collections::HashSet::new();
+        tools.insert("schedule_create".to_string());
+        assert!(!scheduling_phantom_detected(
+            "Please schedule my ainl to run daily",
+            "All set.",
+            &tools,
+        ));
+    }
+
+    #[test]
+    fn scheduling_phantom_not_triggered_without_user_intent() {
+        let tools = std::collections::HashSet::new();
+        assert!(!scheduling_phantom_detected(
+            "What is cron?",
+            "Cron is a Unix job scheduler.",
+            &tools,
+        ));
     }
 
     // --- Integration tests for empty response guards ---
@@ -4238,6 +4416,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should complete without error");
@@ -4294,6 +4473,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should complete without error");
@@ -4353,6 +4533,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should complete without error");
@@ -4409,6 +4590,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should complete without error");
@@ -4458,6 +4640,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4585,6 +4768,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should recover via retry");
@@ -4635,6 +4819,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Loop should complete with fallback");
@@ -4645,11 +4830,6 @@ mod tests {
             "Expected empty response fallback (no tools executed), got: {:?}",
             result.response
         );
-    }
-
-    #[tokio::test]
-    async fn test_max_history_messages_constant() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 60);
     }
 
     #[tokio::test]
@@ -4693,6 +4873,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -5672,6 +5853,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Agent loop should complete");
@@ -5745,6 +5927,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -5820,6 +6003,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Normal loop should complete");
@@ -5886,6 +6070,7 @@ mod tests {
             None, // user_content_blocks
             None, // btw_rx
             None, // redirect_rx
+            EffectiveRuntimeLimits::legacy_defaults(),
         )
         .await
         .expect("Streaming loop should complete");

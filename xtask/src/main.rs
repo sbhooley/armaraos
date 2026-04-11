@@ -3,6 +3,8 @@
 //! This is the home for "glue" steps that don't belong in crates themselves,
 //! especially packaging-time tasks.
 
+mod load_test;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,6 +57,46 @@ enum Cmd {
         #[arg(long)]
         name: String,
     },
+    /// Env-gated HTTP load harness against a running daemon (see `docs/load-testing.md`).
+    #[command(name = "load-test")]
+    LoadTest {
+        /// API base URL (overrides `ARMARAOS_TEST_BASE_URL`).
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Target agent UUID (overrides `ARMARAOS_TEST_AGENT_ID`).
+        #[arg(long)]
+        agent_id: Option<String>,
+        /// `Authorization: Bearer` token when the daemon has `api_key` set (overrides `ARMARAOS_TEST_BEARER`).
+        #[arg(long)]
+        bearer: Option<String>,
+        /// Concurrent workers for KV + LLM phases (1–128; overrides `ARMARAOS_TEST_CONCURRENCY`).
+        #[arg(long)]
+        concurrency: Option<u32>,
+        /// PUT+GET pairs per KV worker (overrides `ARMARAOS_TEST_KV_OPS`).
+        #[arg(long)]
+        kv_ops: Option<u32>,
+        /// POST /message calls per LLM worker (overrides `ARMARAOS_TEST_MESSAGE_ROUNDS`).
+        #[arg(long)]
+        message_rounds: Option<u32>,
+        /// User message body (overrides `ARMARAOS_TEST_MESSAGE`).
+        #[arg(long)]
+        message: Option<String>,
+        /// Workflow POST /run count — **each run typically bills one LLM** (overrides `ARMARAOS_TEST_WORKFLOW_RUNS`, default 0).
+        #[arg(long)]
+        workflow_runs: Option<u32>,
+        /// Stagger LLM worker start: worker * this ms (overrides `ARMARAOS_TEST_INTER_BATCH_MS`).
+        #[arg(long)]
+        inter_batch_ms: Option<u64>,
+        /// Hard wall-clock limit for the whole run (overrides `ARMARAOS_TEST_MAX_WALL_SECS`).
+        #[arg(long)]
+        max_wall_secs: Option<u64>,
+        /// Path to `config.toml` for `[llm]` isolation hint (overrides `ARMARAOS_TEST_CONFIG_PATH`).
+        #[arg(long)]
+        config_path: Option<std::path::PathBuf>,
+        /// Preflight + metrics excerpt only; no KV / message / workflow stress.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -67,6 +109,39 @@ fn main() -> Result<()> {
         } => bundle_ainl_wheel(&version, clean, extra_index_url.as_deref()),
         Cmd::BundlePortablePython { target } => bundle_portable_python(&target),
         Cmd::ScaffoldAinlProgram { name } => scaffold_ainl_program(&name),
+        Cmd::LoadTest {
+            base_url,
+            agent_id,
+            bearer,
+            concurrency,
+            kv_ops,
+            message_rounds,
+            message,
+            workflow_runs,
+            inter_batch_ms,
+            max_wall_secs,
+            config_path,
+            dry_run,
+        } => {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("tokio runtime")?;
+            rt.block_on(load_test::run_load_test(load_test::LoadTestCli {
+                base_url,
+                agent_id,
+                bearer,
+                concurrency,
+                kv_ops,
+                message_rounds,
+                message,
+                workflow_runs,
+                inter_batch_ms,
+                max_wall_secs,
+                config_path,
+                dry_run,
+            }))
+        }
     }
 }
 

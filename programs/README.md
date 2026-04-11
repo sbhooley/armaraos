@@ -6,6 +6,8 @@ First-class [**AI Native Language (AINL)**](https://github.com/sbhooley/ainative
 
 Program folder names sometimes end in `-stub` for **minimal templates** (still valid, runnable graphs)—not “fake” implementations. Prefer a concrete name when the bundle is a full integration kit (e.g. [wishlist-host-kit/](wishlist-host-kit/)).
 
+**Templates vs showcases:** [armaraos_automation_stub/](armaraos_automation_stub/) (generic `http.GET` to `example.com`), [skill-mint-stub/](skill-mint-stub/), and [learning-frame-echo/](learning-frame-echo/) remain **small teaching / wiring** bundles. Prefer the **[ainl-showcases.md](../docs/ainl-showcases.md)** programs for demos to new users and for Scheduler examples.
+
 Each program lives in its own directory:
 
 ```
@@ -39,3 +41,13 @@ Policy: [docs/ainl-first-language.md](../docs/ainl-first-language.md).
 **Runtime mirror:** the kernel embeds this `programs/` tree at build time and materializes it to `~/.armaraos/ainl-library/armaraos-programs/` on boot (see [docs/ootb-ainl.md](../docs/ootb-ainl.md)). Repo paths like `programs/learning-frame-echo/` appear on disk as `armaraos-programs/learning-frame-echo/` next to upstream `examples/`, etc. Includes `armaraos_health_ping/`, `armaraos_automation_stub/` (disabled curated template), and shared learning-frame samples.
 
 **Orchestration wishlist (1–8):** the canonical AINL graphs live upstream in `examples/wishlist/` (cache, memory, vector_memory, fanout, ext, llm_query, http, code_context). This repo adds [wishlist-host-kit/](wishlist-host-kit/) — `wishlist_host_smoke.ainl` (core-only host wiring test), `frames/*.json`, and `run_upstream_wishlist.sh`. See [wishlist-host-kit/README.md](wishlist-host-kit/README.md).
+
+**AINL-first showcases** (see [docs/ainl-showcases.md](../docs/ainl-showcases.md)):
+
+| Program | Role |
+|---------|------|
+| [lead_gen_pipeline/](lead_gen_pipeline/) | GitHub stand-in “lead” + heuristics; optional LLM (`extra.use_llm`) |
+| [research_pipeline/](research_pipeline/) | GitHub repo search; optional LLM (`extra.use_llm`) |
+| [channel_session_digest/](channel_session_digest/) | Multi-signal digest: health, agents, channels, workflows |
+| [budget_threshold_alert/](budget_threshold_alert/) | Hourly 80% budget threshold |
+| [system_health_monitor/](system_health_monitor/) | Combined local + upstream version signal (opt-in cron) |

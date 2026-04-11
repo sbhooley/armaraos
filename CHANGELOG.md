@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-04-10
+
+### Added
+
+- **Audit:** New **`AgentManifestUpdate`** action for successful **`PUT /api/agents/{id}/update`** (persisted as `AgentManifestUpdate` in SQLite; older rows may still show **`ConfigChange`** for the same operation).
+- **HTTP API:** **`GET /api/agents/{id}?omit=manifest_toml`** — comma-separated **`omit`** list drops top-level JSON fields; use to avoid the large canonical TOML when listing agent metadata.
+- **SDK (JavaScript + Python):** **`agents.get`** accepts optional **`omit`** (e.g. `manifest_toml`) for the same behavior.
+
+### Changed
+
+- **HTTP API:** `PUT /api/agents/{id}/update` applies the parsed manifest to the running kernel (capabilities, scheduler quotas, proactive triggers, SQLite) and syncs or materializes `agents/<name>/agent.toml` under the configured home directory. Successful JSON responses use **`status`: `"ok"`** with **`name`** and **`note`**. Clients or scripts that expected the previous **`status`: `"acknowledged"`** no-op must treat **`"ok"`** as success and read **`note`** for session-clear / restart hints. The kernel **reloads autonomous background loops** (continuous / periodic / proactive triggers) from the new manifest **without a daemon restart** when the standard `Arc` handle is registered. Each successful apply appends an audit **`AgentManifestUpdate`** entry (`detail` includes `PUT agent manifest update`) for compliance trails.
+- **Dashboard (Agents → agent → Config):** Explains **Save Config** (partial, session preserved) vs **advanced full manifest** (`PUT …/update`) with a confirmation dialog, client-side manifest checks, reload/apply controls, and success toasts that reference the audit trail. **`GET /api/agents/{id}`** includes **`manifest_toml`** for loading the editor (omit via query when not needed).
+- **Dashboard → Monitor → Timeline:** **System** filter and action labels include **`AgentManifestUpdate`** (full manifest apply).
+- **SDK (JavaScript + Python):** Documented **`manifest_toml`** on **`agents.get`** / **`agents.update`** (full manifest replace). TypeScript **`AgentDetail`** includes optional **`manifest_toml`**.
+- **Tests:** `api_integration_test` covers **`GET /api/agents/{id}`**, **`manifest_toml`**, **`?omit=manifest_toml`**, and **`AgentManifestUpdate`** audit after **`PUT …/update`**.
+
+### Fixed
+
+- **Agent registry / disk paths:** Per-agent directory renames and `agent.toml` sync use the same **`home_dir`** as the kernel config (no divergence from `openfang_home_dir()` when `home_dir` is customized).
+
+### Documentation
+
+- **`docs/api-reference.md`:** Documented **`PATCH /api/agents/{id}`** vs **`PUT …/update`**, **`GET …/agents/{id}`** **`omit`** query, expanded **`PATCH …/config`** request fields, and refreshed the endpoint summary table for common agent routes. **`PUT …/update`** audit text now references **`AgentManifestUpdate`**. **`GET /api/audit/recent`** documents query params **`n`** / **`q`** and the real JSON shape (`seq`, `action`, `tip_hash`, …).
+- **`docs/RELEASING.md`:** New semver release checklist (bump, `CHANGELOG`, **ainativelangweb** tag, verify, tag). **`docs/README.md`**, **`docs/release-desktop.md`**, **`docs/production-checklist.md`**, and root **`README.md`** cross-link it.
+
 ## [0.7.1] - 2026-04-08
 
 Patch release after **0.7.0** — CLI compile fixes for efficient-mode telemetry, eco mode defaults and dashboard UX, and AINL wheel pin **1.4.4** in release workflow.
@@ -412,6 +437,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.2]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.2
 [0.7.1]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.1
 [0.7.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.0
 [0.6.9]: https://github.com/sbhooley/armaraos/releases/tag/v0.6.9

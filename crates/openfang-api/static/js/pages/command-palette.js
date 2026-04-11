@@ -50,6 +50,13 @@ var CMD_PALETTE_ACTIONS = [
   { label: 'Pending Approvals', sublabel: 'Review tool calls waiting for your approval',
     icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>',
     action: function() { window.location.hash = 'approvals'; } },
+  { label: 'Notifications', sublabel: 'Open the notification center (bell)',
+    icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
+    action: function() {
+      try {
+        Alpine.store('notifyCenter').open();
+      } catch (e) { /* ignore */ }
+    } },
   { label: 'Toggle Focus Mode', sublabel: 'Hide sidebar for distraction-free chat',
     icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
     action: function() { try { Alpine.store('app').toggleFocusMode(); } catch(e) { /* ignore */ } } },

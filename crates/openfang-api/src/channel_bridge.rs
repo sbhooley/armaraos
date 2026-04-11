@@ -323,10 +323,13 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             None => return format!("Workflow '{name}' not found. Use /workflows to list."),
         };
 
+        let retention = openfang_types::runtime_limits::WorkflowRetentionLimits::from_global_config(
+            &self.kernel.runtime_limits_live.read().unwrap(),
+        );
         let run_id = match self
             .kernel
             .workflows
-            .create_run(wf.id, input.to_string())
+            .create_run(wf.id, input.to_string(), retention)
             .await
         {
             Some(id) => id,

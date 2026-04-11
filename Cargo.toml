@@ -18,7 +18,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/sbhooley/armaraos"
@@ -55,7 +55,9 @@ chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 
 # Database
-rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

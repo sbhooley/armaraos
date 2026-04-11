@@ -6,7 +6,7 @@
     "timeout_secs": 30,
     "enabled": true,
     "json_output": true,
-    "description": "Polls the local ArmaraOS API every 15 minutes and writes agent health status to memory."
+    "description": "Every 15 minutes: polls /api/health and /api/agents; JSON output appended to the target agent session."
   },
   {
     "name": "armaraos-daily-budget-digest",
@@ -15,7 +15,7 @@
     "timeout_secs": 45,
     "enabled": true,
     "json_output": true,
-    "description": "Fetches token spend summary each morning and writes a structured budget digest to memory."
+    "description": "Daily 08:00: fetches /api/budget summary; JSON appended to the target agent session."
   },
   {
     "name": "armaraos-budget-threshold-alert",
@@ -24,7 +24,7 @@
     "timeout_secs": 30,
     "enabled": true,
     "json_output": true,
-    "description": "Checks hourly if spend exceeds 80% of budget limit and writes an alert record to memory."
+    "description": "Hourly: compares spend to 80% of budget limit; JSON alert appended to the target agent session."
   },
   {
     "name": "armaraos-new-version-checker",
@@ -33,16 +33,25 @@
     "timeout_secs": 60,
     "enabled": true,
     "json_output": true,
-    "description": "Checks GitHub and PyPI weekly for new ArmaraOS and AINL releases; writes update status to memory."
+    "description": "Weekly: GitHub + PyPI version check vs local /api/version; JSON appended to the target agent session."
   },
   {
     "name": "armaraos-channel-session-digest",
     "relative_path": "armaraos-programs/channel_session_digest/channel_session_digest.ainl",
     "cron_expr": "0 */6 * * *",
-    "timeout_secs": 30,
+    "timeout_secs": 45,
     "enabled": true,
     "json_output": true,
-    "description": "Every 6 hours, snapshots agent session activity counts to memory for channel digest integrations."
+    "description": "Every 6 hours: digest of daemon status, agent count, channel catalog, and workflows; JSON appended to the target agent session."
+  },
+  {
+    "name": "armaraos-system-health-monitor",
+    "relative_path": "armaraos-programs/system_health_monitor/system_health_monitor.ainl",
+    "cron_expr": "15 */2 * * *",
+    "timeout_secs": 90,
+    "enabled": false,
+    "json_output": true,
+    "description": "Every 2 hours at :15 (opt-in): local health, agents, version + GitHub/PyPI upstream; JSON appended to the target agent session."
   },
   {
     "name": "armaraos-weekly-usage-report",
@@ -51,7 +60,7 @@
     "timeout_secs": 120,
     "enabled": false,
     "json_output": true,
-    "description": "Sunday evening: LLM-generated natural language summary of the week's usage. Requires LLM adapter enabled."
+    "description": "Sunday evening: LLM summary of the week's usage (requires LLM adapter); output appended to the target agent session."
   },
   {
     "name": "armaraos-ainl-health-weekly",
@@ -94,6 +103,50 @@
       "outcome": "ok",
       "episode": "Stub graph run; host still owns full SKILL Meta for interactive flows.",
       "tier": "unattended"
+    }
+  },
+  {
+    "name": "armaraos-lead-gen-pipeline",
+    "relative_path": "armaraos-programs/lead_gen_pipeline/lead_gen_pipeline.ainl",
+    "cron_expr": "0 7 * * 1",
+    "timeout_secs": 120,
+    "enabled": false,
+    "json_output": true,
+    "description": "Monday 07:00 (opt-in): deterministic lead fetch + heuristic score; optional LLM note when extra.use_llm is yes. Output JSON is appended to the target agent session.",
+    "frame": {
+      "frame_version": "1",
+      "op": "capture",
+      "run_id": "curated-armaraos-lead-gen",
+      "intent": "Embedded lead-gen showcase (deterministic + optional LLM)",
+      "outcome": "ok",
+      "episode": "Curated cron: GitHub public user profile + optional llm.COMPLETION when extra.use_llm is yes.",
+      "tier": "unattended",
+      "extra": {
+        "seed_company": "Acme Robotics",
+        "use_llm": "no"
+      }
+    }
+  },
+  {
+    "name": "armaraos-research-pipeline",
+    "relative_path": "armaraos-programs/research_pipeline/research_pipeline.ainl",
+    "cron_expr": "30 6 * * 2",
+    "timeout_secs": 120,
+    "enabled": false,
+    "json_output": true,
+    "description": "Tuesday 06:30 (opt-in): GitHub repo search for extra.research_query + optional LLM brief. Output JSON is appended to the target agent session.",
+    "frame": {
+      "frame_version": "1",
+      "op": "capture",
+      "run_id": "curated-armaraos-research",
+      "intent": "Embedded research showcase (GitHub search + optional LLM)",
+      "outcome": "ok",
+      "episode": "Curated cron: api.github.com search; set extra.research_query to a URL-safe token (no spaces).",
+      "tier": "unattended",
+      "extra": {
+        "research_query": "armaraos",
+        "use_llm": "no"
+      }
     }
   },
   {

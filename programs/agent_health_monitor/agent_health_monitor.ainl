@@ -12,7 +12,7 @@ agent_health_monitor:
   agents = http.GET "http://127.0.0.1:4200/api/agents"
 
   daemon_status = core.GET health status
-  agent_count = core.GET agents total
+  agent_count = core.LEN agents
   ts = core.NOW 0
 
   if daemon_status == "ok":

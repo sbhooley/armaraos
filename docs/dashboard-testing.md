@@ -12,6 +12,18 @@ With the daemon running, pass the **Dashboard** base URL from `openfang start` (
 
 This hits `/api/health`, `/api/status`, `/api/schedules`, **`GET /api/version/github-latest`**, **`GET /api/logs/daemon/recent?lines=5`** (may return empty `lines` until `logs/daemon.log` exists), `POST /api/support/diagnostics` (writes a zip under `~/.armaraos/support/` on success), **`GET /api/support/diagnostics/download`** for that zip’s `bundle_filename`, **`GET /api/armaraos-home/download`** for the same file under `support/…`, a sample `POST /api/agents` to verify auth/error JSON when a key is configured, and (when agents exist) `GET /api/agents/:id/session/digest`.
 
+## PUT full manifest + on-disk `agent.toml` (optional API QA)
+
+Verifies **`PUT /api/agents/{id}/update`** applies **`AgentManifest`** TOML to the running kernel and syncs **`agents/<name>/agent.toml`** under the configured home (see [api-reference.md](api-reference.md)). **Auth:** when `api_key` is set, send **`Authorization: Bearer <key>`** (same as other write routes).
+
+1. Set **`BASE`** to your dashboard origin (e.g. `http://127.0.0.1:4200`). Resolve an agent id: **`GET $BASE/api/agents`** and pick **`id`** plus the agent’s **`name`** (the manifest’s **`name =`** must match that string).
+2. **`PUT $BASE/api/agents/<id>/update`** with JSON **`{"manifest_toml": "..."}`** — use a full valid TOML body; change a harmless field (e.g. **`description`**) so you can spot it on disk.
+3. Expect **`200`** and JSON **`status`: `"ok"`**, **`name`**, and a non-empty **`note`** (session memory clear; autonomous loops reload in-process without daemon restart).
+4. Optional: **`GET $BASE/api/audit/recent?n=30`** — confirm an **`AgentManifestUpdate`** entry whose **`detail`** mentions **`PUT agent manifest update`** and the agent name.
+5. On disk, open **`$ARMARAOS_HOME/agents/<name>/agent.toml`** (default **`~/.armaraos`**) and confirm the field matches the PUT body.
+
+**Automated regression:** `cargo test -p openfang-api --test api_integration_test test_put_agent_update`.
+
 ## Get started page (hash `#overview`) — setup checklist
 
 **UI labels:** The sidebar shows **Get started** (section above **Chat**); the page title is **Get started**. The router still uses the internal page id `overview` and hash `#overview`.
@@ -90,8 +102,27 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 
 ## Kernel SSE (`GET /api/events/stream`)
 
-- **Smoke:** Open the dashboard, confirm the sidebar **SSE** badge appears when the stream connects (kernel running, same origin / loopback as usual).
+- **Smoke:** Open the dashboard, confirm the sidebar **SSE** badge appears when the stream connects (kernel running, same origin / loopback as usual). The **[Notification center (bell)](#notification-center-bell)** also consumes the same stream for persistent rows (crashes, quota, health, cron failures) alongside approvals + budget polling.
 - **API:** `cargo test -p openfang-api --test api_integration_test test_kernel_events_stream_sse_smoke` and `cargo test -p openfang-api --test sse_stream_auth` cover HTTP behavior (including loopback vs remote auth).
+
+## Notification center (bell)
+
+Persistent queue (not toasts): fixed **bell** top-right; **badge** = number of rows in the panel. Implemented in `static/js/app.js` (`Alpine.store('notifyCenter')`), `static/index_body.html`, `static/css/layout.css`. Rebuild the daemon after editing embedded static assets.
+
+**A11y & UX:** With the panel **closed**, new rows update a visually hidden **`aria-live="polite"`** region (“New notification: …”). With the panel **open**, **Tab** / **Shift+Tab** cycle focus within the panel (focus trap); closing restores focus to the element that had focus before open (usually the bell). Command palette (**Cmd/Ctrl+K**) includes **Notifications** → opens the panel.
+
+**Persistence:** Dismissing a **kernel** row (id `k-<event id>`) stores that id in **`localStorage`** key **`armaraos-notify-dismissed-kernel`** (capped list) so a full page reload does not show the same SSE event again. Synthetic rows **`approval-pending`** and **`budget-alert`** are not stored there.
+
+**Automated checks:** `./scripts/verify-dashboard-smoke.sh` curls **`GET /`** and asserts **`notify-bell-btn`** or **`notify-center-root`** appears in HTML, and curls **`GET /api/budget`** + **`GET /api/approvals`**. Integration tests: `cargo test -p openfang-api --test api_integration_test test_get_budget_status_json_shape test_get_approvals_list_json_shape` (plus existing `test_kernel_events_stream_sse_smoke`).
+
+**Manual smoke (daemon + dashboard in browser):**
+
+1. **Bell + panel** — Confirm the bell appears when connected. Click it: panel opens; **badge** matches row count. **Esc** and clicking the **dimmed backdrop** close the panel. **Tab** cycles controls inside the panel while open. **Open** on a row navigates via hash and closes the panel.
+2. **Approvals** — With at least one **pending** execution approval (`GET /api/approvals`), expect a **Pending approval(s)** row within a few seconds (poll) or immediately after the kernel emits **`ApprovalPending`** on `GET /api/events/stream` (same SSE path as sidebar **SSE**). **Dismiss** hides that row until the set of pending request ids changes (new approval or all resolved). **Clear all** removes every row and resets snooze/debounce state used by the center (it does **not** clear kernel-dismissed ids in `localStorage`).
+3. **Budget** — When a configured limit exists and spend fraction meets or exceeds **`alert_threshold`** from `GET /api/budget` (default **0.85** in the UI when unset), expect a **Budget:** row pointing at **Settings**. **Dismiss** on that row suppresses re-adding the synthetic budget row for **one hour** (or use **Clear all**).
+4. **Kernel-driven rows** — From live SSE, confirm new rows can appear for **agent crashed** (Lifecycle **Crashed**), **Quota enforced** / **Quota warning**, **Health check failed** (debounced per agent like toasts, ~90s), and **Cron job failed**. Each row should be individually **Dismiss**-able; after dismiss + reload, the same event id should not reappear.
+5. **Focus mode** — Toggle focus mode (sidebar / chat UX). The bell + panel should **hide** with other chrome (same behavior as the mobile menu button).
+6. **Command palette** — Open the palette, search **Notifications**, confirm it opens the notification panel.
 
 ## Logs page (Live, Daemon, Audit Trail)
 
@@ -142,18 +173,19 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 
 ## Agents page → Config tab (identity, prompt, tool filters)
 
-**API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
+**API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), **`manifest_toml`** (detail route — canonical TOML for the full manifest editor), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
 
 **Manual checks (daemon + browser):**
 
-1. Spawn or pick an agent; set **Archetype**, **Vibe**, **System prompt**, and add tools to **Allowlist** / **Blocklist**; save.
+1. Spawn or pick an agent; set **Archetype**, **Vibe**, **System prompt**, and add tools to **Allowlist** / **Blocklist**; save — toast should say **partial — session preserved**.
 2. Close the detail modal and reopen **Config** — fields and lists should match what you saved.
 3. Optional: click **Add messaging tools** — `channel_send` and `event_publish` are added to the allowlist when it is non-empty, or removed from the blocklist when using profile-default tools (empty allowlist).
+4. **Advanced full manifest:** expand **Show advanced — full manifest**, click **Reload from server** (textarea fills), change a harmless line (e.g. `description`), **Apply full manifest** — confirm dialog lists session clear + audit; after success, toast includes server **`note`** and audit hint.
 
 **curl (replace `AGENT_ID` and port):**
 
 ```bash
-curl -sS "http://127.0.0.1:4200/api/agents/AGENT_ID" | jq '.system_prompt, .identity, .tool_allowlist'
+curl -sS "http://127.0.0.1:4200/api/agents/AGENT_ID" | jq '{ system_prompt, identity, tool_allowlist, manifest_preview: (.manifest_toml[0:120] // "") }'
 curl -sS "http://127.0.0.1:4200/api/agents/AGENT_ID/tools"
 ```
 

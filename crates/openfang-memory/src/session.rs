@@ -1,13 +1,12 @@
 //! Session management — load/save conversation history.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::agent::{AgentId, SessionId};
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::message::{ContentBlock, Message, MessageContent, Role};
-use rusqlite::Connection;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 /// A conversation session with message history.
 #[derive(Debug, Clone)]
@@ -27,20 +26,20 @@ pub struct Session {
 /// Session store backed by SQLite.
 #[derive(Clone)]
 pub struct SessionStore {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
 }
 
 impl SessionStore {
-    /// Create a new session store wrapping the given connection.
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    /// Create a new session store wrapping the given pool.
+    pub fn new(pool: MemorySqlitePool) -> Self {
+        Self { pool }
     }
 
     /// Load a session from the database.
     pub fn get_session(&self, session_id: SessionId) -> OpenFangResult<Option<Session>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare("SELECT agent_id, messages, context_window_tokens, label FROM sessions WHERE id = ?1")
@@ -77,8 +76,8 @@ impl SessionStore {
     /// Save a session to the database.
     pub fn save_session(&self, session: &Session) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let messages_blob = rmp_serde::to_vec_named(&session.messages)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
@@ -103,8 +102,8 @@ impl SessionStore {
     /// Delete a session from the database.
     pub fn delete_session(&self, session_id: SessionId) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM sessions WHERE id = ?1",
@@ -117,8 +116,8 @@ impl SessionStore {
     /// Delete all sessions belonging to an agent.
     pub fn delete_agent_sessions(&self, agent_id: AgentId) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM sessions WHERE agent_id = ?1",
@@ -131,8 +130,8 @@ impl SessionStore {
     /// Delete the canonical (cross-channel) session for an agent.
     pub fn delete_canonical_session(&self, agent_id: AgentId) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM canonical_sessions WHERE agent_id = ?1",
@@ -145,8 +144,8 @@ impl SessionStore {
     /// List all sessions with metadata (session_id, agent_id, message_count, created_at).
     pub fn list_sessions(&self) -> OpenFangResult<Vec<serde_json::Value>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
@@ -202,8 +201,8 @@ impl SessionStore {
         label: Option<&str>,
     ) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE sessions SET label = ?1, updated_at = ?2 WHERE id = ?3",
@@ -220,8 +219,8 @@ impl SessionStore {
         label: &str,
     ) -> OpenFangResult<Option<Session>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
@@ -263,8 +262,8 @@ impl SessionStore {
     /// List all sessions for a specific agent.
     pub fn list_agent_sessions(&self, agent_id: AgentId) -> OpenFangResult<Vec<serde_json::Value>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
@@ -363,8 +362,8 @@ impl SessionStore {
     /// Load the canonical session for an agent, creating one if it doesn't exist.
     pub fn load_canonical(&self, agent_id: AgentId) -> OpenFangResult<CanonicalSession> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
@@ -493,8 +492,8 @@ impl SessionStore {
     /// Persist a canonical session to SQLite.
     fn save_canonical(&self, canonical: &CanonicalSession) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let messages_blob = rmp_serde::to_vec(&canonical.messages)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
@@ -620,12 +619,12 @@ impl SessionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> SessionStore {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        SessionStore::new(Arc::new(Mutex::new(conn)))
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        SessionStore::new(pool)
     }
 
     #[test]

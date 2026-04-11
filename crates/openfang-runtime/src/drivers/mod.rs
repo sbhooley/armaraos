@@ -7,11 +7,16 @@
 pub mod anthropic;
 pub mod claude_code;
 pub mod copilot;
+pub mod factory;
 pub mod fallback;
 pub mod gemini;
+pub mod instrumenting_llm;
 pub mod openai;
 pub mod qwen_code;
 pub mod vertex;
+
+pub use factory::{build_llm_http_client, LlmDriverFactory};
+pub use instrumenting_llm::LlmCallMetrics;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
 use openfang_types::config::DEFAULT_OPENROUTER_MODEL_ID;
@@ -238,6 +243,117 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
     }
 }
 
+/// Cache key for [`LlmDriverFactory`]: provider, normalized base URL, API key fingerprint.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct DriverCacheKey {
+    pub provider: String,
+    pub base_url: String,
+    pub key_fp: String,
+}
+
+fn normalize_cache_base_url(s: &str) -> String {
+    s.trim().trim_end_matches('/').to_string()
+}
+
+fn fingerprint_api_key(api_key: &Option<String>) -> String {
+    match api_key {
+        None => "none".to_string(),
+        Some(s) if s.is_empty() => "none".to_string(),
+        Some(s) => {
+            use sha2::{Digest, Sha256};
+            let h = Sha256::digest(s.as_bytes());
+            hex::encode(&h[..8])
+        }
+    }
+}
+
+/// Effective base URL for cache identity (kept in sync with [`create_driver`] branches).
+pub fn effective_base_url_for_cache(config: &DriverConfig) -> String {
+    let p = config.provider.as_str();
+    if p == "anthropic" {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string());
+    }
+    if p == "gemini" || p == "google" {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| GEMINI_BASE_URL.to_string());
+    }
+    if p == "codex" || p == "openai-codex" {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| OPENAI_BASE_URL.to_string());
+    }
+    if p == "claude-code" {
+        return format!("cli:{}", config.base_url.as_deref().unwrap_or(""));
+    }
+    if p == "qwen-code" {
+        return format!("qwen-cli:{}", config.base_url.as_deref().unwrap_or(""));
+    }
+    if p == "github-copilot" || p == "copilot" {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| copilot::GITHUB_COPILOT_BASE_URL.to_string());
+    }
+    if p == "azure" || p == "azure-openai" {
+        return config.base_url.clone().unwrap_or_default();
+    }
+    if p == "vertex-ai" || p == "vertex" || p == "google-vertex" {
+        return "vertex-oauth".to_string();
+    }
+    if p == "kimi_coding" {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| KIMI_CODING_BASE_URL.to_string());
+    }
+    if let Some(d) = provider_defaults(p) {
+        return config
+            .base_url
+            .clone()
+            .unwrap_or_else(|| d.base_url.to_string());
+    }
+    config.base_url.clone().unwrap_or_default()
+}
+
+pub fn driver_cache_key(config: &DriverConfig) -> DriverCacheKey {
+    DriverCacheKey {
+        provider: config.provider.to_lowercase(),
+        base_url: normalize_cache_base_url(&effective_base_url_for_cache(config)),
+        key_fp: fingerprint_api_key(&config.api_key),
+    }
+}
+
+pub(crate) fn sanitize_provider_prometheus(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn http_client_for_driver(config: &DriverConfig) -> reqwest::Client {
+    config
+        .http_client
+        .as_ref()
+        .map(|c| (**c).clone())
+        .unwrap_or_else(|| {
+            reqwest::Client::builder()
+                .user_agent(crate::USER_AGENT)
+                .build()
+                .unwrap_or_default()
+        })
+}
+
 /// Create an LLM driver based on provider name and configuration.
 ///
 /// Supported providers:
@@ -278,7 +394,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .base_url
             .clone()
             .unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string());
-        return Ok(Arc::new(anthropic::AnthropicDriver::new(api_key, base_url)));
+        return Ok(Arc::new(anthropic::AnthropicDriver::with_client(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // Gemini uses a different API format — special case
@@ -297,7 +417,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .base_url
             .clone()
             .unwrap_or_else(|| GEMINI_BASE_URL.to_string());
-        return Ok(Arc::new(gemini::GeminiDriver::new(api_key, base_url)));
+        return Ok(Arc::new(gemini::GeminiDriver::with_client(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // Codex — reuses OpenAI driver with credential sync from Codex CLI
@@ -314,7 +438,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .base_url
             .clone()
             .unwrap_or_else(|| OPENAI_BASE_URL.to_string());
-        return Ok(Arc::new(openai::OpenAIDriver::new(api_key, base_url)));
+        return Ok(Arc::new(openai::OpenAIDriver::with_client(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // Claude Code CLI — subprocess-based, no API key needed
@@ -375,7 +503,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                       https://{resource}.openai.azure.com/openai/deployments"
                 .to_string(),
         })?;
-        return Ok(Arc::new(openai::OpenAIDriver::new_azure(api_key, base_url)));
+        return Ok(Arc::new(openai::OpenAIDriver::with_client_azure(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // Vertex AI — uses Google Cloud OAuth with service account credentials.
@@ -408,7 +540,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
         let region = std::env::var("GOOGLE_CLOUD_REGION")
             .or_else(|_| std::env::var("VERTEX_AI_REGION"))
             .unwrap_or_else(|_| "us-central1".to_string());
-        return Ok(Arc::new(vertex::VertexAIDriver::new(project_id, region)));
+        return Ok(Arc::new(vertex::VertexAIDriver::with_client(
+            project_id,
+            region,
+            http_client_for_driver(config),
+        )));
     }
 
     // Kimi for Code — Anthropic-compatible endpoint
@@ -424,7 +560,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .base_url
             .clone()
             .unwrap_or_else(|| KIMI_CODING_BASE_URL.to_string());
-        return Ok(Arc::new(anthropic::AnthropicDriver::new(api_key, base_url)));
+        return Ok(Arc::new(anthropic::AnthropicDriver::with_client(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // All other providers use OpenAI-compatible format
@@ -447,7 +587,11 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             .clone()
             .unwrap_or_else(|| defaults.base_url.to_string());
 
-        return Ok(Arc::new(openai::OpenAIDriver::new(api_key, base_url)));
+        return Ok(Arc::new(openai::OpenAIDriver::with_client(
+            api_key,
+            base_url,
+            http_client_for_driver(config),
+        )));
     }
 
     // Unknown provider — if base_url is set, treat as custom OpenAI-compatible.
@@ -459,9 +603,10 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             let env_var = format!("{}_API_KEY", provider.to_uppercase().replace('-', "_"));
             std::env::var(&env_var).unwrap_or_default()
         });
-        return Ok(Arc::new(openai::OpenAIDriver::new(
+        return Ok(Arc::new(openai::OpenAIDriver::with_client(
             api_key,
             base_url.clone(),
+            http_client_for_driver(config),
         )));
     }
 
@@ -632,6 +777,7 @@ mod tests {
             api_key: Some("test".to_string()),
             base_url: Some("http://localhost:9999/v1".to_string()),
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok());
@@ -644,6 +790,7 @@ mod tests {
             api_key: None,
             base_url: None,
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(driver.is_err());
@@ -747,6 +894,7 @@ mod tests {
             api_key: None, // picked up from env via provider_defaults
             base_url: None,
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(
@@ -767,6 +915,7 @@ mod tests {
             api_key: None,
             base_url: None,
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         let err_without_key = driver.is_err();
@@ -790,6 +939,7 @@ mod tests {
             api_key: None,
             base_url: None,
             skip_permissions: true,
+            ..Default::default()
         };
         let result = create_driver(&config);
         assert!(result.is_err());
@@ -818,6 +968,7 @@ mod tests {
             api_key: Some("explicit-key".to_string()),
             base_url: Some("https://api.example.com/v1".to_string()),
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok());
@@ -845,6 +996,7 @@ mod tests {
             api_key: Some("test-azure-key".to_string()),
             base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok(), "Azure driver with key + URL should succeed");
@@ -857,6 +1009,7 @@ mod tests {
             api_key: None,
             base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
             skip_permissions: true,
+            ..Default::default()
         };
         let result = create_driver(&config);
         assert!(result.is_err(), "Azure driver without key should error");
@@ -875,6 +1028,7 @@ mod tests {
             api_key: Some("test-azure-key".to_string()),
             base_url: None,
             skip_permissions: true,
+            ..Default::default()
         };
         let result = create_driver(&config);
         assert!(result.is_err(), "Azure driver without URL should error");
@@ -893,6 +1047,7 @@ mod tests {
             api_key: Some("test-azure-key".to_string()),
             base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
             skip_permissions: true,
+            ..Default::default()
         };
         let driver = create_driver(&config);
         assert!(

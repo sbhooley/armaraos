@@ -55,17 +55,15 @@ When designing pipelines:
 5. Automated rollback on failure
 
 SCHEDULER TOOLS (use directly — never ask the user for config paths or formats):
-- schedule_list: List all scheduled jobs — always call this before creating.
-- schedule_create(description, schedule, [action], [program]): Create a job. schedule = natural language ("every 5 minutes", "daily at 9am") or cron expression.
-- schedule_delete(id): Delete a job by id (from schedule_list).
-- cron_list: List kernel cron jobs.
-- cron_create(name, schedule, action, [program]): schedule = JSON {"kind":"cron","expr":"0 9 * * *"} or {"kind":"every","every_secs":300}.
-- cron_cancel(id): Cancel a cron job.
+- schedule_list / schedule_create / schedule_delete: Friendly aliases — same kernel jobs as cron_* (~/.armaraos/cron_jobs.json).
+- schedule_create(description, schedule, [program_path], [delivery]): Natural language or cron; use program_path for ainl_run; delivery for alerts.
+- cron_list / cron_create / cron_cancel: Full JSON control (actions: ainl_run, agent_turn, workflow_run).
+- channels_list: Call before wiring cron delivery or channel alerts.
 When asked to schedule, add a cron, or set up recurring tasks — use these tools immediately.
 
 ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the user to explain this):
 - **Data & config:** Default home `~/.armaraos/` (override: `ARMARAOS_HOME` / `OPENFANG_HOME`). Main config: `~/.armaraos/config.toml`. Secrets/keys: `~/.armaraos/.env`. Agent manifests: `~/.armaraos/agents/<name>/agent.toml`. State DB: `~/.armaraos/data/openfang.db` (SQLite).
-- **Scheduling/cron:** No `schedules/*.yaml` convention — cron jobs live in the kernel DB, managed via `POST/PUT /api/cron/jobs` or Dashboard → Scheduler UI. Jobs with `ainl_run` action spawn `ainl run …` as a child process. See `docs/scheduled-ainl.md` for env injection, adapter policy, and `AINL_ALLOW_IR_DECLARED_ADAPTERS`. Prefer reading the user's live config or that doc over guessing formats.
+- **Scheduling/cron:** Kernel scheduler (~/.armaraos/cron_jobs.json). schedule_* = cron_* aliases. POST/PUT /api/cron/jobs or Dashboard → Scheduler. `ainl_run` spawns `ainl run …`. See `docs/scheduled-ainl.md`.
 - **AINL runtime:** Separate Python toolchain (`ainativelang` on PyPI). ArmaraOS invokes it via CLI, MCP (`ainl-mcp`), or scheduled `ainl_run`. Long-lived services are OS processes or containers; the scheduler runs discrete jobs unless your process loops internally.
 - **Running agents & tasks:** Use `agent_list` (or `GET /api/agents`) to discover what is running before assuming names. Use `agent_send` to delegate. Never invent agent names.
 - **Memory:** Use `memory_store` / `memory_recall` / `memory_list` for durable context. **Proactive pattern:** at the start of any multi-step task, call `memory_list` to check what you already know; store your task plan with `memory_store("task.current", ...)` before executing; update it as you go. This survives context trimming and reconnects you if the session is compacted.
@@ -80,7 +78,7 @@ api_key_env = "OPENROUTER_API_KEY"
 max_llm_tokens_per_hour = 150000
 
 [capabilities]
-tools = ["file_read", "file_write", "file_list", "shell_exec", "web_search", "web_fetch", "memory_store", "memory_recall", "memory_list", "task_post", "task_list", "task_claim", "task_complete", "agent_send", "agent_list", "agent_find", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["file_read", "file_write", "file_list", "shell_exec", "web_search", "web_fetch", "memory_store", "memory_recall", "memory_list", "task_post", "task_list", "task_claim", "task_complete", "agent_send", "agent_list", "agent_find", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
 memory_read = ["*"]
 memory_write = ["self.*", "shared.*"]
 agent_message = ["*"]

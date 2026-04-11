@@ -150,9 +150,18 @@ class AgentResource {
     return this._c._request("GET", "/api/agents");
   }
 
-  /** Get agent by ID. */
-  async get(id) {
-    return this._c._request("GET", "/api/agents/" + id);
+  /** Get agent by ID (`GET /api/agents/:id`).
+   * @param {string} id - Agent UUID.
+   * @param {{ omit?: string }} [opts] - e.g. `{ omit: "manifest_toml" }` to skip the large TOML field.
+   * @returns {Promise<object>} Agent detail, including **`manifest_toml`**: canonical TOML for the
+   *   in-memory manifest (full-manifest tooling; larger than the list endpoint). See API reference.
+   */
+  async get(id, opts) {
+    var q = "";
+    if (opts && opts.omit) {
+      q = "?omit=" + encodeURIComponent(opts.omit);
+    }
+    return this._c._request("GET", "/api/agents/" + id + q);
   }
 
   /** Create (spawn) a new agent.
@@ -177,7 +186,9 @@ class AgentResource {
     return this._c._request("POST", "/api/agents/" + id + "/clone");
   }
 
-  /** Update agent. */
+  /** Full manifest replace (`PUT /api/agents/:id/update`). Pass `{ manifest_toml: string }`.
+   * Clears canonical session, reloads autonomous schedules in-process, syncs `agent.toml`; see API docs.
+   */
   async update(id, data) {
     return this._c._request("PUT", "/api/agents/" + id + "/update", data);
   }
@@ -457,6 +468,7 @@ class ScheduleResource {
     return this._c._request("GET", "/api/schedules");
   }
 
+  /** POST /api/schedules — 201 JSON includes top-level `id` (cron job UUID), `name`, `result`, `source`. */
   async create(schedule) {
     return this._c._request("POST", "/api/schedules", schedule);
   }

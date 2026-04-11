@@ -1028,6 +1028,65 @@ impl Default for ThinkingConfig {
     }
 }
 
+/// HTTP client + driver pooling for LLM traffic (`[llm]` in config.toml).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LlmConfig {
+    /// `shared` (default): LRU-reuse `reqwest::Client` + drivers keyed by provider, base URL, and
+    /// API key fingerprint. `isolated`: build a fresh driver each resolution (no cache); timeouts
+    /// still apply.
+    pub driver_isolation: String,
+    /// Total HTTP timeout for LLM and embedding traffic (milliseconds).
+    pub client_timeout_ms: u64,
+    /// TCP connect timeout (milliseconds).
+    pub connect_timeout_ms: u64,
+    /// LRU capacity for cached drivers in `shared` mode.
+    pub max_cached_drivers: usize,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            driver_isolation: "shared".to_string(),
+            client_timeout_ms: 120_000,
+            connect_timeout_ms: 10_000,
+            max_cached_drivers: 64,
+        }
+    }
+}
+
+impl LlmConfig {
+    /// Normalize isolation mode and clamp numeric bounds.
+    pub fn clamp_bounds(&mut self) {
+        let mode = self.driver_isolation.trim().to_lowercase();
+        self.driver_isolation = if mode == "isolated" {
+            "isolated".to_string()
+        } else {
+            "shared".to_string()
+        };
+        if self.client_timeout_ms == 0 {
+            self.client_timeout_ms = 120_000;
+        } else if self.client_timeout_ms > 600_000 {
+            self.client_timeout_ms = 600_000;
+        }
+        if self.connect_timeout_ms == 0 {
+            self.connect_timeout_ms = 10_000;
+        } else if self.connect_timeout_ms > 120_000 {
+            self.connect_timeout_ms = 120_000;
+        }
+        if self.max_cached_drivers == 0 {
+            self.max_cached_drivers = 64;
+        } else if self.max_cached_drivers > 4096 {
+            self.max_cached_drivers = 4096;
+        }
+    }
+
+    /// True when driver LRU caching is disabled.
+    pub fn is_isolated_mode(&self) -> bool {
+        self.driver_isolation.eq_ignore_ascii_case("isolated")
+    }
+}
+
 /// On-disk `config.toml` schema version for this binary.
 ///
 /// Bump when the file format or migration steps change; document in `docs/data-directory.md`.
@@ -1190,6 +1249,12 @@ pub struct KernelConfig {
     /// Web dashboard options (Home folder editor allowlist, etc.).
     #[serde(default)]
     pub dashboard: DashboardConfig,
+    /// Agent loop, inter-agent depth, and workflow run retention (`[runtime_limits]`).
+    #[serde(default)]
+    pub runtime_limits: crate::runtime_limits::RuntimeLimitsConfig,
+    /// LLM HTTP client timeouts and driver pooling (`[llm]`).
+    #[serde(default)]
+    pub llm: LlmConfig,
     /// Ultra Cost-Efficient Mode for prompt compression.
     /// "off" | "balanced" (default, ~50–60 % reduction) | "aggressive" (~60 % reduction).
     #[serde(default = "default_efficient_mode")]
@@ -1522,6 +1587,8 @@ impl Default for KernelConfig {
             turn_watchdog: TurnWatchdogSettings::default(),
             openclaw_workspace: OpenclawWorkspaceConfig::default(),
             dashboard: DashboardConfig::default(),
+            runtime_limits: crate::runtime_limits::RuntimeLimitsConfig::default(),
+            llm: LlmConfig::default(),
             efficient_mode: default_efficient_mode(),
         }
     }
@@ -1649,6 +1716,8 @@ impl std::fmt::Debug for KernelConfig {
                     self.dashboard.home_editable_globs.len()
                 ),
             )
+            .field("runtime_limits", &"…")
+            .field("llm", &"…")
             .finish()
     }
 }
@@ -1789,6 +1858,34 @@ pub struct MemoryConfig {
     /// Env var name holding the HTTP memory API bearer token.
     #[serde(default)]
     pub http_token_env: Option<String>,
+    /// Max concurrent SQLite connections in the memory substrate pool (`r2d2`).
+    #[serde(default = "default_memory_max_connections")]
+    pub max_connections: usize,
+    /// Max time to wait for a pooled connection (`r2d2` acquire timeout).
+    #[serde(default = "default_memory_acquire_timeout_ms")]
+    pub acquire_timeout_ms: u64,
+    /// SQLite `busy_timeout` in milliseconds (retries on `SQLITE_BUSY`).
+    #[serde(default = "default_memory_busy_timeout_ms")]
+    pub busy_timeout_ms: u64,
+    /// Future: substrate sharding mode. Only `single` is implemented (one pool per process).
+    #[serde(default = "default_memory_shard_mode")]
+    pub shard_mode: String,
+}
+
+fn default_memory_max_connections() -> usize {
+    16
+}
+
+fn default_memory_acquire_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_memory_busy_timeout_ms() -> u64 {
+    5000
+}
+
+fn default_memory_shard_mode() -> String {
+    "single".to_string()
 }
 
 fn default_consolidation_interval() -> u64 {
@@ -1812,6 +1909,10 @@ impl Default for MemoryConfig {
             backend: default_memory_backend(),
             http_url: None,
             http_token_env: None,
+            max_connections: default_memory_max_connections(),
+            acquire_timeout_ms: default_memory_acquire_timeout_ms(),
+            busy_timeout_ms: default_memory_busy_timeout_ms(),
+            shard_mode: default_memory_shard_mode(),
         }
     }
 }
@@ -3890,6 +3991,29 @@ impl KernelConfig {
         } else if self.web.fetch.timeout_secs > 120 {
             self.web.fetch.timeout_secs = 120;
         }
+
+        // Memory SQLite pool
+        if self.memory.max_connections == 0 {
+            self.memory.max_connections = default_memory_max_connections();
+        } else if self.memory.max_connections > 512 {
+            self.memory.max_connections = 512;
+        }
+        if self.memory.acquire_timeout_ms == 0 {
+            self.memory.acquire_timeout_ms = default_memory_acquire_timeout_ms();
+        } else if self.memory.acquire_timeout_ms > 120_000 {
+            self.memory.acquire_timeout_ms = 120_000;
+        }
+        if self.memory.busy_timeout_ms == 0 {
+            self.memory.busy_timeout_ms = default_memory_busy_timeout_ms();
+        } else if self.memory.busy_timeout_ms > 300_000 {
+            self.memory.busy_timeout_ms = 300_000;
+        }
+        if self.memory.shard_mode.trim().is_empty() {
+            self.memory.shard_mode = default_memory_shard_mode();
+        }
+
+        self.runtime_limits.clamp_bounds();
+        self.llm.clamp_bounds();
     }
 }
 

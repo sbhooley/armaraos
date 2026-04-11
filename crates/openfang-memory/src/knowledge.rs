@@ -2,33 +2,32 @@
 //!
 //! Stores entities and relations with support for graph pattern queries.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{
     Entity, EntityType, GraphMatch, GraphPattern, Relation, RelationType,
 };
-use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 /// Knowledge graph store backed by SQLite.
 #[derive(Clone)]
 pub struct KnowledgeStore {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
 }
 
 impl KnowledgeStore {
-    /// Create a new knowledge store wrapping the given connection.
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    /// Create a new knowledge store wrapping the given pool.
+    pub fn new(pool: MemorySqlitePool) -> Self {
+        Self { pool }
     }
 
     /// Add an entity to the knowledge graph.
     pub fn add_entity(&self, entity: Entity) -> OpenFangResult<String> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = if entity.id.is_empty() {
             Uuid::new_v4().to_string()
@@ -53,8 +52,8 @@ impl KnowledgeStore {
     /// Add a relation between two entities.
     pub fn add_relation(&self, relation: Relation) -> OpenFangResult<String> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = Uuid::new_v4().to_string();
         let rel_type_str = serde_json::to_string(&relation.relation)
@@ -82,8 +81,8 @@ impl KnowledgeStore {
     /// Query the knowledge graph with a pattern.
     pub fn query_graph(&self, pattern: GraphPattern) -> OpenFangResult<Vec<GraphMatch>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let mut sql = String::from(
@@ -274,12 +273,12 @@ fn parse_relation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> KnowledgeStore {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        KnowledgeStore::new(Arc::new(Mutex::new(conn)))
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        KnowledgeStore::new(pool)
     }
 
     #[test]

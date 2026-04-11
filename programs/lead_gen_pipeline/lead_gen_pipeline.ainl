@@ -1,0 +1,30 @@
+# Lead-gen pipeline (showcase)
+# Deterministic: fetches a public GitHub user profile (read-only API) as a stand-in "lead" row.
+# Optional: set extra.use_llm to "yes" for a one-line LLM enrichment (requires provider keys).
+#
+# Curated cron passes a LearningFrame v1 with extra.seed_company / extra.use_llm (see frame.example.json).
+# Uses: http, core, llm/openrouter
+# Validate: ainl validate programs/lead_gen_pipeline/lead_gen_pipeline.ainl --strict
+
+lead_gen_pipeline:
+  seed_company = core.GET extra seed_company
+  use_llm = core.GET extra use_llm
+
+  lead_json = http.GET "https://api.github.com/users/octocat"
+  login = core.GET lead_json login
+  display_name = core.GET lead_json name
+  followers = core.GET lead_json followers
+  public_repos = core.GET lead_json public_repos
+  ts = core.NOW 0
+
+  label = core.CONCAT login " — " display_name
+  followers_str = core.STR followers
+  follower_score = core.LEN followers_str
+
+  if use_llm == "yes":
+    prompt = core.CONCAT "Return one sentence: ICP fit (0-10) for selling devtools to company keyword '" seed_company "'. Lead card: " label " followers=" followers_str
+    blurb = llm.COMPLETION prompt
+    out {pipeline: "lead_gen", seed_company: seed_company, lead_card: label, public_repos: public_repos, heuristic_follower_digits: follower_score, llm_note: blurb, source: "api.github.com", generated_at: ts}
+
+  if use_llm != "yes":
+    out {pipeline: "lead_gen", seed_company: seed_company, lead_card: label, public_repos: public_repos, heuristic_follower_digits: follower_score, source: "api.github.com", generated_at: ts}

@@ -1,8 +1,8 @@
-# ArmaraOS Budget Threshold Alert
-# ==================================
-# Runs hourly. Checks current token spend against the configured budget limit.
-# If spend exceeds 80% of the limit, outputs an alert record. The kernel captures
-# this into the owning agent's session feed (inbox-style, no LLM turn triggered).
+# ArmaraOS budget threshold alert (showcase)
+# ============================================
+# Hourly: compares total_spent_usd to 80% of budget_limit_usd when limit > 0
+# (equivalent to spent/limit >= 0.8 via integer compare spent*100 >= limit*80).
+# JSON stdout is appended to the owning agent session by the cron runner.
 #
 # Uses: http, core
 # Validate: ainl validate programs/budget_threshold_alert/budget_threshold_alert.ainl --strict
@@ -13,20 +13,13 @@ budget_threshold_alert:
 
   spent = core.GET budget total_spent_usd
   limit = core.GET budget budget_limit_usd
+  period = core.GET budget period
 
-  # Early exit: no limit configured
   if limit == 0:
-    out {alert: false, reason: "no_limit_set", checked_at: ts}
-    # Note: execution continues after out; wrap remainder in limit > 0 guard
+    out {alert: false, reason: "no_limit_set", period: period, spent_usd: spent, checked_at: ts}
 
-  # Only compute threshold when limit is set
   if limit > 0:
-    pct = core.MUL spent 100
-    threshold = core.MUL limit 80
-
-    if pct >= threshold:
-      out {alert: true, spent_usd: spent, limit_usd: limit, triggered_at: ts}
-
-    # pct < threshold (under threshold, no alert)
-    if pct < threshold:
-      out {alert: false, spent_usd: spent, limit_usd: limit, checked_at: ts}
+    spent_x100 = core.MUL spent 100
+    threshold_line = core.MUL limit 80
+    at_risk = core.GTE spent_x100 threshold_line
+    out {alert: at_risk, threshold_rule: "spent_ge_80pct_of_limit", spent_usd: spent, budget_limit_usd: limit, period: period, checked_at: ts}

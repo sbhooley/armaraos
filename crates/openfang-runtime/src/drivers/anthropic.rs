@@ -24,15 +24,23 @@ pub struct AnthropicDriver {
 impl AnthropicDriver {
     /// Create a new Anthropic driver.
     pub fn new(api_key: String, base_url: String) -> Self {
+        Self::with_client(api_key, base_url, default_anthropic_reqwest_client())
+    }
+
+    pub fn with_client(api_key: String, base_url: String, client: reqwest::Client) -> Self {
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
-            client: reqwest::Client::builder()
-                .user_agent(crate::USER_AGENT)
-                .build()
-                .unwrap_or_default(),
+            client,
         }
     }
+}
+
+fn default_anthropic_reqwest_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(crate::USER_AGENT)
+        .build()
+        .unwrap_or_default()
 }
 
 /// Anthropic Messages API request body.

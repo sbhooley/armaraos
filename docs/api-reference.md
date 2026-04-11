@@ -104,7 +104,13 @@ Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avat
 
 Returns detailed information about a single agent.
 
-Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / **`tool_blocklist`**, **`fallback_models`**, and related fields on top of the list payload shape (without `model_tier` / `ready` enrichment).
+**Query parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `omit` | Optional. Comma-separated list of top-level JSON fields to omit from the response. Use **`omit=manifest_toml`** to skip the large canonical TOML string when you only need metadata (name, model, capabilities, etc.). |
+
+Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / **`tool_blocklist`**, **`fallback_models`**, **`manifest_toml`** (canonical TOML serialization of the in-memory manifest for dashboards and tooling, unless omitted via **`?omit=manifest_toml`**), and related fields on top of the list payload shape (without `model_tier` / `ready` enrichment).
 
 **Response** `200 OK`:
 
@@ -143,6 +149,7 @@ Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / 
   "fallback_models": [],
   "tool_allowlist": [],
   "tool_blocklist": [],
+  "manifest_toml": "name = \"hello-world\"\nversion = \"0.1.0\"\n…",
   "scheduled_ainl_host_adapter": {
     "source": "default_online",
     "summary": "Default full host-adapter allowlist (agent has network, tools, shell, spawn, or OFP).",
@@ -177,28 +184,57 @@ The body must deserialize to **`AgentManifest`**: use **top-level** fields such 
 }
 ```
 
-### PUT /api/agents/{id}/update
+### PATCH /api/agents/{id}
 
-Update an agent's configuration at runtime.
+Partial update of a small set of fields (lighter than `PUT …/update` or `PATCH …/config`).
 
-**Request Body**:
+**Request body** (JSON; all keys optional — include only what you want to change):
 
-```json
-{
-  "description": "Updated description",
-  "system_prompt": "You are a specialized assistant.",
-  "tags": ["updated", "v2"]
-}
-```
+- **`name`** (string) — renames the agent; when `~/.armaraos/agents/<old_name>/` exists it is renamed to match.
+- **`description`** (string)
+- **`model`** (string) — optional **`provider`** (string) in the same object for explicit catalog resolution
+- **`system_prompt`** (string)
+
+Updates are persisted to SQLite and synced to on-disk `agent.toml` under the kernel’s configured home directory (the directory and file are created if missing).
 
 **Response** `200 OK`:
 
 ```json
 {
-  "status": "updated",
-  "agent_id": "a1b2c3d4-..."
+  "status": "ok",
+  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "my-agent"
 }
 ```
+
+### PUT /api/agents/{id}/update
+
+Replace the **entire** **`AgentManifest`** for a running agent — the same conceptual document as `agent.toml` (flat top-level keys such as `name`, `[model]`, `[capabilities]`, `tags`, …). This is **not** a merge: the body is one TOML string.
+
+**Request body** (JSON):
+
+```json
+{
+  "manifest_toml": "name = \"my-agent\"\nversion = \"0.1.0\"\ndescription = \"…\"\nauthor = \"me\"\nmodule = \"builtin:chat\"\n\n[model]\nprovider = \"groq\"\nmodel = \"llama-3.3-70b-versatile\"\n"
+}
+```
+
+The parsed manifest’s **`name`** must equal the agent’s **current** registered name (use **`PATCH /api/agents/{id}`** with `"name"` to rename first).
+
+On success the kernel applies capabilities, scheduler quotas, proactive trigger registration, and SQLite persistence; it syncs or materializes `agents/<name>/agent.toml` and clears canonical session memory. When the daemon has registered the kernel handle (normal operation), **continuous**, **periodic**, and **proactive** autonomous schedules are **reloaded in-process** (background loops restarted from the new manifest) without requiring a daemon restart. An **`AgentManifestUpdate`** row is appended to the audit trail (`GET /api/audit/recent`; `action` is the Debug name, e.g. `"AgentManifestUpdate"`). Older databases may still show **`ConfigChange`** for the same operation.
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": "ok",
+  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "my-agent",
+  "note": "Manifest applied to the running kernel and persisted. Autonomous schedule loops (continuous / periodic / proactive triggers) were reloaded without a daemon restart. Session memory was cleared for safety."
+}
+```
+
+**Errors**: `400` if TOML is invalid or `name` does not match; `404` if the agent id is not found.
 
 ### PUT /api/agents/{id}/mode
 
@@ -224,14 +260,19 @@ Set an agent's operating mode. `Stable` mode pins the current model and freezes 
 
 ### PATCH /api/agents/{id}/config
 
-Hot-update name, description, system prompt, visual identity, model, provider, and fallback model chain. Omitted JSON keys leave those fields unchanged.
+Hot-update name, description, system prompt, visual identity, model, provider, optional custom endpoint hints, fallback model chain, and autonomous loop step limit. Omitted JSON keys leave those fields unchanged.
 
 **Merge semantics (important for API clients):**
 
 - **`description`**, **`system_prompt`**: if the key is present but the string is **empty**, the server **does not** apply the update (avoids accidental wipes from clients that used to send `""` when they did not have the real value).
 - **Identity** (`emoji`, `avatar_url`, `archetype`, `vibe`, `greeting_style`): **absent** key → keep current; **empty string** → clear to `null`; **non-empty** → set. **`color`**: empty string keeps the current color (invalid payloads are ignored).
 
-The updated agent row is persisted to SQLite after a successful patch.
+**Optional fields**
+
+- **`api_key_env`**, **`base_url`**: forwarded to the agent’s primary model config when set (custom endpoints / env key for the provider).
+- **`max_iterations`**: integer **1–10000** — sets **`[autonomous]` `max_iterations`** (creates **`[autonomous]`** if absent).
+
+The updated agent row is persisted to SQLite after a successful patch, and `agent.toml` is synced when the on-disk file exists (or materialized under the kernel home when missing).
 
 **Request body** (all fields optional):
 
@@ -248,7 +289,10 @@ The updated agent row is persisted to SQLite after a successful patch.
   "greeting_style": "warm",
   "model": "llama-3.3-70b-versatile",
   "provider": "groq",
-  "fallback_models": [{ "provider": "groq", "model": "llama-3.1-8b-instant" }]
+  "api_key_env": "GROQ_API_KEY",
+  "base_url": null,
+  "fallback_models": [{ "provider": "groq", "model": "llama-3.1-8b-instant" }],
+  "max_iterations": 50
 }
 ```
 
@@ -939,7 +983,7 @@ Detailed kernel status including all agents. Includes `config_schema_version` (e
 ```json
 {
   "status": "running",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "agent_count": 2,
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
@@ -989,8 +1033,8 @@ Build and version information.
 
 ```json
 {
-  "tag_name": "v0.7.1",
-  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.7.1",
+  "tag_name": "v0.7.2",
+  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.7.2",
   "published_at": "2026-01-01T12:00:00Z"
 }
 ```
@@ -1838,10 +1882,14 @@ ArmaraOS maintains a Merkle hash chain audit trail for all security-relevant ope
 
 ### GET /api/audit/recent
 
-Retrieve recent audit log entries.
+Retrieve recent audit log entries from the Merkle chain (newest slice; see also **`GET /api/logs/stream`** for live SSE).
 
-**Query Parameters:**
-- `limit` (optional): Number of entries to return (default: 50, max: 500)
+**Query parameters**
+
+| Name | Description |
+|------|-------------|
+| `n` | Optional. Number of recent entries to return (default **50**, max **1000**). |
+| `q` | Optional. Case-insensitive substring filter across `action`, `detail`, `outcome`, and `agent_id` (useful in the dashboard timeline search). |
 
 **Response** `200 OK`:
 
@@ -1849,18 +1897,21 @@ Retrieve recent audit log entries.
 {
   "entries": [
     {
-      "id": 1042,
-      "timestamp": "2025-01-15T10:30:00Z",
-      "event_type": "agent_spawned",
-      "agent_id": "a1b2c3d4-...",
-      "details": "Agent 'coder' spawned with model groq/llama-3.3-70b-versatile",
-      "hash": "a1b2c3d4e5f6...",
-      "prev_hash": "f6e5d4c3b2a1..."
+      "seq": 1041,
+      "timestamp": "2025-01-15T10:30:00.000000+00:00",
+      "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "action": "AgentManifestUpdate",
+      "detail": "PUT agent manifest update name=my-agent",
+      "outcome": "ok",
+      "hash": "a1b2c3d4e5f6..."
     }
   ],
-  "total": 1042
+  "total": 1042,
+  "tip_hash": "…"
 }
 ```
+
+The `action` string is the Rust **`Debug`** form of **`AuditAction`** (see [`crates/openfang-runtime/src/audit.rs`](../crates/openfang-runtime/src/audit.rs)) — e.g. `ToolInvoke`, `ConfigChange`, `AgentManifestUpdate`. Entries do not include `prev_hash` in this JSON (the chain is verified via **`GET /api/audit/verify`**).
 
 ### GET /api/audit/verify
 
@@ -2325,6 +2376,20 @@ Replace the entire preferences object on disk. The body **must** be a JSON **obj
 
 Manage recurring and one-shot scheduled jobs. Jobs can trigger agent turns, system events, or workflow runs on a schedule.
 
+### `/api/schedules` (alias)
+
+Dashboard, **Setup Wizard**, and the bundled JavaScript/Python SDKs call this path. It uses the **same kernel cron job store** as `/api/cron/jobs` (persistent jobs under the ArmaraOS home directory).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/schedules` | List jobs. Response: `{ "schedules": [...], "total", "source": "kernel_cron" }`. **Public read** (no Bearer) when `api_key` is set — same idea as `GET /api/cron/*`, so the dashboard overview can load before the user pastes an API key. |
+| `POST` | `/api/schedules` | Create an **agent-turn** cron job from a simplified body: `name`, `cron` (five space-separated fields), `agent_id` (UUID or agent **name**), optional `message` and `enabled`. **201 Created** includes top-level **`id`** (job UUID, for wizard “run now” and DELETE), **`name`**, **`result`**, and **`source`: `"kernel_cron"`**. The job id is also in `result.job_id` when present. From **loopback** (`127.0.0.1` / `::1`), the embedded dashboard may call this **without** Bearer (same trust model as `POST /api/support/diagnostics`); remote clients must send `Authorization` or `?token=`. |
+| `PUT` | `/api/schedules/{id}` | Update job (UUID same as `/api/cron/jobs/{id}`). Loopback-only bypass for Bearer matches **POST** above. |
+| `DELETE` | `/api/schedules/{id}` | Remove job. Loopback-only bypass for Bearer matches **POST** above. |
+| `POST` | `/api/schedules/{id}/run` | Trigger a run immediately (same semantics as `POST /api/cron/jobs/{id}/run`). Loopback-only bypass for Bearer matches **POST** above. |
+
+Full job schema, enable/disable, and status polling are documented under **`/api/cron/jobs`** below.
+
 ### GET /api/cron/jobs
 
 List all cron jobs. Optionally filter by agent with `?agent_id=<uuid>`.
@@ -2455,6 +2520,7 @@ Get job metadata including last run time, status, and error history.
   "last_status": "ok",
   "consecutive_errors": 0
 }
+```
 
 ### POST /api/cron/jobs/{id}/run
 
@@ -2895,21 +2961,33 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/agents` | List agents (includes `system_prompt`, `identity`) |
 | POST | `/api/agents` | Spawn agent |
 | GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
-| PUT | `/api/agents/{id}/update` | Update agent config |
-| PATCH | `/api/agents/{id}/config` | Hot-update name, prompt, identity, model, fallbacks |
+| PATCH | `/api/agents/{id}` | Partial update (`name`, `description`, `model`, `system_prompt`) |
+| PUT | `/api/agents/{id}/update` | Replace full manifest (`manifest_toml` TOML string) |
+| PATCH | `/api/agents/{id}/config` | Hot-update name, prompt, identity, model, `api_key_env` / `base_url`, fallbacks, `max_iterations` |
 | PATCH | `/api/agents/{id}/identity` | Update identity only (merged) |
 | GET | `/api/agents/{id}/tools` | Get tool allowlist / blocklist |
 | PUT | `/api/agents/{id}/tools` | Set tool allowlist / blocklist |
+| GET | `/api/agents/{id}/skills` | Get skill allowlist |
+| PUT | `/api/agents/{id}/skills` | Set skill allowlist |
+| GET | `/api/agents/{id}/mcp_servers` | Get MCP server allowlist |
+| PUT | `/api/agents/{id}/mcp_servers` | Set MCP server allowlist |
 | PUT | `/api/agents/{id}/mode` | Set agent mode (Stable/Normal) |
 | DELETE | `/api/agents/{id}` | Kill agent |
 | POST | `/api/agents/{id}/message` | Send message (blocking) |
 | POST | `/api/agents/{id}/message/stream` | Send message (SSE stream) |
 | GET | `/api/agents/{id}/session` | Get conversation history |
+| GET | `/api/agents/{id}/session/digest` | Lightweight session counts (dashboard polling) |
 | GET | `/api/agents/{id}/ws` | WebSocket chat |
 | POST | `/api/agents/{id}/session/reset` | Reset session |
 | POST | `/api/agents/{id}/session/compact` | LLM-based compaction |
 | POST | `/api/agents/{id}/stop` | Cancel current run |
 | PUT | `/api/agents/{id}/model` | Switch model |
+| **Budget** | | |
+| GET | `/api/budget` | Global budget status |
+| PUT | `/api/budget` | Update global budget |
+| GET | `/api/budget/agents` | Per-agent budget ranking |
+| GET | `/api/budget/agents/{id}` | Per-agent budget detail |
+| PUT | `/api/budget/agents/{id}` | Update per-agent budget limits |
 | **Workflows** | | |
 | GET | `/api/workflows` | List workflows |
 | POST | `/api/workflows` | Create workflow |

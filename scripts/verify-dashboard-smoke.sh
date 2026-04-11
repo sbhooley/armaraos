@@ -3,8 +3,9 @@
 # Default base URL is http://127.0.0.1:4200 — use the URL printed by `openfang start`
 # (e.g. http://127.0.0.1:50051) if your config binds a different port.
 # Covers health, status, schedules, support zip + downloads, spawn error shape, session digest,
-# GET /api/version/github-latest (dashboard “vs GitHub” compare), and GET /api/logs/daemon/recent
-# (empty lines OK until daemon.log exists).
+# GET /api/version/github-latest (dashboard “vs GitHub” compare), GET /api/logs/daemon/recent
+# (empty lines OK until daemon.log exists), GET / (embedded dashboard HTML includes notification bell),
+# GET /api/budget, GET /api/approvals.
 # Usage: ./scripts/verify-dashboard-smoke.sh [BASE_URL]
 set -euo pipefail
 
@@ -19,6 +20,21 @@ fi
 
 echo "-- GET /api/health"
 curl -sS -f "$BASE/api/health" | head -c 400
+echo ""
+
+echo "-- GET / (dashboard HTML: notification center bell markup)"
+if ! curl -sS -f -m 8 "$BASE/" | grep -qE 'notify-bell-btn|notify-center-root'; then
+  echo "ERROR: Dashboard HTML missing notification center (expected notify-bell-btn or notify-center-root)."
+  exit 1
+fi
+echo "OK"
+
+echo "-- GET /api/budget (JSON shape for dashboard notification + Settings)"
+curl -sS -f -m 5 "$BASE/api/budget" | head -c 500
+echo ""
+
+echo "-- GET /api/approvals (execution approval queue)"
+curl -sS -f -m 5 "$BASE/api/approvals" | head -c 500
 echo ""
 
 echo "-- GET /api/status"

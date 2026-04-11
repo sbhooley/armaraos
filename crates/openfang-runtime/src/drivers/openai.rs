@@ -25,16 +25,25 @@ pub struct OpenAIDriver {
     azure_mode: bool,
 }
 
+fn default_openai_reqwest_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(crate::USER_AGENT)
+        .build()
+        .unwrap_or_default()
+}
+
 impl OpenAIDriver {
     /// Create a new OpenAI-compatible driver.
     pub fn new(api_key: String, base_url: String) -> Self {
+        Self::with_client(api_key, base_url, default_openai_reqwest_client())
+    }
+
+    /// OpenAI-compatible driver with an explicit HTTP client (timeouts, pooling).
+    pub fn with_client(api_key: String, base_url: String, client: reqwest::Client) -> Self {
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
-            client: reqwest::Client::builder()
-                .user_agent(crate::USER_AGENT)
-                .build()
-                .unwrap_or_default(),
+            client,
             extra_headers: Vec::new(),
             azure_mode: false,
         }
@@ -46,13 +55,15 @@ impl OpenAIDriver {
     /// `Authorization: Bearer`.  The `base_url` should be the deployments root,
     /// e.g. `https://{resource}.openai.azure.com/openai/deployments`.
     pub fn new_azure(api_key: String, base_url: String) -> Self {
+        Self::with_client_azure(api_key, base_url, default_openai_reqwest_client())
+    }
+
+    /// Azure OpenAI with an explicit HTTP client.
+    pub fn with_client_azure(api_key: String, base_url: String, client: reqwest::Client) -> Self {
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
-            client: reqwest::Client::builder()
-                .user_agent(crate::USER_AGENT)
-                .build()
-                .unwrap_or_default(),
+            client,
             extra_headers: Vec::new(),
             azure_mode: true,
         }

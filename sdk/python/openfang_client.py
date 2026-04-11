@@ -141,8 +141,16 @@ class _AgentResource(_Resource):
     def list(self):
         return self._c._request("GET", "/api/agents")
 
-    def get(self, agent_id: str):
-        return self._c._request("GET", f"/api/agents/{agent_id}")
+    def get(self, agent_id: str, *, omit: Optional[str] = None) -> Any:
+        """GET /api/agents/{id} — agent detail.
+
+        The response includes **manifest_toml** (str): canonical TOML for the in-memory
+        manifest, suitable for full-manifest tooling. Pass ``omit="manifest_toml"`` to
+        skip that field (smaller payload). The list endpoint is lighter than a full GET
+        without ``omit``.
+        """
+        suffix = f"?omit={quote(omit, safe='')}" if omit else ""
+        return self._c._request("GET", f"/api/agents/{agent_id}{suffix}")
 
     def create(self, **kwargs):
         return self._c._request("POST", "/api/agents", kwargs)
@@ -157,6 +165,10 @@ class _AgentResource(_Resource):
         return self._c._request("POST", f"/api/agents/{agent_id}/clone")
 
     def update(self, agent_id: str, **data):
+        """PUT /api/agents/{id}/update — replace full manifest (pass manifest_toml=...).
+
+        See API docs: session clear, audit trail, on-disk agent.toml sync.
+        """
         return self._c._request("PUT", f"/api/agents/{agent_id}/update", data)
 
     def set_mode(self, agent_id: str, mode: str):
@@ -355,6 +367,7 @@ class _ScheduleResource(_Resource):
         return self._c._request("GET", "/api/schedules")
 
     def create(self, **schedule):
+        """POST /api/schedules. Success body includes id (job UUID), name, result, source."""
         return self._c._request("POST", "/api/schedules", schedule)
 
     def update(self, schedule_id: str, **schedule):

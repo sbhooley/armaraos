@@ -1,8 +1,9 @@
 //! Agent registry — tracks all agents, their state, and indexes.
 
 use dashmap::DashMap;
-use openfang_types::agent::{AgentEntry, AgentId, AgentMode, AgentState};
+use openfang_types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, AgentState};
 use openfang_types::error::{OpenFangError, OpenFangResult};
+use std::path::PathBuf;
 
 /// Registry of all agents in the kernel.
 pub struct AgentRegistry {
@@ -12,15 +13,29 @@ pub struct AgentRegistry {
     name_index: DashMap<String, AgentId>,
     /// Tag index: tag → list of agent IDs.
     tag_index: DashMap<String, Vec<AgentId>>,
+    /// ArmaraOS home root (same as `KernelConfig::home_dir`). Agent templates live under
+    /// `agent_home/agents/<name>/`. Defaults to [`openfang_types::config::openfang_home_dir`].
+    agent_home: PathBuf,
 }
 
 impl AgentRegistry {
-    /// Create a new empty registry.
+    /// Create a new empty registry (uses [`openfang_types::config::openfang_home_dir`] for disk paths).
     pub fn new() -> Self {
         Self {
             agents: DashMap::new(),
             name_index: DashMap::new(),
             tag_index: DashMap::new(),
+            agent_home: openfang_types::config::openfang_home_dir(),
+        }
+    }
+
+    /// Registry with an explicit ArmaraOS home root (must match the kernel's `config.home_dir`).
+    pub fn with_agent_home(agent_home: PathBuf) -> Self {
+        Self {
+            agents: DashMap::new(),
+            name_index: DashMap::new(),
+            tag_index: DashMap::new(),
+            agent_home,
         }
     }
 
@@ -295,6 +310,9 @@ impl AgentRegistry {
     }
 
     /// Update an agent's name (also updates the name index).
+    ///
+    /// When `~/.armaraos/agents/<old_name>/` exists on disk, it is renamed to
+    /// `agents/<new_name>/` so `agent.toml` and workspace files stay with the agent.
     pub fn update_name(&self, id: AgentId, new_name: String) -> OpenFangResult<()> {
         if let Some(existing_id) = self.name_index.get(&new_name).as_deref().copied() {
             if existing_id != id {
@@ -303,11 +321,37 @@ impl AgentRegistry {
             // Same agent owns this name — no-op
             return Ok(());
         }
+        let old_name = {
+            let entry = self
+                .agents
+                .get(&id)
+                .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+            entry.name.clone()
+        };
+        if old_name == new_name {
+            return Ok(());
+        }
+
+        let old_path = self.agent_home.join("agents").join(&old_name);
+        let new_path = self.agent_home.join("agents").join(&new_name);
+        if old_path.is_dir() {
+            if new_path.exists() {
+                return Err(OpenFangError::AgentAlreadyExists(format!(
+                    "agents/{new_name} already exists on disk"
+                )));
+            }
+            std::fs::rename(&old_path, &new_path).map_err(|e| {
+                OpenFangError::Config(format!(
+                    "rename agent directory {} → {}: {e}",
+                    old_name, new_name
+                ))
+            })?;
+        }
+
         let mut entry = self
             .agents
             .get_mut(&id)
             .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
-        let old_name = entry.name.clone();
         entry.name = new_name.clone();
         entry.manifest.name = new_name.clone();
         entry.last_active = chrono::Utc::now();
@@ -315,6 +359,38 @@ impl AgentRegistry {
         drop(entry);
         self.name_index.remove(&old_name);
         self.name_index.insert(new_name, id);
+        Ok(())
+    }
+
+    /// Replace the in-memory manifest and keep `entry.tags` / [`AgentManifest::tags`] / tag index aligned.
+    pub fn replace_manifest(&self, id: AgentId, manifest: AgentManifest) -> OpenFangResult<()> {
+        let old_tags = self
+            .agents
+            .get(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?
+            .tags
+            .clone();
+
+        let new_tags = {
+            let mut entry = self
+                .agents
+                .get_mut(&id)
+                .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+            entry.manifest = manifest;
+            let tags = entry.manifest.tags.clone();
+            entry.tags = tags.clone();
+            entry.last_active = chrono::Utc::now();
+            tags
+        };
+
+        for t in &old_tags {
+            if let Some(mut ids) = self.tag_index.get_mut(t) {
+                ids.retain(|&agent_id| agent_id != id);
+            }
+        }
+        for t in &new_tags {
+            self.tag_index.entry(t.clone()).or_default().push(id);
+        }
         Ok(())
     }
 
@@ -502,5 +578,49 @@ mod tests {
         registry.register(entry).unwrap();
         registry.remove(id).unwrap();
         assert!(registry.get(id).is_none());
+    }
+
+    #[test]
+    fn test_replace_manifest_updates_tags_and_index() {
+        let registry = AgentRegistry::new();
+        let mut e = test_entry("tagged");
+        e.manifest.tags = vec!["a".into(), "b".into()];
+        e.tags = e.manifest.tags.clone();
+        let id = e.id;
+        registry.register(e).unwrap();
+
+        let mut m = registry.get(id).unwrap().manifest;
+        m.tags = vec!["b".into(), "c".into()];
+        registry.replace_manifest(id, m).unwrap();
+
+        let updated = registry.get(id).unwrap();
+        assert_eq!(updated.tags, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(updated.manifest.tags, updated.tags);
+    }
+
+    /// `update_name` renames `agents/<old>` → `agents/<new>` under `ARMARAOS_HOME` when present.
+    #[serial_test::serial]
+    #[test]
+    fn test_update_name_renames_agent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ARMARAOS_HOME", dir.path().as_os_str());
+        let agents = dir.path().join("agents");
+        std::fs::create_dir_all(agents.join("alpha")).unwrap();
+        std::fs::write(agents.join("alpha").join("marker.txt"), b"x").unwrap();
+
+        let registry = AgentRegistry::new();
+        let mut e = test_entry("alpha");
+        e.manifest.name = "alpha".to_string();
+        let id = e.id;
+        registry.register(e).unwrap();
+
+        registry.update_name(id, "beta".to_string()).unwrap();
+
+        assert!(agents.join("beta").is_dir());
+        assert!(agents.join("beta").join("marker.txt").exists());
+        assert!(!agents.join("alpha").exists());
+        assert_eq!(registry.get(id).unwrap().name, "beta");
+
+        std::env::remove_var("ARMARAOS_HOME");
     }
 }

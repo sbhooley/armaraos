@@ -95,6 +95,13 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 1.6 — AINL product awareness (ArmaraOS hosts AINL graphs / tooling; include for subagents too)
     sections.push(AINL_AWARENESS_SECTION.to_string());
 
+    // Section 1.65 — AINL authoring workflow (all agents; complements MCP tool list when present)
+    sections.push(AINL_AUTHORING_WORKFLOW_SECTION.to_string());
+
+    if granted_ainl_mcp_tools(&ctx.granted_tools) {
+        sections.push(AINL_MCP_TOOLS_GRANTED_NOTE.to_string());
+    }
+
     // Section 1.7 — Disambiguate ArmaraOS from OpenClaw (models often conflate the two)
     sections.push(ARMARAOS_NOT_OPENCLAW_SECTION.to_string());
 
@@ -252,6 +259,29 @@ This environment integrates **AI Native Language (AINL)** — the same project m
 When users ask about AINL versions, adapters, syntax, or release notes, treat these URLs as authoritative. Prefer **web_fetch** or **web_search** against them (or GitHub Releases / `docs/CHANGELOG.md` in the repo) instead of inventing changelog details.
 
 If a tool or capability reports an **embedded runtime version** (e.g. from a bundled interpreter), that number may differ from the latest **PyPI** package (`pip install ainativelang`) or **git** tag — say so briefly and still point to the links above for official release notes.";
+
+/// Workflow for authoring `.ainl` graphs (validate-first, MCP feedback, avoid random example grepping).
+const AINL_AUTHORING_WORKFLOW_SECTION: &str = "\
+## AINL authoring (workflows)
+For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or similar **repeatable workflows**, prefer **AINL** `.ainl` graphs over ad-hoc scripts unless the user clearly needs a general-purpose language.
+
+- **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, fix the graph using fields in the tool response (e.g. **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`**) — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
+- **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
+- **Starters:** for new graphs, consider **`mcp_ainl_ainl_list_ecosystem`** and **`mcp_ainl_ainl_import_*`** before writing large graphs from scratch.
+- **`ainl_run` adapters:** graphs that use `http`, `fs`, `cache`, or `sqlite` must pass an **`adapters`** object in the run payload — the MCP server does not register those adapters by default (see tool schema / server instructions).";
+
+/// Short reminder when this agent actually has `mcp_ainl_*` tools granted.
+const AINL_MCP_TOOLS_GRANTED_NOTE: &str = "\
+## AINL MCP tools (granted)
+You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → apply diagnostics → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters.";
+
+/// True when `granted_tools` includes at least one tool for MCP server `ainl` (`mcp_ainl_*`).
+fn granted_ainl_mcp_tools(granted: &[String]) -> bool {
+    granted.iter().any(|t| {
+        let p: Vec<&str> = t.splitn(3, '_').collect();
+        p.len() >= 3 && p[0] == "mcp" && p[1] == "ainl"
+    })
+}
 
 /// Clarifies that this host is ArmaraOS, not the OpenClaw CLI/npm product (reduces spurious install attempts).
 const ARMARAOS_NOT_OPENCLAW_SECTION: &str = "\
@@ -552,6 +582,7 @@ const OPERATIONAL_GUIDELINES: &str = "\
 ## Operational Guidelines
 - Do NOT retry a tool call with identical parameters if it failed. Try a different approach.
 - If a tool returns an error, analyze the error before calling it again.
+- When editing AINL (`.ainl`), if **`mcp_ainl_ainl_validate`** fails, fix the graph from the structured fields in the response (`primary_diagnostic`, `agent_repair_steps`, etc.) and re-validate — do not rely on hunting random example `.ainl` files across the repo as your main syntax source.
 - Prefer targeted, specific tool calls over broad ones.
 - Plan your approach before executing multiple tool calls.
 - If you cannot accomplish a task after a few attempts, explain what went wrong instead of looping.
@@ -561,6 +592,36 @@ const OPERATIONAL_GUIDELINES: &str = "\
 // ---------------------------------------------------------------------------
 // Tool metadata helpers
 // ---------------------------------------------------------------------------
+
+/// One-line hint for `mcp_ainl_*` tools (server key `ainl` from host MCP config).
+fn mcp_ainl_tool_hint(full_name: &str) -> &'static str {
+    let Some(rest) = full_name.strip_prefix("mcp_ainl_") else {
+        return "AINL MCP toolchain";
+    };
+    match rest {
+        "ainl_validate" => {
+            "validate AINL source; fix using primary_diagnostic and agent_repair_steps"
+        }
+        "ainl_compile" => "compile AINL source to IR JSON",
+        "ainl_capabilities" => {
+            "list adapter verbs and strict contract (use before inventing R lines)"
+        }
+        "ainl_security_report" => "security / policy report for AINL source",
+        "ainl_run" => "compile and run AINL; pass adapters for http/fs/cache/sqlite when needed",
+        "ainl_list_ecosystem" => "list importable AINL starters from the ecosystem",
+        "ainl_import_clawflow" => "import a graph from ClawFlow-style input",
+        "ainl_import_agency_agent" => "import a graph from agency-agent style input",
+        "ainl_import_markdown" => "import a graph from markdown description",
+        "ainl_fitness_report" => "stability / fitness report for an AINL file",
+        "ainl_ir_diff" => "diff IR between two AINL files",
+        "ainl_ptc_signature_check" => "PTC signature check on AINL source",
+        "ainl_trace_export" => "export trace JSONL to structured JSONL",
+        "ainl_ptc_run" => "run PTC suite on AINL",
+        "ainl_ptc_health_check" => "PTC health check",
+        _ if rest.starts_with("ainl_import_") => "import a starter graph from the AINL ecosystem",
+        _ => "AINL MCP tool (validate strict before run when editing graphs)",
+    }
+}
 
 /// Map a tool name to its category for grouping.
 pub fn tool_category(name: &str) -> &'static str {
@@ -584,7 +645,8 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "docker_exec" | "docker_build" | "docker_run" => "Docker",
 
-        "cron_create" | "cron_list" | "cron_delete" => "Scheduling",
+        "cron_create" | "cron_list" | "cron_cancel" | "schedule_create" | "schedule_list"
+        | "schedule_delete" | "channels_list" => "Scheduling & channels",
 
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
             "Processes"
@@ -652,10 +714,14 @@ pub fn tool_hint(name: &str) -> &'static str {
         "docker_build" => "build a Docker image",
         "docker_run" => "start a Docker container",
 
-        // Scheduling
-        "cron_create" => "schedule a recurring task",
-        "cron_list" => "list scheduled tasks",
-        "cron_delete" => "remove a scheduled task",
+        // Scheduling & outbound channels
+        "cron_create" => "create a kernel cron job (ArmaraOS scheduler)",
+        "cron_list" => "list kernel cron jobs for this agent",
+        "cron_cancel" => "remove a kernel cron job by id",
+        "schedule_create" => "create a cron job (friendly alias of cron_create)",
+        "schedule_list" => "list cron jobs for this agent",
+        "schedule_delete" => "delete a cron job by id",
+        "channels_list" => "list registered channel adapters for alerts",
 
         // Processes
         "process_start" => "start a long-running process (REPL, server)",
@@ -663,6 +729,8 @@ pub fn tool_hint(name: &str) -> &'static str {
         "process_write" => "write to a process's stdin",
         "process_kill" => "terminate a running process",
         "process_list" => "list active processes",
+
+        _ if name.starts_with("mcp_ainl_") => mcp_ainl_tool_hint(name),
 
         _ => "",
     }
@@ -749,6 +817,8 @@ mod tests {
         let prompt = build_system_prompt(&basic_ctx());
         assert!(prompt.contains("You are Researcher"));
         assert!(prompt.contains("## AI Native Language (AINL)"));
+        assert!(prompt.contains("## AINL authoring (workflows)"));
+        assert!(!prompt.contains("## AINL MCP tools (granted)"));
         assert!(prompt.contains("## Host environment (ArmaraOS, not OpenClaw)"));
         assert!(prompt.contains("https://ainativelang.com"));
         assert!(prompt.contains("https://github.com/sbhooley/ainativelang"));
@@ -782,6 +852,7 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
 
         assert!(prompt.contains("## AI Native Language (AINL)"));
+        assert!(prompt.contains("## AINL authoring (workflows)"));
         assert!(prompt.contains("## Host environment (ArmaraOS, not OpenClaw)"));
         assert!(!prompt.contains("## Tool Call Behavior"));
         assert!(!prompt.contains("## User Profile"));
@@ -835,6 +906,22 @@ mod tests {
         assert!(!tool_hint("file_read").is_empty());
         assert!(!tool_hint("browser_navigate").is_empty());
         assert!(tool_hint("some_unknown_tool").is_empty());
+    }
+
+    #[test]
+    fn test_mcp_ainl_tool_hints() {
+        assert!(!tool_hint("mcp_ainl_ainl_validate").is_empty());
+        assert!(!tool_hint("mcp_ainl_ainl_run").is_empty());
+        assert!(tool_hint("mcp_ainl_ainl_validate").contains("validate"));
+    }
+
+    #[test]
+    fn test_granted_ainl_mcp_adds_connected_note() {
+        let mut ctx = basic_ctx();
+        ctx.granted_tools.push("mcp_ainl_ainl_validate".to_string());
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## AINL MCP tools (granted)"));
+        assert!(prompt.contains("Golden path"));
     }
 
     #[test]

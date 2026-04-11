@@ -399,6 +399,63 @@
 
   <div class="sidebar-overlay" @click="mobileMenuOpen = false"></div>
 
+  <!-- Notification center (fixed; outside main so page flex layout is unchanged) -->
+  <div class="notify-center-root">
+    <div
+      class="sr-only"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      x-text="$store.notifyCenter.liveRegionText"
+    ></div>
+    <div class="notify-center-backdrop" x-show="$store.notifyCenter.panelOpen" @click="$store.notifyCenter.close()" aria-hidden="true"></div>
+    <button
+      type="button"
+      id="notify-bell-btn"
+      class="notify-bell-btn btn btn-ghost"
+      @click.stop="$store.notifyCenter.toggle()"
+      :aria-expanded="$store.notifyCenter.panelOpen ? 'true' : 'false'"
+      aria-haspopup="true"
+      aria-controls="notify-center-panel"
+      title="Notifications"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      <span class="notify-bell-badge" x-show="$store.notifyCenter.badgeCount() > 0" x-text="$store.notifyCenter.badgeCount() > 99 ? '99+' : $store.notifyCenter.badgeCount()"></span>
+    </button>
+    <div
+      id="notify-center-panel"
+      class="notify-panel card"
+      tabindex="-1"
+      x-show="$store.notifyCenter.panelOpen"
+      x-transition:enter="transition ease-out duration-150"
+      x-transition:enter-start="opacity-0 transform -translate-y-1"
+      x-transition:enter-end="opacity-100 transform translate-y-0"
+      role="region"
+      aria-label="Notifications"
+      @click.stop
+    >
+      <div class="notify-panel-head">
+        <span class="notify-panel-title">Notifications</span>
+        <button type="button" class="btn btn-ghost btn-sm" x-show="$store.notifyCenter.badgeCount() > 0" @click="$store.notifyCenter.clearAll()">Clear all</button>
+      </div>
+      <div class="notify-panel-body">
+        <p class="notify-panel-empty text-dim text-sm" x-show="$store.notifyCenter.badgeCount() === 0" style="margin:0;padding:12px 4px">Nothing needs attention.</p>
+        <template x-for="row in $store.notifyCenter.items" :key="row.id">
+          <div class="notify-row" :class="'notify-row--' + (row.severity || 'info')">
+            <div class="notify-row-text">
+              <div class="notify-row-title" x-text="row.title"></div>
+              <div class="notify-row-detail text-dim text-sm" x-show="row.detail" x-text="row.detail"></div>
+            </div>
+            <div class="notify-row-actions">
+              <a class="btn btn-ghost btn-sm" x-show="row.href" :href="row.href" @click="$store.notifyCenter.close()">Open</a>
+              <button type="button" class="btn btn-ghost btn-sm" @click="$store.notifyCenter.dismiss(row.id)">Dismiss</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Content -->
   <main class="main-content">
     <!-- Mobile menu button -->
@@ -1151,6 +1208,16 @@
                         <template x-if="(msg.tools || []).length && !schedulerParts(msg)">
                           <div class="message-reply-with-tools">
                             <div class="message-tools-cluster">
+                              <div class="message-tools-cluster-intro" role="group" aria-label="Tool calls in this turn">
+                                <div class="message-tools-cluster-intro-icon" aria-hidden="true">
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                                </div>
+                                <div class="message-tools-cluster-intro-meta">
+                                  <div class="message-tools-cluster-intro-title">Tool calls</div>
+                                  <div class="message-tools-cluster-intro-sub" x-text="(msg.tools || []).length + ' step' + ((msg.tools || []).length !== 1 ? 's' : '') + ' in this turn'"></div>
+                                </div>
+                                <span class="message-tools-cluster-pill">Agent loop</span>
+                              </div>
                               <template x-if="msg.images && msg.images.length">
                                 <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0 0">
                                   <template x-for="img in msg.images" :key="img.file_id">
@@ -1162,15 +1229,17 @@
                               </template>
                               <template x-for="tool in (msg.tools || [])" :key="tool.id">
                                 <div class="tool-card" :class="{ 'tool-card-error': tool.is_error }" :data-tool="tool.name">
-                                  <div class="tool-card-header" @click="tool.expanded = !tool.expanded">
+                                  <button type="button" class="tool-card-header" @click="tool.expanded = !tool.expanded" :aria-expanded="tool.expanded ? 'true' : 'false'">
                                     <template x-if="tool.running"><div class="tool-card-spinner"></div></template>
                                     <template x-if="!tool.running && !tool.is_error"><span class="tool-icon-ok">&#10003;</span></template>
                                     <template x-if="!tool.running && tool.is_error"><span class="tool-icon-err">&#10007;</span></template>
-                                    <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
+                                    <div class="tool-card-icon-badge">
+                                      <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
+                                    </div>
                                     <span class="tool-card-name" x-text="tool.name"></span>
                                     <span class="text-xs text-dim" x-text="tool.running ? 'running...' : (tool.is_error ? 'error' : (tool.result ? (tool.result.length > 500 ? Math.round(tool.result.length/1024) + 'KB' : 'done') : 'done'))" style="margin-left:auto"></span>
                                     <span class="tool-expand-chevron" :style="tool.expanded ? 'transform:rotate(90deg)' : ''" style="transition:transform 0.15s">&#9654;</span>
-                                  </div>
+                                  </button>
                                   <div x-show="tool._imageUrls && tool._imageUrls.length" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px">
                                     <template x-for="iurl in (tool._imageUrls || [])" :key="iurl">
                                       <a :href="iurl" target="_blank" style="display:block">
@@ -1203,7 +1272,7 @@
                               </template>
                             </div>
                             <template x-if="msg.text && msg.text.trim() && !msg.thinking && !schedulerParts(msg)">
-                              <div class="message-bubble" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-html="formatChatMessageHtml(msg)"></div>
+                              <div class="message-bubble message-rich-reply" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-html="formatChatMessageHtml(msg)"></div>
                             </template>
                           </div>
                         </template>
@@ -1607,6 +1676,7 @@
                   <button class="btn btn-primary mt-4" @click="saveConfig()" :disabled="configSaving">
                     <span x-show="!configSaving">Save Config</span><span x-show="configSaving">Saving...</span>
                   </button>
+                  <p class="text-xs text-dim" style="margin-top:10px;line-height:1.45;max-width:42rem">Use <strong>Save Config</strong> for routine edits (prompt, model, identity, tools). Your chat session stays intact. Use <strong>full manifest</strong> below only when you need to replace the entire <code style="font-size:11px">agent.toml</code> document.</p>
 
                   <!-- Tool Filters -->
                   <div class="mt-4" style="border-top:1px solid var(--border);padding-top:16px">
@@ -1637,6 +1707,26 @@
                         <input class="form-input" style="font-size:12px;flex:1" x-model="newBlockTool" placeholder="tool name" @keydown.enter="addBlockTool()">
                         <button class="btn btn-ghost btn-sm" @click="addBlockTool()">Add</button>
                       </div>
+                    </div>
+                  </div>
+
+                  <div class="mt-4" style="border-top:1px solid var(--border);padding-top:16px">
+                    <button type="button" class="btn btn-ghost btn-sm mb-2" @click="fullManifestSectionOpen = !fullManifestSectionOpen">
+                      <span x-text="fullManifestSectionOpen ? 'Hide' : 'Show'"></span> advanced — full manifest (replace entire agent.toml)
+                    </button>
+                    <div x-show="fullManifestSectionOpen" x-transition>
+                      <p class="text-xs text-dim mb-2" style="line-height:1.5;max-width:42rem">Applies <code style="font-size:11px">PUT /api/agents/{id}/update</code>: replaces the whole manifest, clears canonical session memory, reloads autonomous schedules without restarting the daemon, and records an <strong>AgentManifestUpdate</strong> audit entry. For lighter edits, use <strong>Save Config</strong> above.</p>
+                      <div class="flex flex-wrap gap-2 mb-2">
+                        <button type="button" class="btn btn-ghost btn-sm" @click="reloadFullManifestToml()" :disabled="fullManifestLoading || fullManifestSaving">
+                          <span x-show="!fullManifestLoading">Reload from server</span>
+                          <span x-show="fullManifestLoading" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                        </button>
+                        <button type="button" class="btn btn-primary btn-sm" @click="promptApplyFullManifest()" :disabled="fullManifestLoading || fullManifestSaving">
+                          <span x-show="!fullManifestSaving">Apply full manifest</span>
+                          <span x-show="fullManifestSaving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                        </button>
+                      </div>
+                      <textarea class="form-textarea" x-model="fullManifestToml" style="min-height:220px;font-family:var(--font-mono);font-size:11px" placeholder="Open advanced and use Reload from server, or paste TOML…" :disabled="fullManifestLoading || fullManifestSaving"></textarea>
                     </div>
                   </div>
                 </div>
@@ -2064,10 +2154,10 @@
                       <div class="bookmark-card-tools-label">Tool outputs</div>
                       <template x-for="(t, ti) in it.tools" :key="it.id + '-tool-' + ti">
                         <div class="tool-card bookmark-tool-card" :class="{ 'tool-card-error': t.is_error }">
-                          <div class="tool-card-header" @click="toggleToolExpand(it.id, ti)">
+                          <button type="button" class="tool-card-header" @click="toggleToolExpand(it.id, ti)" :aria-expanded="isToolExpanded(it.id, ti) ? 'true' : 'false'">
                             <span class="tool-card-name" x-text="t.name"></span>
                             <span class="text-xs text-dim" x-text="isToolExpanded(it.id, ti) ? 'hide' : 'show'"></span>
-                          </div>
+                          </button>
                           <div class="bookmark-tool-expand" x-show="isToolExpanded(it.id, ti)">
                             <div class="text-dim mb-1 text-xs">Input</div>
                             <pre class="bookmark-tool-pre" x-text="t.input"></pre>

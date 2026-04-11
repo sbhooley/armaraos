@@ -373,7 +373,7 @@ These are features where ArmaraOS can leapfrog OpenClaw.
 
 ### 4.5 Final Release -- READY
 
-**Status: ALL CODE COMPLETE** — All 18 code items done. 1751+ tests passing. Production audit completed: 2 critical bugs fixed (API delete alias, config/set route), CSP hardened (Tauri + middleware), Tauri signing key installed. **Stable desktop:** tag **v0.7.1** (patch after v0.7.0 — see CHANGELOG). Build release artifacts from the tagged commit.
+**Status: ALL CODE COMPLETE** — All 18 code items done. 1751+ tests passing. Production audit completed: 2 critical bugs fixed (API delete alias, config/set route), CSP hardened (Tauri + middleware), Tauri signing key installed. **Stable desktop:** tag **v0.7.2** (patch line — see CHANGELOG). Build release artifacts from the tagged commit.
 
 1. Complete items from `production-checklist.md` (keygen DONE, secrets, icons DONE, domain pending)
 2. Tag `v0.1.0`

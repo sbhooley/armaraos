@@ -10,8 +10,9 @@
 //!
 //! Workflows are defined as Rust structs or loaded from JSON.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use openfang_types::agent::AgentId;
+use openfang_types::runtime_limits::WorkflowRetentionLimits;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -255,10 +256,6 @@ impl WorkflowEngine {
         }
     }
 
-    /// Maximum number of retained workflow runs. Oldest completed/failed
-    /// runs are evicted when this limit is exceeded.
-    const MAX_RETAINED_RUNS: usize = 200;
-
     /// Start a workflow run. Returns the run ID and a handle to check progress.
     ///
     /// The actual execution is driven externally by calling `execute_run()`
@@ -267,6 +264,7 @@ impl WorkflowEngine {
         &self,
         workflow_id: WorkflowId,
         input: String,
+        retention: WorkflowRetentionLimits,
     ) -> Option<WorkflowRunId> {
         let workflow = self.workflows.read().await.get(&workflow_id)?.clone();
         let run_id = WorkflowRunId::new();
@@ -287,8 +285,28 @@ impl WorkflowEngine {
         let mut runs = self.runs.write().await;
         runs.insert(run_id, run);
 
+        let now = Utc::now();
+        if let Some(ttl_secs) = retention.run_ttl_secs {
+            runs.retain(|rid, r| {
+                if !matches!(
+                    r.state,
+                    WorkflowRunState::Completed | WorkflowRunState::Failed
+                ) {
+                    return true;
+                }
+                let anchor = r.completed_at.unwrap_or(r.started_at);
+                let age = now.signed_duration_since(anchor);
+                if age > ChronoDuration::seconds(ttl_secs as i64) {
+                    debug!(run_id = %rid, ttl_secs, "TTL eviction workflow run");
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+
         // Evict oldest completed/failed runs when we exceed the cap
-        if runs.len() > Self::MAX_RETAINED_RUNS {
+        if runs.len() > retention.max_retained_runs {
             let mut evictable: Vec<(WorkflowRunId, DateTime<Utc>)> = runs
                 .iter()
                 .filter(|(_, r)| {
@@ -303,10 +321,10 @@ impl WorkflowEngine {
             // Sort oldest first
             evictable.sort_by_key(|(_, t)| *t);
 
-            let to_remove = runs.len() - Self::MAX_RETAINED_RUNS;
+            let to_remove = runs.len() - retention.max_retained_runs;
             for (id, _) in evictable.into_iter().take(to_remove) {
                 runs.remove(&id);
-                debug!(run_id = %id, "Evicted old workflow run");
+                debug!(run_id = %id, "Evicted old workflow run (count cap)");
             }
         }
 
@@ -863,7 +881,13 @@ mod tests {
         let wf = test_workflow();
         let wf_id = engine.register(wf).await;
 
-        let run_id = engine.create_run(wf_id, "test input".to_string()).await;
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "test input".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await;
         assert!(run_id.is_some());
 
         let run = engine.get_run(run_id.unwrap()).await.unwrap();
@@ -897,7 +921,11 @@ mod tests {
         let wf = test_workflow();
         let wf_id = engine.register(wf).await;
         let run_id = engine
-            .create_run(wf_id, "raw data".to_string())
+            .create_run(
+                wf_id,
+                "raw data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
             .await
             .unwrap();
 
@@ -954,7 +982,11 @@ mod tests {
         };
         let wf_id = engine.register(wf).await;
         let run_id = engine
-            .create_run(wf_id, "all good".to_string())
+            .create_run(
+                wf_id,
+                "all good".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
             .await
             .unwrap();
 
@@ -1005,7 +1037,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         // This sender returns output containing "ERROR"
         let sender = |_id: AgentId, _msg: String| async move {
@@ -1044,7 +1083,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "draft".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "draft".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1090,7 +1136,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let sender = |_id: AgentId, _msg: String| async move {
             Ok(("iteration output".to_string(), 10u64, 5u64))
@@ -1137,7 +1190,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1183,7 +1243,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1251,7 +1318,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "start".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "start".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1320,7 +1394,14 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "data".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
 
         let sender =
             |_id: AgentId, msg: String| async move { Ok((format!("Done: {msg}"), 10u64, 5u64)) };

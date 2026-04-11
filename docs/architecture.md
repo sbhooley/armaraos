@@ -31,6 +31,8 @@ ArmaraOS treats **AI Native Language (AINL)** as the **first-class** language fo
 
 See **[AINL first (policy)](ainl-first-language.md)** for the full principle, exceptions, and rationale.
 
+Embedded operator graphs under `programs/` (materialized to `~/.armaraos/ainl-library/armaraos-programs/`) and their curated Scheduler wiring are summarized in **[AINL showcases](ainl-showcases.md)**.
+
 ---
 
 ## Crate Structure
@@ -63,7 +65,7 @@ openfang-types          Shared types: Agent, Capability, Event, Memory, Message,
 | Crate | Description |
 |-------|-------------|
 | **openfang-types** | Core type definitions used across all crates. Defines `AgentManifest`, `AgentId`, `Capability`, `Event`, `ToolDefinition`, `KernelConfig`, `ArmaraOSError`, taint tracking (`TaintLabel`, `TaintSet`), Ed25519 manifest signing, model catalog types (`ModelCatalogEntry`, `ProviderInfo`, `ModelTier`), tool compatibility mappings (21 OpenClaw-to-ArmaraOS), MCP/A2A config types, and web config types. All config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
-| **openfang-memory** | SQLite-backed memory substrate (schema v5). Uses `Arc<Mutex<Connection>>` with `spawn_blocking` for async bridge. Provides structured KV storage, semantic search with vector embeddings, knowledge graph (entities and relations), session management, task board, usage event persistence (`usage_events` table, `UsageStore`), and canonical sessions for cross-channel memory. Five schema versions: V1 core, V2 collab, V3 embeddings, V4 usage, V5 canonical_sessions. |
+| **openfang-memory** | SQLite-backed memory substrate (schema v8+). Uses an `r2d2` connection pool (`MemorySqlitePool`, WAL + configurable `busy_timeout`) with `spawn_blocking` for async bridging. Provides structured KV storage, semantic search with vector embeddings, knowledge graph (entities and relations), session management, task board, usage event persistence (`usage_events` table, `UsageStore`), and canonical sessions for cross-channel memory. |
 | **openfang-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, and embedding driver. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
 | **openfang-kernel** | The central coordinator. `OpenFangKernel` assembles all subsystems: `AgentRegistry`, `AgentScheduler`, `CapabilityManager`, `EventBus`, `Supervisor`, `WorkflowEngine`, `TriggerEngine`, `BackgroundExecutor`, `WasmSandbox`, `ModelCatalog`, `MeteringEngine`, `ModelRouter`, `AuthManager` (RBAC), `HeartbeatMonitor`, `SetupWizard`, `SkillRegistry`, MCP connections, and `WebToolsContext`. Implements `KernelHandle` for inter-agent operations. Handles agent spawn/kill, message dispatch, workflow execution, trigger evaluation, capability inheritance validation, and graceful shutdown with state persistence. |
 | **openfang-api** | HTTP API server built on Axum 0.8. Routes for agents, workflows, triggers, memory, channels, templates, models, providers, skills, ClawHub, MCP, health, status, version, shutdown, ArmaraOS home browser, audit and **log** streams (`/api/logs/stream`, `/api/logs/daemon/*`), and more (see [api-reference.md](api-reference.md)). WebSocket handler for real-time agent chat with streaming. Multiple SSE endpoints (agent message stream, kernel events, audit log, daemon tracing tail). OpenAI-compatible endpoints (`POST /v1/chat/completions`, `GET /v1/models`). A2A endpoints (`/.well-known/agent.json`, `/a2a/*`). Middleware: Bearer token auth, request ID injection, structured request logging, GCRA rate limiter (cost-aware), security headers (CSP, X-Frame-Options, etc.), health endpoint redaction, loopback exceptions for selected SSE and support routes. Serves the embedded Alpine.js dashboard from `static/` (`index_body.html`, `js/pages/`, `css/`). The **Get started** landing page (`#overview`) — section order, Quick actions, Setup Wizard gating, checklist — is documented in [dashboard-overview-ui.md](dashboard-overview-ui.md); **Settings** / **Runtime** dashboard shell in [dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md). |
@@ -331,9 +333,52 @@ A shared task queue for multi-agent collaboration:
 - **Usage tracking**: `usage_events` table persists token counts, cost estimates, and model usage per agent. `UsageStore` provides query and aggregation APIs.
 - **Canonical sessions**: Cross-channel memory. `CanonicalSession` tracks a user's conversation context across multiple channels. Compaction produces summaries that are injected into system prompts. Stored in `canonical_sessions` table (schema v5).
 
-### SQLite Architecture
+### SQLite architecture
 
-All memory operations go through `Arc<Mutex<Connection>>` with Tokio's `spawn_blocking` for async bridging. This ensures thread safety without requiring an async SQLite driver. Schema migrations run automatically through five versions.
+Concurrent access uses **`r2d2` + `r2d2_sqlite`** (`MemorySqlitePool`): multiple pooled `rusqlite` connections share one database file (WAL mode). The public `Memory` trait is unchanged; async entry points still use `spawn_blocking` so the Tokio runtime is not blocked on SQLite.
+
+**`[memory]` options** (see `MemoryConfig` in `openfang-types`; defaults keep existing behavior):
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `max_connections` | `16` | Pool size (`r2d2` `max_size`, clamped 1–512). |
+| `acquire_timeout_ms` | `30000` | Max wait to obtain a connection from the pool. |
+| `busy_timeout_ms` | `5000` | SQLite `busy_timeout` (retries on `SQLITE_BUSY`). |
+| `shard_mode` | `"single"` | Stub for future per-workspace or per-agent shards; only `single` is implemented. |
+
+Schema migrations run once on disk-backed databases before the pool is exposed; in-memory test pools migrate on the first pooled connection so shared-cache `:memory:` databases are not dropped prematurely.
+
+---
+
+## Runtime limits (`[runtime_limits]`)
+
+Global defaults live in `config.toml` under **`[runtime_limits]`** (`RuntimeLimitsConfig` in `openfang-types`). The kernel keeps a hot-reloadable snapshot (`runtime_limits_live`); each agent turn builds an **`EffectiveRuntimeLimits`** from that snapshot plus optional **per-agent manifest `[metadata]`** overrides.
+
+| Key (TOML) | Default | Notes |
+|------------|---------|--------|
+| `max_iterations` | `80` | Used when the agent has no `[autonomous].max_iterations`. |
+| `max_continuations` | `5` | Consecutive `MaxTokens` stops before partial reply. |
+| `max_history_messages` | `60` | Pre-LLM trim of session messages. |
+| `max_agent_call_depth` | `5` | Nested `agent_send` depth (task-local in `tool_runner`). |
+| `workflow_max_retained_runs` | `200` | In-memory workflow run map cap. |
+| `workflow_run_ttl_secs` | *(unset)* | Optional TTL for completed/failed runs (seconds). |
+| `allow_unbounded_agent_loop` | `false` | With `ARMARAOS_UNBOUNDED=1`, raises ceilings (e.g. 512 / 4096 history). |
+
+**Manifest metadata overrides** (same section, string or number JSON values): `runtime_max_iterations`, `runtime_max_continuations`, `runtime_max_history_messages`, `runtime_max_agent_call_depth`, `runtime_workflow_max_retained_runs`, `runtime_workflow_run_ttl_secs`.
+
+**Bounded mode** (default): values are clamped to safe ceilings (e.g. 64 for iterations/continuations/depth, 1024 history, 512 retained workflow runs). **`allow_unbounded_agent_loop = true`** and **`ARMARAOS_UNBOUNDED=1`** are both required for the higher “absolute max” tier.
+
+**Hot reload**: Changing only `[runtime_limits]` queues `HotAction::UpdateRuntimeLimits` (no daemon restart). In-flight loops keep the limits they started with.
+
+Example:
+
+```toml
+[runtime_limits]
+max_iterations = 120
+max_agent_call_depth = 8
+workflow_max_retained_runs = 400
+workflow_run_ttl_secs = 604800
+```
 
 ---
 
@@ -399,6 +444,17 @@ Three native driver implementations cover all 20 providers with 51 models:
 | `ollama` | OpenAI-compat | `http://localhost:11434` | No |
 | `vllm` | OpenAI-compat | `http://localhost:8000` | No |
 | `lmstudio` | OpenAI-compat | `http://localhost:1234` | No |
+
+### LLM driver factory (`[llm]`)
+
+The kernel keeps an `LlmDriverFactory` (`openfang-runtime::drivers::factory`) for the process lifetime:
+
+- **`[llm]` in `config.toml`** (`openfang_types::config::LlmConfig`): `driver_isolation` (`shared` default, or `isolated` to skip the LRU), `client_timeout_ms`, `connect_timeout_ms`, `max_cached_drivers` (LRU capacity, default 64). Values are clamped in `KernelConfig::clamp_bounds()`.
+- **LRU cache key**: `(provider, normalized base URL, API key fingerprint)` so stable `reqwest::Client` instances are reused across agent turns when keys and endpoints match.
+- **Hot-reload**: changing `[llm]` triggers `HotAction::UpdateLlmConfig` — the factory applies the new section and **clears** the LRU so timeouts / isolation take effect without restart.
+- **Metrics**: `InstrumentingLlmDriver` records per-provider counters and latency; `GET /api/metrics` appends `llm_requests_total`, `llm_errors_total`, `llm_in_flight`, `llm_latency_seconds_sum`, and `llm_latency_seconds_count` (labels: `provider`).
+- **Embeddings**: `create_embedding_driver_with_http` uses the same `build_llm_http_client(&config.llm)` timeouts as chat drivers.
+- **Manual load testing**: `cargo run -p xtask -- load-test` (requires `ARMARAOS_LOAD_TEST=1`) drives concurrent memory KV + agent messages against a running daemon, optionally workflow runs, and prints `llm_*` excerpts from `/api/metrics`. **Not for CI** — see [`docs/load-testing.md`](load-testing.md).
 
 ### Per-Agent Driver Resolution
 

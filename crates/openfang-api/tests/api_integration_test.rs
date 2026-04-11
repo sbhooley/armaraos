@@ -119,7 +119,11 @@ async fn start_test_server_with_provider_patch(
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route(
             "/api/agents/{id}",
-            axum::routing::delete(routes::kill_agent),
+            axum::routing::get(routes::get_agent).delete(routes::kill_agent),
+        )
+        .route(
+            "/api/agents/{id}/update",
+            axum::routing::put(routes::update_agent),
         )
         .route(
             "/api/triggers",
@@ -128,6 +132,18 @@ async fn start_test_server_with_provider_patch(
         .route(
             "/api/triggers/{id}",
             axum::routing::delete(routes::delete_trigger),
+        )
+        .route(
+            "/api/schedules",
+            axum::routing::get(routes::list_schedules).post(routes::create_schedule),
+        )
+        .route(
+            "/api/schedules/{id}",
+            axum::routing::delete(routes::delete_schedule).put(routes::update_schedule),
+        )
+        .route(
+            "/api/schedules/{id}/run",
+            axum::routing::post(routes::run_schedule),
         )
         .route(
             "/api/workflows",
@@ -148,6 +164,14 @@ async fn start_test_server_with_provider_patch(
         .route(
             "/api/events/stream",
             axum::routing::get(routes::kernel_events_stream),
+        )
+        .route(
+            "/api/budget",
+            axum::routing::get(routes::budget_status).put(routes::update_budget),
+        )
+        .route(
+            "/api/approvals",
+            axum::routing::get(routes::list_approvals).post(routes::create_approval),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route(
@@ -200,6 +224,44 @@ module = "builtin:chat"
 provider = "ollama"
 model = "test-model"
 system_prompt = "You are a test agent. Reply concisely."
+
+[capabilities]
+tools = ["file_read"]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+/// Same as `TEST_MANIFEST` but with a distinct description for `PUT /update` tests.
+const TEST_MANIFEST_PUT_UPDATE: &str = r#"
+name = "test-agent"
+version = "0.1.0"
+description = "Updated via PUT /update integration test"
+author = "test"
+module = "builtin:chat"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "You are a test agent. Reply concisely."
+
+[capabilities]
+tools = ["file_read"]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+/// Manifest that does not match the spawned agent name (must be rejected by PUT /update).
+const WRONG_NAME_MANIFEST: &str = r#"
+name = "wrong-agent-name"
+version = "0.1.0"
+description = "wrong"
+author = "test"
+module = "builtin:chat"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "x"
 
 [capabilities]
 tools = ["file_read"]
@@ -511,6 +573,243 @@ async fn test_spawn_list_kill_agent() {
     let agents: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["name"], "assistant");
+}
+
+#[tokio::test]
+async fn test_put_agent_update_applies_manifest_and_writes_toml() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .put(format!(
+            "{}/api/agents/{}/update",
+            server.base_url, agent_id
+        ))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST_PUT_UPDATE}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["name"], "test-agent");
+    assert!(body["note"]
+        .as_str()
+        .map(|n| !n.is_empty())
+        .unwrap_or(false));
+
+    let audit = server.state.kernel.audit_log.recent(20);
+    assert!(
+        audit.iter().any(|e| {
+            matches!(
+                &e.action,
+                &openfang_runtime::audit::AuditAction::AgentManifestUpdate
+            ) && e.outcome == "ok"
+                && e.detail.contains("PUT agent manifest update")
+                && e.detail.contains("test-agent")
+        }),
+        "expected AgentManifestUpdate audit entry for successful PUT /update, got: {:?}",
+        audit
+            .iter()
+            .map(|e| (&e.action, &e.detail, &e.outcome))
+            .collect::<Vec<_>>()
+    );
+
+    let path = server.state.kernel.agent_toml_path("test-agent");
+    assert!(
+        path.exists(),
+        "agent.toml should exist at {}",
+        path.display()
+    );
+    let disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        disk.contains("Updated via PUT /update integration test"),
+        "on-disk manifest should include new description, got: {disk}"
+    );
+}
+
+#[tokio::test]
+async fn test_put_agent_update_manifest_name_mismatch_returns_400() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .put(format!(
+            "{}/api/agents/{}/update",
+            server.base_url, agent_id
+        ))
+        .json(&serde_json::json!({"manifest_toml": WRONG_NAME_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "Manifest rejected");
+}
+
+#[tokio::test]
+async fn test_get_agent_includes_manifest_toml() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!("{}/api/agents/{}", server.base_url, agent_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["name"], "test-agent");
+    let mt = detail["manifest_toml"]
+        .as_str()
+        .expect("manifest_toml string");
+    assert!(!mt.is_empty(), "manifest_toml must be non-empty");
+    assert!(
+        mt.contains("name") && mt.contains("test-agent"),
+        "expected canonical TOML to include agent name, got: {mt}"
+    );
+}
+
+#[tokio::test]
+async fn test_get_agent_omit_manifest_toml() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}?omit=manifest_toml",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["name"], "test-agent");
+    assert!(
+        detail.get("manifest_toml").is_none(),
+        "manifest_toml should be omitted when ?omit=manifest_toml"
+    );
+}
+
+#[tokio::test]
+async fn test_get_agent_omit_comma_separated_includes_manifest_toml_other_token() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}?omit=foo,manifest_toml",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["name"], "test-agent");
+    assert!(
+        detail.get("manifest_toml").is_none(),
+        "comma-separated omit should still drop manifest_toml"
+    );
+}
+
+#[tokio::test]
+async fn test_post_schedules_returns_top_level_id_and_name() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/schedules", server.base_url))
+        .json(&serde_json::json!({
+            "name": "integration-test-cron",
+            "cron": "0 9 * * *",
+            "agent_id": "assistant",
+            "message": "[integration test schedule]"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::CREATED,
+        "unexpected body: {body}"
+    );
+    assert_eq!(body["source"], "kernel_cron");
+    let id = body["id"]
+        .as_str()
+        .expect("POST /api/schedules should include top-level id for clients");
+    uuid::Uuid::parse_str(id).expect("id should be a UUID");
+    assert_eq!(
+        body["result"]["job_id"].as_str(),
+        Some(id),
+        "result.job_id should match top-level id"
+    );
+    assert!(
+        body["name"].as_str().unwrap().contains("integration"),
+        "expected sanitized name to retain marker: {}",
+        body["name"]
+    );
+
+    let del = client
+        .delete(format!("{}/api/schedules/{}", server.base_url, id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), 200);
 }
 
 #[tokio::test]
@@ -1008,6 +1307,51 @@ async fn test_kernel_events_stream_sse_smoke() {
     );
 }
 
+/// GET /api/budget returns JSON used by the dashboard (notification center + Settings).
+#[tokio::test]
+async fn test_get_budget_status_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/budget", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        v.get("hourly_spend").is_some(),
+        "expected hourly_spend: {v}"
+    );
+    assert!(
+        v.get("alert_threshold").is_some(),
+        "expected alert_threshold: {v}"
+    );
+    assert!(
+        v.get("monthly_limit").is_some(),
+        "expected monthly_limit: {v}"
+    );
+}
+
+/// GET /api/approvals returns `{ approvals, total }` for the dashboard queue.
+#[tokio::test]
+async fn test_get_approvals_list_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/approvals", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        v.get("approvals").is_some(),
+        "expected approvals array: {v}"
+    );
+    assert!(v.get("total").is_some(), "expected total: {v}");
+}
+
 // ---------------------------------------------------------------------------
 // Auth integration tests
 // ---------------------------------------------------------------------------
@@ -1081,7 +1425,11 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route(
             "/api/agents/{id}",
-            axum::routing::delete(routes::kill_agent),
+            axum::routing::get(routes::get_agent).delete(routes::kill_agent),
+        )
+        .route(
+            "/api/agents/{id}/update",
+            axum::routing::put(routes::update_agent),
         )
         .route(
             "/api/triggers",
@@ -1090,6 +1438,18 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         .route(
             "/api/triggers/{id}",
             axum::routing::delete(routes::delete_trigger),
+        )
+        .route(
+            "/api/schedules",
+            axum::routing::get(routes::list_schedules).post(routes::create_schedule),
+        )
+        .route(
+            "/api/schedules/{id}",
+            axum::routing::delete(routes::delete_schedule).put(routes::update_schedule),
+        )
+        .route(
+            "/api/schedules/{id}/run",
+            axum::routing::post(routes::run_schedule),
         )
         .route(
             "/api/workflows",
@@ -1119,7 +1479,12 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let addr = listener.local_addr().unwrap();
 
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     TestServer {
@@ -1193,6 +1558,108 @@ async fn test_auth_accepts_correct_token() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "running");
+}
+
+#[tokio::test]
+async fn test_auth_schedules_get_without_token_is_public_read() {
+    let server = start_test_server_with_auth("secret-key-123").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/schedules", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["source"], "kernel_cron");
+}
+
+#[tokio::test]
+async fn test_auth_schedules_post_delete_with_bearer() {
+    let server = start_test_server_with_auth("secret-key-123").await;
+    let client = reqwest::Client::new();
+    const TOKEN: &str = "secret-key-123";
+
+    let list = client
+        .get(format!("{}/api/schedules", server.base_url))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), 200);
+    let list_body: serde_json::Value = list.json().await.unwrap();
+    assert_eq!(list_body["source"], "kernel_cron");
+
+    let resp = client
+        .post(format!("{}/api/schedules", server.base_url))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .json(&serde_json::json!({
+            "name": "auth-server-schedule-test",
+            "cron": "30 10 * * *",
+            "agent_id": "assistant",
+            "message": "[auth integration test]"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::CREATED,
+        "unexpected body: {body}"
+    );
+    let id = body["id"].as_str().expect("top-level id");
+    uuid::Uuid::parse_str(id).expect("id is uuid");
+
+    let del = client
+        .delete(format!("{}/api/schedules/{}", server.base_url, id))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), 200);
+}
+
+#[tokio::test]
+async fn test_auth_schedules_post_delete_loopback_without_bearer() {
+    let server = start_test_server_with_auth("secret-key-123").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/schedules", server.base_url))
+        .json(&serde_json::json!({
+            "name": "loopback-no-bearer-sched",
+            "cron": "45 11 * * *",
+            "agent_id": "assistant",
+            "message": "[loopback auth test]"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        status,
+        reqwest::StatusCode::CREATED,
+        "loopback should allow POST /api/schedules without Bearer: {body}"
+    );
+    let id = body["id"].as_str().expect("id");
+    uuid::Uuid::parse_str(id).unwrap();
+
+    let del = client
+        .delete(format!("{}/api/schedules/{}", server.base_url, id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        del.status(),
+        200,
+        "loopback should allow DELETE /api/schedules/:id without Bearer"
+    );
 }
 
 #[tokio::test]

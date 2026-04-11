@@ -285,6 +285,19 @@ The Telegram adapter uses long-polling via the `getUpdates` API. It polls every 
 
 Messages from authorized users are converted to `ChannelMessage` events and routed to the configured agent. Responses are sent back via the `sendMessage` API. Long responses are automatically split into multiple messages to respect Telegram's 4096-character limit using the shared `split_message()` utility.
 
+### Multiple bots (private ArmaraOS + public bot)
+
+Each Telegram bot has its **own** token. ArmaraOS connects **one** bot per running daemon (long-polling via `getUpdates`). There is no second `[channels.telegram]` slot for another token.
+
+**To keep a private bot (your agents) and a public bot (e.g. group + custom AINL) separate:**
+
+1. **ArmaraOS only** — In `~/.armaraos/.env` (or your service environment), set **`TELEGRAM_BOT_TOKEN`** to the **private** bot token only. Keep `[channels.telegram]` with `bot_token_env = "TELEGRAM_BOT_TOKEN"` and `default_agent` pointing at your main agent (not your public FAQ agent).
+2. **Public bot only** — Run your custom bot in a **different process** (script, systemd unit, or another host). Give it a **different** env var name, e.g. **`PUBLIC_TELEGRAM_BOT_TOKEN`**, and read that in code — **never** assign the public token to `TELEGRAM_BOT_TOKEN` on the same machine as the daemon.
+3. **Verify** — `curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe"` should show your private bot’s `username`; your public runner should use its own variable and show the other `username`.
+4. **Revoke** any token that was pasted into chat or committed to git; issue new tokens in @BotFather.
+
+Only **one** process may long-poll a given token; two daemons sharing `TELEGRAM_BOT_TOKEN` cause conflicts (Telegram may return `409`). Webhook vs polling also must not be mixed per bot without clearing the other mode first.
+
 ### Interactive Setup
 
 ```bash

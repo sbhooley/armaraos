@@ -1,0 +1,30 @@
+# ArmaraOS system health monitor (showcase, Option B)
+# =====================================================
+# Single graph: local daemon health + agent count + running version vs
+# upstream ArmaraOS release + PyPI ainativelang version. Complements the
+# existing split jobs (agent_health_monitor, new_version_checker) without
+# replacing them.
+#
+# Uses: http, core
+# Validate: ainl validate programs/system_health_monitor/system_health_monitor.ainl --strict
+
+system_health_monitor:
+  ts = core.NOW 0
+  health = http.GET "http://127.0.0.1:4200/api/health"
+  agents = http.GET "http://127.0.0.1:4200/api/agents"
+  local_version = http.GET "http://127.0.0.1:4200/api/version"
+  armaraos_release = http.GET "https://api.github.com/repos/sbhooley/armaraos/releases/latest"
+  ainl_release = http.GET "https://pypi.org/pypi/ainativelang/json"
+
+  daemon_status = core.GET health status
+  agent_count = core.LEN agents
+  running_version = core.GET local_version version
+  armaraos_latest = core.GET armaraos_release tag_name
+  ainl_latest = core.GET ainl_release info version
+  update_available = core.NEQ armaraos_latest running_version
+
+  if daemon_status != "ok":
+    out {check: "system_health", overall: "degraded", daemon_status: daemon_status, agents: agent_count, armaraos_running: running_version, armaraos_upstream_tag: armaraos_latest, ainl_pypi_version: ainl_latest, update_available: false, checked_at: ts}
+
+  if daemon_status == "ok":
+    out {check: "system_health", overall: "ok", daemon_status: daemon_status, agents: agent_count, update_available: update_available, armaraos_running: running_version, armaraos_upstream_tag: armaraos_latest, ainl_pypi_version: ainl_latest, checked_at: ts}

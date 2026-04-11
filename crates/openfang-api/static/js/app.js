@@ -317,6 +317,131 @@ function armaraosAgentActivityLineFromSystemPayload(p) {
   return phase || '';
 }
 
+/** Persist dismissed kernel notification ids (event ids) across reloads — key `armaraos-notify-dismissed-kernel`. */
+var NOTIFY_KERNEL_DISMISS_KEY = 'armaraos-notify-dismissed-kernel';
+var NOTIFY_KERNEL_DISMISS_MAX = 400;
+var _armaraosKernelDismissCache = null;
+
+function armaraosNotifyLoadKernelDismissSet() {
+  try {
+    var raw = localStorage.getItem(NOTIFY_KERNEL_DISMISS_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return {};
+    var o = {};
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i]) o[String(arr[i])] = true;
+    }
+    return o;
+  } catch (e) {
+    return {};
+  }
+}
+
+function armaraosNotifyKernelDismissSetCached() {
+  if (!_armaraosKernelDismissCache) {
+    _armaraosKernelDismissCache = armaraosNotifyLoadKernelDismissSet();
+  }
+  return _armaraosKernelDismissCache;
+}
+
+function armaraosNotifyInvalidateKernelDismissCache() {
+  _armaraosKernelDismissCache = null;
+}
+
+function armaraosNotifyIsKernelDismissed(id) {
+  if (!id || String(id).indexOf('k-') !== 0) return false;
+  return !!armaraosNotifyKernelDismissSetCached()[String(id)];
+}
+
+function armaraosNotifyPersistKernelDismiss(id) {
+  if (!id || String(id).indexOf('k-') !== 0) return;
+  try {
+    var raw = localStorage.getItem(NOTIFY_KERNEL_DISMISS_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) arr = [];
+    var s = String(id);
+    if (arr.indexOf(s) < 0) arr.push(s);
+    if (arr.length > NOTIFY_KERNEL_DISMISS_MAX) arr = arr.slice(-NOTIFY_KERNEL_DISMISS_MAX);
+    localStorage.setItem(NOTIFY_KERNEL_DISMISS_KEY, JSON.stringify(arr));
+    armaraosNotifyInvalidateKernelDismissCache();
+  } catch (e) { /* ignore */ }
+}
+
+var _armaraosNotifyTrapHandler = null;
+
+function armaraosNotifyFocusableSelector() {
+  return 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+}
+
+function armaraosNotifyFocusFirstInPanel() {
+  var panel = document.getElementById('notify-center-panel');
+  if (!panel) return;
+  var sel = armaraosNotifyFocusableSelector();
+  var list = panel.querySelectorAll(sel);
+  var focusables = [];
+  for (var i = 0; i < list.length; i++) {
+    var el = list[i];
+    try {
+      if (el.offsetParent !== null || el.getClientRects().length > 0) focusables.push(el);
+    } catch (e) {
+      focusables.push(el);
+    }
+  }
+  if (focusables.length > 0) {
+    try {
+      focusables[0].focus();
+    } catch (e2) { /* ignore */ }
+  } else {
+    try {
+      panel.focus();
+    } catch (e3) { /* ignore */ }
+  }
+}
+
+function armaraosNotifyTrapInstall(notifyStore) {
+  armaraosNotifyTrapRemove();
+  _armaraosNotifyTrapHandler = function(e) {
+    if (e.key !== 'Tab' || !notifyStore || !notifyStore.panelOpen) return;
+    var panel = document.getElementById('notify-center-panel');
+    if (!panel) return;
+    var sel = armaraosNotifyFocusableSelector();
+    var nodes = panel.querySelectorAll(sel);
+    var list = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      try {
+        if (el.offsetParent !== null || el.getClientRects().length > 0) list.push(el);
+      } catch (ex) {
+        list.push(el);
+      }
+    }
+    if (list.length === 0) return;
+    var first = list[0];
+    var last = list[list.length - 1];
+    var active = document.activeElement;
+    if (!panel.contains(active)) return;
+    if (e.shiftKey) {
+      if (active === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', _armaraosNotifyTrapHandler, true);
+}
+
+function armaraosNotifyTrapRemove() {
+  if (_armaraosNotifyTrapHandler) {
+    document.removeEventListener('keydown', _armaraosNotifyTrapHandler, true);
+    _armaraosNotifyTrapHandler = null;
+  }
+}
+
 // Alpine.js global store
 document.addEventListener('alpine:init', function() {
   // Restore saved API key on load
@@ -615,6 +740,9 @@ document.addEventListener('alpine:init', function() {
         }
         this.pendingApprovalCount = pending.length;
         this.lastPendingApprovalSignature = signature;
+        try {
+          Alpine.store('notifyCenter').syncPendingApprovals(pending.length, signature);
+        } catch (eN) { /* ignore */ }
       } catch(e) { /* silent */ }
     },
 
@@ -806,6 +934,226 @@ document.addEventListener('alpine:init', function() {
     last: null,
   });
 
+  /** Persistent notification center (bell): approvals, budget threshold, kernel agent/system events. */
+  Alpine.store('notifyCenter', {
+    panelOpen: false,
+    items: [],
+    /** Screen-reader live region (panel closed): new items. */
+    liveRegionText: '',
+    approvalDismissSig: '',
+    budgetSnoozeUntil: 0,
+    _healthNotifyAt: {},
+    _notifyFocusBefore: null,
+
+    toggle() {
+      if (this.panelOpen) {
+        this.close();
+      } else {
+        this.open();
+      }
+    },
+    open() {
+      if (this.panelOpen) return;
+      try {
+        this._notifyFocusBefore = document.activeElement;
+      } catch (e) {
+        this._notifyFocusBefore = null;
+      }
+      this.panelOpen = true;
+      var self = this;
+      setTimeout(function() {
+        armaraosNotifyTrapInstall(self);
+        armaraosNotifyFocusFirstInPanel();
+      }, 0);
+    },
+    close() {
+      this.panelOpen = false;
+      armaraosNotifyTrapRemove();
+      var el = this._notifyFocusBefore;
+      this._notifyFocusBefore = null;
+      if (el && typeof el.focus === 'function') {
+        try {
+          el.focus();
+        } catch (e2) { /* ignore */ }
+      }
+    },
+    badgeCount() {
+      return (this.items || []).length;
+    },
+    _announceIfClosed(title) {
+      if (this.panelOpen) return;
+      var self = this;
+      this.liveRegionText = '';
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          self.liveRegionText = 'New notification: ' + (title || 'update');
+        });
+      });
+    },
+    dismiss(id) {
+      if (!id) return;
+      if (String(id).indexOf('k-') === 0) {
+        armaraosNotifyPersistKernelDismiss(id);
+      }
+      if (id === 'approval-pending') {
+        try {
+          this.approvalDismissSig = Alpine.store('app').lastPendingApprovalSignature || '';
+        } catch (e) {
+          this.approvalDismissSig = '';
+        }
+      } else if (id === 'budget-alert') {
+        this.budgetSnoozeUntil = Date.now() + 3600000;
+      }
+      this.items = (this.items || []).filter(function(x) { return x.id !== id; });
+    },
+    clearAll() {
+      this.items = [];
+      this.approvalDismissSig = '';
+      this.budgetSnoozeUntil = 0;
+      this._healthNotifyAt = {};
+    },
+    _prepend(row) {
+      if (row && row.id && String(row.id).indexOf('k-') === 0 && armaraosNotifyIsKernelDismissed(row.id)) {
+        return;
+      }
+      var list = (this.items || []).filter(function(x) { return x.id !== row.id; });
+      list.unshift(row);
+      if (list.length > 48) list.length = 48;
+      this.items = list;
+      if (!this.panelOpen && row && row.title) {
+        this._announceIfClosed(row.title);
+      }
+    },
+    syncPendingApprovals(count, sig) {
+      sig = sig != null ? String(sig) : '';
+      if (!count) {
+        this.items = (this.items || []).filter(function(x) { return x.id !== 'approval-pending'; });
+        this.approvalDismissSig = '';
+        return;
+      }
+      if (sig && sig === this.approvalDismissSig) return;
+      this._prepend({
+        id: 'approval-pending',
+        kind: 'approval',
+        title: count === 1 ? 'Pending approval' : ('Pending approvals (' + count + ')'),
+        detail: 'A sensitive tool call needs your review.',
+        href: '#approvals',
+        severity: 'warn',
+        ts: Date.now()
+      });
+    },
+    syncBudgetStatus(b) {
+      if (!b) return;
+      if (Date.now() < (this.budgetSnoozeUntil || 0)) return;
+      var thr = (typeof b.alert_threshold === 'number' && !isNaN(b.alert_threshold)) ? b.alert_threshold : 0.85;
+      var rows = [
+        { label: 'Hourly', pct: Number(b.hourly_pct) || 0, lim: Number(b.hourly_limit) || 0, sp: Number(b.hourly_spend) || 0 },
+        { label: 'Daily', pct: Number(b.daily_pct) || 0, lim: Number(b.daily_limit) || 0, sp: Number(b.daily_spend) || 0 },
+        { label: 'Monthly', pct: Number(b.monthly_pct) || 0, lim: Number(b.monthly_limit) || 0, sp: Number(b.monthly_spend) || 0 }
+      ];
+      var worst = null;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r.lim > 0 && r.pct >= thr && (!worst || r.pct > worst.pct)) worst = r;
+      }
+      if (!worst) {
+        this.items = (this.items || []).filter(function(x) { return x.id !== 'budget-alert'; });
+        return;
+      }
+      var pctStr = (worst.pct * 100).toFixed(0);
+      this._prepend({
+        id: 'budget-alert',
+        kind: 'budget',
+        title: 'Budget: ' + worst.label + ' at ' + pctStr + '%',
+        detail: 'Spend $' + worst.sp.toFixed(2) + ' of $' + worst.lim.toFixed(2) + ' (alert at ' + (thr * 100).toFixed(0) + '%).',
+        href: '#settings',
+        severity: worst.pct >= 0.98 ? 'error' : 'warn',
+        ts: Date.now()
+      });
+    },
+    ingestKernelEvent(j) {
+      if (!j || !j.payload) return;
+      var p = j.payload;
+      var kid = 'k-' + (j.id != null ? String(j.id) : String(Date.now()));
+      if (armaraosNotifyIsKernelDismissed(kid)) return;
+      try {
+        if (p.type === 'Lifecycle' && p.data && p.data.event === 'Crashed') {
+          var err = (p.data.error || '').slice(0, 280);
+          var aid = (p.data.agent_id != null) ? String(p.data.agent_id) : '';
+          this._prepend({
+            id: kid,
+            kind: 'agent_error',
+            title: 'Agent crashed',
+            detail: (err || aid || 'See logs for details.').slice(0, 320),
+            href: '#agents',
+            severity: 'error',
+            ts: Date.now()
+          });
+          return;
+        }
+        if (p.type === 'System' && p.data) {
+          var d = p.data;
+          if (d.event === 'QuotaEnforced') {
+            this._prepend({
+              id: kid,
+              kind: 'budget',
+              title: 'Quota enforced',
+              detail: 'Spent $' + (Number(d.spent) || 0).toFixed(3) + ' / $' + (Number(d.limit) || 0).toFixed(3) + ' (agent ' + String(d.agent_id || '') + ').',
+              href: '#settings',
+              severity: 'warn',
+              ts: Date.now()
+            });
+            return;
+          }
+          if (d.event === 'QuotaWarning') {
+            this._prepend({
+              id: kid,
+              kind: 'budget',
+              title: 'Quota warning',
+              detail: (d.resource || 'resource') + ' at ' + (d.usage_percent != null ? Number(d.usage_percent).toFixed(0) : '?') + '% (agent ' + String(d.agent_id || '') + ').',
+              href: '#analytics',
+              severity: 'warn',
+              ts: Date.now()
+            });
+            return;
+          }
+          if (d.event === 'HealthCheckFailed') {
+            var aid2 = String((d.agent_id != null) ? d.agent_id : 'unknown');
+            var nowMs = Date.now();
+            var prev = this._healthNotifyAt[aid2] || 0;
+            if (nowMs - prev < 90000) return;
+            this._healthNotifyAt[aid2] = nowMs;
+            var u2 = d.unresponsive_secs;
+            var det = (typeof u2 === 'number') ? ('Unresponsive for ~' + u2 + 's') : 'Agent unresponsive';
+            this._prepend({
+              id: kid,
+              kind: 'agent_error',
+              title: 'Health check failed',
+              detail: det,
+              href: '#agents',
+              severity: 'warn',
+              ts: Date.now()
+            });
+            return;
+          }
+          if (d.event === 'CronJobFailed') {
+            var nm = d.job_name || 'Scheduled job';
+            var er = (d.error || '').slice(0, 220);
+            this._prepend({
+              id: kid,
+              kind: 'agent_error',
+              title: nm + ' failed',
+              detail: er,
+              href: '#scheduler',
+              severity: 'error',
+              ts: Date.now()
+            });
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+  });
+
   /** Subscribe to GET /api/events/stream (kernel bus). Started from app().init. */
   window.ArmaraosKernelSse = (function() {
     var _es = null;
@@ -843,6 +1191,8 @@ document.addEventListener('alpine:init', function() {
         var name2 = p.data.job_name || 'Scheduled job';
         var err2 = (p.data.error || '').slice(0, 180);
         OpenFangToast.error(name2 + ' failed: ' + err2, 8000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'ApprovalPending') {
+        try { Alpine.store('app').refreshApprovals(); } catch (eAp) { /* ignore */ }
       }
     }
     return {
@@ -880,6 +1230,9 @@ document.addEventListener('alpine:init', function() {
             if (ke.items.length > 80) ke.items.shift();
             ke.items.push({ id: j.id, ts: j.timestamp, payload: j.payload });
             maybeToast(j);
+            try {
+              Alpine.store('notifyCenter').ingestKernelEvent(j);
+            } catch (eN) { /* ignore */ }
             window.dispatchEvent(new CustomEvent('armaraos-kernel-event', { detail: j }));
           } catch (e) { /* ignore parse errors */ }
         };
@@ -1030,9 +1383,12 @@ function app() {
           e.preventDefault();
           Alpine.store('app').toggleFocusMode();
         }
-        // Escape — close mobile menu
+        // Escape — close mobile menu + notification panel
         if (e.key === 'Escape') {
           self.mobileMenuOpen = false;
+          try {
+            Alpine.store('notifyCenter').close();
+          } catch (eN) { /* ignore */ }
         }
       });
 
@@ -1044,12 +1400,26 @@ function app() {
       // Initial data load
       this.pollStatus();
       Alpine.store('app').refreshApprovals();
+      OpenFangAPI.get('/api/budget')
+        .then(function(b) {
+          try {
+            Alpine.store('notifyCenter').syncBudgetStatus(b);
+          } catch (eB) { /* ignore */ }
+        })
+        .catch(function() { /* ignore */ });
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       Alpine.store('app').loadUiPrefs();
       setInterval(function() {
         self.pollStatus();
         Alpine.store('app').refreshApprovals();
+        OpenFangAPI.get('/api/budget')
+          .then(function(b) {
+            try {
+              Alpine.store('notifyCenter').syncBudgetStatus(b);
+            } catch (eB) { /* ignore */ }
+          })
+          .catch(function() { /* ignore */ });
       }, 5000);
 
       setInterval(function() {

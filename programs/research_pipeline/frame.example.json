@@ -1,0 +1,13 @@
+{
+  "frame_version": "1",
+  "op": "capture",
+  "run_id": "local-research-001",
+  "intent": "Local research showcase run",
+  "outcome": "ok",
+  "episode": "Manual ainl run; see README for extra fields.",
+  "tier": "unattended",
+  "extra": {
+    "research_query": "armaraos",
+    "use_llm": "no"
+  }
+}

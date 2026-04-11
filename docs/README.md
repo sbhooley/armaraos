@@ -47,8 +47,9 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [Releasing (semver)](RELEASING.md) | Routine bump → `CHANGELOG` → `cargo fmt` / test / clippy → tag → GitHub Release; **ainativelangweb** `latestArmaraosReleaseTag`; audit/API notes |
 | [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
-| [Production Checklist](production-checklist.md) | Every step before tagging v0.1.0 -- signing keys, secrets, verification |
+| [Production Checklist](production-checklist.md) | First-ship gate before tagging v0.1.0 — signing keys, secrets, verification |
 | [Desktop code signing](desktop-code-signing.md) | Gatekeeper, SmartScreen, `TAURI_SIGNING_PRIVATE_KEY` vs Authenticode / notarization, GitHub Actions secrets, Azure Artifact Signing, SignPath OSS |
 | [Desktop release smoke](release-desktop.md) | Tauri build, updater, optional PostHog (`ARMARAOS_POSTHOG_KEY` / `AINL_POSTHOG_KEY`), AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |

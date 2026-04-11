@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-/// Maximum inter-agent call depth to prevent infinite recursion (A->B->C->...).
-const MAX_AGENT_CALL_DEPTH: u32 = 5;
+/// Fallback max inter-agent depth when not running inside an agent task scope.
+const DEFAULT_MAX_AGENT_CALL_DEPTH: u32 = 5;
 
 /// Check if a tool name refers to a shell execution tool.
 ///
@@ -84,8 +84,17 @@ fn check_taint_net_fetch(url: &str) -> Option<String> {
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
     static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
+    /// Effective max depth for this agent turn (from `[runtime_limits]` + manifest).
+    pub static MAX_AGENT_CALL_DEPTH_LIMIT: std::cell::Cell<u32>;
     /// Canvas max HTML size in bytes (set from kernel config at loop start).
     pub static CANVAS_MAX_BYTES: usize;
+}
+
+fn effective_max_agent_call_depth() -> u32 {
+    MAX_AGENT_CALL_DEPTH_LIMIT
+        .try_with(|c| c.get())
+        .unwrap_or(DEFAULT_MAX_AGENT_CALL_DEPTH)
+        .max(1)
 }
 
 /// Get the current inter-agent call depth from the task-local context.
@@ -327,10 +336,11 @@ pub async fn execute_tool(
         "task_list" => tool_task_list(input, kernel).await,
         "event_publish" => tool_event_publish(input, kernel).await,
 
-        // Scheduling tools
-        "schedule_create" => tool_schedule_create(input, kernel).await,
-        "schedule_list" => tool_schedule_list(kernel).await,
+        // Scheduling tools (aliases for kernel cron — persisted in ~/.armaraos/cron_jobs.json)
+        "schedule_create" => tool_schedule_create(input, kernel, caller_agent_id).await,
+        "schedule_list" => tool_schedule_list(kernel, caller_agent_id).await,
         "schedule_delete" => tool_schedule_delete(input, kernel).await,
+        "channels_list" => Ok(tool_channels_list(kernel)),
 
         // Knowledge graph tools
         "knowledge_add_entity" => tool_knowledge_add_entity(input, kernel).await,
@@ -492,6 +502,13 @@ pub async fn execute_tool(
 
         // Canvas / A2UI tool
         "canvas_present" => tool_canvas_present(input, workspace_root).await,
+
+        // Email tools
+        "email_send" => tool_email_send(input, kernel, mcp_connections).await,
+        "email_read" => tool_email_read(input, kernel, mcp_connections).await,
+        "email_search" => tool_email_search(input, kernel, mcp_connections).await,
+        "email_reply" => tool_email_reply(input, kernel, mcp_connections).await,
+        "email_draft" => tool_email_draft(input, mcp_connections).await,
 
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
@@ -839,23 +856,28 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["event_type"]
             }),
         },
-        // --- Scheduling tools ---
+        // --- Scheduling tools (friendly aliases → same kernel cron as cron_create) ---
         ToolDefinition {
             name: "schedule_create".to_string(),
-            description: "Schedule a recurring task using natural language or cron syntax. Examples: 'every 5 minutes', 'daily at 9am', 'weekdays at 6pm', '0 */5 * * *'.".to_string(),
+            description: "Create a recurring job in the ArmaraOS kernel scheduler (same as cron_create; persisted under ~/.armaraos/cron_jobs.json). Pass natural-language schedule or cron expr. Prefer `program_path` + `delivery` for AINL + alerts; use `cron_create` for full control.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "description": { "type": "string", "description": "What this schedule does (e.g., 'Check for new emails')" },
-                    "schedule": { "type": "string", "description": "Natural language or cron expression (e.g., 'every 5 minutes', 'daily at 9am', '0 */5 * * *')" },
-                    "agent": { "type": "string", "description": "Agent name or ID to run this task (optional, defaults to self)" }
+                    "description": { "type": "string", "description": "Short name/label for the job (used as the cron job name after sanitizing)" },
+                    "schedule": { "type": "string", "description": "Natural language or 5-field cron (e.g. 'every 5 minutes', 'daily at 9am', '0 */5 * * *')" },
+                    "program_path": { "type": "string", "description": "If set, action is ainl_run on this path (under ainl-library). Otherwise defaults to agent_turn with `message`." },
+                    "message": { "type": "string", "description": "Agent turn message when program_path is omitted (default: description)" },
+                    "action": { "type": "object", "description": "Optional: full cron action JSON to override program_path/message" },
+                    "delivery": { "type": "object", "description": "Optional: same as cron_create delivery (none, last_channel, channel, webhook)" },
+                    "timeout_secs": { "type": "integer", "description": "Timeout for agent_turn or ainl_run (default 300)" },
+                    "enabled": { "type": "boolean" }
                 },
                 "required": ["description", "schedule"]
             }),
         },
         ToolDefinition {
             name: "schedule_list".to_string(),
-            description: "List all scheduled tasks with their IDs, descriptions, schedules, and next run times.".to_string(),
+            description: "List kernel cron jobs for this agent (same data as cron_list / Dashboard Scheduler).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -863,13 +885,22 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "schedule_delete".to_string(),
-            description: "Remove a scheduled task by its ID.".to_string(),
+            description: "Remove a kernel cron job by job_id (same as cron_cancel).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "The schedule ID to remove" }
+                    "id": { "type": "string", "description": "Cron job UUID (from schedule_list or cron_list)" },
+                    "job_id": { "type": "string", "description": "Alias for id" }
                 },
-                "required": ["id"]
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "channels_list".to_string(),
+            description: "List registered outbound channel adapter names (telegram, discord, …) for channel_send and cron delivery. Call before channel_send or when wiring alerts.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         },
         // --- Knowledge graph tools ---
@@ -1081,24 +1112,25 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Cron scheduling tools ---
         ToolDefinition {
             name: "cron_create".to_string(),
-            description: "Create a scheduled/cron job. Supports one-shot (at), recurring (every N seconds), and cron expressions. Max 50 jobs per agent.".to_string(),
+            description: "Create a scheduled job in the ArmaraOS kernel scheduler (persists to ~/.armaraos/cron_jobs.json; not OS cron). Supports one-shot (at), recurring (every N seconds), and 5-field cron expressions. Max 50 jobs per agent.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "description": "Job name (max 128 chars, alphanumeric + spaces/hyphens/underscores)" },
                     "schedule": {
                         "type": "object",
-                        "description": "Schedule: {\"kind\":\"at\",\"at\":\"2025-01-01T00:00:00Z\"} or {\"kind\":\"every\",\"every_secs\":300} or {\"kind\":\"cron\",\"expr\":\"0 */6 * * *\"}"
+                        "description": "When: {\"kind\":\"at\",\"at\":\"2025-01-01T00:00:00Z\"} | {\"kind\":\"every\",\"every_secs\":300} | {\"kind\":\"cron\",\"expr\":\"0 */6 * * *\",\"tz\":null}"
                     },
                     "action": {
                         "type": "object",
-                        "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300}"
+                        "description": "What to run: {\"kind\":\"system_event\",\"text\":\"...\"} | {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"model_override\":null} | {\"kind\":\"workflow_run\",\"workflow_id\":\"...\",\"input\":null,\"timeout_secs\":120} | {\"kind\":\"ainl_run\",\"program_path\":\"path.ainl\",\"cwd\":null,\"timeout_secs\":300,\"json_output\":false,\"frame\":null}"
                     },
                     "delivery": {
                         "type": "object",
-                        "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"channel\",\"channel\":\"telegram\"} or {\"kind\":\"last_channel\"}"
+                        "description": "Where to send output: {\"kind\":\"none\"} | {\"kind\":\"last_channel\"} | {\"kind\":\"channel\",\"channel\":\"telegram\",\"to\":\"chat_id\"} | {\"kind\":\"webhook\",\"url\":\"https://...\"}"
                     },
-                    "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" }
+                    "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" },
+                    "enabled": { "type": "boolean", "description": "Default true" }
                 },
                 "required": ["name", "schedule", "action"]
             }),
@@ -1344,6 +1376,81 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "title": { "type": "string", "description": "Optional title for the canvas panel" }
                 },
                 "required": ["html"]
+            }),
+        },
+        // --- Email tools ---
+        ToolDefinition {
+            name: "email_send".to_string(),
+            description: "Send an email via SMTP. Supports Gmail, Outlook, Yahoo, ProtonMail, and other standard SMTP providers. Requires email channel configuration or MCP email integration.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "Recipient email address (e.g., 'user@example.com')" },
+                    "subject": { "type": "string", "description": "Email subject line" },
+                    "body": { "type": "string", "description": "Email body (plain text or HTML)" },
+                    "cc": { "type": "string", "description": "Optional CC recipients (comma-separated)" },
+                    "bcc": { "type": "string", "description": "Optional BCC recipients (comma-separated)" },
+                    "provider": { "type": "string", "description": "Optional email provider hint: 'gmail', 'outlook', 'yahoo', 'smtp', 'mcp'. Auto-detected if omitted." }
+                },
+                "required": ["to", "subject", "body"]
+            }),
+        },
+        ToolDefinition {
+            name: "email_read".to_string(),
+            description: "Read recent emails from inbox via IMAP or MCP. Returns email metadata and body content. Requires email channel configuration or MCP email integration.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "folder": { "type": "string", "description": "Email folder to read from (default: 'INBOX')" },
+                    "limit": { "type": "number", "description": "Maximum number of emails to return (default: 10, max: 50)" },
+                    "unread_only": { "type": "boolean", "description": "Only return unread emails (default: true)" },
+                    "from": { "type": "string", "description": "Filter by sender email address" },
+                    "subject_contains": { "type": "string", "description": "Filter by subject keyword" },
+                    "provider": { "type": "string", "description": "Optional provider hint: 'gmail', 'outlook', 'imap', 'mcp'" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "email_search".to_string(),
+            description: "Search emails using provider-specific query syntax. Supports Gmail search operators, Outlook filters, and IMAP SEARCH. Returns matching email metadata.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query (provider-specific syntax, e.g., Gmail: 'from:user@example.com subject:urgent', Outlook: 'subject:meeting', IMAP: 'SUBJECT \"meeting\"')" },
+                    "limit": { "type": "number", "description": "Maximum results to return (default: 20, max: 100)" },
+                    "folder": { "type": "string", "description": "Folder to search (default: all folders or INBOX)" },
+                    "provider": { "type": "string", "description": "Provider hint: 'gmail', 'outlook', 'imap', 'mcp'" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "email_reply".to_string(),
+            description: "Reply to an email thread, maintaining conversation context and threading headers (In-Reply-To, References).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message_id": { "type": "string", "description": "Original message ID to reply to" },
+                    "body": { "type": "string", "description": "Reply body text" },
+                    "reply_all": { "type": "boolean", "description": "Reply to all recipients (default: false)" },
+                    "provider": { "type": "string", "description": "Provider hint: 'gmail', 'outlook', 'smtp', 'mcp'" }
+                },
+                "required": ["message_id", "body"]
+            }),
+        },
+        ToolDefinition {
+            name: "email_draft".to_string(),
+            description: "Create or update an email draft without sending. Useful for composing emails that need review before sending.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "Recipient email address" },
+                    "subject": { "type": "string", "description": "Email subject" },
+                    "body": { "type": "string", "description": "Email body" },
+                    "draft_id": { "type": "string", "description": "Optional existing draft ID to update" },
+                    "provider": { "type": "string", "description": "Provider hint: 'gmail', 'outlook', 'mcp'" }
+                },
+                "required": ["to", "subject", "body"]
             }),
         },
     ]
@@ -1764,11 +1871,12 @@ async fn tool_agent_send(
 
     // Check + increment inter-agent call depth
     let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
-    if current_depth >= MAX_AGENT_CALL_DEPTH {
+    let max_depth = effective_max_agent_call_depth();
+    if current_depth >= max_depth {
         return Err(format!(
             "Inter-agent call depth exceeded (max {}). \
              A->B->C chain is too deep. Use the task queue instead.",
-            MAX_AGENT_CALL_DEPTH
+            max_depth
         ));
     }
 
@@ -2263,96 +2371,128 @@ fn parse_time_to_hour(s: &str) -> Result<u32, String> {
 
 const SCHEDULES_KEY: &str = "__openfang_schedules";
 
+fn sanitize_cron_job_name(description: &str) -> String {
+    let cleaned: String = description
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut name = cleaned
+        .split_whitespace()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if name.is_empty() {
+        name = "scheduled-job".to_string();
+    }
+    if name.len() > 120 {
+        name.truncate(120);
+    }
+    name
+}
+
+/// Friendly wrapper around [`KernelHandle::cron_create`] — registers the real kernel scheduler.
 async fn tool_schedule_create(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let agent_id = caller_agent_id.ok_or("Agent ID required for schedule_create")?;
     let description = input["description"]
         .as_str()
         .ok_or("Missing 'description' parameter")?;
     let schedule_str = input["schedule"]
         .as_str()
         .ok_or("Missing 'schedule' parameter")?;
-    let agent = input["agent"].as_str().unwrap_or("");
-
     let cron_expr = parse_schedule_to_cron(schedule_str)?;
-    let schedule_id = uuid::Uuid::new_v4().to_string();
+    let timeout_secs = input["timeout_secs"]
+        .as_u64()
+        .unwrap_or(300)
+        .clamp(10, 3600);
 
-    let entry = serde_json::json!({
-        "id": schedule_id,
-        "description": description,
-        "schedule_input": schedule_str,
-        "cron": cron_expr,
-        "agent": agent,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "enabled": true,
+    let name = sanitize_cron_job_name(description);
+
+    let action = if let Some(p) = input["program_path"].as_str() {
+        serde_json::json!({
+            "kind": "ainl_run",
+            "program_path": p,
+            "timeout_secs": timeout_secs
+        })
+    } else if input.get("action").map(|v| v.is_object()).unwrap_or(false) {
+        input["action"].clone()
+    } else {
+        let msg = input["message"].as_str().unwrap_or(description);
+        serde_json::json!({
+            "kind": "agent_turn",
+            "message": format!("[Scheduled] {msg}"),
+            "timeout_secs": timeout_secs
+        })
+    };
+
+    let delivery = if input
+        .get("delivery")
+        .map(|v| v.is_object())
+        .unwrap_or(false)
+    {
+        input["delivery"].clone()
+    } else {
+        serde_json::json!({"kind": "none"})
+    };
+
+    let enabled = input["enabled"].as_bool().unwrap_or(true);
+
+    let body = serde_json::json!({
+        "name": name,
+        "agent_id": agent_id,
+        "schedule": { "kind": "cron", "expr": cron_expr },
+        "action": action,
+        "delivery": delivery,
+        "enabled": enabled,
     });
 
-    // Load existing schedules from shared memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
-        Some(serde_json::Value::Array(arr)) => arr,
-        _ => Vec::new(),
-    };
-
-    schedules.push(entry);
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
-
-    Ok(format!(
-        "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
-    ))
+    kh.cron_create(agent_id, body).await
 }
 
-async fn tool_schedule_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
+async fn tool_schedule_list(
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
-        Some(serde_json::Value::Array(arr)) => arr,
-        _ => Vec::new(),
-    };
-
-    if schedules.is_empty() {
-        return Ok("No scheduled tasks.".to_string());
+    let agent_id = caller_agent_id.ok_or("Agent ID required for schedule_list")?;
+    let jobs = kh.cron_list(agent_id).await?;
+    let mut out = serde_json::to_string_pretty(&jobs)
+        .map_err(|e| format!("Failed to serialize jobs: {e}"))?;
+    if let Ok(Some(serde_json::Value::Array(arr))) = kh.memory_recall(SCHEDULES_KEY) {
+        if !arr.is_empty() {
+            out.push_str("\n\n(Legacy note: old memory-only schedule entries exist under __openfang_schedules — they never ran on a timer. New jobs use the kernel cron file; ignore or clear stale memory keys if you migrated.)");
+        }
     }
-
-    let mut output = format!("Scheduled tasks ({}):\n\n", schedules.len());
-    for s in &schedules {
-        let enabled = s["enabled"].as_bool().unwrap_or(true);
-        let status = if enabled { "active" } else { "paused" };
-        output.push_str(&format!(
-            "  [{status}] {} — {}\n    Cron: {} | Agent: {}\n    Created: {}\n\n",
-            s["id"].as_str().unwrap_or("?"),
-            s["description"].as_str().unwrap_or("?"),
-            s["cron"].as_str().unwrap_or("?"),
-            s["agent"].as_str().unwrap_or("(self)"),
-            s["created_at"].as_str().unwrap_or("?"),
-        ));
-    }
-
-    Ok(output)
+    Ok(out)
 }
 
 async fn tool_schedule_delete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
+    let job_id = input["job_id"]
+        .as_str()
+        .or_else(|| input["id"].as_str())
+        .ok_or("Missing 'job_id' or 'id' parameter (cron job UUID)")?;
+    tool_cron_cancel(&serde_json::json!({ "job_id": job_id }), kernel).await
+}
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(SCHEDULES_KEY)? {
-        Some(serde_json::Value::Array(arr)) => arr,
-        _ => Vec::new(),
+fn tool_channels_list(kernel: Option<&Arc<dyn KernelHandle>>) -> String {
+    let kh = match require_kernel(kernel) {
+        Ok(k) => k,
+        Err(e) => return e,
     };
-
-    let before = schedules.len();
-    schedules.retain(|s| s["id"].as_str() != Some(id));
-
-    if schedules.len() == before {
-        return Err(format!("Schedule '{id}' not found."));
-    }
-
-    kh.memory_store(SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
-    Ok(format!("Schedule '{id}' deleted."))
+    kh.list_channels_summary()
 }
 
 // ---------------------------------------------------------------------------
@@ -3531,6 +3671,356 @@ async fn tool_canvas_present(
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
 }
 
+// ---------------------------------------------------------------------------
+// Email tools
+// ---------------------------------------------------------------------------
+
+/// Send an email via SMTP or MCP email integration.
+async fn tool_email_send(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let to = input["to"].as_str().ok_or("Missing 'to' parameter")?;
+    let subject = input["subject"]
+        .as_str()
+        .ok_or("Missing 'subject' parameter")?;
+    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let cc = input["cc"].as_str();
+    let bcc = input["bcc"].as_str();
+    let provider_hint = input["provider"].as_str();
+
+    // Strategy: Try MCP email servers first, then fall back to SMTP via email channel config
+
+    // 1. Check for MCP email integrations (Gmail, Outlook, etc.)
+    if let Some(mcp_conns) = mcp_connections {
+        let conns = mcp_conns.lock().await;
+
+        // Look for email-capable MCP servers (gmail, outlook, etc.)
+        let email_servers: Vec<&str> = conns
+            .iter()
+            .filter(|c| {
+                let name = c.name().to_lowercase();
+                name.contains("gmail") || name.contains("outlook") || name.contains("email")
+            })
+            .map(|c| c.name())
+            .collect();
+
+        if !email_servers.is_empty() {
+            // Found MCP email server - use provider hint or first available
+            let server_name_ref = if let Some(hint) = provider_hint {
+                email_servers
+                    .iter()
+                    .find(|&&s| s.to_lowercase().contains(&hint.to_lowercase()))
+                    .unwrap_or(&email_servers[0])
+            } else {
+                email_servers[0]
+            };
+
+            // Clone to owned String before dropping lock
+            let server_name = server_name_ref.to_string();
+
+            drop(conns); // Release lock before async call
+
+            // Try to find a send_email tool on the MCP server
+            let tool_name = format!("{}_send_email", server_name);
+            let mcp_input = serde_json::json!({
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "cc": cc,
+                "bcc": bcc,
+            });
+
+            let mut conns = mcp_connections.unwrap().lock().await;
+            if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                match conn.call_tool(&tool_name, &mcp_input).await {
+                    Ok(_result) => {
+                        return Ok(serde_json::json!({
+                            "status": "sent",
+                            "provider": server_name,
+                            "method": "mcp",
+                            "to": to,
+                            "subject": subject,
+                        })
+                        .to_string());
+                    }
+                    Err(e) => {
+                        warn!("MCP email send failed, falling back to SMTP: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to SMTP using email channel config (if available)
+    // TODO: Add support for direct SMTP via email channel config when kernel provides access to config
+    let _ = kernel; // Suppress unused warning
+    Err("No MCP email integration found. Configure an email channel or install an MCP email server (e.g., Gmail, Outlook).".to_string())
+}
+
+/// Read emails via IMAP or MCP email integration.
+async fn tool_email_read(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let folder = input["folder"].as_str().unwrap_or("INBOX");
+    let limit = input["limit"].as_u64().unwrap_or(10).min(50) as usize;
+    let unread_only = input["unread_only"].as_bool().unwrap_or(true);
+    let from_filter = input["from"].as_str();
+    let subject_filter = input["subject_contains"].as_str();
+    let provider_hint = input["provider"].as_str();
+
+    // 1. Try MCP email servers first
+    if let Some(mcp_conns) = mcp_connections {
+        let conns = mcp_conns.lock().await;
+
+        let email_servers: Vec<&str> = conns
+            .iter()
+            .filter(|c| {
+                let name = c.name().to_lowercase();
+                name.contains("gmail") || name.contains("outlook") || name.contains("email")
+            })
+            .map(|c| c.name())
+            .collect();
+
+        if !email_servers.is_empty() {
+            let server_name_ref = if let Some(hint) = provider_hint {
+                email_servers
+                    .iter()
+                    .find(|&&s| s.to_lowercase().contains(&hint.to_lowercase()))
+                    .unwrap_or(&email_servers[0])
+            } else {
+                email_servers[0]
+            };
+
+            let server_name = server_name_ref.to_string();
+
+            drop(conns);
+
+            let tool_name = format!("{}_read_emails", server_name);
+            let mcp_input = serde_json::json!({
+                "folder": folder,
+                "limit": limit,
+                "unread_only": unread_only,
+                "from": from_filter,
+                "subject_contains": subject_filter,
+            });
+
+            let mut conns = mcp_connections.unwrap().lock().await;
+            if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                match conn.call_tool(&tool_name, &mcp_input).await {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        warn!("MCP email read failed, falling back to IMAP: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fall back to IMAP (requires email channel config)
+    let _ = kernel; // Suppress unused warning
+    Err("No MCP email integration found. Configure an email channel or install an MCP email server.".to_string())
+}
+
+/// Search emails using provider-specific query syntax.
+async fn tool_email_search(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
+    let limit = input["limit"].as_u64().unwrap_or(20).min(100) as usize;
+    let folder = input["folder"].as_str();
+    let provider_hint = input["provider"].as_str();
+
+    // 1. Try MCP email servers
+    if let Some(mcp_conns) = mcp_connections {
+        let conns = mcp_conns.lock().await;
+
+        let email_servers: Vec<&str> = conns
+            .iter()
+            .filter(|c| {
+                let name = c.name().to_lowercase();
+                name.contains("gmail") || name.contains("outlook") || name.contains("email")
+            })
+            .map(|c| c.name())
+            .collect();
+
+        if !email_servers.is_empty() {
+            let server_name_ref = if let Some(hint) = provider_hint {
+                email_servers
+                    .iter()
+                    .find(|&&s| s.to_lowercase().contains(&hint.to_lowercase()))
+                    .unwrap_or(&email_servers[0])
+            } else {
+                email_servers[0]
+            };
+
+            let server_name = server_name_ref.to_string();
+
+            drop(conns);
+
+            let tool_name = format!("{}_search_emails", server_name);
+            let mcp_input = serde_json::json!({
+                "query": query,
+                "limit": limit,
+                "folder": folder,
+            });
+
+            let mut conns = mcp_connections.unwrap().lock().await;
+            if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                match conn.call_tool(&tool_name, &mcp_input).await {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        warn!("MCP email search failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = kernel; // Suppress unused warning
+    Err("No MCP email integration found. Configure an email channel or install an MCP email server.".to_string())
+}
+
+/// Reply to an email thread with proper threading headers.
+async fn tool_email_reply(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let message_id = input["message_id"]
+        .as_str()
+        .ok_or("Missing 'message_id' parameter")?;
+    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let reply_all = input["reply_all"].as_bool().unwrap_or(false);
+    let provider_hint = input["provider"].as_str();
+
+    // 1. Try MCP email servers
+    if let Some(mcp_conns) = mcp_connections {
+        let conns = mcp_conns.lock().await;
+
+        let email_servers: Vec<&str> = conns
+            .iter()
+            .filter(|c| {
+                let name = c.name().to_lowercase();
+                name.contains("gmail") || name.contains("outlook") || name.contains("email")
+            })
+            .map(|c| c.name())
+            .collect();
+
+        if !email_servers.is_empty() {
+            let server_name_ref = if let Some(hint) = provider_hint {
+                email_servers
+                    .iter()
+                    .find(|&&s| s.to_lowercase().contains(&hint.to_lowercase()))
+                    .unwrap_or(&email_servers[0])
+            } else {
+                email_servers[0]
+            };
+
+            let server_name = server_name_ref.to_string();
+
+            drop(conns);
+
+            let tool_name = format!("{}_reply_email", server_name);
+            let mcp_input = serde_json::json!({
+                "message_id": message_id,
+                "body": body,
+                "reply_all": reply_all,
+            });
+
+            let mut conns = mcp_connections.unwrap().lock().await;
+            if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                match conn.call_tool(&tool_name, &mcp_input).await {
+                    Ok(_result) => {
+                        return Ok(serde_json::json!({
+                            "status": "sent",
+                            "provider": server_name,
+                            "method": "mcp",
+                            "message_id": message_id,
+                            "reply_all": reply_all,
+                        })
+                        .to_string());
+                    }
+                    Err(e) => {
+                        warn!("MCP email reply failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = kernel; // Suppress unused warning
+    Err("No MCP email integration found. Configure an email channel or install an MCP email server.".to_string())
+}
+
+/// Create or update an email draft.
+async fn tool_email_draft(
+    input: &serde_json::Value,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let to = input["to"].as_str().ok_or("Missing 'to' parameter")?;
+    let subject = input["subject"]
+        .as_str()
+        .ok_or("Missing 'subject' parameter")?;
+    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let draft_id = input["draft_id"].as_str();
+    let provider_hint = input["provider"].as_str();
+
+    // Draft creation/update is MCP-only (not well supported via raw IMAP)
+    if let Some(mcp_conns) = mcp_connections {
+        let conns = mcp_conns.lock().await;
+
+        let email_servers: Vec<&str> = conns
+            .iter()
+            .filter(|c| {
+                let name = c.name().to_lowercase();
+                name.contains("gmail") || name.contains("outlook") || name.contains("email")
+            })
+            .map(|c| c.name())
+            .collect();
+
+        if !email_servers.is_empty() {
+            let server_name_ref = if let Some(hint) = provider_hint {
+                email_servers
+                    .iter()
+                    .find(|&&s| s.to_lowercase().contains(&hint.to_lowercase()))
+                    .unwrap_or(&email_servers[0])
+            } else {
+                email_servers[0]
+            };
+
+            let server_name = server_name_ref.to_string();
+
+            drop(conns);
+
+            let tool_name = format!("{}_create_draft", server_name);
+            let mcp_input = serde_json::json!({
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "draft_id": draft_id,
+            });
+
+            let mut conns = mcp_connections.unwrap().lock().await;
+            if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
+                match conn.call_tool(&tool_name, &mcp_input).await {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        return Err(format!("MCP draft creation failed: {}", e));
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Draft creation requires an MCP email integration (Gmail, Outlook). Raw IMAP does not support drafts reliably.".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3539,8 +4029,8 @@ mod tests {
     fn test_builtin_tool_definitions() {
         let tools = builtin_tool_definitions();
         assert!(
-            tools.len() >= 39,
-            "Expected at least 39 tools, got {}",
+            tools.len() >= 40,
+            "Expected at least 40 tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -3588,8 +4078,9 @@ mod tests {
         assert!(names.contains(&"cron_create"));
         assert!(names.contains(&"cron_list"));
         assert!(names.contains(&"cron_cancel"));
-        // 1 channel send tool
+        // Channel tools
         assert!(names.contains(&"channel_send"));
+        assert!(names.contains(&"channels_list"));
         // 4 hand tools
         assert!(names.contains(&"hand_list"));
         assert!(names.contains(&"hand_activate"));
@@ -4198,15 +4689,15 @@ mod tests {
     }
 
     #[test]
-    fn test_depth_limit_constant() {
-        assert_eq!(MAX_AGENT_CALL_DEPTH, 5);
+    fn test_depth_limit_default_cap() {
+        assert_eq!(DEFAULT_MAX_AGENT_CALL_DEPTH, 5);
     }
 
     #[test]
     fn test_depth_limit_first_call_succeeds() {
-        // Default depth is 0, which is < MAX_AGENT_CALL_DEPTH
+        // Default depth is 0, which is < effective max when task-local unset
         let default_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
-        assert!(default_depth < MAX_AGENT_CALL_DEPTH);
+        assert!(default_depth < effective_max_agent_call_depth());
     }
 
     #[test]

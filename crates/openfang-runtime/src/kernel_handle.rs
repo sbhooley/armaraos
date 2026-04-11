@@ -132,6 +132,11 @@ pub trait KernelHandle: Send + Sync {
         Err("Cron scheduler not available".to_string())
     }
 
+    /// Human-readable list of registered outbound channel adapters (names match `channel_send` / cron `delivery`).
+    fn list_channels_summary(&self) -> String {
+        "Channel listing not available.".to_string()
+    }
+
     /// Check if a tool requires approval based on current policy.
     fn requires_approval(&self, tool_name: &str) -> bool {
         let _ = tool_name;
@@ -257,6 +262,25 @@ pub trait KernelHandle: Send + Sync {
     /// Called by the agent loop before long LLM calls to prevent heartbeat false-positives.
     fn touch_agent(&self, agent_id: &str) {
         let _ = agent_id;
+    }
+
+    /// Live `[llm]` HTTP timeouts (and related settings) when the host tracks them.
+    /// `None` means use built-in defaults for ad-hoc drivers (e.g. tests without a kernel).
+    fn live_llm_config(&self) -> Option<openfang_types::config::LlmConfig> {
+        None
+    }
+
+    /// Resolve an LLM driver via the host `LlmDriverFactory` (instrumented, LRU when shared).
+    ///
+    /// Used for rare fallback paths (OpenRouter free-tier, manifest `fallback_models`) so they
+    /// contribute to the same `llm_*` metrics as the primary driver. Default: unavailable — callers
+    /// use `create_driver` with `[llm]` HTTP timeouts from [`live_llm_config`](Self::live_llm_config).
+    fn get_llm_driver(
+        &self,
+        config: &crate::llm_driver::DriverConfig,
+    ) -> Result<std::sync::Arc<dyn crate::llm_driver::LlmDriver>, String> {
+        let _ = config;
+        Err("LLM factory not available".to_string())
     }
 
     /// Spawn an agent with capability inheritance enforcement.

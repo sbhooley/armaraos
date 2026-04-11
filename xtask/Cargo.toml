@@ -9,5 +9,9 @@ description = "Build automation for the ArmaraOS workspace"
 anyhow = { workspace = true }
 clap = { workspace = true }
 flate2 = "1"
+reqwest = { workspace = true }
+serde_json = { workspace = true }
 tar = "0.4"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+toml = { workspace = true }
 ureq = { version = "2.12", default-features = false, features = ["tls"] }

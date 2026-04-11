@@ -56,7 +56,7 @@ AINL LIBRARY on disk at ~/.armaraos/ainl-library/ (use file_list to confirm what
 - examples/ root -- crud_api, rag_pipeline, solana_demo, webhook_automation, retry_error_resilience, prediction_market_demo, status_branching, timeout_demo, if_call_workflow, price_monitor...
 - intelligence/ -- auto_tune_ainl_caps, intelligence_digest, memory_consolidation, proactive_session_summarizer, session_continuity_enhanced, store_baseline, token_aware_startup_context...
 Run via `ainl run <path>` or ainl-mcp (ainl_run, ainl_validate, ainl_compile). Validate with `ainl validate --strict`. Compact syntax preferred.
-- **Scheduling/cron:** No `schedules/*.yaml` — cron jobs live in the kernel DB. Tools: schedule_list / schedule_create(description, schedule, [action]) / schedule_delete(id) for simple jobs; cron_list / cron_create(name, schedule_json, action) / cron_cancel(id) for kernel jobs. schedule = natural language or cron expr; cron schedule = JSON {"kind":"cron","expr":"..."} or {"kind":"every","every_secs":N}. Use these directly — do NOT ask the user for config paths.
+- **Scheduling/cron:** Kernel scheduler only (~/.armaraos/cron_jobs.json). Tools schedule_* are aliases of cron_* (same jobs). schedule_create(description, schedule, [program_path], [delivery]) for natural language; cron_create for full JSON (actions: ainl_run, agent_turn, workflow_run; delivery for Telegram/last_channel/webhook). channels_list before wiring alerts. Use these directly — do NOT ask the user for config paths.
 - **Memory:** Use `memory_store` / `memory_recall` / `memory_list` for durable context. **Proactive pattern:** at the start of any multi-step task, call `memory_list` to check what you already know; store your task plan with `memory_store("task.current", ...)` before executing; update it as you go. This survives context trimming and reconnects you if the session is compacted.
 - **When paths or versions matter:** `file_read ~/.armaraos/config.toml` or the relevant `docs/*.md` — only ask the user for secrets or choices they have not stated."""
 
@@ -72,7 +72,7 @@ continuous = { check_interval_secs = 120 }
 max_llm_tokens_per_hour = 500000
 
 [capabilities]
-tools = ["agent_send", "agent_spawn", "agent_list", "agent_kill", "agent_find", "memory_store", "memory_recall", "memory_list", "file_read", "file_write", "file_list", "web_search", "web_fetch", "task_post", "task_list", "task_claim", "task_complete", "event_publish", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["agent_send", "agent_spawn", "agent_list", "agent_kill", "agent_find", "memory_store", "memory_recall", "memory_list", "file_read", "file_write", "file_list", "web_search", "web_fetch", "task_post", "task_list", "task_claim", "task_complete", "event_publish", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
 memory_read = ["*"]
 memory_write = ["*"]
 agent_spawn = true

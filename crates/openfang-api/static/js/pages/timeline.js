@@ -81,7 +81,13 @@ function timelinePage() {
         return a === 'AuthAttempt' || a === 'CapabilityCheck' || a === 'ShellExec';
       }
       if (f === 'system') {
-        return a === 'ConfigChange' || a === 'WireConnect' || a === 'UpdateCheck' || a === 'UpdateInstall';
+        return (
+          a === 'ConfigChange' ||
+          a === 'AgentManifestUpdate' ||
+          a === 'WireConnect' ||
+          a === 'UpdateCheck' ||
+          a === 'UpdateInstall'
+        );
       }
       return true;
     },
@@ -178,6 +184,7 @@ function timelinePage() {
         AuthAttempt: 'Auth',
         CapabilityCheck: 'Capability',
         ConfigChange: 'Config',
+        AgentManifestUpdate: 'Manifest',
         WireConnect: 'Wire',
         UpdateCheck: 'Update check',
         UpdateInstall: 'Update install'

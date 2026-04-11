@@ -1,11 +1,10 @@
 //! Usage tracking store — records LLM usage events for cost monitoring.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 
 /// A single usage event recording an LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,20 +69,20 @@ pub struct DailyBreakdown {
 /// Usage store backed by SQLite.
 #[derive(Clone)]
 pub struct UsageStore {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
 }
 
 impl UsageStore {
-    /// Create a new usage store wrapping the given connection.
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+    /// Create a new usage store wrapping the given pool.
+    pub fn new(pool: MemorySqlitePool) -> Self {
+        Self { pool }
     }
 
     /// Record a usage event.
     pub fn record(&self, record: &UsageRecord) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -108,8 +107,8 @@ impl UsageStore {
     /// Query total cost in the last hour for an agent.
     pub fn query_hourly(&self, agent_id: AgentId) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -125,8 +124,8 @@ impl UsageStore {
     /// Query total cost today for an agent.
     pub fn query_daily(&self, agent_id: AgentId) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -142,8 +141,8 @@ impl UsageStore {
     /// Query total cost in the current calendar month for an agent.
     pub fn query_monthly(&self, agent_id: AgentId) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -159,8 +158,8 @@ impl UsageStore {
     /// Query total cost across all agents for the current hour.
     pub fn query_global_hourly(&self) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -176,8 +175,8 @@ impl UsageStore {
     /// Query total cost across all agents for the current calendar month.
     pub fn query_global_monthly(&self) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -193,8 +192,8 @@ impl UsageStore {
     /// Query usage summary, optionally filtered by agent.
     pub fn query_summary(&self, agent_id: Option<AgentId>) -> OpenFangResult<UsageSummary> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_id {
@@ -233,8 +232,8 @@ impl UsageStore {
     /// Query usage grouped by model.
     pub fn query_by_model(&self) -> OpenFangResult<Vec<ModelUsage>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let mut stmt = conn
@@ -267,8 +266,8 @@ impl UsageStore {
     /// Query daily usage breakdown for the last N days.
     pub fn query_daily_breakdown(&self, days: u32) -> OpenFangResult<Vec<DailyBreakdown>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         let mut stmt = conn
@@ -305,8 +304,8 @@ impl UsageStore {
     /// Query the timestamp of the earliest usage event.
     pub fn query_first_event_date(&self) -> OpenFangResult<Option<String>> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let result: Option<String> = conn
             .query_row("SELECT MIN(timestamp) FROM usage_events", [], |row| {
@@ -319,8 +318,8 @@ impl UsageStore {
     /// Query today's total cost across all agents.
     pub fn query_today_cost(&self) -> OpenFangResult<f64> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let cost: f64 = conn
             .query_row(
@@ -336,8 +335,8 @@ impl UsageStore {
     /// Delete usage events older than the given number of days.
     pub fn cleanup_old(&self, days: u32) -> OpenFangResult<usize> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let deleted = conn
             .execute(
@@ -354,12 +353,12 @@ impl UsageStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> UsageStore {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        UsageStore::new(Arc::new(Mutex::new(conn)))
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        UsageStore::new(pool)
     }
 
     #[test]

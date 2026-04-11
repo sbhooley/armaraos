@@ -11,7 +11,7 @@ use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/embedded_programs.rs"));
 
 /// Marker file with the build revision; bumped when embedded content changes meaningfully.
-pub const EMBEDDED_PROGRAMS_REVISION: &str = "5";
+pub const EMBEDDED_PROGRAMS_REVISION: &str = "7";
 
 /// `~/.armaraos/ainl-library/armaraos-programs/`
 pub fn armaraos_programs_subdir(home_dir: &Path) -> std::path::PathBuf {
@@ -140,6 +140,18 @@ mod tests {
         assert!(
             paths.iter().any(|p| p.contains("new_version_checker")),
             "expected new_version_checker in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("lead_gen_pipeline")),
+            "expected lead_gen_pipeline in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("research_pipeline")),
+            "expected research_pipeline in embed, got: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("system_health_monitor")),
+            "expected system_health_monitor in embed, got: {paths:?}"
         );
     }
 }

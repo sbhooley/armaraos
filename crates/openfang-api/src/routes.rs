@@ -1927,10 +1927,27 @@ pub async fn version_github_latest_release() -> impl IntoResponse {
 // Single agent detail + SSE streaming
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Deserialize)]
+pub struct GetAgentQuery {
+    /// Comma-separated response fields to omit (e.g. `manifest_toml`).
+    #[serde(default)]
+    pub omit: Option<String>,
+}
+
+fn get_agent_query_omits_field(omit: &Option<String>, field: &str) -> bool {
+    omit.as_deref().is_some_and(|s| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .any(|p| p == field)
+    })
+}
+
 /// GET /api/agents/:id — Get a single agent's detailed info.
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(query): Query<GetAgentQuery>,
     ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
@@ -1970,59 +1987,71 @@ pub async fn get_agent(
         serde_json::json!(entry.turn_stats.turns_err as f64 / turn_total as f64)
     };
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "id": entry.id.to_string(),
-            "name": entry.name,
-            "state": format!("{:?}", entry.state),
-            "mode": entry.mode,
-            "profile": entry.manifest.profile,
-            "created_at": entry.created_at.to_rfc3339(),
-            "session_id": entry.session_id.0.to_string(),
-            "model": {
-                "provider": entry.manifest.model.provider,
-                "model": entry.manifest.model.model,
-            },
-            "capabilities": {
-                "tools": entry.manifest.capabilities.tools,
-                "network": entry.manifest.capabilities.network,
-            },
-            "description": entry.manifest.description,
-            "tags": entry.manifest.tags,
-            "system_prompt": entry.manifest.model.system_prompt,
-            "identity": {
-                "emoji": entry.identity.emoji,
-                "avatar_url": entry.identity.avatar_url,
-                "color": entry.identity.color,
-                "archetype": entry.identity.archetype,
-                "vibe": entry.identity.vibe,
-                "greeting_style": entry.identity.greeting_style,
-            },
-            "tool_allowlist": entry.manifest.tool_allowlist,
-            "tool_blocklist": entry.manifest.tool_blocklist,
-            "skills": entry.manifest.skills,
-            "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
-            "mcp_servers": entry.manifest.mcp_servers,
-            "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
-            "fallback_models": entry.manifest.fallback_models,
-            "max_iterations": entry.manifest.autonomous.as_ref().map(|a| a.max_iterations),
-            "scheduled_ainl_host_adapter": state.kernel.scheduled_ainl_host_adapter_info(agent_id),
-            "turn_stats": {
-                "last_latency_ms": entry.turn_stats.last_latency_ms,
-                "last_fallback_note": entry.turn_stats.last_fallback_note,
-                "last_turn_at": entry.turn_stats.last_turn_at.map(|t| t.to_rfc3339()),
-                "last_success_at": entry.turn_stats.last_success_at.map(|t| t.to_rfc3339()),
-                "last_error_at": entry.turn_stats.last_error_at.map(|t| t.to_rfc3339()),
-                "last_error_summary": entry.turn_stats.last_error_summary,
-                "turns_ok": entry.turn_stats.turns_ok,
-                "turns_err": entry.turn_stats.turns_err,
-                "last_input_tokens": entry.turn_stats.last_input_tokens,
-                "last_output_tokens": entry.turn_stats.last_output_tokens,
-                "error_rate": turn_error_rate,
-            },
-        })),
-    )
+    let omit_manifest_toml = get_agent_query_omits_field(&query.omit, "manifest_toml");
+    let manifest_toml = (!omit_manifest_toml).then(|| {
+        toml::to_string(&entry.manifest).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to serialize manifest to TOML for GET /api/agents/:id");
+            String::new()
+        })
+    });
+
+    let mut body = serde_json::json!({
+        "id": entry.id.to_string(),
+        "name": entry.name,
+        "state": format!("{:?}", entry.state),
+        "mode": entry.mode,
+        "profile": entry.manifest.profile,
+        "created_at": entry.created_at.to_rfc3339(),
+        "session_id": entry.session_id.0.to_string(),
+        "model": {
+            "provider": entry.manifest.model.provider,
+            "model": entry.manifest.model.model,
+        },
+        "capabilities": {
+            "tools": entry.manifest.capabilities.tools,
+            "network": entry.manifest.capabilities.network,
+        },
+        "description": entry.manifest.description,
+        "tags": entry.manifest.tags,
+        "system_prompt": entry.manifest.model.system_prompt,
+        "identity": {
+            "emoji": entry.identity.emoji,
+            "avatar_url": entry.identity.avatar_url,
+            "color": entry.identity.color,
+            "archetype": entry.identity.archetype,
+            "vibe": entry.identity.vibe,
+            "greeting_style": entry.identity.greeting_style,
+        },
+        "tool_allowlist": entry.manifest.tool_allowlist,
+        "tool_blocklist": entry.manifest.tool_blocklist,
+        "skills": entry.manifest.skills,
+        "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
+        "mcp_servers": entry.manifest.mcp_servers,
+        "mcp_servers_mode": if entry.manifest.mcp_servers.is_empty() { "all" } else { "allowlist" },
+        "fallback_models": entry.manifest.fallback_models,
+        "max_iterations": entry.manifest.autonomous.as_ref().map(|a| a.max_iterations),
+        "scheduled_ainl_host_adapter": state.kernel.scheduled_ainl_host_adapter_info(agent_id),
+        "turn_stats": {
+            "last_latency_ms": entry.turn_stats.last_latency_ms,
+            "last_fallback_note": entry.turn_stats.last_fallback_note,
+            "last_turn_at": entry.turn_stats.last_turn_at.map(|t| t.to_rfc3339()),
+            "last_success_at": entry.turn_stats.last_success_at.map(|t| t.to_rfc3339()),
+            "last_error_at": entry.turn_stats.last_error_at.map(|t| t.to_rfc3339()),
+            "last_error_summary": entry.turn_stats.last_error_summary,
+            "turns_ok": entry.turn_stats.turns_ok,
+            "turns_err": entry.turn_stats.turns_err,
+            "last_input_tokens": entry.turn_stats.last_input_tokens,
+            "last_output_tokens": entry.turn_stats.last_output_tokens,
+            "error_rate": turn_error_rate,
+        },
+    });
+    if let Some(mt) = manifest_toml {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("manifest_toml".to_string(), serde_json::Value::String(mt));
+        }
+    }
+
+    (StatusCode::OK, Json(body))
 }
 
 /// POST /api/agents/:id/message/stream — SSE streaming response.
@@ -4259,6 +4288,8 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
         "openfang_restarts_total {}\n\n",
         health.restart_count
     ));
+
+    out.push_str(&state.kernel.llm_factory.prometheus_snippet());
 
     // Version info
     out.push_str("# HELP openfang_info ArmaraOS version and build info.\n");
@@ -7665,6 +7696,7 @@ pub async fn update_agent_budget(
             // Persist updated entry
             if let Some(entry) = state.kernel.registry.get(agent_id) {
                 let _ = state.kernel.memory.save_agent(&entry);
+                sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
             }
             (
                 StatusCode::OK,
@@ -7909,7 +7941,7 @@ pub async fn update_trigger(
 // Agent update endpoint
 // ---------------------------------------------------------------------------
 
-/// PUT /api/agents/:id — Update an agent (currently: re-set manifest fields).
+/// PUT /api/agents/{id}/update — Replace a running agent's manifest from validated TOML.
 pub async fn update_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -7917,7 +7949,7 @@ pub async fn update_agent(
     Json(req): Json<AgentUpdateRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
-    const PATH: &str = "/api/agents/:id";
+    const PATH: &str = "/api/agents/:id/update";
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -7943,8 +7975,7 @@ pub async fn update_agent(
         );
     }
 
-    // Parse the new manifest
-    let _manifest: AgentManifest = match toml::from_str(&req.manifest_toml) {
+    let manifest: AgentManifest = match toml::from_str(&req.manifest_toml) {
         Ok(m) => m,
         Err(e) => {
             return api_json_error(
@@ -7958,15 +7989,52 @@ pub async fn update_agent(
         }
     };
 
-    // Note: Full manifest update requires kill + respawn. For now, acknowledge receipt.
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "acknowledged",
-            "agent_id": id,
-            "note": "Full manifest update requires agent restart. Use DELETE + POST to apply.",
-        })),
-    )
+    match state.kernel.apply_agent_manifest_update(agent_id, manifest) {
+        Ok(entry) => {
+            sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "ok",
+                    "agent_id": id,
+                    "name": entry.name,
+                    "note": "Manifest applied to the running kernel and persisted. Autonomous schedule loops (continuous / periodic / proactive triggers) were reloaded without a daemon restart. Session memory was cleared for safety.",
+                })),
+            )
+        }
+        Err(e) => match e {
+            openfang_kernel::error::KernelError::OpenFang(
+                openfang_types::error::OpenFangError::Config(msg),
+            ) => api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Manifest rejected",
+                msg,
+                Some(
+                    "The manifest name must match the agent. Use PATCH /api/agents/:id to rename.",
+                ),
+            ),
+            openfang_kernel::error::KernelError::OpenFang(
+                openfang_types::error::OpenFangError::AgentNotFound(s),
+            ) => api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                s,
+                Some("Use GET /api/agents to list ids."),
+            ),
+            other => api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Manifest update failed",
+                format!("{other}"),
+                Some("Check daemon logs and retry."),
+            ),
+        },
+    }
 }
 
 /// PATCH /api/agents/{id} — Partial update of agent fields (name, description, model, system_prompt).
@@ -8072,6 +8140,7 @@ pub async fn patch_agent(
     // Persist updated entry to SQLite
     if let Some(entry) = state.kernel.registry.get(agent_id) {
         let _ = state.kernel.memory.save_agent(&entry);
+        sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
         (
             StatusCode::OK,
             Json(
@@ -9832,6 +9901,7 @@ pub async fn set_model(
                 .registry
                 .get(agent_id)
                 .map(|e| {
+                    sync_agent_toml_for_kernel(state.kernel.as_ref(), &e);
                     (
                         e.manifest.model.model.clone(),
                         e.manifest.model.provider.clone(),
@@ -9953,7 +10023,12 @@ pub async fn set_agent_tools(
         .kernel
         .set_agent_tool_filters(agent_id, allowlist, blocklist)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))),
+        Ok(()) => {
+            if let Some(entry) = state.kernel.registry.get(agent_id) {
+                sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
+            }
+            (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+        }
         Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &rid,
@@ -10053,10 +10128,15 @@ pub async fn set_agent_skills(
         })
         .unwrap_or_default();
     match state.kernel.set_agent_skills(agent_id, skills.clone()) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "ok", "skills": skills})),
-        ),
+        Ok(()) => {
+            if let Some(entry) = state.kernel.registry.get(agent_id) {
+                sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "skills": skills})),
+            )
+        }
         Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
             &rid,
@@ -10163,10 +10243,15 @@ pub async fn set_agent_mcp_servers(
         .kernel
         .set_agent_mcp_servers(agent_id, servers.clone())
     {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "ok", "mcp_servers": servers})),
-        ),
+        Ok(()) => {
+            if let Some(entry) = state.kernel.registry.get(agent_id) {
+                sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "ok", "mcp_servers": servers})),
+            )
+        }
         Err(e) => api_json_error(
             StatusCode::BAD_REQUEST,
             &rid,
@@ -10504,6 +10589,7 @@ pub async fn test_provider(
             Some(base_url)
         },
         skip_permissions: true,
+        ..Default::default()
     };
 
     let network_hints = crate::network_hints::collect();
@@ -11287,51 +11373,73 @@ pub async fn reload_integrations(
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled Jobs (cron) endpoints
+// Scheduled Jobs (cron) endpoints — /api/schedules aliases the kernel scheduler
+// (same persistence as /api/cron/jobs — ~/.armaraos/cron_jobs.json).
 // ---------------------------------------------------------------------------
 
-/// The well-known shared-memory agent ID used for cross-agent KV storage.
-/// Must match the value in `openfang-kernel/src/kernel.rs::shared_memory_agent_id()`.
-fn schedule_shared_agent_id() -> AgentId {
-    AgentId(uuid::Uuid::from_bytes([
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01,
-    ]))
+fn sanitize_schedule_api_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut out = cleaned
+        .split_whitespace()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if out.is_empty() {
+        out = "schedule".to_string();
+    }
+    if out.len() > 120 {
+        out.truncate(120);
+    }
+    out
 }
 
-const SCHEDULES_KEY: &str = "__openfang_schedules";
+/// Resolve `agent_id` (UUID or registered name) to an [`AgentId`].
+fn resolve_schedule_agent_id(state: &AppState, agent_id_str: &str) -> Result<AgentId, String> {
+    if let Ok(aid) = agent_id_str.parse::<AgentId>() {
+        if state.kernel.registry.get(aid).is_some() {
+            return Ok(aid);
+        }
+        return Err(format!("No agent with id {agent_id_str}"));
+    }
+    state
+        .kernel
+        .registry
+        .list()
+        .into_iter()
+        .find(|a| a.name == agent_id_str)
+        .map(|a| a.id)
+        .ok_or_else(|| format!("No agent named {agent_id_str}"))
+}
 
-/// GET /api/schedules — List all cron-based scheduled jobs.
+/// GET /api/schedules — List all kernel cron jobs (same backing store as GET /api/cron/jobs).
 pub async fn list_schedules(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
 ) -> impl IntoResponse {
-    let rid = resolve_request_id(ext);
-    let agent_id = schedule_shared_agent_id();
-    match state.kernel.memory.structured_get(agent_id, SCHEDULES_KEY) {
-        Ok(Some(serde_json::Value::Array(arr))) => {
-            let total = arr.len();
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"schedules": arr, "total": total})),
-            )
-        }
-        Ok(_) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"schedules": [], "total": 0})),
-        ),
-        Err(e) => {
-            tracing::warn!("Failed to load schedules: {e}");
-            api_json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &rid,
-                "/api/schedules",
-                "Failed to load schedules",
-                format!("{e}"),
-                Some("Check memory/sqlite configuration and daemon logs."),
-            )
-        }
-    }
+    let _rid = resolve_request_id(ext);
+    let jobs = state.kernel.cron_scheduler.list_all_jobs();
+    let total = jobs.len();
+    let schedules: Vec<serde_json::Value> = jobs
+        .into_iter()
+        .map(|j| serde_json::to_value(&j).unwrap_or_default())
+        .collect();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "schedules": schedules,
+            "total": total,
+            "source": "kernel_cron"
+        })),
+    )
 }
 
 /// POST /api/schedules — Create a new cron-based scheduled job.
@@ -11395,71 +11503,76 @@ pub async fn create_schedule(
             Some("Use an id from GET /api/agents."),
         );
     }
-    // Validate agent exists (UUID or name lookup)
-    let agent_exists = if let Ok(aid) = agent_id_str.parse::<AgentId>() {
-        state.kernel.registry.get(aid).is_some()
-    } else {
-        state
-            .kernel
-            .registry
-            .list()
-            .iter()
-            .any(|a| a.name == agent_id_str)
-    };
-    if !agent_exists {
-        return api_json_error(
-            StatusCode::NOT_FOUND,
-            &rid,
-            PATH,
-            "Agent not found",
-            format!("No agent matches agent_id {agent_id_str}."),
-            Some("Create the agent first or fix agent_id."),
-        );
-    }
     let message = req["message"].as_str().unwrap_or("").to_string();
     let enabled = req.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
 
-    let schedule_id = uuid::Uuid::new_v4().to_string();
-    let entry = serde_json::json!({
-        "id": schedule_id,
-        "name": name,
-        "cron": cron,
-        "agent_id": agent_id_str,
-        "message": message,
+    let target_agent = match resolve_schedule_agent_id(&state, &agent_id_str) {
+        Ok(id) => id,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                e,
+                Some("Use an id from GET /api/agents."),
+            );
+        }
+    };
+
+    let job_name = sanitize_schedule_api_name(&name);
+    let body = serde_json::json!({
+        "name": job_name,
+        "agent_id": target_agent.to_string(),
+        "schedule": { "kind": "cron", "expr": cron },
+        "action": {
+            "kind": "agent_turn",
+            "message": if message.is_empty() {
+                "[Scheduled task]".to_string()
+            } else {
+                message.clone()
+            },
+            "timeout_secs": 300u64
+        },
+        "delivery": { "kind": "none" },
         "enabled": enabled,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "last_run": null,
-        "run_count": 0,
     });
 
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    schedules.push(entry.clone());
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        tracing::warn!("Failed to save schedule: {e}");
-        return api_json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
+    match state
+        .kernel
+        .cron_create(&target_agent.to_string(), body)
+        .await
+    {
+        Ok(result) => {
+            let parsed: serde_json::Value = serde_json::from_str(&result)
+                .unwrap_or_else(|_| serde_json::json!({ "raw": result }));
+            let job_id = parsed
+                .get("job_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let mut body = serde_json::json!({
+                "result": parsed,
+                "source": "kernel_cron",
+                "name": job_name,
+            });
+            // Back-compat: wizard.js and older clients expect top-level `id` (cron job UUID).
+            if let Some(ref jid) = job_id {
+                body["id"] = serde_json::json!(jid);
+            }
+            (StatusCode::CREATED, Json(body))
+        }
+        Err(e) => api_json_error(
+            StatusCode::BAD_REQUEST,
             &rid,
             PATH,
-            "Failed to save schedule",
-            format!("{e}"),
-            Some("Check memory/sqlite storage and daemon logs."),
-        );
+            "Schedule creation failed",
+            e,
+            Some("Same shape as POST /api/cron/jobs — validate name, cron expr, and agent_id."),
+        ),
     }
-
-    (StatusCode::CREATED, Json(entry))
 }
 
-/// PUT /api/schedules/:id — Update a scheduled job (toggle enabled, edit fields).
+/// PUT /api/schedules/:id — Update a kernel cron job (same id as GET /api/cron/jobs).
 pub async fn update_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -11468,249 +11581,118 @@ pub async fn update_schedule(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/schedules/:id";
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let mut found = false;
-    for s in schedules.iter_mut() {
-        if s["id"].as_str() == Some(&id) {
-            found = true;
-            if let Some(enabled) = req.get("enabled").and_then(|v| v.as_bool()) {
-                s["enabled"] = serde_json::Value::Bool(enabled);
-            }
-            if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
-                s["name"] = serde_json::Value::String(name.to_string());
-            }
-            if let Some(cron) = req.get("cron").and_then(|v| v.as_str()) {
-                let cron_parts: Vec<&str> = cron.split_whitespace().collect();
-                if cron_parts.len() != 5 {
-                    return api_json_error(
-                        StatusCode::BAD_REQUEST,
-                        &rid,
-                        PATH,
-                        "Invalid cron expression",
-                        "Cron must have exactly 5 fields (minute hour dom mon dow).".to_string(),
-                        None,
-                    );
-                }
-                s["cron"] = serde_json::Value::String(cron.to_string());
-            }
-            if let Some(agent_id) = req.get("agent_id").and_then(|v| v.as_str()) {
-                s["agent_id"] = serde_json::Value::String(agent_id.to_string());
-            }
-            if let Some(message) = req.get("message").and_then(|v| v.as_str()) {
-                s["message"] = serde_json::Value::String(message.to_string());
-            }
-            break;
+    let uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid cron job id",
+                "Expected a UUID (same as kernel cron job id).".to_string(),
+                Some("Use GET /api/schedules or GET /api/cron/jobs."),
+            );
         }
-    }
-
-    if !found {
-        return api_json_error(
-            StatusCode::NOT_FOUND,
-            &rid,
-            PATH,
-            "Schedule not found",
-            format!("No schedule with id {id}."),
-            Some("Use GET /api/schedules to list ids."),
-        );
-    }
-
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        return api_json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &rid,
-            PATH,
-            "Failed to update schedule",
-            format!("{e}"),
-            Some("Check memory/sqlite storage."),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "updated", "schedule_id": id})),
-    )
-}
-
-/// DELETE /api/schedules/:id — Remove a scheduled job.
-pub async fn delete_schedule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    ext: Option<Extension<RequestId>>,
-) -> impl IntoResponse {
-    let rid = resolve_request_id(ext);
-    const PATH: &str = "/api/schedules/:id";
-    let shared_id = schedule_shared_agent_id();
-    let mut schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let before = schedules.len();
-    schedules.retain(|s| s["id"].as_str() != Some(&id));
-
-    if schedules.len() == before {
-        return api_json_error(
-            StatusCode::NOT_FOUND,
-            &rid,
-            PATH,
-            "Schedule not found",
-            format!("No schedule with id {id}."),
-            Some("Use GET /api/schedules to list ids."),
-        );
-    }
-
-    if let Err(e) = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules),
-    ) {
-        return api_json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &rid,
-            PATH,
-            "Failed to delete schedule",
-            format!("{e}"),
-            Some("Check memory/sqlite storage."),
-        );
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": "removed", "schedule_id": id})),
-    )
-}
-
-/// POST /api/schedules/:id/run — Manually run a scheduled job now.
-pub async fn run_schedule(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    ext: Option<Extension<RequestId>>,
-) -> impl IntoResponse {
-    let rid = resolve_request_id(ext);
-    const PATH: &str = "/api/schedules/:id/run";
-    let shared_id = schedule_shared_agent_id();
-    let schedules: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
-        };
-
-    let schedule = match schedules.iter().find(|s| s["id"].as_str() == Some(&id)) {
-        Some(s) => s.clone(),
+    };
+    let job_id = CronJobId(uuid);
+    let mut job = match state.kernel.cron_scheduler.get_job(job_id) {
+        Some(j) => j,
         None => {
             return api_json_error(
                 StatusCode::NOT_FOUND,
                 &rid,
                 PATH,
                 "Schedule not found",
-                format!("No schedule with id {id}."),
+                format!("No cron job with id {id}."),
                 Some("Use GET /api/schedules to list ids."),
             );
         }
     };
 
-    let agent_id_str = schedule["agent_id"].as_str().unwrap_or("");
-    let message = schedule["message"]
-        .as_str()
-        .unwrap_or("Scheduled task triggered manually.");
-    let name = schedule["name"].as_str().unwrap_or("(unnamed)");
-
-    // Find the target agent — require explicit agent_id, no silent fallback
-    let target_agent = if !agent_id_str.is_empty() {
-        if let Ok(aid) = agent_id_str.parse::<AgentId>() {
-            if state.kernel.registry.get(aid).is_some() {
-                Some(aid)
-            } else {
-                None
-            }
-        } else {
-            state
-                .kernel
-                .registry
-                .list()
-                .iter()
-                .find(|a| a.name == agent_id_str)
-                .map(|a| a.id)
-        }
-    } else {
-        None
-    };
-
-    let target_agent = match target_agent {
-        Some(a) => a,
-        None => {
+    if let Some(enabled) = req.get("enabled").and_then(|v| v.as_bool()) {
+        job.enabled = enabled;
+    }
+    if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
+        job.name = sanitize_schedule_api_name(name);
+    }
+    if let Some(cron) = req.get("cron").and_then(|v| v.as_str()) {
+        let cron_parts: Vec<&str> = cron.split_whitespace().collect();
+        if cron_parts.len() != 5 {
             return api_json_error(
-                StatusCode::NOT_FOUND,
+                StatusCode::BAD_REQUEST,
                 &rid,
                 PATH,
-                "No target agent",
-                "No target agent found. Specify an agent_id or start an agent first.".to_string(),
-                Some("Fix the schedule's agent_id or spawn the agent."),
+                "Invalid cron expression",
+                "Cron must have exactly 5 fields (minute hour dom mon dow).".to_string(),
+                None,
             );
         }
-    };
-
-    let run_message = if message.is_empty() {
-        format!("[Scheduled task '{}' triggered manually]", name)
-    } else {
-        message.to_string()
-    };
-
-    // Update last_run and run_count
-    let mut schedules_updated: Vec<serde_json::Value> =
-        match state.kernel.memory.structured_get(shared_id, SCHEDULES_KEY) {
-            Ok(Some(serde_json::Value::Array(arr))) => arr,
-            _ => Vec::new(),
+        job.schedule = CronSchedule::Cron {
+            expr: cron.to_string(),
+            tz: None,
         };
-    for s in schedules_updated.iter_mut() {
-        if s["id"].as_str() == Some(&id) {
-            s["last_run"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
-            let count = s["run_count"].as_u64().unwrap_or(0);
-            s["run_count"] = serde_json::json!(count + 1);
-            break;
+    }
+    if let Some(aid_str) = req.get("agent_id").and_then(|v| v.as_str()) {
+        match resolve_schedule_agent_id(&state, aid_str) {
+            Ok(aid) => job.agent_id = aid,
+            Err(e) => {
+                return api_json_error(
+                    StatusCode::NOT_FOUND,
+                    &rid,
+                    PATH,
+                    "Agent not found",
+                    e,
+                    None,
+                );
+            }
         }
     }
-    let _ = state.kernel.memory.structured_set(
-        shared_id,
-        SCHEDULES_KEY,
-        serde_json::Value::Array(schedules_updated),
-    );
+    if let Some(msg) = req.get("message").and_then(|v| v.as_str()) {
+        if let CronAction::AgentTurn {
+            ref mut message, ..
+        } = job.action
+        {
+            *message = msg.to_string();
+        }
+    }
 
-    let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
-    match state
-        .kernel
-        .send_message_with_handle(target_agent, &run_message, Some(kernel_handle), None, None)
-        .await
-    {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "completed",
-                "schedule_id": id,
-                "agent_id": target_agent.to_string(),
-                "response": result.response,
-            })),
-        ),
+    match state.kernel.cron_scheduler.update_job(job_id, job) {
+        Ok(()) => {
+            let _ = state.kernel.cron_scheduler.persist();
+            (
+                StatusCode::OK,
+                Json(
+                    serde_json::json!({"status": "updated", "job_id": id, "source": "kernel_cron"}),
+                ),
+            )
+        }
         Err(e) => api_json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_REQUEST,
             &rid,
             PATH,
-            "Scheduled run failed",
+            "Schedule update failed",
             format!("{e}"),
-            Some("Check LLM provider, agent state, and /api/budget."),
+            Some("Validate merged fields against cron job rules."),
         ),
     }
+}
+
+/// DELETE /api/schedules/:id — Remove a kernel cron job (alias of DELETE /api/cron/jobs/:id).
+pub async fn delete_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    delete_cron_job(State(state), Path(id), ext).await
+}
+
+/// POST /api/schedules/:id/run — Manually run a kernel cron job now (alias of POST /api/cron/jobs/:id/run).
+pub async fn run_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    run_cron_job(State(state), Path(id), ext).await
 }
 
 // ---------------------------------------------------------------------------
@@ -12345,6 +12327,7 @@ pub async fn update_agent_identity(
             // Persist identity to SQLite
             if let Some(entry) = state.kernel.registry.get(agent_id) {
                 let _ = state.kernel.memory.save_agent(&entry);
+                sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
             }
             (
                 StatusCode::OK,
@@ -12366,7 +12349,8 @@ pub async fn update_agent_identity(
 // Agent Config Hot-Update
 // ---------------------------------------------------------------------------
 
-/// Request body for patching agent config (name, description, prompt, identity, model).
+/// Request body for patching agent config (name, description, prompt, identity, model,
+/// optional `api_key_env` / `base_url`, fallback chain, `max_iterations` for autonomous).
 #[derive(serde::Deserialize)]
 pub struct PatchAgentConfigRequest {
     pub name: Option<String>,
@@ -12694,14 +12678,7 @@ pub async fn patch_agent_config(
             tracing::warn!("Failed to persist agent config update: {e}");
         }
 
-        // Write user-editable fields back to agent.toml so disk stays in sync.
-        let agent_toml_path = openfang_kernel::config::openfang_home()
-            .join("agents")
-            .join(&entry.name)
-            .join("agent.toml");
-        if agent_toml_path.exists() {
-            patch_agent_toml_on_disk(&agent_toml_path, &entry);
-        }
+        sync_agent_toml_for_kernel(state.kernel.as_ref(), &entry);
     }
 
     (
@@ -12710,12 +12687,73 @@ pub async fn patch_agent_config(
     )
 }
 
-/// Read the existing agent.toml, update user-editable fields in-place, and write it back.
+/// Persist dashboard-held fields to `agent.toml`, creating the file and parent directory if missing.
+fn sync_agent_toml_for_kernel(kernel: &OpenFangKernel, entry: &openfang_types::agent::AgentEntry) {
+    let path = kernel.agent_toml_path(&entry.name);
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    path = %parent.display(),
+                    error = %e,
+                    "Failed to create agent directory for agent.toml sync"
+                );
+                return;
+            }
+        }
+    }
+    if !path.exists() {
+        match toml::to_string_pretty(&entry.manifest) {
+            Ok(body) => {
+                if let Err(e) = std::fs::write(&path, body) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "Failed to materialize agent.toml"
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize manifest for agent.toml");
+                return;
+            }
+        }
+    }
+    patch_agent_toml_on_disk(&path, entry);
+}
+
+#[derive(serde::Serialize)]
+struct AgentTomlResourcesPatch<'a> {
+    resources: &'a openfang_types::agent::ResourceQuota,
+}
+
+#[derive(serde::Serialize)]
+struct AgentTomlFallbacksPatch<'a> {
+    fallback_models: &'a [openfang_types::agent::FallbackModel],
+}
+
+#[derive(serde::Serialize)]
+struct AgentTomlRoutingPatch<'a> {
+    routing: &'a openfang_types::agent::ModelRoutingConfig,
+}
+
+#[derive(serde::Serialize)]
+struct AgentTomlProfilePatch<'a> {
+    profile: &'a openfang_types::agent::ToolProfile,
+}
+
+#[derive(serde::Serialize)]
+struct AgentTomlPriorityPatch {
+    priority: openfang_types::agent::Priority,
+}
+
+/// Read the existing agent.toml, update dashboard-held fields in-place, and write it back.
 ///
-/// Only touches system_prompt and identity (emoji, vibe, archetype, color, avatar_url,
-/// greeting_style). All other fields (capabilities, tools, exec_policy, mcp_servers, etc.)
-/// are left exactly as they are on disk so that upgrade-driven structural changes continue
-/// to propagate normally via the kernel's disk-vs-DB comparison.
+/// Keeps structural template keys (capabilities, exec_policy, module, schedule, …) from
+/// the file while syncing name, description, tags, priority, workspace,
+/// `generate_identity_files`, metadata, model, identity, budgets/resources, routing,
+/// fallbacks, skill/MCP/tool filters, etc. from the live [`AgentEntry`].
 fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agent::AgentEntry) {
     use toml::Value;
 
@@ -12730,21 +12768,86 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
         return;
     };
 
-    // Update [model].system_prompt
-    if let Some(Value::Table(model)) = root.get_mut("model") {
-        model.insert(
-            "system_prompt".to_string(),
-            Value::String(entry.manifest.model.system_prompt.clone()),
-        );
+    root.insert(
+        "name".to_string(),
+        Value::String(entry.manifest.name.clone()),
+    );
+    root.insert(
+        "description".to_string(),
+        Value::String(entry.manifest.description.clone()),
+    );
+
+    match &entry.manifest.profile {
+        Some(p) => {
+            if let Ok(s) = toml::to_string(&AgentTomlProfilePatch { profile: p }) {
+                if let Ok(Value::Table(t)) = s.parse::<Value>() {
+                    if let Some(pv) = t.get("profile") {
+                        root.insert("profile".to_string(), pv.clone());
+                    }
+                }
+            }
+        }
+        None => {
+            root.remove("profile");
+        }
     }
 
-    // Update [identity] — create the table if it doesn't exist yet
+    match &entry.manifest.pinned_model {
+        Some(p) if !p.is_empty() => {
+            root.insert("pinned_model".to_string(), Value::String(p.clone()));
+        }
+        _ => {
+            root.remove("pinned_model");
+        }
+    }
+
+    // [model] — full primary model row from the registry
+    {
+        let m = &entry.manifest.model;
+        let model_tbl = root
+            .entry("model".to_string())
+            .or_insert_with(|| Value::Table(toml::map::Map::new()));
+        if let Some(tbl) = model_tbl.as_table_mut() {
+            tbl.insert("provider".to_string(), Value::String(m.provider.clone()));
+            tbl.insert("model".to_string(), Value::String(m.model.clone()));
+            tbl.insert(
+                "system_prompt".to_string(),
+                Value::String(m.system_prompt.clone()),
+            );
+            tbl.insert(
+                "max_tokens".to_string(),
+                Value::Integer(i64::from(m.max_tokens)),
+            );
+            tbl.insert(
+                "temperature".to_string(),
+                Value::Float(m.temperature as f64),
+            );
+            match &m.api_key_env {
+                Some(s) if !s.is_empty() => {
+                    tbl.insert("api_key_env".to_string(), Value::String(s.clone()));
+                }
+                _ => {
+                    tbl.remove("api_key_env");
+                }
+            }
+            match &m.base_url {
+                Some(s) if !s.is_empty() => {
+                    tbl.insert("base_url".to_string(), Value::String(s.clone()));
+                }
+                _ => {
+                    tbl.remove("base_url");
+                }
+            }
+        }
+    }
+
+    // [identity]
     {
         let id = &entry.identity;
         let identity_tbl = root
             .entry("identity".to_string())
             .or_insert_with(|| Value::Table(toml::map::Map::new()));
-        if let Some(Value::Table(tbl)) = Some(identity_tbl) {
+        if let Some(tbl) = identity_tbl.as_table_mut() {
             set_toml_opt_value(tbl, "emoji", id.emoji.as_deref());
             set_toml_opt_value(tbl, "vibe", id.vibe.as_deref());
             set_toml_opt_value(tbl, "archetype", id.archetype.as_deref());
@@ -12754,16 +12857,96 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
         }
     }
 
-    // Update [autonomous].max_iterations if present in the manifest
     if let Some(autonomous) = &entry.manifest.autonomous {
         let autonomous_tbl = root
             .entry("autonomous".to_string())
             .or_insert_with(|| Value::Table(toml::map::Map::new()));
-        if let Some(Value::Table(tbl)) = Some(autonomous_tbl) {
+        if let Some(tbl) = autonomous_tbl.as_table_mut() {
             tbl.insert(
                 "max_iterations".to_string(),
                 Value::Integer(autonomous.max_iterations as i64),
             );
+        }
+    }
+
+    set_string_array_root(root, "skills", &entry.manifest.skills);
+    set_string_array_root(root, "mcp_servers", &entry.manifest.mcp_servers);
+    set_string_array_root(root, "tool_allowlist", &entry.manifest.tool_allowlist);
+    set_string_array_root(root, "tool_blocklist", &entry.manifest.tool_blocklist);
+
+    if let Ok(s) = toml::to_string(&AgentTomlResourcesPatch {
+        resources: &entry.manifest.resources,
+    }) {
+        if let Ok(v) = s.parse::<Value>() {
+            if let Some(Value::Table(inner)) = v.get("resources") {
+                root.insert("resources".to_string(), Value::Table(inner.clone()));
+            }
+        }
+    }
+
+    if entry.manifest.fallback_models.is_empty() {
+        root.remove("fallback_models");
+    } else if let Ok(s) = toml::to_string(&AgentTomlFallbacksPatch {
+        fallback_models: &entry.manifest.fallback_models,
+    }) {
+        if let Ok(v) = s.parse::<Value>() {
+            if let Some(fbv) = v.get("fallback_models") {
+                root.insert("fallback_models".to_string(), fbv.clone());
+            }
+        }
+    }
+
+    match &entry.manifest.routing {
+        Some(r) => {
+            if let Ok(s) = toml::to_string(&AgentTomlRoutingPatch { routing: r }) {
+                if let Ok(v) = s.parse::<Value>() {
+                    if let Some(Value::Table(rt)) = v.get("routing") {
+                        root.insert("routing".to_string(), Value::Table(rt.clone()));
+                    }
+                }
+            }
+        }
+        None => {
+            root.remove("routing");
+        }
+    }
+
+    set_string_array_root(root, "tags", &entry.manifest.tags);
+
+    if let Ok(s) = toml::to_string(&AgentTomlPriorityPatch {
+        priority: entry.manifest.priority,
+    }) {
+        if let Ok(Value::Table(t)) = s.parse::<Value>() {
+            if let Some(pv) = t.get("priority") {
+                root.insert("priority".to_string(), pv.clone());
+            }
+        }
+    }
+
+    root.insert(
+        "generate_identity_files".to_string(),
+        Value::Boolean(entry.manifest.generate_identity_files),
+    );
+
+    match &entry.manifest.workspace {
+        Some(p) => {
+            let s = p.to_string_lossy();
+            if !s.is_empty() {
+                root.insert("workspace".to_string(), Value::String(s.into_owned()));
+            } else {
+                root.remove("workspace");
+            }
+        }
+        None => {
+            root.remove("workspace");
+        }
+    }
+
+    if entry.manifest.metadata.is_empty() {
+        root.remove("metadata");
+    } else if let Ok(jv) = serde_json::to_value(&entry.manifest.metadata) {
+        if let Some(tv) = json_value_to_toml(&jv) {
+            root.insert("metadata".to_string(), tv);
         }
     }
 
@@ -12779,6 +12962,22 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
     }
 }
 
+fn set_string_array_root(
+    root: &mut toml::map::Map<String, toml::Value>,
+    key: &str,
+    list: &[String],
+) {
+    use toml::Value;
+    if list.is_empty() {
+        root.remove(key);
+    } else {
+        root.insert(
+            key.to_string(),
+            Value::Array(list.iter().map(|s| Value::String(s.clone())).collect()),
+        );
+    }
+}
+
 fn set_toml_opt_value(tbl: &mut toml::map::Map<String, toml::Value>, key: &str, val: Option<&str>) {
     match val {
         Some(v) if !v.is_empty() => {
@@ -12786,6 +12985,43 @@ fn set_toml_opt_value(tbl: &mut toml::map::Map<String, toml::Value>, key: &str, 
         }
         _ => {
             tbl.remove(key);
+        }
+    }
+}
+
+/// Convert a [`serde_json::Value`] tree into `toml::Value` for persisting `manifest.metadata`.
+fn json_value_to_toml(v: &serde_json::Value) -> Option<toml::Value> {
+    use serde_json::Value as J;
+    match v {
+        J::Null => None,
+        J::Bool(b) => Some(toml::Value::Boolean(*b)),
+        J::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(toml::Value::Integer(i))
+            } else if let Some(u) = n.as_u64() {
+                Some(toml::Value::Integer(i64::try_from(u).unwrap_or(i64::MAX)))
+            } else {
+                Some(toml::Value::Float(n.as_f64().unwrap_or(0.0)))
+            }
+        }
+        J::String(s) => Some(toml::Value::String(s.clone())),
+        J::Array(a) => {
+            let mut out = Vec::new();
+            for x in a {
+                if let Some(tv) = json_value_to_toml(x) {
+                    out.push(tv);
+                }
+            }
+            Some(toml::Value::Array(out))
+        }
+        J::Object(m) => {
+            let mut tbl = toml::map::Map::new();
+            for (k, x) in m {
+                if let Some(tv) = json_value_to_toml(x) {
+                    tbl.insert(k.clone(), tv);
+                }
+            }
+            Some(toml::Value::Table(tbl))
         }
     }
 }

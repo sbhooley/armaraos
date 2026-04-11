@@ -1,0 +1,13 @@
+{
+  "frame_version": "1",
+  "op": "capture",
+  "run_id": "local-lead-gen-001",
+  "intent": "Local lead-gen showcase run",
+  "outcome": "ok",
+  "episode": "Manual ainl run; see README for extra fields.",
+  "tier": "unattended",
+  "extra": {
+    "seed_company": "Acme Robotics",
+    "use_llm": "no"
+  }
+}

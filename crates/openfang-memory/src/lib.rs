@@ -17,5 +17,8 @@ pub mod session;
 pub mod structured;
 pub mod usage;
 
+mod pool;
 mod substrate;
+
+pub use pool::{open_in_memory_pool, MemorySqlitePool};
 pub use substrate::MemorySubstrate;

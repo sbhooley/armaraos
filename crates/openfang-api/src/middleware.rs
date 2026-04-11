@@ -60,6 +60,15 @@ pub struct AuthState {
     pub session_secret: String,
 }
 
+#[inline]
+fn connect_info_is_loopback(request: &Request<Body>) -> bool {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().is_loopback())
+        .unwrap_or(false)
+}
+
 /// Bearer token authentication middleware.
 ///
 /// When `api_key` is non-empty (after trimming), requests to non-public
@@ -79,11 +88,7 @@ pub async fn auth(
     // Shutdown is loopback-only (CLI on same machine) — skip token auth
     let path = request.uri().path();
     if path == "/api/shutdown" {
-        let is_loopback_shutdown = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip().is_loopback())
-            .unwrap_or(false); // SECURITY: default-deny — unknown origin is NOT loopback
+        let is_loopback_shutdown = connect_info_is_loopback(&request); // default-deny if no ConnectInfo
         if is_loopback_shutdown {
             return next.run(request).await;
         }
@@ -91,54 +96,60 @@ pub async fn auth(
 
     // Redacted support bundle: same machine only (desktop shell / local CLI).
     // Writes go under ~/.armaraos/support/; loopback prevents remote abuse when api_key is set.
-    if path == "/api/support/diagnostics" && method == axum::http::Method::POST {
-        let is_loopback_diag = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip().is_loopback())
-            .unwrap_or(false);
-        if is_loopback_diag {
-            return next.run(request).await;
-        }
+    if path == "/api/support/diagnostics"
+        && method == axum::http::Method::POST
+        && connect_info_is_loopback(&request)
+    {
+        return next.run(request).await;
     }
 
     // Stream a generated zip from ~/support/ — same loopback-only rule as POST diagnostics.
     // Without this, the SPA fetch GET is rejected when api_key is set (Bearer not always
     // applied consistently in embedded WebViews), so users cannot save the bundle.
-    if path == "/api/support/diagnostics/download" && method == axum::http::Method::GET {
-        let is_loopback_dl = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip().is_loopback())
-            .unwrap_or(false);
-        if is_loopback_dl {
-            return next.run(request).await;
-        }
+    if path == "/api/support/diagnostics/download"
+        && method == axum::http::Method::GET
+        && connect_info_is_loopback(&request)
+    {
+        return next.run(request).await;
     }
 
     // Stream arbitrary home files (e.g. support/*.zip) without forcing Bearer in embedded WebView.
-    if path == "/api/armaraos-home/download" && method == axum::http::Method::GET {
-        let is_loopback_home_dl = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip().is_loopback())
-            .unwrap_or(false);
-        if is_loopback_home_dl {
+    if path == "/api/armaraos-home/download"
+        && method == axum::http::Method::GET
+        && connect_info_is_loopback(&request)
+    {
+        return next.run(request).await;
+    }
+
+    // Kernel scheduler (wizard + overview): same-machine clients skip Bearer for mutations.
+    // Remote callers must still send Authorization / ?token= when api_key is set.
+    if connect_info_is_loopback(&request) {
+        if path == "/api/schedules" && method == axum::http::Method::POST {
             return next.run(request).await;
+        }
+        if let Some(rest) = path.strip_prefix("/api/schedules/") {
+            if method == axum::http::Method::POST {
+                if let Some(id_part) = rest.strip_suffix("/run") {
+                    if !id_part.is_empty() && !id_part.contains('/') {
+                        return next.run(request).await;
+                    }
+                }
+            }
+            if !rest.contains('/')
+                && (method == axum::http::Method::PUT || method == axum::http::Method::DELETE)
+            {
+                return next.run(request).await;
+            }
         }
     }
 
     // Public endpoints that don't require auth (dashboard needs these).
     // SECURITY: /api/agents is GET-only (listing). POST (spawn) requires auth.
     // SECURITY: Public endpoints are GET-only unless explicitly noted.
-    // POST/PUT/DELETE to any endpoint ALWAYS requires auth to prevent
-    // unauthenticated writes (cron job creation, skill install, etc.).
+    // POST/PUT/DELETE require auth for remote peers; loopback-only exceptions are
+    // documented above (support bundle, home download, /api/schedules mutations).
     let is_get = method == axum::http::Method::GET;
-    let is_loopback = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip().is_loopback())
-        .unwrap_or(false);
+    let is_loopback = connect_info_is_loopback(&request);
 
     // SSE: allow without credentials only from loopback (embedded dashboard). Remote clients
     // must send the same Bearer / ?token= as other protected routes when api_key is set.
@@ -190,6 +201,7 @@ pub async fn auth(
         || (path == "/api/integrations/available" && is_get)
         || (path == "/api/integrations/health" && is_get)
         || (path == "/api/workflows" && is_get)
+        || (path == "/api/schedules" && is_get)
         // /api/logs/stream, /api/logs/daemon/stream, /api/events/stream: loopback bypass above; remote needs auth
         || (path.starts_with("/api/cron/") && is_get)
         || (path.starts_with("/api/ainl/library") && is_get)

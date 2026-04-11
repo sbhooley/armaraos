@@ -23,6 +23,15 @@ export interface StreamEvent {
   [key: string]: unknown;
 }
 
+/** `GET /api/agents/:id` — partial shape; see API reference for full fields. */
+export interface AgentDetail {
+  id: string;
+  name: string;
+  /** Canonical TOML serialization of the in-memory manifest (can be large). */
+  manifest_toml?: string;
+  [key: string]: unknown;
+}
+
 export class OpenFang {
   baseUrl: string;
   agents: AgentResource;
@@ -50,7 +59,7 @@ export class OpenFang {
 
 export class AgentResource {
   list(): Promise<unknown[]>;
-  get(id: string): Promise<unknown>;
+  get(id: string): Promise<AgentDetail>;
   create(opts: AgentCreateOpts): Promise<{ id: string; [key: string]: unknown }>;
   delete(id: string): Promise<unknown>;
   stop(id: string): Promise<unknown>;

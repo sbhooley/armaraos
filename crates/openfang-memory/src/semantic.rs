@@ -7,13 +7,12 @@
 //! When a query embedding is provided, recall uses cosine similarity ranking.
 //! When no embeddings are available, falls back to LIKE matching.
 
+use crate::MemorySqlitePool;
 use chrono::Utc;
 use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{MemoryFilter, MemoryFragment, MemoryId, MemorySource};
-use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tracing::{debug, warn};
 
 #[cfg(feature = "http-memory")]
@@ -27,16 +26,16 @@ use crate::http_client::MemoryApiClient;
 ///   (PostgreSQL + pgvector + Jina AI embeddings).
 #[derive(Clone)]
 pub struct SemanticStore {
-    conn: Arc<Mutex<Connection>>,
+    pool: MemorySqlitePool,
     #[cfg(feature = "http-memory")]
     http_client: Option<MemoryApiClient>,
 }
 
 impl SemanticStore {
-    /// Create a new semantic store wrapping the given connection (SQLite backend).
-    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
+    /// Create a new semantic store wrapping the given pool (SQLite backend).
+    pub fn new(pool: MemorySqlitePool) -> Self {
         Self {
-            conn,
+            pool,
             #[cfg(feature = "http-memory")]
             http_client: None,
         }
@@ -44,11 +43,11 @@ impl SemanticStore {
 
     /// Create a semantic store with an HTTP backend for the memory-api gateway.
     ///
-    /// The SQLite connection is still required for local fallback and other stores.
+    /// The SQLite pool is still required for local fallback and other stores.
     #[cfg(feature = "http-memory")]
-    pub fn new_with_http(conn: Arc<Mutex<Connection>>, client: MemoryApiClient) -> Self {
+    pub fn new_with_http(pool: MemorySqlitePool, client: MemoryApiClient) -> Self {
         Self {
-            conn,
+            pool,
             http_client: Some(client),
         }
     }
@@ -99,8 +98,8 @@ impl SemanticStore {
         embedding: Option<&[f32]>,
     ) -> OpenFangResult<MemoryId> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = MemoryId::new();
         let now = Utc::now().to_rfc3339();
@@ -202,8 +201,8 @@ impl SemanticStore {
         }
 
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
 
         // Build SQL: fetch candidates (broader than limit for vector re-ranking)
@@ -389,8 +388,8 @@ impl SemanticStore {
         }
 
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE memories SET deleted = 1 WHERE id = ?1",
@@ -403,8 +402,8 @@ impl SemanticStore {
     /// Update the embedding for an existing memory.
     pub fn update_embedding(&self, id: MemoryId, embedding: &[f32]) -> OpenFangResult<()> {
         let conn = self
-            .conn
-            .lock()
+            .pool
+            .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let bytes = embedding_to_bytes(embedding);
         conn.execute(
@@ -508,12 +507,12 @@ fn embedding_from_bytes(bytes: &[u8]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration::run_migrations;
+    use crate::pool::open_in_memory_pool;
+    use openfang_types::config::MemoryConfig;
 
     fn setup() -> SemanticStore {
-        let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
-        SemanticStore::new(Arc::new(Mutex::new(conn)))
+        let pool = open_in_memory_pool(&MemoryConfig::default()).unwrap();
+        SemanticStore::new(pool)
     }
 
     #[test]

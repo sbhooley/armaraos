@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use openfang_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use openfang_types::tool::{ToolCall, ToolDefinition};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Error type for LLM driver operations.
@@ -178,7 +178,7 @@ pub trait LlmDriver: Send + Sync {
 }
 
 /// Configuration for creating an LLM driver.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct DriverConfig {
     /// Provider name.
     pub provider: String,
@@ -193,8 +193,60 @@ pub struct DriverConfig {
     /// with no interactive terminal, so permission prompts would block
     /// indefinitely.  OpenFang's own capability / RBAC layer already
     /// restricts what agents can do, making this safe.
-    #[serde(default = "default_skip_permissions")]
     pub skip_permissions: bool,
+    /// Optional shared HTTP client (injected by [`crate::drivers::factory::LlmDriverFactory`]).
+    pub http_client: Option<std::sync::Arc<reqwest::Client>>,
+}
+
+impl Default for DriverConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            api_key: None,
+            base_url: None,
+            skip_permissions: true,
+            http_client: None,
+        }
+    }
+}
+
+impl serde::Serialize for DriverConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("DriverConfig", 4)?;
+        s.serialize_field("provider", &self.provider)?;
+        s.serialize_field("api_key", &self.api_key)?;
+        s.serialize_field("base_url", &self.base_url)?;
+        s.serialize_field("skip_permissions", &self.skip_permissions)?;
+        s.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DriverConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct DriverConfigDe {
+            provider: String,
+            api_key: Option<String>,
+            base_url: Option<String>,
+            #[serde(default = "default_skip_permissions")]
+            skip_permissions: bool,
+        }
+        let v = DriverConfigDe::deserialize(deserializer)?;
+        Ok(DriverConfig {
+            provider: v.provider,
+            api_key: v.api_key,
+            base_url: v.base_url,
+            skip_permissions: v.skip_permissions,
+            http_client: None,
+        })
+    }
 }
 
 fn default_skip_permissions() -> bool {
@@ -209,6 +261,7 @@ impl std::fmt::Debug for DriverConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
             .field("skip_permissions", &self.skip_permissions)
+            .field("http_client", &self.http_client.as_ref().map(|_| "<set>"))
             .finish()
     }
 }
