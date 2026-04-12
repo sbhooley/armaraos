@@ -19,6 +19,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
 | [Architecture](architecture.md) | Workspace crate graph, kernel boot, agent lifecycle, memory + graph-memory substrates |
+| [AINL graph memory (runtime)](graph-memory.md) | Per-agent **`ainl_memory.db`**, **`GraphMemoryWriter`** wiring, persona lines in the chat system prompt, vs scheduled **`bundle.ainlbundle`** |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Agent automation hardening](agent-automation-hardening.md) | Tool args, persist vs re-scrape, loop guard interaction, phases, workspace habits; skill-mint stub cron reference |
@@ -80,7 +81,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [Dashboard Get started UI](dashboard-overview-ui.md) | `#overview` landing: layout, **Quick actions** (incl. **App Store**, **Daemon & runtime** → `#runtime`), **Comms** under **Monitor**, Setup Wizard gating (`openfang-onboarded`, `navigateOverview`), setup checklist, seven-tile skeleton, CSS and source map |
 | [Dashboard Setup Wizard](dashboard-setup-wizard.md) | `#wizard` first-run flow: provider test / Next rules, flat `manifest_toml` for `POST /api/agents`, valid `ToolProfile` values, static embed + rebuild note, links to overview and API |
 | [Dashboard Settings & Runtime UI](dashboard-settings-runtime-ui.md) | `#settings` / `#runtime` plus shared **`dashboard-page-*`** shell on **Skills**, **Channels**, **Hands**, **Home folder**, **Analytics**; **`dashboard-toolbar-tabs`**, **Channels** filter card, **Analytics** stat grid; **Settings** summary line (config schema, API, log, home); **Budget** tab **Ultra Cost-Efficient Mode** card + **Chat** header **⚡ eco** toggle; daemon **Reload** / **Shut down**, **`daemon_lifecycle.js`** — class map and files |
-| [Scheduled AINL](scheduled-ainl.md) | Cron `ainl run`, `~/.armaraos/.env`, `AINL_HOST_ADAPTER_ALLOWLIST`, `AINL_ALLOW_IR_DECLARED_ADAPTERS`, editing jobs |
+| [Scheduled AINL](scheduled-ainl.md) | Cron **`ainl run`**, secrets / adapter env, **`AINL_BUNDLE_PATH`** + **`bundle.ainlbundle`** round-trip, per-agent Rust graph memory vs Python bridge |
 
 ## Additional Resources
 
@@ -132,7 +133,8 @@ See **[data-directory.md](data-directory.md)** for overrides and migration from 
 |------|-------------|
 | `~/.armaraos/config.toml` | Main configuration file |
 | `~/.armaraos/data/openfang.db` | Main SQLite database (kernel / memory substrate) |
-| `~/.armaraos/graph_memory.db` | Optional **`ainl-memory`** graph store (delegation episodes); see [data-directory.md](data-directory.md) |
+| `~/.armaraos/agents/<id>/ainl_memory.db` | Optional per-agent **`ainl-memory`** graph store (episodes, facts, persona for LLM prompt); see [data-directory.md](data-directory.md) |
+| `~/.armaraos/agents/<id>/bundle.ainlbundle` | Optional **AINL bundle** for scheduled **`ainl run`** round-trip; see [scheduled-ainl.md](scheduled-ainl.md) |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/daemon.json` | Daemon PID and port info |
 | `agents/` | Agent template manifests (repo / dev) |

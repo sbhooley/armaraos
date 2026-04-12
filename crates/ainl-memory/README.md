@@ -55,6 +55,10 @@ let episodes = store.query_recent_episodes("agent-A", 10).unwrap();
 - **Zero unsafe code**: Pure Rust implementation
 - **Offline-first**: No network required, local SQLite storage
 
+### High-level `GraphMemory` API (used by ArmaraOS `openfang-runtime`)
+
+The **`GraphMemory`** type (see **`src/lib.rs`**) wraps **`SqliteGraphStore`** with helpers including **`write_episode`**, **`write_fact`**, **`store_pattern`**, **`write_persona`**, **`recall_recent`**, and **`recall_by_type`** (filter by **`AinlNodeKind`**, e.g. **`Persona`**, within a time window). **`openfang-runtime`** exposes this through **`GraphMemoryWriter`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** for delegation episodes, facts, and **persona** traits that feed the chat **system prompt** hook. Scheduled **`ainl run`** uses a separate Python JSON bridge + **`.ainlbundle`** file; see ArmaraOS **`docs/scheduled-ainl.md`** and **ainativelang** **`docs/adapters/AINL_GRAPH_MEMORY.md`**.
+
 ## Node Types
 
 ### Episode

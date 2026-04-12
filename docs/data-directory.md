@@ -6,7 +6,8 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 |------|---------|
 | `~/.armaraos/config.toml` | Main configuration file (see **Config schema version** below) |
 | `~/.armaraos/data/openfang.db` | SQLite database (filename is historical) — kernel memory, sessions, task board, audit, etc. |
-| `~/.armaraos/graph_memory.db` | Optional **graph memory** SQLite file (**`ainl-memory`**). Created on first delegation-related write from **`openfang-runtime`** (separate from **`data/openfang.db`**). Safe to delete only if you accept losing typed episode/fact nodes stored there; back up with the rest of the home directory. |
+| `~/.armaraos/agents/<agent_id>/ainl_memory.db` | Optional **per-agent graph memory** SQLite file (**`ainl-memory`** / **`GraphMemoryWriter`**). Created when the agent loop first opens graph memory (separate from **`data/openfang.db`**). Holds typed **episode**, **semantic**, **procedural**, and **persona** nodes; persona traits with strength ≥ **0.1** in the last **90** days are summarized into the chat **system prompt**. Safe to delete only if you accept losing that substrate; back up with the agent folder. |
+| `~/.armaraos/agents/<agent_id>/bundle.ainlbundle` | Optional **AINL bundle** JSON (workflow + memory + **persona** + tools). Used by scheduled **`ainl_run`**: the kernel sets **`AINL_BUNDLE_PATH`** before **`ainl run`**, and after a successful exit best-effort rewrites this file from the live **`ainl_graph_memory`** bridge. See **[scheduled-ainl.md](scheduled-ainl.md)** (*AINL bundle + graph memory*). |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/agents/` | Agent manifests and per-agent data |
 | `~/.armaraos/daemon.json` | Daemon PID and port when `armaraos` / `openfang start` is running |

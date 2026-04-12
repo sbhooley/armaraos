@@ -72,12 +72,33 @@ Programs like **`intelligence_digest.lang`** call **`web`**, **`tiktok`**, **`ca
 
 After editing the agent manifest, restart the agent or reload configuration so the kernel picks up metadata — e.g. **Settings → System Info → Daemon / API** or **Monitor → Runtime** → **Reload config**, or a full daemon restart. Check **Agents → agent → Info** for **`scheduled_ainl_host_adapter`** (summary, **`ainl_allow_ir_declared_adapters`**, and allowlist fields). Narrative: **`AI_Native_Lang/docs/INTELLIGENCE_PROGRAMS.md`**; UI map: **[dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md)** (*Daemon / API runtime*).
 
+## AINL bundle + graph memory (stateful scheduled runs)
+
+Scheduled jobs with action **`ainl_run`** are executed by **`OpenFangKernel::cron_run_job`** (`crates/openfang-kernel/src/kernel.rs`): it resolves the program under **`~/.armaraos/ainl-library/`**, builds a `tokio::process::Command` for **`ainl run`**, then applies host env injection (secrets, adapter policy — sections above). Optional helpers live in **`openfang_runtime::ainl_bundle_cron`** (`crates/openfang-runtime/src/ainl_bundle_cron.rs`).
+
+| Path | Role |
+|------|------|
+| **`~/.armaraos/agents/<agent_id>/bundle.ainlbundle`** | Optional **`AINLBundle`** JSON (workflow IR + memory snapshot + persona list + tools). Not required for every graph; created or updated by the host export path. |
+
+**Pre-run (bundle → Python):** If **`~/.armaraos/agents/<agent_id>/bundle.ainlbundle`** exists, the kernel sets on the child process:
+
+- **`AINL_BUNDLE_PATH`** — absolute path to that file  
+- **`AINL_AGENT_ID`** — the cron job’s target agent id (string)
+
+The AINL subprocess should have **`~/.armaraos/ainl-library`** on **`PYTHONPATH`** (normal ArmaraOS layout). **`AINLGraphMemoryBridge.boot()`** in the **ainativelang** repo (`armaraos/bridge/ainl_graph_memory.py`) reads **`AINL_BUNDLE_PATH`**, loads **`AINLBundle`**, and best-effort replays **`persona`** entries via **`persona.update`** so the JSON graph store matches the last saved bundle before your graph runs.
+
+**Post-run (Python → bundle):** After **`ainl` exits successfully**, the kernel schedules a **non-blocking** export (`tokio::task::spawn_blocking` → **`openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort`** in `crates/openfang-runtime/src/ainl_bundle_cron.rs`). That spawns **`python3`** with **`AINL_EXPORT_AGENT_ID`**, re-boots the bridge for that agent, merges the live graph with the previous bundle source (or a tiny default **`.ainl`** stub if no bundle existed yet), and **`AINLBundleBuilder.save`** over **`bundle.ainlbundle`**. Failures are logged only; they do not fail the cron job.
+
+**Related (chat LLM, not the AINL subprocess):** **`openfang-runtime`** opens per-agent SQLite **`~/.armaraos/agents/<id>/ainl_memory.db`** via **`GraphMemoryWriter`** and, in **`run_agent_loop` / `run_agent_loop_streaming`**, appends recent **Persona** nodes (strength ≥ **0.1**, last **90** days) to the **system prompt** as **`[Persona traits active: …]`**. That path uses the **`ainl-memory`** crate (Rust), separate from the JSON **`ainl_graph_memory`** file used inside **`ainl run`**. See **[data-directory.md](data-directory.md)** and **`AI_Native_Lang/docs/adapters/AINL_GRAPH_MEMORY.md`**.
+
 ## Editing cron jobs
 
 The API supports **updating** a job in place: **`PUT /api/cron/jobs/{id}`** with the same JSON shape as **`POST /api/cron/jobs`** (including `agent_id`, `name`, `schedule`, `action`, `delivery`, `enabled`, optional `one_shot`). The Dashboard **Scheduler** page can **Edit** or **Duplicate** a job so you do not have to delete and recreate manually.
 
 ## Related docs
 
-- [Data directory](data-directory.md) — `~/.armaraos/` layout  
+- [Data directory](data-directory.md) — `~/.armaraos/` layout (per-agent **`ainl_memory.db`**, **`bundle.ainlbundle`**)  
+- [Architecture](architecture.md) — **`openfang-runtime`**, **`ainl-memory`**, graph memory  
 - [AINL first (default language)](ainl-first-language.md)  
 - [OOTB AINL](ootb-ainl.md)  
+- **AINL:** [ArmaraOS integration](https://github.com/sbhooley/ainativelang/blob/main/docs/ARMARAOS_INTEGRATION.md), [AINL graph memory adapter](https://github.com/sbhooley/ainativelang/blob/main/docs/adapters/AINL_GRAPH_MEMORY.md)  

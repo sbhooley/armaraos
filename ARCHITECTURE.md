@@ -100,7 +100,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 ## Layer 3: AINL Graph-Memory Substrate
 
 **Date**: April 12, 2026  
-**Integration**: Proof-of-concept delegation writes
+**Integration**: `openfang-runtime` agent loop + `tool_runner` (delegation, A2A, tools, persona)
 
 ### Vision
 
@@ -114,14 +114,14 @@ SQLite database schema (`~/.armaraos/memory.db`):
   - `src/query.rs`: Graph traversal (walk_from, recall_recent, find_patterns)
   - `src/lib.rs`: GraphMemory API (write_episode, write_fact, store_pattern, recall_recent)
 
-- **Schema**: Two tables added to existing openfang-memory database
-  - `ainl_graph_nodes`: Stores node payloads as JSON
-  - `ainl_graph_edges`: Stores labeled edges between nodes
+- **Schema**: Dedicated SQLite file per agent (`ainl_graph_*` tables inside `ainl_memory.db`), **not** inside `data/openfang.db`.
 
-- **Integration Point**: `openfang-runtime/src/tool_runner.rs`
-  - `tool_agent_delegate()`: After successful delegation, write Episode node
-  - Episode includes serialized `OrchestrationTraceEvent` (via `trace_event` field)
-  - Module-level `OnceLock<Mutex<GraphMemory>>` for non-invasive integration
+- **Integration (`openfang-runtime`)**
+  - `graph_memory_writer.rs` — `GraphMemoryWriter` (`Arc<Mutex<GraphMemory>>`); open is non-fatal.
+  - `agent_loop.rs` — `record_turn` on EndTurn, `record_fact` after successful tools, persona lines merged into system prompt.
+  - `tool_runner.rs` — `tool_agent_delegate`: after successful send, `record_turn` with optional serialized `OrchestrationTraceEvent` JSON; `tool_a2a_send`: `record_delegation` after `A2aClient::send_task` (stays in `tool_runner` so `caller_agent_id` exists).
+
+Operator reference: **`docs/graph-memory.md`**.
 
 ### Node Types
 
@@ -155,9 +155,8 @@ SQLite database schema (`~/.armaraos/memory.db`):
 
 ### Database Location
 
-- Development: `~/.armaraos/graph_memory.db`
-- Same directory as `memory.db` (existing openfang-memory database)
-- Schema auto-created on first delegation write
+- **ArmaraOS agent loop (`GraphMemoryWriter`):** `~/.armaraos/agents/<agent_id>/ainl_memory.db` (per-agent SQLite; schema created on first open).
+- **AINL Python `ainl_graph_memory`:** JSON file default `~/.armaraos/ainl_graph_memory.json` (override `AINL_GRAPH_MEMORY_PATH`); scheduled **`ainl run`** may also read/write **`~/.armaraos/agents/<agent_id>/bundle.ainlbundle`** via **`AINL_BUNDLE_PATH`** — see **`docs/scheduled-ainl.md`**.
 
 ---
 

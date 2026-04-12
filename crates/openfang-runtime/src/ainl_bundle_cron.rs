@@ -1,4 +1,13 @@
 //! AINLBundle env + best-effort export for scheduled `ainl run` (kernel cron).
+//!
+//! Wired from **`openfang-kernel`** (`Kernel::cron_run_job` → `CronAction::AinlRun`):
+//! - **`apply_ainl_bundle_env`** sets `AINL_BUNDLE_PATH` + `AINL_AGENT_ID` on the `ainl` child when
+//!   `~/.armaraos/agents/<agent_id>/bundle.ainlbundle` exists.
+//! - After a successful `ainl` exit, the kernel runs **`export_ainl_bundle_after_ainl_run_best_effort`**
+//!   on the blocking pool (`tokio::task::spawn_blocking`) so Python can merge the live
+//!   **`ainl_graph_memory`** bridge back into the bundle.
+//!
+//! See ArmaraOS **`docs/scheduled-ainl.md`** (section *AINL bundle + graph memory*).
 
 use std::path::PathBuf;
 use tokio::process::Command;
