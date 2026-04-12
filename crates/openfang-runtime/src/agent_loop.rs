@@ -506,6 +506,11 @@ pub async fn run_agent_loop(
             async {
                 info!(agent = %manifest.name, "Starting agent loop");
 
+                // Initialize AINL graph memory writer (non-fatal if it fails)
+                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open(
+                    &session.agent_id.to_string()
+                ).ok();
+
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
@@ -1108,6 +1113,12 @@ pub async fn run_agent_loop(
                         }),
                     };
                     let _ = hook_reg.fire(&ctx);
+                }
+
+                // Record completed turn in AINL graph memory
+                if let Some(ref gm) = graph_memory {
+                    let tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
+                    gm.record_turn(tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {
@@ -2154,6 +2165,11 @@ pub async fn run_agent_loop_streaming(
             async {
                 info!(agent = %manifest.name, "Starting streaming agent loop");
 
+                // Initialize AINL graph memory writer (non-fatal if it fails)
+                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open(
+                    &session.agent_id.to_string()
+                ).ok();
+
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
@@ -2771,6 +2787,12 @@ pub async fn run_agent_loop_streaming(
                         }),
                     };
                     let _ = hook_reg.fire(&ctx);
+                }
+
+                // Record completed turn in AINL graph memory
+                if let Some(ref gm) = graph_memory {
+                    let tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
+                    gm.record_turn(tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {

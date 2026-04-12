@@ -23,6 +23,7 @@ pub mod document_tools;
 pub mod drivers;
 pub mod embedding;
 pub mod graceful_shutdown;
+pub mod graph_memory_writer;
 pub mod hooks;
 pub mod host_ainl_snapshot;
 pub mod host_functions;
