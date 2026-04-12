@@ -110,6 +110,7 @@ fn normalize_rel(label: &str) -> String {
     match label {
         "learned_from" => "learned_from".to_string(),
         "delegated_to" => "delegated_to".to_string(),
+        "follows" => "follows".to_string(),
         "caused" | "caused_by" => "caused".to_string(),
         _ => "related".to_string(),
     }

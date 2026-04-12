@@ -18,7 +18,7 @@ fn test_write_episode_and_query() {
     let memory = GraphMemory::new(&db_path).expect("Failed to create memory");
 
     // Write an episode with delegation
-    let episode_id = memory
+    let _episode_id = memory
         .write_episode(
             vec!["file_read".to_string(), "agent_delegate".to_string()],
             Some("agent-B".to_string()),
@@ -106,11 +106,7 @@ fn test_graph_traversal_with_edges() {
         None,
     );
 
-    let mut fact = AinlMemoryNode::new_fact(
-        "Delegation successful".to_string(),
-        0.90,
-        turn_id,
-    );
+    let mut fact = AinlMemoryNode::new_fact("Delegation successful".to_string(), 0.90, turn_id);
 
     // Add edge from fact to episode
     fact.add_edge(episode.id, "learned_from");
@@ -152,8 +148,7 @@ fn test_procedural_pattern_storage() {
     println!("✓ Stored procedural pattern");
 
     // Find it
-    let patterns =
-        ainl_memory::find_patterns(memory.store(), "research").expect("Query failed");
+    let patterns = ainl_memory::find_patterns(memory.store(), "research").expect("Query failed");
 
     assert_eq!(patterns.len(), 1);
     println!("✓ Retrieved pattern by prefix");
@@ -183,7 +178,7 @@ fn test_episode_with_trace_event() {
         "timestamp": "2026-04-12T00:00:00Z"
     });
 
-    let episode_id = memory
+    let _episode_id = memory
         .write_episode(
             vec!["agent_delegate".to_string()],
             Some("agent-B".to_string()),

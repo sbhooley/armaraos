@@ -1099,6 +1099,32 @@ pub async fn run_agent_loop(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
+                if let Some(ref gm) = graph_memory {
+                    let episode_id = gm
+                        .record_turn(turn_tool_names.clone(), None, None)
+                        .await
+                        .unwrap_or_else(Uuid::new_v4);
+                    let facts = crate::graph_extractor::extract_facts(
+                        session_user_message,
+                        &final_response,
+                    );
+                    for fact in facts {
+                        gm.record_fact(fact.text, fact.confidence, episode_id)
+                            .await;
+                    }
+                    if let Some(pattern) =
+                        crate::graph_extractor::extract_pattern(&turn_tool_names)
+                    {
+                        gm.record_pattern(
+                            &pattern.name,
+                            pattern.tool_sequence,
+                            pattern.confidence,
+                        )
+                        .await;
+                    }
+                }
+
                 // Save session
                 memory
                     .save_session_async(session)
@@ -1173,11 +1199,6 @@ pub async fn run_agent_loop(
                         }),
                     };
                     let _ = hook_reg.fire(&ctx);
-                }
-
-                // Record completed turn in AINL graph memory
-                if let Some(ref gm) = graph_memory {
-                    gm.record_turn(turn_tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {
@@ -2829,6 +2850,32 @@ pub async fn run_agent_loop_streaming(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
+                if let Some(ref gm) = graph_memory {
+                    let episode_id = gm
+                        .record_turn(turn_tool_names.clone(), None, None)
+                        .await
+                        .unwrap_or_else(Uuid::new_v4);
+                    let facts = crate::graph_extractor::extract_facts(
+                        session_user_message_s,
+                        &final_response,
+                    );
+                    for fact in facts {
+                        gm.record_fact(fact.text, fact.confidence, episode_id)
+                            .await;
+                    }
+                    if let Some(pattern) =
+                        crate::graph_extractor::extract_pattern(&turn_tool_names)
+                    {
+                        gm.record_pattern(
+                            &pattern.name,
+                            pattern.tool_sequence,
+                            pattern.confidence,
+                        )
+                        .await;
+                    }
+                }
+
                 memory
                     .save_session_async(session)
                     .await
@@ -2902,11 +2949,6 @@ pub async fn run_agent_loop_streaming(
                         }),
                     };
                     let _ = hook_reg.fire(&ctx);
-                }
-
-                // Record completed turn in AINL graph memory
-                if let Some(ref gm) = graph_memory {
-                    gm.record_turn(turn_tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {

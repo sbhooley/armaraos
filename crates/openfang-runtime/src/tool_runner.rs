@@ -2239,24 +2239,29 @@ async fn tool_agent_delegate(
 
     // AINL graph-memory write using GraphMemoryWriter
     if let Ok(gm) = crate::graph_memory_writer::GraphMemoryWriter::open(&delegator.to_string()) {
-        let trace_event = serde_json::to_value(&openfang_types::orchestration_trace::OrchestrationTraceEvent {
-            trace_id: trace_id.clone(),
-            orchestrator_id,
-            agent_id: delegator,
-            parent_agent_id: parent_of_delegator,
-            event_type: openfang_types::orchestration_trace::TraceEventType::AgentDelegated {
-                target_agent: selected,
-                task: task.to_string(),
+        let trace_event = serde_json::to_value(
+            &openfang_types::orchestration_trace::OrchestrationTraceEvent {
+                trace_id: trace_id.clone(),
+                orchestrator_id,
+                agent_id: delegator,
+                parent_agent_id: parent_of_delegator,
+                event_type: openfang_types::orchestration_trace::TraceEventType::AgentDelegated {
+                    target_agent: selected,
+                    task: task.to_string(),
+                },
+                timestamp: chrono::Utc::now(),
+                metadata: std::collections::HashMap::new(),
             },
-            timestamp: chrono::Utc::now(),
-            metadata: std::collections::HashMap::new(),
-        }).ok();
+        )
+        .ok();
 
-        gm.record_turn(
-            vec!["agent_delegate".to_string()],
-            Some(selected.to_string()),
-            trace_event,
-        ).await;
+        let _ = gm
+            .record_turn(
+                vec!["agent_delegate".to_string()],
+                Some(selected.to_string()),
+                trace_event,
+            )
+            .await;
     }
 
     kh.record_orchestration_trace(
@@ -2859,9 +2864,7 @@ async fn tool_task_claim(
     match kh.task_claim(agent_id, prefer.as_deref(), strategy).await? {
         Some(task) => {
             if let Ok(claimant) = kh.resolve_agent_id(agent_id) {
-                if let Some(ctx) =
-                    orchestration_context_from_claimed_task(&task, claimant)
-                {
+                if let Some(ctx) = orchestration_context_from_claimed_task(&task, claimant) {
                     let _ = kh.set_pending_orchestration_ctx(agent_id, ctx.clone());
                     if let Some(live) = orchestration_live {
                         *live.write().await = ctx;
@@ -3695,7 +3698,8 @@ async fn tool_a2a_send(
     if let Some(caller_id) = caller_agent_id {
         if let Ok(gm) = crate::graph_memory_writer::GraphMemoryWriter::open(caller_id) {
             let target = input["agent_name"].as_str().unwrap_or("external-a2a-agent");
-            gm.record_delegation(target, vec!["a2a_send".to_string()]).await;
+            gm.record_delegation(target, vec!["a2a_send".to_string()])
+                .await;
         }
     }
 

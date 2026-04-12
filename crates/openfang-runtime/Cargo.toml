@@ -30,6 +30,7 @@ hex = { workspace = true }
 zeroize = { workspace = true }
 dashmap = { workspace = true }
 regex-lite = { workspace = true }
+regex = "1"
 rusqlite = { workspace = true }
 rmcp = { workspace = true }
 dirs = { workspace = true }

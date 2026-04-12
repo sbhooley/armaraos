@@ -8,8 +8,8 @@
 pub const USER_AGENT: &str = "openfang/0.3.48";
 
 pub mod a2a;
-pub mod ainl_bundle_cron;
 pub mod agent_loop;
+pub mod ainl_bundle_cron;
 pub mod apply_patch;
 pub mod audit;
 pub mod auth_cooldown;
@@ -24,6 +24,7 @@ pub mod document_tools;
 pub mod drivers;
 pub mod embedding;
 pub mod graceful_shutdown;
+pub mod graph_extractor;
 pub mod graph_memory_writer;
 pub mod hooks;
 pub mod host_ainl_snapshot;

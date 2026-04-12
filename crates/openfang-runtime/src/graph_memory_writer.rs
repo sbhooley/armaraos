@@ -61,12 +61,15 @@ impl GraphMemoryWriter {
     }
 
     /// Record a completed agent turn as an EpisodeNode.
+    ///
+    /// On success, returns the new episode **node** id (same id space as
+    /// [`Self::record_fact`] `source_turn_id` in existing call sites).
     pub async fn record_turn(
         &self,
         tool_calls: Vec<String>,
         delegation_to: Option<String>,
         trace_json: Option<serde_json::Value>,
-    ) {
+    ) -> Option<Uuid> {
         let kind = if delegation_to.is_some() {
             "delegation"
         } else {
@@ -74,7 +77,24 @@ impl GraphMemoryWriter {
         };
         let res = {
             let inner = self.inner.lock().await;
-            inner.write_episode(tool_calls.clone(), delegation_to.clone(), trace_json)
+            let prev_id = inner
+                .recall_recent(60 * 60 * 24 * 7)
+                .ok()
+                .and_then(|nodes| nodes.into_iter().next())
+                .map(|n| n.id);
+            match inner.write_episode(
+                tool_calls.clone(),
+                delegation_to.clone(),
+                trace_json,
+            ) {
+                Ok(new_id) => {
+                    if let Some(prev) = prev_id {
+                        let _ = inner.write_edge(new_id, prev, "follows");
+                    }
+                    Ok(new_id)
+                }
+                Err(e) => Err(e),
+            }
         };
         match res {
             Ok(id) => {
@@ -86,11 +106,39 @@ impl GraphMemoryWriter {
                     "AINL graph memory: episode written"
                 );
                 self.fire_write_hook(kind);
+                Some(id)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write episode"
+                );
+                None
+            }
+        }
+    }
+
+    /// Record a procedural pattern node (named tool workflow).
+    pub async fn record_pattern(&self, name: &str, tool_sequence: Vec<String>, confidence: f32) {
+        let res = {
+            let inner = self.inner.lock().await;
+            inner.write_procedural(name, tool_sequence, confidence)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    pattern_id = %id,
+                    pattern_name = %name,
+                    "AINL graph memory: procedural pattern written"
+                );
+                self.fire_write_hook("procedural");
             }
             Err(e) => warn!(
                 agent_id = %self.agent_id,
                 error = %e,
-                "AINL graph memory: failed to write episode"
+                "AINL graph memory: failed to write procedural pattern"
             ),
         }
     }
@@ -121,7 +169,8 @@ impl GraphMemoryWriter {
 
     /// Record an A2A delegation as an EpisodeNode with delegation_to set.
     pub async fn record_delegation(&self, target_agent_id: &str, tool_calls: Vec<String>) {
-        self.record_turn(tool_calls, Some(target_agent_id.to_string()), None)
+        let _ = self
+            .record_turn(tool_calls, Some(target_agent_id.to_string()), None)
             .await;
     }
 
@@ -157,13 +206,16 @@ mod tests {
             on_write: None,
         };
 
-        writer
-            .record_turn(
-                vec!["web_search".to_string(), "file_read".to_string()],
-                None,
-                None,
-            )
-            .await;
+        assert!(
+            writer
+                .record_turn(
+                    vec!["web_search".to_string(), "file_read".to_string()],
+                    None,
+                    None,
+                )
+                .await
+                .is_some()
+        );
 
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
@@ -198,6 +250,32 @@ mod tests {
         } else {
             panic!("wrong node type");
         }
+    }
+
+    #[tokio::test]
+    async fn test_record_turn_writes_follows_edge_between_episodes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("follows_test.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "test-agent".to_string(),
+            on_write: None,
+        };
+
+        let id1 = writer
+            .record_turn(vec!["a".to_string()], None, None)
+            .await
+            .expect("ep1");
+        let id2 = writer
+            .record_turn(vec!["b".to_string()], None, None)
+            .await
+            .expect("ep2");
+
+        let store = GraphMemory::new(&db_path).expect("reopen");
+        let prev = store.store().walk_edges(id2, "follows").expect("walk");
+        assert_eq!(prev.len(), 1);
+        assert_eq!(prev[0].id, id1);
     }
 
     #[tokio::test]

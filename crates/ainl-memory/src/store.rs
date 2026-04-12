@@ -16,8 +16,11 @@ pub trait GraphStore {
     fn read_node(&self, id: Uuid) -> Result<Option<AinlMemoryNode>, String>;
 
     /// Query episodes since a given timestamp
-    fn query_episodes_since(&self, since_timestamp: i64, limit: usize)
-        -> Result<Vec<AinlMemoryNode>, String>;
+    fn query_episodes_since(
+        &self,
+        since_timestamp: i64,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String>;
 
     /// Find nodes by type
     fn find_by_type(&self, type_name: &str) -> Result<Vec<AinlMemoryNode>, String>;
@@ -92,6 +95,18 @@ impl SqliteGraphStore {
         Ok(Self { conn })
     }
 
+    /// Insert a directed edge between two node IDs (separate from per-node edge payloads).
+    pub fn insert_graph_edge(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO ainl_graph_edges (from_id, to_id, label)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![from_id.to_string(), to_id.to_string(), label],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Nodes of a given `node_type` with `timestamp >= since_timestamp`, most recent first.
     pub fn query_nodes_by_type_since(
         &self,
@@ -160,11 +175,7 @@ impl GraphStore for SqliteGraphStore {
                 .execute(
                     "INSERT OR REPLACE INTO ainl_graph_edges (from_id, to_id, label)
                      VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        node.id.to_string(),
-                        edge.target_id.to_string(),
-                        edge.label,
-                    ],
+                    rusqlite::params![node.id.to_string(), edge.target_id.to_string(), edge.label,],
                 )
                 .map_err(|e| e.to_string())?;
         }

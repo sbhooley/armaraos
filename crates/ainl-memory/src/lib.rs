@@ -44,7 +44,9 @@ pub mod query;
 pub mod store;
 
 pub use node::{AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType};
-pub use query::{find_high_confidence_facts, find_patterns, find_strong_traits, recall_recent, walk_from};
+pub use query::{
+    find_high_confidence_facts, find_patterns, find_strong_traits, recall_recent, walk_from,
+};
 pub use store::{GraphStore, SqliteGraphStore};
 
 use uuid::Uuid;
@@ -90,13 +92,8 @@ impl GraphMemory {
         let turn_id = Uuid::new_v4();
         let timestamp = chrono::Utc::now().timestamp();
 
-        let node = AinlMemoryNode::new_episode(
-            turn_id,
-            timestamp,
-            tool_calls,
-            delegation_to,
-            trace_event,
-        );
+        let node =
+            AinlMemoryNode::new_episode(turn_id, timestamp, tool_calls, delegation_to, trace_event);
 
         let node_id = node.id;
         self.store.write_node(&node)?;
@@ -143,6 +140,28 @@ impl GraphMemory {
         Ok(node_id)
     }
 
+    /// Store a procedural pattern derived from a live tool sequence (heuristic extraction).
+    pub fn write_procedural(
+        &self,
+        pattern_name: &str,
+        tool_sequence: Vec<String>,
+        confidence: f32,
+    ) -> Result<Uuid, String> {
+        let node = AinlMemoryNode::new_procedural_tools(
+            pattern_name.to_string(),
+            tool_sequence,
+            confidence,
+        );
+        let node_id = node.id;
+        self.store.write_node(&node)?;
+        Ok(node_id)
+    }
+
+    /// Write a graph edge between nodes (e.g. episode timeline `follows`).
+    pub fn write_edge(&self, source: Uuid, target: Uuid, rel: &str) -> Result<(), String> {
+        self.store.insert_graph_edge(source, target, rel)
+    }
+
     /// Recall recent episodes (within the last N seconds).
     ///
     /// # Arguments
@@ -173,11 +192,7 @@ impl GraphMemory {
         strength: f32,
         learned_from: Vec<Uuid>,
     ) -> Result<Uuid, String> {
-        let node = AinlMemoryNode::new_persona(
-            trait_name.to_string(),
-            strength,
-            learned_from,
-        );
+        let node = AinlMemoryNode::new_persona(trait_name.to_string(), strength, learned_from);
         let node_id = node.id;
         self.store.write_node(&node)?;
         Ok(node_id)

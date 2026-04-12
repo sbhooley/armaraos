@@ -69,7 +69,15 @@ pub enum AinlNodeType {
         pattern_name: String,
 
         /// Compiled graph representation (binary format)
+        #[serde(default)]
         compiled_graph: Vec<u8>,
+
+        /// Tool names from a live turn (heuristic extraction; dashboard display)
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tool_sequence: Vec<String>,
+
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f32>,
     },
 
     /// Persona memory: traits learned over time
@@ -150,6 +158,26 @@ impl AinlMemoryNode {
             node_type: AinlNodeType::Procedural {
                 pattern_name,
                 compiled_graph,
+                tool_sequence: Vec::new(),
+                confidence: None,
+            },
+            edges: Vec::new(),
+        }
+    }
+
+    /// Procedural node from a detected tool workflow (no compiled IR).
+    pub fn new_procedural_tools(
+        pattern_name: String,
+        tool_sequence: Vec<String>,
+        confidence: f32,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            node_type: AinlNodeType::Procedural {
+                pattern_name,
+                compiled_graph: Vec::new(),
+                tool_sequence,
+                confidence: Some(confidence),
             },
             edges: Vec::new(),
         }
