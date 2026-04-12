@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
@@ -1357,6 +1358,20 @@ pub async fn run_agent_loop(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
+                            }
+
+                            // Record successful tool results as semantic facts in AINL graph memory
+                            if !result.is_error {
+                                if let Some(ref gm) = graph_memory {
+                                    // Create a fact summarizing the tool execution
+                                    let fact = format!(
+                                        "Tool '{}' executed successfully",
+                                        tool_call.name
+                                    );
+                                    // Use a dummy UUID for source_turn_id (we don't track turn IDs yet)
+                                    let source_turn_id = uuid::Uuid::new_v4();
+                                    gm.record_fact(fact, 0.5, source_turn_id).await;
+                                }
                             }
 
                             let content =
@@ -3051,6 +3066,20 @@ pub async fn run_agent_loop_streaming(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
+                            }
+
+                            // Record successful tool results as semantic facts in AINL graph memory
+                            if !result.is_error {
+                                if let Some(ref gm) = graph_memory {
+                                    // Create a fact summarizing the tool execution
+                                    let fact = format!(
+                                        "Tool '{}' executed successfully",
+                                        tool_call.name
+                                    );
+                                    // Use a dummy UUID for source_turn_id (we don't track turn IDs yet)
+                                    let source_turn_id = Uuid::new_v4();
+                                    gm.record_fact(fact, 0.5, source_turn_id).await;
+                                }
                             }
 
                             let content =
