@@ -1035,6 +1035,8 @@ pub async fn run_agent_loop(
                 } else {
                     text
                 };
+                // Snapshot tool names for graph memory before phantom detection clears `last_tools_called`.
+                let turn_tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
                 // Phantom action detection: if the LLM claims it performed a
                 // channel action (send, post, email, etc.) but never actually
                 // called the corresponding tool, re-prompt once to force real
@@ -1175,8 +1177,7 @@ pub async fn run_agent_loop(
 
                 // Record completed turn in AINL graph memory
                 if let Some(ref gm) = graph_memory {
-                    let tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
-                    gm.record_turn(tool_names, None, None).await;
+                    gm.record_turn(turn_tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {
@@ -2771,6 +2772,7 @@ pub async fn run_agent_loop_streaming(
                 } else {
                     text
                 };
+                let turn_tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
                 // Phantom action detection (streaming): channel actions without tools.
                 let text = if !any_tools_executed
                     && iteration == 0
@@ -2904,8 +2906,7 @@ pub async fn run_agent_loop_streaming(
 
                 // Record completed turn in AINL graph memory
                 if let Some(ref gm) = graph_memory {
-                    let tool_names: Vec<String> = last_tools_called.iter().cloned().collect();
-                    gm.record_turn(tool_names, None, None).await;
+                    gm.record_turn(turn_tool_names, None, None).await;
                 }
 
                 return Ok(AgentLoopResult {

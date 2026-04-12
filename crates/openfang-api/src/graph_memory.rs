@@ -118,11 +118,8 @@ fn normalize_rel(label: &str) -> String {
 /// GET /api/graph-memory?agent_id=…&limit=…&since_seconds=…
 pub async fn get_graph_memory(Query(q): Query<GraphMemoryQuery>) -> Json<Value> {
     let limit = q.limit.clamp(1, 2000);
-    let Some(home) = dirs::home_dir() else {
-        return Json(json!({ "nodes": [], "edges": [] }));
-    };
-    let path = home
-        .join(".armaraos")
+    // Same layout as `GraphMemoryWriter::db_path`: `openfang_home_dir()/agents/<id>/ainl_memory.db`.
+    let path = openfang_types::config::openfang_home_dir()
         .join("agents")
         .join(q.agent_id.trim())
         .join("ainl_memory.db");

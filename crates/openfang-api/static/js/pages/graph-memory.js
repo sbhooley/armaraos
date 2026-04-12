@@ -115,6 +115,8 @@ function graphMemoryPanel() {
         if (!list.length) {
           list = graphMemoryNormalizeAgentsPayload(await OpenFangAPI.get('/api/agents'));
         }
+        // Option `value` must be `GET /api/agents` `id` (UUID string) — same path segment as
+        // `GraphMemoryWriter::open(session.agent_id)` and `?agent_id=` for `/api/graph-memory`.
         this.agents = list
           .map(function (a) {
             var id = String(a.id != null ? a.id : a.agent_id || '').trim();

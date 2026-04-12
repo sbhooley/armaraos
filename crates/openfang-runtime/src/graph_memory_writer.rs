@@ -46,9 +46,9 @@ impl GraphMemoryWriter {
     }
 
     fn db_path(agent_id: &str) -> Result<PathBuf, String> {
-        let home = dirs::home_dir().ok_or("no home dir")?;
-        Ok(home
-            .join(".armaraos")
+        // Must match kernel agent dirs (`KernelConfig::home_dir` / `openfang_home_dir`) and
+        // `GET /api/graph-memory` — not `dirs::home_dir().join(".armaraos")` alone (breaks `ARMARAOS_HOME`).
+        Ok(openfang_types::config::openfang_home_dir()
             .join("agents")
             .join(agent_id)
             .join("ainl_memory.db"))
