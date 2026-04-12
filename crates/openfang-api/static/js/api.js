@@ -547,6 +547,8 @@ var OpenFangAPI = (function() {
   }
 
   return {
+    /** Same origin as API requests (`window.location.origin`). */
+    baseUrl: BASE,
     setAuthToken: setAuthToken,
     getToken: getToken,
     sseUrl: sseUrl,

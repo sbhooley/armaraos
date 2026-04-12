@@ -7133,12 +7133,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <template x-for="kind in ['episode','semantic','procedural','persona']" :key="kind">
               <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind"></button>
             </template>
-            <select x-model="agentId" @change="fetchGraph()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%)">
-              <template x-for="a in agents" :key="a.id">
-                <option :value="a.id" x-text="a.id"></option>
-              </template>
+            <select id="gm-agent-select" x-model="agentId" @change="fetchGraph()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%);min-width:12rem" aria-label="Agent for graph memory">
             </select>
-            <button type="button" class="btn btn-primary btn-sm" @click="fetchGraph()">Refresh</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="refreshPanel()">Refresh</button>
           </div>
         </div>
         <div id="graph-memory-canvas" style="width:100%;height:calc(100vh - 220px);min-height:480px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">

@@ -95,7 +95,8 @@ function networkPage() {
       if (this.sseSource) this.sseSource.close();
       var self = this;
       var url = OpenFangAPI.baseUrl + '/api/comms/events/stream';
-      if (OpenFangAPI.apiKey) url += '?token=' + encodeURIComponent(OpenFangAPI.apiKey);
+      var tok = OpenFangAPI.getToken && OpenFangAPI.getToken();
+      if (tok) url += '?token=' + encodeURIComponent(tok);
       this.sseSource = new EventSource(url);
       this.sseSource.onmessage = function(ev) {
         if (ev.data === 'ping') return;

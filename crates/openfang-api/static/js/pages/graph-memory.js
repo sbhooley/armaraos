@@ -1,5 +1,15 @@
 /** Graph Memory dashboard — D3 force-directed view of `ainl_memory.db` graph. */
 
+function graphMemoryNormalizeAgentsPayload(raw) {
+  if (Array.isArray(raw)) {
+    return raw;
+  }
+  if (raw && Array.isArray(raw.agents)) {
+    return raw.agents;
+  }
+  return [];
+}
+
 function graphMemoryPanel() {
   return {
     nodes: [],
@@ -24,16 +34,7 @@ function graphMemoryPanel() {
     },
 
     async init() {
-      try {
-        var r = await fetch(OpenFangAPI.baseUrl + '/api/agents');
-        var data = await r.json();
-        this.agents = (Array.isArray(data) ? data : (data.agents || [])).map(function (a) {
-          return { id: a.id || a.agent_id };
-        });
-        if (this.agents.length > 0) {
-          this.agentId = this.agents[0].id;
-        }
-      } catch (e0) { /* ignore */ }
+      await this.loadAgents();
       await this.fetchGraph();
 
       var self = this;
@@ -53,19 +54,107 @@ function graphMemoryPanel() {
       }
     },
 
+    /**
+     * Build real <option> nodes under the agent <select>.
+     * WebKit (Safari / Tauri) often omits options generated via <template x-for> inside <select>.
+     */
+    syncAgentSelectDom() {
+      var sel = document.getElementById('gm-agent-select');
+      if (!sel || typeof sel.appendChild !== 'function') {
+        return;
+      }
+      var prev = String(this.agentId || '');
+      while (sel.firstChild) {
+        sel.removeChild(sel.firstChild);
+      }
+      if (!this.agents.length) {
+        var ph = document.createElement('option');
+        ph.value = '';
+        ph.disabled = true;
+        ph.textContent = 'No agents loaded';
+        sel.appendChild(ph);
+        this.agentId = '';
+        return;
+      }
+      this.agents.forEach(function (a) {
+        var opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = a.label || a.id;
+        sel.appendChild(opt);
+      });
+      var hasPrev = this.agents.some(function (a) {
+        return String(a.id) === prev;
+      });
+      this.agentId = hasPrev ? prev : String(this.agents[0].id);
+      try {
+        sel.value = this.agentId;
+      } catch (eVal) {
+        /* ignore */
+      }
+    },
+
+    /** Populate agent picker (auth headers via OpenFangAPI; optional cache from Alpine store). */
+    async loadAgents() {
+      var list = [];
+      var st = null;
+      try {
+        st = typeof Alpine !== 'undefined' && Alpine.store && Alpine.store('app');
+        if (st && Array.isArray(st.agents) && st.agents.length) {
+          list = st.agents;
+        }
+      } catch (e1) {
+        /* ignore */
+      }
+      try {
+        if (!list.length && st && typeof st.refreshAgents === 'function') {
+          await st.refreshAgents();
+          if (Array.isArray(st.agents) && st.agents.length) {
+            list = st.agents;
+          }
+        }
+        if (!list.length) {
+          list = graphMemoryNormalizeAgentsPayload(await OpenFangAPI.get('/api/agents'));
+        }
+        this.agents = list
+          .map(function (a) {
+            var id = String(a.id != null ? a.id : a.agent_id || '').trim();
+            if (!id) {
+              return null;
+            }
+            var nm = (a.name && String(a.name).trim()) || 'Agent';
+            var short = id.length > 10 ? id.slice(0, 8) + '…' : id;
+            return { id: id, label: nm + ' — ' + short };
+          })
+          .filter(Boolean);
+        if (this.agents.length > 0 && !this.agentId) {
+          this.agentId = this.agents[0].id;
+        }
+        await this.$nextTick();
+        this.syncAgentSelectDom();
+      } catch (e0) {
+        console.error('graph-memory: loadAgents failed', e0);
+        this.agents = [];
+        await this.$nextTick();
+        this.syncAgentSelectDom();
+      }
+    },
+
+    async refreshPanel() {
+      await this.loadAgents();
+      await this.fetchGraph();
+    },
+
     async fetchGraph() {
       if (!this.agentId) {
         return;
       }
       this.loading = true;
       try {
-        var r = await fetch(
-          OpenFangAPI.baseUrl +
-            '/api/graph-memory?agent_id=' +
-            encodeURIComponent(this.agentId) +
-            '&limit=300'
-        );
-        var data = await r.json();
+        var path =
+          '/api/graph-memory?agent_id=' +
+          encodeURIComponent(this.agentId) +
+          '&limit=300';
+        var data = await OpenFangAPI.get(path);
         this.nodes = data.nodes || [];
         this.edges = data.edges || [];
         await this.$nextTick();
