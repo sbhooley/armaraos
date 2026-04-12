@@ -15,6 +15,7 @@
   <a href="docs/getting-started.md">Quick Start</a> &bull;
   <a href="docs/docker.md">Docker</a> &bull;
   <a href="ARCHITECTURE.md">Architecture</a> &bull;
+  <a href="docs/graph-memory.md">Graph memory (runtime)</a> &bull;
   <a href="PRIOR_ART.md">Prior art (graph memory)</a>
 </p>
 

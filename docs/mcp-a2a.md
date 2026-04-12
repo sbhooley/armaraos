@@ -17,6 +17,7 @@ ArmaraOS implements both the **Model Context Protocol (MCP)** and **Agent-to-Age
   - [Agent Card](#agent-card)
   - [A2A Server](#a2a-server)
   - [A2A Client](#a2a-client)
+  - [AINL graph memory (outbound A2A)](#ainl-graph-memory-outbound-a2a)
   - [Task Lifecycle](#task-lifecycle)
   - [API Endpoints](#a2a-api-endpoints)
   - [Configuration](#a2a-configuration)
@@ -623,6 +624,12 @@ let task = client.send_task(
 ).await?;
 println!("Task {}: {:?}", task.id, task.status);
 ```
+
+#### AINL graph memory (outbound A2A)
+
+When an agent invokes the built-in **`a2a_send`** tool, **`openfang-runtime`** calls **`A2aClient::send_task`** (`crates/openfang-runtime/src/a2a.rs`). After a **successful** HTTP response, **`tool_a2a_send`** (`crates/openfang-runtime/src/tool_runner.rs`) opens **`GraphMemoryWriter`** for the **caller agent id** and records a **delegation episode** (`record_delegation`). Recording lives in **`tool_runner`** (not **`a2a.rs`**) so the kernel caller id is in scope without threading graph handles through the HTTP client.
+
+See **[graph-memory.md](graph-memory.md)** for paths, node types, and how this differs from **orchestration traces** (`#orchestration-traces`).
 
 The client sends a JSON-RPC request:
 

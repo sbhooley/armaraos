@@ -42,6 +42,7 @@ openfang orchestration watch --trace abc-trace-id --interval-secs 2
 
 - **`docs/orchestration-walkthrough.md`** — step-by-step: API, dashboard, CLI export, workflows, optional task queue / triggers.
 - **`docs/task-queue-orchestration.md`** — how `task_post` / `task_claim` carry `trace_id` for sticky routing.
+- **`docs/graph-memory.md`** — **AINL graph memory** (per-agent `ainl_memory.db`): separate SQLite substrate from this trace ring; delegate episodes may embed orchestration JSON for correlation.
 
 ## HTTP API
 
