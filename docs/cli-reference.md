@@ -508,6 +508,92 @@ openfang workflow run abc123 "Analyze this code for security issues"
 
 ---
 
+## Orchestration commands
+
+All **`openfang orchestration`** subcommands require a **running daemon** (they call **`/api/orchestration/...`** on the configured API base). Trace ids are the same strings shown in the dashboard **`#orchestration-traces`** view and in **`GET /api/orchestration/traces`** (often prefixed like **`wf:`** … **`run:`** … — pass the full id).
+
+Global optional wall-clock budget for new orchestration roots: **`[runtime_limits] orchestration_default_budget_ms`** in **`config.toml`** (see **[configuration.md](configuration.md#runtime_limits)**).
+
+### openfang orchestration list
+
+Recent trace summaries (newest first).
+
+```
+openfang orchestration list [--limit <N>] [--json]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--limit` | Max rows (**1–200**, default **50**). |
+| `--json` | Print raw JSON (API response). |
+
+### openfang orchestration trace
+
+All events for one trace.
+
+```
+openfang orchestration trace <TRACE_ID> [--json]
+```
+
+### openfang orchestration cost
+
+Token/cost rollup for one trace.
+
+```
+openfang orchestration cost <TRACE_ID> [--json]
+```
+
+### openfang orchestration tree
+
+Delegation tree for one trace.
+
+```
+openfang orchestration tree <TRACE_ID> [--json]
+```
+
+### openfang orchestration live
+
+Live snapshot (shared vars / budget) for an active trace.
+
+```
+openfang orchestration live <TRACE_ID> [--json]
+```
+
+### openfang orchestration quota
+
+Quota tree for an agent (resources + descendants).
+
+```
+openfang orchestration quota <AGENT_ID> [--json]
+```
+
+### openfang orchestration export
+
+Single JSON document with events, tree, and cost for a trace.
+
+```
+openfang orchestration export <TRACE_ID> [-o <FILE>]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-o` / `--output` | Write to file; default **stdout**. |
+
+### openfang orchestration watch
+
+Poll summaries or a single trace’s live endpoint until **Ctrl+C**.
+
+```
+openfang orchestration watch [--trace <TRACE_ID>] [--interval-secs <SEC>]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--trace` | When set, poll **`/api/orchestration/traces/<id>/live`** instead of listing traces. |
+| `--interval-secs` | Seconds between polls (default **3**). |
+
+---
+
 ## Trigger Commands
 
 All trigger commands require a running daemon.

@@ -1,6 +1,6 @@
 # ArmaraOS Documentation
 
-Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operating System -- 14 Rust crates, 40 channels, 60 skills, 20 LLM providers, 80+ HTTP/WebSocket/SSE endpoints (see [API Reference](api-reference.md)), and 16 security systems in a single binary.
+Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operating System -- **15** Rust library crates in this workspace plus **`xtask`** (16 Cargo members), 40 channels, 60 skills, 20 LLM providers, 80+ HTTP/WebSocket/SSE endpoints (see [API Reference](api-reference.md)), and 16 security systems in a single binary.
 
 ---
 
@@ -18,11 +18,32 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | Guide | Description |
 |-------|-------------|
 | [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
-| [Architecture](architecture.md) | 12-crate structure, kernel boot, agent lifecycle, memory substrate |
+| [Architecture](architecture.md) | Workspace crate graph, kernel boot, agent lifecycle, memory + graph-memory substrates |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Agent automation hardening](agent-automation-hardening.md) | Tool args, persist vs re-scrape, loop guard interaction, phases, workspace habits; skill-mint stub cron reference |
 | [Security](security.md) | 16 defense-in-depth security systems |
+
+## Multi-agent orchestration and observability
+
+| Guide | Description |
+|-------|-------------|
+| [Orchestration guide](orchestration-guide.md) | Dashboard **Monitor → Orchestration traces**, API + SSE, quotas |
+| [Orchestration walkthrough](orchestration-walkthrough.md) | Hands-on URL hash **`#orchestration-traces`** and curl patterns |
+| [Task queue + orchestration](task-queue-orchestration.md) | **`task_post` / `task_claim`** stickiness with **`trace_id`** |
+| [Workflow examples](workflow-examples.md) | Compact JSON + register/run recipes |
+| [Orchestration implementation audit](orchestration-implementation-audit.md) | Gaps, tests, and follow-ups |
+| [Agent orchestration design](agent-orchestration-design.md) | Deep design (§ phases, status) |
+| [Agent orchestration phases](agent-orchestration-phases.md) | Phased delivery checklist |
+
+## Prompt caching and proactive learning (reference)
+
+| Guide | Description |
+|-------|-------------|
+| [Prompt caching (multi-provider)](prompt-caching-multi-provider.md) | Cache behavior across providers |
+| [Prompt caching (Anthropic)](prompt-caching-anthropic.md) | Anthropic-specific notes |
+| [Proactive learning design](proactive-learning-design.md) | Design narrative |
+| [Proactive learning phases](proactive-learning-phases.md) | Phased implementation notes |
 
 ## Integrations
 
@@ -54,7 +75,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [Desktop code signing](desktop-code-signing.md) | Gatekeeper, SmartScreen, `TAURI_SIGNING_PRIVATE_KEY` vs Authenticode / notarization, GitHub Actions secrets, Azure Artifact Signing, SignPath OSS |
 | [Desktop release smoke](release-desktop.md) | Tauri build, updater, optional PostHog (`ARMARAOS_POSTHOG_KEY` / `AINL_POSTHOG_KEY`), AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |
-| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download; **`README.txt`** + **`diagnostics_snapshot.json`** triage), Home folder preview vs download, chat unread + digest, **LLM error banner** (`humanizeChatError`, 401 vs 403 vs billing), kernel SSE, **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility + **end-to-end `#wizard` QA**, **App Store** section title, **Settings / Runtime** layout smoke (**Settings** at-a-glance config schema line + mismatch suffix), **daemon lifecycle** + **GitHub-latest** QA, **Agents → Agent detail modal (gear)** + **Config** QA, **`/api/ui-prefs`** pinned agents, **HTTP chat fallback** (`POST …/message` **`tools`** + tool-cluster UI; rebuild/restart after embedded asset changes), Playwright notes |
+| [Dashboard testing](dashboard-testing.md) | Smoke script, support diagnostics zip (create/download; **`README.txt`** + **`diagnostics_snapshot.json`** triage), Home folder preview vs download, chat unread + digest, **LLM error banner** (`humanizeChatError`, 401 vs 403 vs billing), kernel SSE, **Orchestration traces** (`#orchestration-traces`), **Logs** tabs, **Get started** (`#overview`) checklist + Quick actions (seven tiles incl. **Daemon & runtime**) + Setup Wizard visibility + **end-to-end `#wizard` QA**, **App Store** section title, **Settings / Runtime** layout smoke (**Settings** at-a-glance config schema line + mismatch suffix), **daemon lifecycle** + **GitHub-latest** QA, **Agents → Agent detail modal (gear)** + **Config** QA, **`/api/ui-prefs`** pinned agents, **HTTP chat fallback** (`POST …/message` **`tools`** + tool-cluster UI; rebuild/restart after embedded asset changes), Playwright notes |
 | [Dashboard Home folder](dashboard-home-folder.md) | Home browser API + **dashboard UI** (row/modal Download, symlinks, large files when preview hits 512 KiB cap) |
 | [Dashboard Get started UI](dashboard-overview-ui.md) | `#overview` landing: layout, **Quick actions** (incl. **App Store**, **Daemon & runtime** → `#runtime`), **Comms** under **Monitor**, Setup Wizard gating (`openfang-onboarded`, `navigateOverview`), setup checklist, seven-tile skeleton, CSS and source map |
 | [Dashboard Setup Wizard](dashboard-setup-wizard.md) | `#wizard` first-run flow: provider test / Next rules, flat `manifest_toml` for `POST /api/agents`, valid `ToolProfile` values, static embed + rebuild note, links to overview and API |
@@ -69,6 +90,8 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [MIGRATION.md](../MIGRATION.md) | Migrating from OpenClaw, LangChain, or AutoGPT |
 | [SECURITY.md](../SECURITY.md) | Security policy and vulnerability reporting |
 | [CHANGELOG.md](../CHANGELOG.md) | Release notes and version history |
+| [ARCHITECTURE.md](../ARCHITECTURE.md) | Repo layering: OpenFang crates, **`ainl-memory`**, **`ainl-runtime`**, integration roadmap |
+| [PRIOR_ART.md](../PRIOR_ART.md) | Graph-as-memory timeline and attribution notes |
 
 ---
 
@@ -88,7 +111,8 @@ armaraos init && armaraos start
 
 | Metric | Count |
 |--------|-------|
-| Crates | 14 |
+| Library crates (`crates/*` excl. `xtask`) | 15 |
+| Cargo workspace members (incl. `xtask`) | 16 |
 | Agent templates | 30 |
 | Messaging channels | 40 |
 | Bundled skills | 60 |
@@ -98,7 +122,7 @@ armaraos init && armaraos start
 | Model aliases | 23 |
 | API endpoints | 77 |
 | Security systems | 16 |
-| Tests | 967 |
+| Tests | 1,767+ |
 
 ### Important paths
 
@@ -107,7 +131,8 @@ See **[data-directory.md](data-directory.md)** for overrides and migration from 
 | Path | Description |
 |------|-------------|
 | `~/.armaraos/config.toml` | Main configuration file |
-| `~/.armaraos/data/openfang.db` | SQLite database |
+| `~/.armaraos/data/openfang.db` | Main SQLite database (kernel / memory substrate) |
+| `~/.armaraos/graph_memory.db` | Optional **`ainl-memory`** graph store (delegation episodes); see [data-directory.md](data-directory.md) |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/daemon.json` | Daemon PID and port info |
 | `agents/` | Agent template manifests (repo / dev) |

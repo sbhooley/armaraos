@@ -1,7 +1,7 @@
 # ArmaraOS — Agent Instructions
 
 ## Project Overview
-ArmaraOS is an open-source Agent Operating System written in Rust (14 crates).
+ArmaraOS is an open-source Agent Operating System written in Rust (15 library crates + **`xtask`** in this workspace).
 - Config: `~/.armaraos/config.toml` (override: `ARMARAOS_HOME` / `OPENFANG_HOME`; legacy `~/.openfang` migrated automatically when possible)
 - Default API: `http://127.0.0.1:4200`
 - CLI binary: `target/release/openfang.exe` (or `target/debug/openfang.exe`)
@@ -9,6 +9,10 @@ ArmaraOS is an open-source Agent Operating System written in Rust (14 crates).
 **Dashboard chat (v0.6.4+):** Unread badges use WebSocket events, kernel SSE, and **`GET /api/agents/{id}/session/digest`** (lightweight counts). Leaving `#agents` may keep the agent WS alive with UI callbacks cleared (`wsClearUiCallbacks`). See **`docs/dashboard-testing.md`** (section *Chat unread badges + session digest*). Live check: `curl -s "$BASE/api/agents/$ID/session/digest"` after resolving `$ID` from `GET /api/agents`.
 
 **OpenRouter + chat LLM banner:** Product default `:free` model, **`OPENROUTER_FREE_FALLBACK_MODELS`** after rate-limit/overload retries, and **`humanizeChatError`** (401 vs 403 vs billing) — **`docs/openrouter.md`**. Manual QA: **`docs/dashboard-testing.md`** (*LLM error banner*).
+
+**Dashboard orchestration traces (`#orchestration-traces`):** **Monitor → Orchestration traces** — trace list, detail (delegation tree, Gantt-style timeline, token heatmap, JSON for events/tree/cost). Kernel also emits **`OrchestrationTrace`** on **`GET /api/events/stream`**. CLI mirror: **`openfang orchestration`** (`list`, `trace`, `cost`, `tree`, …). Manual QA: **`docs/dashboard-testing.md`** (*Orchestration traces*); **`docs/orchestration-guide.md`**; **`docs/cli-reference.md`** (*Orchestration commands*). Optional default wall-clock budget: **`[runtime_limits] orchestration_default_budget_ms`** — **`docs/configuration.md`** (`[runtime_limits]`).
+
+**Graph memory file:** **`~/.armaraos/graph_memory.db`** (**`ainl-memory`**, written from **`openfang-runtime`** on delegation) — see **`docs/data-directory.md`**, repo **`ARCHITECTURE.md`**.
 
 **Dashboard notification center (bell):** Fixed top-right **bell** with a **count badge**; panel holds persistent rows (pending approvals, budget threshold via **`GET /api/budget`**, kernel **`GET /api/events/stream`** events such as crashes, quota, debounced health failures, cron failures) until **Dismiss** / **Clear all**. Store: **`Alpine.store('notifyCenter')`** in **`static/js/app.js`**; markup **`static/index_body.html`**; styles **`static/css/layout.css`** (**`:root --notify-bell-reserve`**, **`.main-content`** `padding-right` + safe-area; cleared in **focus mode**). Palette action: **`static/js/pages/command-palette.js`** → **Notifications**. **`ApprovalPending`** on the event stream triggers an immediate approvals refresh. Dismissed **kernel** rows persist by event id in **`localStorage`** under **`armaraos-notify-dismissed-kernel`**. **`aria-live`** announces new items when the panel is closed; **Tab** traps focus inside the open panel. Hidden in **focus mode** (with other chrome). **`./scripts/verify-dashboard-smoke.sh`** checks **`GET /`**, **`GET /api/budget`**, **`GET /api/approvals`**. Integration: **`cargo test -p openfang-api --test api_integration_test json_shape`**. Manual QA → **`docs/dashboard-testing.md`** (*Notification center (bell)*).
 

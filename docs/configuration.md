@@ -13,6 +13,7 @@ Complete reference for `config.toml`, covering every configurable field in the A
   - [Top-Level Fields](#top-level-fields)
   - [\[default\_model\]](#default_model)
   - [\[memory\]](#memory)
+  - [\[runtime_limits\]](#runtime_limits)
   - [\[network\]](#network)
   - [\[dashboard\]](#dashboard)
   - [\[web\]](#web)
@@ -119,6 +120,11 @@ api_key_env = "GROQ_API_KEY"
 embedding_model = "all-MiniLM-L6-v2"
 consolidation_threshold = 10000
 decay_rate = 0.1
+
+# --- Runtime limits (optional; see Section Reference > [runtime_limits]) ---
+# [runtime_limits]
+# max_iterations = 80
+# orchestration_default_budget_ms = 600000
 
 # --- Network (OFP Wire Protocol) ---
 [network]
@@ -316,6 +322,37 @@ decay_rate = 0.1
 | `embedding_model` | string | `"all-MiniLM-L6-v2"` | Model name used for generating vector embeddings for semantic memory search. |
 | `consolidation_threshold` | u64 | `10000` | Number of stored memories before automatic consolidation is triggered to merge and prune old entries. |
 | `decay_rate` | f32 | `0.1` | Memory confidence decay rate. `0.0` = no decay (memories never fade), `1.0` = aggressive decay. Values between 0.0 and 1.0. |
+
+---
+
+### `[runtime_limits]`
+
+Caps for the **agent loop**, **nested agent calls**, **workflow run retention**, and optional **orchestration wall-clock budget**. Parsed into **`RuntimeLimitsConfig`** (`crates/openfang-types/src/runtime_limits.rs`); values are **clamped** on load (`clamp_bounds`). Per-agent manifest **`[metadata]`** can override several limits via `runtime_*` keys (see **`EffectiveRuntimeLimits`** in the same module).
+
+```toml
+[runtime_limits]
+max_iterations = 80
+max_continuations = 5
+max_history_messages = 60
+max_agent_call_depth = 5
+workflow_max_retained_runs = 200
+# workflow_run_ttl_secs = 86400
+allow_unbounded_agent_loop = false
+# orchestration_default_budget_ms = 600000
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_iterations` | u32 | `80` | Max tool/LLM iterations per user turn when the manifest has no **`[autonomous].max_iterations`**. |
+| `max_continuations` | u32 | `5` | Max consecutive **`StopReason::MaxTokens`** continuations before returning a partial reply. |
+| `max_history_messages` | usize | `60` | Trim session to this many messages before the LLM call (safety valve). |
+| `max_agent_call_depth` | u32 | `5` | Max nested **`agent_send`** depth (A→B→C…). |
+| `workflow_max_retained_runs` | usize | `200` | Max completed/failed **workflow run** records kept in memory (eviction drops oldest completed/failed first). |
+| `workflow_run_ttl_secs` | u64 or omitted | omitted (`null`) | Drop completed/failed runs older than this many seconds. **`0`** is treated as off. |
+| `allow_unbounded_agent_loop` | bool | `false` | When **`true`** **and** the process sets **`ARMARAOS_UNBOUNDED=1`**, higher ceilings apply (still capped by absolute maxima in code). |
+| `orchestration_default_budget_ms` | u64 or omitted | omitted (`null`) | When set, new **`OrchestrationContext`** roots that do not already carry **`remaining_budget_ms`** receive this **wall-clock budget** in milliseconds (workflows, spawn paths, orchestration triggers). **`0`** is treated as unset. Upper bound **90 days** after clamping. **`None`** = no default wall-clock cap from config. |
+
+**Related docs:** [workflows.md](workflows.md) (section *Orchestration and traces*), [api-reference.md](api-reference.md#orchestration-traces--quota) (HTTP + SSE).
 
 ---
 

@@ -5,7 +5,8 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 | Path | Purpose |
 |------|---------|
 | `~/.armaraos/config.toml` | Main configuration file (see **Config schema version** below) |
-| `~/.armaraos/data/openfang.db` | SQLite database (filename is historical) |
+| `~/.armaraos/data/openfang.db` | SQLite database (filename is historical) — kernel memory, sessions, task board, audit, etc. |
+| `~/.armaraos/graph_memory.db` | Optional **graph memory** SQLite file (**`ainl-memory`**). Created on first delegation-related write from **`openfang-runtime`** (separate from **`data/openfang.db`**). Safe to delete only if you accept losing typed episode/fact nodes stored there; back up with the rest of the home directory. |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/agents/` | Agent manifests and per-agent data |
 | `~/.armaraos/daemon.json` | Daemon PID and port when `armaraos` / `openfang start` is running |

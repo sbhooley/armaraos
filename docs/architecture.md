@@ -37,24 +37,27 @@ Embedded operator graphs under `programs/` (materialized to `~/.armaraos/ainl-li
 
 ## Crate Structure
 
-ArmaraOS is organized as a Cargo workspace with 14 crates (13 code crates + xtask). Dependencies flow downward (lower crates depend on nothing above them).
+ArmaraOS is organized as a Cargo workspace with **16** Cargo members: **15** library crates under `crates/` plus **`xtask`**. Dependencies flow downward (lower crates depend on nothing above them). Standalone **`ainl-memory`** / **`ainl-runtime`** crates ship on crates.io and integrate at the **runtime** boundary today (see repo-root **[ARCHITECTURE.md](../ARCHITECTURE.md)**).
 
 ```
-openfang-cli            CLI interface, daemon auto-detect, MCP server
+openfang-cli            CLI interface, daemon auto-detect, MCP server, orchestration HTTP client
     |
 openfang-desktop        Tauri 2.0 desktop app (WebView + system tray)
     |
-openfang-api            REST/WS/SSE API server (Axum 0.8), 77 endpoints
+openfang-api            REST/WS/SSE API server (Axum 0.8), 77+ endpoints (incl. orchestration traces)
     |
 openfang-kernel         Kernel: assembles all subsystems, workflow engine, RBAC, metering
     |
-    +-- openfang-runtime    Agent loop, 3 LLM drivers, 23 tools, WASM sandbox, MCP, A2A
+    +-- openfang-runtime    Agent loop, 3 LLM drivers, built-in tools, WASM sandbox, MCP, A2A; ainl-memory
     +-- openfang-channels   40 channel adapters, bridge, formatter, rate limiter
     +-- openfang-wire       OFP peer-to-peer networking with HMAC-SHA256 auth
     +-- openfang-migrate    Migration engine (OpenClaw YAML->TOML)
     +-- openfang-skills     60 bundled skills, FangHub marketplace, ClawHub client
     |
 openfang-memory         SQLite memory substrate, sessions, semantic search, usage tracking
+    |
+ainl-memory             Standalone graph-memory SQLite (delegation episodes; graph_memory.db in home)
+ainl-runtime            Standalone AINL host runtime (workspace member; future / tooling)
     |
 openfang-types          Shared types: Agent, Capability, Event, Memory, Message, Tool, Config,
                         Taint, ManifestSigning, ModelCatalog, MCP/A2A config, Web config
@@ -66,15 +69,17 @@ openfang-types          Shared types: Agent, Capability, Event, Memory, Message,
 |-------|-------------|
 | **openfang-types** | Core type definitions used across all crates. Defines `AgentManifest`, `AgentId`, `Capability`, `Event`, `ToolDefinition`, `KernelConfig`, `ArmaraOSError`, taint tracking (`TaintLabel`, `TaintSet`), Ed25519 manifest signing, model catalog types (`ModelCatalogEntry`, `ProviderInfo`, `ModelTier`), tool compatibility mappings (21 OpenClaw-to-ArmaraOS), MCP/A2A config types, and web config types. All config structs use `#[serde(default)]` for forward-compatible TOML parsing. |
 | **openfang-memory** | SQLite-backed memory substrate (schema v8+). Uses an `r2d2` connection pool (`MemorySqlitePool`, WAL + configurable `busy_timeout`) with `spawn_blocking` for async bridging. Provides structured KV storage, semantic search with vector embeddings, knowledge graph (entities and relations), session management, task board, usage event persistence (`usage_events` table, `UsageStore`), and canonical sessions for cross-channel memory. |
-| **openfang-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, and embedding driver. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
+| **openfang-runtime** | Agent execution engine. Contains the agent loop (`run_agent_loop`, `run_agent_loop_streaming`), 3 native LLM drivers (Anthropic, Gemini, OpenAI-compatible covering 20 providers), 23 built-in tools, WASM sandbox (Wasmtime with dual fuel+epoch metering), MCP client/server (JSON-RPC 2.0 over stdio/SSE), A2A protocol (AgentCard, task management), web search engine (4 providers: Tavily/Brave/Perplexity/DuckDuckGo), web fetch with SSRF protection, loop guard (SHA256-based tool loop detection), session repair (history validation), LLM session compactor (block-aware), Merkle hash chain audit trail, embedding driver, and optional **`ainl-memory`** writes (**`graph_memory.db`**) for delegation episodes. Defines the `KernelHandle` trait that enables inter-agent tools without circular crate dependencies. |
 | **openfang-kernel** | The central coordinator. `OpenFangKernel` assembles all subsystems: `AgentRegistry`, `AgentScheduler`, `CapabilityManager`, `EventBus`, `Supervisor`, `WorkflowEngine`, `TriggerEngine`, `BackgroundExecutor`, `WasmSandbox`, `ModelCatalog`, `MeteringEngine`, `ModelRouter`, `AuthManager` (RBAC), `HeartbeatMonitor`, `SetupWizard`, `SkillRegistry`, MCP connections, and `WebToolsContext`. Implements `KernelHandle` for inter-agent operations. Handles agent spawn/kill, message dispatch, workflow execution, trigger evaluation, capability inheritance validation, and graceful shutdown with state persistence. |
 | **openfang-api** | HTTP API server built on Axum 0.8. Routes for agents, workflows, triggers, memory, channels, templates, models, providers, skills, ClawHub, MCP, health, status, version, shutdown, ArmaraOS home browser, audit and **log** streams (`/api/logs/stream`, `/api/logs/daemon/*`), and more (see [api-reference.md](api-reference.md)). WebSocket handler for real-time agent chat with streaming. Multiple SSE endpoints (agent message stream, kernel events, audit log, daemon tracing tail). OpenAI-compatible endpoints (`POST /v1/chat/completions`, `GET /v1/models`). A2A endpoints (`/.well-known/agent.json`, `/a2a/*`). Middleware: Bearer token auth, request ID injection, structured request logging, GCRA rate limiter (cost-aware), security headers (CSP, X-Frame-Options, etc.), health endpoint redaction, loopback exceptions for selected SSE and support routes. Serves the embedded Alpine.js dashboard from `static/` (`index_body.html`, `js/pages/`, `css/`). The **Get started** landing page (`#overview`) — section order, Quick actions, Setup Wizard gating, checklist — is documented in [dashboard-overview-ui.md](dashboard-overview-ui.md); **Settings** / **Runtime** dashboard shell in [dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md). **Notification center** (bell + panel, approvals/budget/kernel rows, command palette entry, layout gutter) — [dashboard-testing.md](dashboard-testing.md#notification-center-bell). |
 | **openfang-channels** | Channel bridge layer with 40 adapters. Each adapter implements the `ChannelAdapter` trait. Includes: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email, SMS, Webhook, Teams, Mattermost, IRC, Google Chat, Twitch, Rocket.Chat, Zulip, XMPP, LINE, Viber, Messenger, Reddit, Mastodon, Bluesky, Feishu, Revolt, Nextcloud, Guilded, Keybase, Threema, Nostr, Webex, Pumble, Flock, Twist, Mumble, DingTalk, Discourse, Gitter, Ntfy, Gotify, LinkedIn. Features: `AgentRouter` for message routing, `BridgeManager` for lifecycle coordination, `ChannelRateLimiter` (per-user DashMap tracking), `formatter.rs` (Markdown to TelegramHTML/SlackMrkdwn/PlainText), `ChannelOverrides` (model/system_prompt/dm_policy/group_policy/rate_limit/threading/output_format), DM/group policy enforcement. |
 | **openfang-wire** | OpenFang Protocol (OFP) for peer-to-peer agent communication. JSON-framed messages over TCP with HMAC-SHA256 mutual authentication (nonce + constant-time verify via `subtle`). `PeerNode` listens for connections and manages peers. `PeerRegistry` tracks known remote peers and their agents. |
-| **openfang-cli** | Clap-based CLI. Supports all commands: `init`, `start`, `status`, `doctor`, `agent spawn/list/chat/kill`, `workflow list/create/run`, `trigger list/create/delete`, `migrate`, `skill install/list/remove/search/create`, `channel list/setup/test/enable/disable`, `config show/edit`, `chat`, `mcp`, `gateway`, etc. Daemon auto-detect: checks `~/.armaraos/daemon.json` and health pings; uses HTTP when a daemon is running, boots an in-process kernel as fallback. **`openfang start`** (and **`gateway start`**) mirror `tracing` to **stderr** and **`~/.armaraos/logs/daemon.log`** for dashboard/API tailing; TUI/chat uses **`tui.log`** instead. Built-in MCP server mode. |
+| **openfang-cli** | Clap-based CLI. Supports all commands: `init`, `start`, `status`, `doctor`, `agent spawn/list/chat/kill`, `workflow list/create/run`, **`orchestration list/trace/cost/tree/live/quota/export/watch`** (daemon HTTP), `trigger list/create/delete`, `migrate`, `skill install/list/remove/search/create`, `channel list/setup/test/enable/disable`, `config show/edit`, `chat`, `mcp`, `gateway`, etc. Daemon auto-detect: checks `~/.armaraos/daemon.json` and health pings; uses HTTP when a daemon is running, boots an in-process kernel as fallback. **`openfang start`** (and **`gateway start`**) mirror `tracing` to **stderr** and **`~/.armaraos/logs/daemon.log`** for dashboard/API tailing; TUI/chat uses **`tui.log`** instead. Built-in MCP server mode. |
 | **openfang-desktop** | Tauri 2.0 native desktop application. Boots the kernel in-process, runs the axum server on a background thread, and points a WebView at `http://127.0.0.1:{random_port}`. Features: system tray (Show/Browser/Status/Quit), single-instance enforcement, desktop notifications, hide-to-tray on close. IPC commands: `get_port`, `get_status`. Mobile-ready with `#[cfg(desktop)]` guards. |
 | **openfang-migrate** | Migration engine. Supports OpenClaw (`~/.openclaw/`). Converts YAML configs to TOML, maps tool names, maps provider names, imports agent manifests, copies memory files, converts channel configs. Produces a `MigrationReport` with imported items, skipped items, and warnings. |
 | **openfang-skills** | Skill system for pluggable tool bundles. 60 bundled skills compiled via `include_str!()`. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. `FangHubClient` connects to FangHub marketplace. `ClawHubClient` connects to clawhub.ai for cross-ecosystem skill discovery. `SKILL.md` parser for OpenClaw compatibility (YAML frontmatter + Markdown body). `SkillVerifier` with SHA256 verification. Prompt injection scanner (`scan_prompt_content()`) detects override attempts, data exfiltration, and shell references. |
+| **ainl-memory** | Standalone **graph-memory** crate (SQLite). Typed nodes (episodes, facts, procedural patterns, persona). Used from **`openfang-runtime`** to append **delegation episodes**; database file defaults to **`~/.armaraos/graph_memory.db`** (see **[data-directory.md](data-directory.md)**). Published separately on crates.io. |
+| **ainl-runtime** | Standalone **AINL** host runtime crate (depends on **`ainl-memory`**). Workspace member for packaging and future host integration; not required for the default daemon graph. |
 | **xtask** | Build automation tasks (cargo-xtask pattern). |
 
 ---
@@ -336,6 +341,10 @@ A shared task queue for multi-agent collaboration:
 ### SQLite architecture
 
 Concurrent access uses **`r2d2` + `r2d2_sqlite`** (`MemorySqlitePool`): multiple pooled `rusqlite` connections share one database file (WAL mode). The public `Memory` trait is unchanged; async entry points still use `spawn_blocking` so the Tokio runtime is not blocked on SQLite.
+
+### Graph memory (`ainl-memory`)
+
+Separate from **`openfang.db`**, the **`ainl-memory`** crate maintains **`GraphMemory`** in **`~/.armaraos/graph_memory.db`** (created on first use). Today the **agent runtime** writes **delegation-related episodes** here alongside **orchestration traces** (kernel ring + HTTP API + dashboard **`#orchestration-traces`**). Operators should **back up** this file with the rest of **`~/.armaraos/`** if they care about retained graph episodes. Crate README: **`crates/ainl-memory/README.md`**. Layering and roadmap: repo-root **`ARCHITECTURE.md`**.
 
 **`[memory]` options** (see `MemoryConfig` in `openfang-types`; defaults keep existing behavior):
 
@@ -976,6 +985,13 @@ The desktop app (`openfang-desktop`) wraps the full ArmaraOS stack in a native T
 | +------------+   |
 | +------------+   |
 | | SQLite v5  |   |  Arc<Mutex<Connection>> + spawn_blocking
+| +------------+   |
++------------------+
+         |
+         v
++------------------+
+| ainl-memory      |
+| GraphMemory      |  graph_memory.db (home root); delegation episodes
 | +------------+   |
 +------------------+
          |

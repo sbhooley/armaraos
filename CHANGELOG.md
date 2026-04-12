@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Orchestration observability:** Bounded in-memory **orchestration trace** ring, **`GET /api/orchestration/traces`** (+ per-trace events, tree, cost), kernel **`OrchestrationTrace`** events on **`GET /api/events/stream`**, dashboard **`#orchestration-traces`** (Monitor), and **`openfang orchestration`** CLI (`list`, `trace`, `cost`, `tree`, `live`, `quota`, `export`, `watch`). See **`docs/orchestration-guide.md`**, **`docs/api-reference.md`** (*Orchestration traces & quota*), **`docs/workflows.md`** (*Orchestration and traces*).
+- **Task queue + traces:** Pending tasks can prefer **`orchestration.trace_id`** in JSON payloads; **`task_claim`** rehydrates **`OrchestrationContext`** for the agent’s next turn (**`docs/task-queue-orchestration.md`**).
+- **Graph memory (`ainl-memory`):** Workspace crates **`ainl-memory`** and **`ainl-runtime`** (standalone / future host). **`openfang-runtime`** records delegation episodes into **`GraphMemory`** backed by **`~/.armaraos/graph_memory.db`** (created on first write; separate from **`data/openfang.db`**). Crate READMEs: **`crates/ainl-memory/README.md`**, **`crates/ainl-runtime/README.md`**. Layering: repo-root **`ARCHITECTURE.md`**, timeline **`PRIOR_ART.md`**.
 - **HTTP API:** `POST /api/agents/{id}/message` may include a top-level **`tools`** array — one **`ToolTurnRecord`** per tool execution in that blocking turn (`name`, **`input`** as a JSON string, **`result`**, **`is_error`**). Omitted when empty. Populated from **`AgentLoopResult.tool_turns`** in **`openfang-runtime`** (non-streaming and streaming agent loops accumulate the same list for parity).
 - **Types:** **`ToolTurnRecord`** in **`openfang_types::message`** (shared by API JSON and runtime).
 
@@ -22,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`CHANGELOG`**, **`docs/data-directory.md`**, **`docs/dashboard-testing.md`**, **`docs/cli-reference.md`**, **`docs/configuration.md`**, **`docs/README.md`**, **`docs/architecture.md`**, root **`README.md`**: orchestration traces QA, **`openfang orchestration`** CLI reference, **`[runtime_limits] orchestration_default_budget_ms`**, **`graph_memory.db`**, workspace crate counts (15 library crates + **`xtask`**), doc index links (**`orchestration-guide.md`**, design/walkthrough, caching, proactive learning), cross-links to **`ARCHITECTURE.md`** / **`PRIOR_ART.md`**.
 - **`docs/api-reference.md`**, **`docs/architecture.md`**, **`docs/dashboard-testing.md`**, **`docs/troubleshooting.md`**, **`docs/getting-started.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`CLAUDE.md`**, **`sdk/javascript/index.d.ts`**, **`sdk/javascript/index.js`**, **`sdk/python/openfang_client.py`**: HTTP **`tools`** contract, QA, troubleshooting, SDK hints, and integration-test notes.
 
 ## [0.7.2] - 2026-04-10

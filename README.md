@@ -6,14 +6,16 @@
 <h3 align="center">The Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 137K LOC. 14 crates. 1,767+ tests. Zero clippy warnings.<br/>
+  Open-source Agent OS built in Rust. 137K LOC. 15 library crates + <code>xtask</code> (16 workspace members). 1,767+ tests. Zero clippy warnings.<br/>
   <strong>One binary. Battle-tested. Agents that actually work for you.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/sbhooley/armaraos">Repository</a> &bull;
   <a href="docs/getting-started.md">Quick Start</a> &bull;
-  <a href="docs/docker.md">Docker</a>
+  <a href="docs/docker.md">Docker</a> &bull;
+  <a href="ARCHITECTURE.md">Architecture</a> &bull;
+  <a href="PRIOR_ART.md">Prior art (graph memory)</a>
 </p>
 
 <p align="center">

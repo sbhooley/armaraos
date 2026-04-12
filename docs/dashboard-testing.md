@@ -105,6 +105,24 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 - **Smoke:** Open the dashboard, confirm the sidebar **SSE** badge appears when the stream connects (kernel running, same origin / loopback as usual). The **[Notification center (bell)](#notification-center-bell)** also consumes the same stream for persistent rows (crashes, quota, health, cron failures) alongside approvals + budget polling.
 - **API:** `cargo test -p openfang-api --test api_integration_test test_kernel_events_stream_sse_smoke` and `cargo test -p openfang-api --test sse_stream_auth` cover HTTP behavior (including loopback vs remote auth).
 
+## Orchestration traces (`#orchestration-traces`)
+
+**Navigation:** Sidebar **Monitor → Orchestration traces**, or open **`http://127.0.0.1:4200/#orchestration-traces`** (adjust host/port if needed).
+
+**Smoke (after a workflow or multi-agent run produced a trace):**
+
+1. **List** — Page loads without console errors; recent traces appear (substring filter narrows rows).
+2. **Detail** — Open a trace row: **delegation graph** (indented tree; agent id copy affordance if present), **Gantt-style** timeline, **token in/out heatmap**, **quota** summary when available.
+3. **Filters** — **Event type** filter (comma-separated) narrows Gantt + raw events JSON; date / id filters behave as described in **`docs/orchestration-guide.md`**.
+4. **JSON** — Expand/collapse blocks for **events**, **tree**, and **cost** payloads; JSON should match **`GET /api/orchestration/traces/{id}`** (+ `/tree`, `/cost`) for the same id.
+5. **CLI parity** — With daemon running: `openfang orchestration list` shows the same traces as the list view; `openfang orchestration trace <TRACE_ID> --json` matches API shape.
+
+**Automated API:** Run **`cargo test -p openfang-api --test api_integration_test`** (orchestration routes are exercised alongside other HTTP surface tests in that harness).
+
+**Dev note:** Page logic lives in **`crates/openfang-api/static/js/pages/orchestration-traces.js`** with **`.orch-*`** styles in **`static/css/layout.css`**. Rebuild / restart the daemon after editing embedded assets.
+
+**Further reading:** **`docs/orchestration-guide.md`**, **`docs/orchestration-walkthrough.md`**, **`docs/workflows.md`** (Orchestration and traces).
+
 ## Notification center (bell)
 
 Persistent queue (not toasts): fixed **bell** top-right; **badge** = number of rows in the panel. Implemented in `static/js/app.js` (`Alpine.store('notifyCenter')`), `static/index_body.html`, `static/css/layout.css`, and **`static/js/pages/command-palette.js`** (palette action **Notifications**). Rebuild the daemon after editing embedded static assets.

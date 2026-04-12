@@ -137,12 +137,14 @@ cargo run -- doctor
 
 ## Architecture Overview
 
-ArmaraOS is organized as a Cargo workspace with 14 crates:
+ArmaraOS is organized as a Cargo workspace with **15** library crates under `crates/` plus **`xtask`** (**16** Cargo workspace members):
 
 | Crate | Role |
 |-------|------|
 | `openfang-types` | Shared type definitions, taint tracking, manifest signing (Ed25519), model catalog, MCP/A2A config types |
 | `openfang-memory` | SQLite-backed memory substrate with vector embeddings, usage tracking, canonical sessions, JSONL mirroring |
+| `ainl-memory` | Standalone graph-memory SQLite (delegation episodes; `graph_memory.db` in home); crates.io package |
+| `ainl-runtime` | Standalone AINL host runtime (depends on `ainl-memory`); workspace packaging / future host wiring |
 | `openfang-runtime` | Agent loop, 3 LLM drivers (Anthropic/Gemini/OpenAI-compat), 38 built-in tools, WASM sandbox, MCP client/server, A2A protocol |
 | `openfang-hands` | Hands system (curated autonomous capability packages), 7 bundled hands |
 | `openfang-extensions` | Integration registry (25 bundled MCP templates), AES-256-GCM credential vault, OAuth2 PKCE |
