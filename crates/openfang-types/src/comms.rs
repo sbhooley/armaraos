@@ -103,6 +103,15 @@ pub struct CommsTaskRequest {
     pub description: String,
     #[serde(default)]
     pub assigned_to: Option<String>,
+    /// Higher priority tasks are claimed first (default 0).
+    #[serde(default)]
+    pub priority: i64,
+    /// Merged into the task JSON payload (e.g. routing hints).
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    /// When set, merged under `payload.orchestration.trace_id` for sticky `task_claim` routing.
+    #[serde(default)]
+    pub orchestration_trace_id: Option<String>,
 }
 
 #[cfg(test)]

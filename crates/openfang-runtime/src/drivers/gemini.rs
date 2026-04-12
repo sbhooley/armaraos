@@ -602,6 +602,8 @@ fn convert_response(resp: GeminiResponse) -> Result<CompletionResponse, LlmError
         .map(|u| TokenUsage {
             input_tokens: u.prompt_token_count,
             output_tokens: u.candidates_token_count,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         })
         .unwrap_or_default();
 
@@ -1364,6 +1366,7 @@ mod tests {
             Message {
                 role: Role::System,
                 content: MessageContent::Text("System prompt here.".to_string()),
+                orchestration_ctx: None,
             },
             Message::user("Hi"),
         ];
@@ -1497,6 +1500,7 @@ mod tests {
                         "thought_signature": "sig_xyz789"
                     })),
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -1506,6 +1510,7 @@ mod tests {
                     content: "Results about Rust programming".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
         ];
 
@@ -1543,6 +1548,7 @@ mod tests {
                         "thought_signature": "text_sig_abc"
                     })),
                 }]),
+                orchestration_ctx: None,
             },
         ];
 
@@ -1614,6 +1620,7 @@ mod tests {
                     input: serde_json::json!({"path": "/tmp/test"}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -1623,6 +1630,7 @@ mod tests {
                     content: "file contents".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
         ];
 
@@ -1866,6 +1874,7 @@ mod tests {
             Message {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(completion.content),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -1875,6 +1884,7 @@ mod tests {
                     content: "search results".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
         ];
         let (contents, _) = convert_messages(&messages, &None);

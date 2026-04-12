@@ -97,6 +97,10 @@ The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for th
 
 **Auth:** If `api_key` is set in config, clients on **loopback** (127.0.0.1 / ::1) may connect to the stream without a token (embedded UI). **Non-loopback** clients must use the same authentication as the rest of the API (`Authorization: Bearer` with the configured key, or a `token` query parameter). See [`docs/dashboard-testing.md`](docs/dashboard-testing.md) for manual checks; [`docs/release-desktop.md`](docs/release-desktop.md) for desktop smoke (Tauri + SSE badge).
 
+### Dashboard: notification center (bell)
+
+A fixed **bell** (top-right) opens a panel of **persistent** rows: pending **`/api/approvals`**, budget threshold from **`/api/budget`**, and selected kernel events from the same **`/api/events/stream`** used for the sidebar SSE badge. Command palette (**Cmd/Ctrl+K**) → **Notifications** opens the panel; layout reserves space via **`--notify-bell-reserve`** so page headers do not sit under the bell. Details, a11y, and smoke commands: [`docs/dashboard-testing.md`](docs/dashboard-testing.md#notification-center-bell).
+
 ### Dashboard: diagnostics bundle (support)
 
 - **`POST /api/support/diagnostics`** generates a **redacted `.zip`** under `~/.armaraos/support/` (includes `config.toml`, redacted `secrets.env`, `audit.json`, SQLite DB + WAL/SHM when present, recent logs, and `meta.json`).

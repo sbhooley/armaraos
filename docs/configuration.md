@@ -294,6 +294,8 @@ api_key_env = "ANTHROPIC_API_KEY"
 | `api_key_env` | string | `"ANTHROPIC_API_KEY"` | Name of the environment variable holding the API key. The actual key is read from this env var at runtime, never stored in config. |
 | `base_url` | string or null | `null` | Override the API base URL. Useful for proxies or self-hosted endpoints. When `null`, the provider's default URL from the model catalog is used. |
 
+When **`provider = "openrouter"`** and you want ArmaraOS’s shipped “free tier” defaults (model id + separate automatic OpenRouter fallbacks on 429/overload), see constants **`DEFAULT_OPENROUTER_MODEL_ID`** and **`OPENROUTER_FREE_FALLBACK_MODELS`** in `openfang-types` and the narrative in **[openrouter.md](openrouter.md)**. Your `[default_model]` block always overrides the kernel default for agents that inherit it.
+
 ---
 
 ### `[memory]`

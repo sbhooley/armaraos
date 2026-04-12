@@ -4,6 +4,8 @@
 //! Supports: Anthropic, Gemini, OpenAI, Groq, OpenRouter, DeepSeek, Together,
 //! Mistral, Fireworks, Ollama, vLLM, Chutes.ai, and any OpenAI-compatible endpoint.
 
+use tracing::debug;
+
 pub mod anthropic;
 pub mod claude_code;
 pub mod copilot;
@@ -243,12 +245,14 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
     }
 }
 
-/// Cache key for [`LlmDriverFactory`]: provider, normalized base URL, API key fingerprint.
+/// Cache key for [`LlmDriverFactory`]: provider, normalized base URL, API key fingerprint, model hint.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct DriverCacheKey {
     pub provider: String,
     pub base_url: String,
     pub key_fp: String,
+    /// Model hint for routing (e.g., "anthropic/..." triggers Anthropic driver for OpenRouter).
+    pub model_hint: Option<String>,
 }
 
 fn normalize_cache_base_url(s: &str) -> String {
@@ -326,6 +330,7 @@ pub fn driver_cache_key(config: &DriverConfig) -> DriverCacheKey {
         provider: config.provider.to_lowercase(),
         base_url: normalize_cache_base_url(&effective_base_url_for_cache(config)),
         key_fp: fingerprint_api_key(&config.api_key),
+        model_hint: config.model_hint.clone(),
     }
 }
 
@@ -399,6 +404,40 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             base_url,
             http_client_for_driver(config),
         )));
+    }
+
+    // OpenRouter + Anthropic models: Auto-detect and route to Anthropic driver for caching.
+    // If provider is "openrouter" AND model starts with "anthropic/", use Anthropic driver
+    // with OpenRouter's base URL to enable prompt caching.
+    if provider == "openrouter" {
+        if let Some(ref model) = config.model_hint {
+            if model.starts_with("anthropic/") {
+                let api_key = config
+                    .api_key
+                    .clone()
+                    .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+                    .ok_or_else(|| {
+                        LlmError::MissingApiKey("Set OPENROUTER_API_KEY environment variable".to_string())
+                    })?;
+
+                let base_url = config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| OPENROUTER_BASE_URL.to_string());
+
+                debug!(
+                    model = %model,
+                    "Auto-routing OpenRouter + Anthropic model to Anthropic driver for prompt caching"
+                );
+
+                return Ok(Arc::new(anthropic::AnthropicDriver::with_client(
+                    api_key,
+                    base_url,
+                    http_client_for_driver(config),
+                )));
+            }
+        }
+        // For non-Anthropic models, fall through to OpenAI driver below
     }
 
     // Gemini uses a different API format — special case

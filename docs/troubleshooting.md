@@ -470,6 +470,22 @@ cors_origins = ["http://localhost:5173", "https://your-app.com"]
 
 **Client-side fix**: Implement reconnection logic with exponential backoff.
 
+### Dashboard chat: HTTP fallback shows no tool cards (or old layout)
+
+**Typical causes:**
+
+1. **Stale daemon** — Dashboard HTML/CSS/JS are **embedded at compile time** (`crates/openfang-api/src/webchat.rs`). Rebuild and **restart** `openfang start` (or the desktop app) after changing chat assets; otherwise the browser keeps an older bundle.
+2. **Older API** — The blocking response must include **`tools`** when the agent used tools. Verify with:
+   ```bash
+   curl -sS -H "Content-Type: application/json" \
+     -d '{"message":"Use file_read on README.md and reply with one word."}' \
+     "http://127.0.0.1:4200/api/agents/$AGENT_ID/message" | python3 -c "import sys,json; d=json.load(sys.stdin); print('tools' in d, len(d.get('tools') or []))"
+   ```
+   Expect **`True`** and a non-zero length when tools ran (omit Bearer on loopback if your install allows it).
+3. **WebSocket still connected** — Tool cards during a live turn are driven by **`tool_*`** WS events. HTTP **`tools`** applies when the client uses **`POST /api/agents/{id}/message`** (e.g. dashboard toast *“Using HTTP mode (no streaming)”*).
+
+See **[dashboard-testing.md](dashboard-testing.md)** (section *HTTP chat fallback — tool cards and assets*).
+
 ### OpenAI-compatible API not working with my tool
 
 **Checklist**:
@@ -784,4 +800,18 @@ shell = ["python *", "node *"]
 
 ### OpenRouter free models don't work
 
-OpenRouter free models have strict rate limits and may return empty responses. Use a paid model or try a different free provider like Groq (`GROQ_API_KEY`).
+OpenRouter free models have strict rate limits and may return empty responses or **429** after a few retries. ArmaraOS then tries **`OPENROUTER_FREE_FALLBACK_MODELS`** (other `:free` ids; skips any entry that matches the primary model). If everything fails, the audit/chat error includes **per-model hints** (not only “rate limited after N retries”). See **[openrouter.md](openrouter.md)**.
+
+Use a paid model, reduce concurrent agents/cron, or try another provider (e.g. Groq with `GROQ_API_KEY`).
+
+### OpenRouter “sign-in failed” / 401 / 403 with credits on the account
+
+The dashboard **LLM error banner** maps errors with **`humanizeChatError`** (`static/js/pages/chat.js`):
+
+- **401** or explicit **invalid API key** text → “Check your API key under Settings.”
+- **402** / **insufficient credits** / billing-like wording → billing message (key may still be valid).
+- **403** / **forbidden** → access restriction message — **not** automatically “wrong key.” OpenRouter may return **403** when a model is not allowed for the key, the account cannot access that route, or the body is generic.
+
+**Having OpenRouter credits does not rule out 401** (missing/wrong key in the daemon environment) **or 403** (model policy). Hover the banner for the **raw** provider string, or check **Logs / Audit** and **[Support diagnostics](dashboard-testing.md)**.
+
+Legacy agent manifests may still reference **`stepfun/step-3.5-flash:free`**; OpenRouter returns **404** (“no endpoints”) for some deprecated free routes — update **`[model]`** or pick a current id from [openrouter.ai](https://openrouter.ai).

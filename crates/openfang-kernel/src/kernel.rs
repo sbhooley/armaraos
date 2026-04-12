@@ -11,7 +11,7 @@ use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
 use crate::triggers::{TriggerEngine, TriggerId, TriggerPattern};
-use crate::workflow::{StepAgent, Workflow, WorkflowEngine, WorkflowId, WorkflowRunId};
+use crate::workflow::{StepAgent, StepMode, Workflow, WorkflowEngine, WorkflowId, WorkflowRunId};
 
 use openfang_memory::MemorySubstrate;
 use openfang_runtime::agent_loop::{
@@ -28,7 +28,7 @@ use openfang_runtime::routing::ModelRouter;
 use openfang_runtime::sandbox::{SandboxConfig, WasmSandbox};
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::*;
-use openfang_types::capability::Capability;
+use openfang_types::capability::{granted_capabilities_cover_required, Capability};
 use openfang_types::config::{KernelConfig, OutputFormat};
 use openfang_types::error::OpenFangError;
 use openfang_types::event::*;
@@ -36,7 +36,7 @@ use openfang_types::memory::Memory;
 use openfang_types::tool::ToolDefinition;
 
 use async_trait::async_trait;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -224,6 +224,24 @@ impl LlmDriver for StubDriver {
     }
 }
 
+/// Decrements [`OpenFangKernel::agent_turn_inflight`] when a message turn finishes.
+struct AgentTurnInflightGuard<'a> {
+    map: &'a dashmap::DashMap<AgentId, u32>,
+    id: AgentId,
+}
+
+impl Drop for AgentTurnInflightGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(mut v) = self.map.get_mut(&self.id) {
+            *v = v.saturating_sub(1);
+            if *v == 0 {
+                drop(v);
+                self.map.remove(&self.id);
+            }
+        }
+    }
+}
+
 pub struct OpenFangKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
@@ -235,7 +253,7 @@ pub struct OpenFangKernel {
     /// Capability manager.
     pub capabilities: CapabilityManager,
     /// Event bus.
-    pub event_bus: EventBus,
+    pub event_bus: Arc<EventBus>,
     /// Agent scheduler.
     pub scheduler: AgentScheduler,
     /// Memory substrate.
@@ -338,6 +356,21 @@ pub struct OpenFangKernel {
     /// Unlike /btw (which appends a user note), /redirect injects a high-priority system
     /// message and prunes recent assistant messages to break the agent's current momentum.
     pub redirect_channels: dashmap::DashMap<AgentId, tokio::sync::mpsc::Sender<String>>,
+    /// First-turn orchestration context for agents spawned via `spawn_agent_with_context`.
+    pending_orchestration_ctx:
+        dashmap::DashMap<AgentId, openfang_types::orchestration::OrchestrationContext>,
+    /// Dedupes `OrchestrationStart` per `trace_id` (root turn only).
+    orchestration_trace_started: dashmap::DashSet<String>,
+    /// Bounded ring buffer of orchestration trace events (`GET /api/orchestration/traces`).
+    pub orchestration_traces: std::sync::Arc<crate::orchestration_trace::OrchestrationTraceBuffer>,
+    /// Best-effort live snapshots for `GET /api/orchestration/traces/:trace_id/live` (in-process only).
+    pub orchestration_trace_live: std::sync::Arc<dashmap::DashMap<String, serde_json::Value>>,
+    /// Round-robin cursor for `agent_delegate` tool selection.
+    delegate_round_robin: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// In-flight agent turns (message handling) per agent — used for `LeastBusy` delegation.
+    agent_turn_inflight: dashmap::DashMap<AgentId, u32>,
+    /// Spawned agent IDs per configured pool name (`[[agent_pools]]`).
+    agent_pool_workers: dashmap::DashMap<String, Vec<AgentId>>,
     /// In-flight agent-loop phase per agent (Thinking / tool / stream) for turn watchdog.
     pub agent_loop_phases: dashmap::DashMap<AgentId, crate::heartbeat::AgentLoopPhaseState>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
@@ -1268,7 +1301,7 @@ impl OpenFangKernel {
             runtime_limits_live,
             registry: AgentRegistry::with_agent_home(agent_home),
             capabilities: CapabilityManager::new(),
-            event_bus: EventBus::new(),
+            event_bus: Arc::new(EventBus::new()),
             scheduler: AgentScheduler::new(),
             memory: memory.clone(),
             supervisor,
@@ -1316,6 +1349,15 @@ impl OpenFangKernel {
             agent_msg_locks: dashmap::DashMap::new(),
             btw_channels: dashmap::DashMap::new(),
             redirect_channels: dashmap::DashMap::new(),
+            pending_orchestration_ctx: dashmap::DashMap::new(),
+            orchestration_trace_started: dashmap::DashSet::new(),
+            orchestration_traces: std::sync::Arc::new(
+                crate::orchestration_trace::OrchestrationTraceBuffer::new(4096),
+            ),
+            orchestration_trace_live: std::sync::Arc::new(dashmap::DashMap::new()),
+            delegate_round_robin: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            agent_turn_inflight: dashmap::DashMap::new(),
+            agent_pool_workers: dashmap::DashMap::new(),
             agent_loop_phases: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
@@ -1646,6 +1688,31 @@ impl OpenFangKernel {
 
         info!(agent = %name, id = %agent_id, parent = ?parent, "Spawning agent");
 
+        if let Some(pid) = parent {
+            let parent_entry = self.registry.get(pid).ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::AgentNotFound(pid.to_string()))
+            })?;
+            let pq = &parent_entry.manifest.resources;
+            if pq.max_subagents > 0 && parent_entry.children.len() >= pq.max_subagents as usize {
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(
+                    format!(
+                        "Parent agent {pid} reached max_subagents ({})",
+                        pq.max_subagents
+                    ),
+                )));
+            }
+            if pq.max_spawn_depth > 0 {
+                if let Some(h) = self.registry.spawn_height_if_add_leaf(pid) {
+                    if h > pq.max_spawn_depth {
+                        return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(format!(
+                            "Spawn would exceed max_spawn_depth ({}) under parent {pid} (projected height {h})",
+                            pq.max_spawn_depth
+                        ))));
+                    }
+                }
+            }
+        }
+
         // Create session — use the returned session_id so the registry
         // and database are in sync (fixes duplicate session bug #651).
         let session = self
@@ -1821,7 +1888,12 @@ impl OpenFangKernel {
             }),
         );
         // Evaluate triggers synchronously (we can't await in a sync fn, so just evaluate)
-        let _triggered = self.triggers.evaluate(&event);
+        let budget = self
+            .runtime_limits_live
+            .read()
+            .unwrap()
+            .orchestration_default_budget_ms;
+        let _triggered = self.triggers.evaluate(&event, budget);
 
         Ok(agent_id)
     }
@@ -1887,6 +1959,8 @@ impl OpenFangKernel {
             Some(blocks),
             None,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -1907,6 +1981,8 @@ impl OpenFangKernel {
             None,
             sender_id,
             sender_name,
+            None,
+            None,
         )
         .await
     }
@@ -1920,6 +1996,7 @@ impl OpenFangKernel {
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
     /// different agents run in parallel.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_handle_and_blocks(
         &self,
         agent_id: AgentId,
@@ -1928,6 +2005,8 @@ impl OpenFangKernel {
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+        workflow_adaptive: Option<crate::workflow::AdaptiveWorkflowOverrides>,
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-agent lock to serialize concurrent messages for the same agent.
         // This prevents session corruption when multiple messages arrive in quick
@@ -1940,9 +2019,16 @@ impl OpenFangKernel {
             .clone();
         let _guard = lock.lock().await;
 
+        *self.agent_turn_inflight.entry(agent_id).or_insert(0) += 1;
+        let _inflight_guard = AgentTurnInflightGuard {
+            map: &self.agent_turn_inflight,
+            id: agent_id,
+        };
+
+        let llm_billing_id = self.llm_quota_billing_agent(agent_id);
         // Enforce quota before running the agent loop
         self.scheduler
-            .check_quota(agent_id)
+            .check_quota(llm_billing_id)
             .map_err(KernelError::OpenFang)?;
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
@@ -1965,6 +2051,8 @@ impl OpenFangKernel {
                 content_blocks,
                 sender_id,
                 sender_name,
+                orchestration_ctx,
+                workflow_adaptive,
             )
             .await
         };
@@ -1972,7 +2060,8 @@ impl OpenFangKernel {
         match result {
             Ok(result) => {
                 // Record token usage for quota tracking
-                self.scheduler.record_usage(agent_id, &result.total_usage);
+                self.scheduler
+                    .record_usage(llm_billing_id, &result.total_usage);
 
                 // Update last active time
                 let _ = self.registry.set_state(agent_id, AgentState::Running);
@@ -2024,6 +2113,7 @@ impl OpenFangKernel {
     ///
     /// WASM and Python agents don't support true streaming — they execute
     /// synchronously and emit a single `TextDelta` + `ContentComplete` pair.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_message_streaming(
         self: &Arc<Self>,
         agent_id: AgentId,
@@ -2032,18 +2122,20 @@ impl OpenFangKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
+        orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
     ) -> KernelResult<(
         tokio::sync::mpsc::Receiver<StreamEvent>,
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
     )> {
-        // Enforce quota before spawning the streaming task
-        self.scheduler
-            .check_quota(agent_id)
-            .map_err(KernelError::OpenFang)?;
-
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
         })?;
+
+        let llm_billing_id = self.llm_quota_billing_agent(agent_id);
+        // Enforce quota before spawning the streaming task
+        self.scheduler
+            .check_quota(llm_billing_id)
+            .map_err(KernelError::OpenFang)?;
 
         let is_wasm = entry.manifest.module.starts_with("wasm:");
         let is_python = entry.manifest.module.starts_with("python:");
@@ -2054,6 +2146,7 @@ impl OpenFangKernel {
             let kernel_clone = Arc::clone(self);
             let message_owned = message.to_string();
             let entry_clone = entry.clone();
+            let bill_id = llm_billing_id;
 
             let handle = tokio::spawn(async move {
                 let result = if is_wasm {
@@ -2082,7 +2175,7 @@ impl OpenFangKernel {
                             .await;
                         kernel_clone
                             .scheduler
-                            .record_usage(agent_id, &result.total_usage);
+                            .record_usage(bill_id, &result.total_usage);
                         let _ = kernel_clone
                             .registry
                             .set_state(agent_id, AgentState::Running);
@@ -2159,7 +2252,7 @@ impl OpenFangKernel {
                     "Token-based compaction triggered (messages below threshold but tokens above)"
                 );
             }
-            let by_quota = if let Some(headroom) = self.scheduler.token_headroom(agent_id) {
+            let by_quota = if let Some(headroom) = self.scheduler.token_headroom(llm_billing_id) {
                 let threshold = (headroom as f64 * 0.8) as u64;
                 if estimated as u64 > threshold && session.messages.len() > 4 {
                     info!(
@@ -2346,11 +2439,22 @@ impl OpenFangKernel {
             }
         }
 
-        // Inject Ultra Cost-Efficient Mode from global config (per-agent metadata wins if set).
+        // Inject Ultra Cost-Efficient Mode:
+        // Priority: per-agent metadata > orchestration context > global config
+        // This ensures subagents/swarms inherit parent's eco settings to prevent cost overruns.
         manifest
             .metadata
             .entry("efficient_mode".to_string())
-            .or_insert_with(|| serde_json::Value::String(self.config.efficient_mode.clone()));
+            .or_insert_with(|| {
+                // Check if orchestration context has an efficient_mode to inherit
+                if let Some(ref octx) = orchestration_ctx {
+                    if let Some(ref mode) = octx.efficient_mode {
+                        return serde_json::Value::String(mode.clone());
+                    }
+                }
+                // Fall back to global config
+                serde_json::Value::String(self.config.efficient_mode.clone())
+            });
 
         let memory = Arc::clone(&self.memory);
         // Build link context from user message (auto-extract URLs for the agent)
@@ -2362,6 +2466,7 @@ impl OpenFangKernel {
             message.to_string()
         };
         let kernel_clone = Arc::clone(self);
+        let bill_id = llm_billing_id;
 
         // Create /btw injection channel; sender stored in shared map so the API
         // can enqueue context while the streaming loop is running.
@@ -2381,6 +2486,14 @@ impl OpenFangKernel {
         };
 
         let handle = tokio::spawn(async move {
+            // Resolve orchestration context for this turn (from parameter or pending queue)
+            let mut orchestration_for_turn = orchestration_ctx;
+            if orchestration_for_turn.is_none() {
+                orchestration_for_turn = kernel_clone
+                    .pending_orchestration_ctx
+                    .remove(&agent_id)
+                    .map(|(_, v)| v);
+            }
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
@@ -2409,6 +2522,13 @@ impl OpenFangKernel {
             );
 
             let ainl_library_root = kernel_clone.config.home_dir.join("ainl-library");
+
+            // Create live orchestration context for concurrent updates during tool execution
+            let orchestration_live: Option<Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>> =
+                orchestration_for_turn.as_ref().map(|ctx| {
+                    Arc::new(tokio::sync::RwLock::new(ctx.clone()))
+                });
+
             let result = run_agent_loop_streaming(
                 &manifest,
                 &message_owned,
@@ -2444,6 +2564,8 @@ impl OpenFangKernel {
                 Some(btw_rx),
                 Some(redirect_rx),
                 runtime_limits_turn,
+                orchestration_for_turn,
+                orchestration_live.as_ref(),
             )
             .await;
 
@@ -2484,7 +2606,7 @@ impl OpenFangKernel {
 
                     kernel_clone
                         .scheduler
-                        .record_usage(agent_id, &result.total_usage);
+                        .record_usage(bill_id, &result.total_usage);
 
                     // Persist usage to database (same as non-streaming path)
                     let model = &manifest.model.model;
@@ -2500,7 +2622,7 @@ impl OpenFangKernel {
                     let _ = kernel_clone
                         .metering
                         .record(&openfang_memory::usage::UsageRecord {
-                            agent_id,
+                            agent_id: bill_id,
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
@@ -2653,10 +2775,7 @@ impl OpenFangKernel {
 
                 Ok(AgentLoopResult {
                     response,
-                    total_usage: openfang_types::message::TokenUsage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                    },
+                    total_usage: openfang_types::message::TokenUsage::default(),
                     iterations: 1,
                     cost_usd: None,
                     silent: false,
@@ -2736,10 +2855,7 @@ impl OpenFangKernel {
                 info!(agent = %entry.name, "Python agent execution complete");
                 Ok(AgentLoopResult {
                     response: result.response,
-                    total_usage: openfang_types::message::TokenUsage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                    },
+                    total_usage: openfang_types::message::TokenUsage::default(),
                     cost_usd: None,
                     iterations: 1,
                     silent: false,
@@ -2778,11 +2894,56 @@ impl OpenFangKernel {
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        orchestration_incoming: Option<openfang_types::orchestration::OrchestrationContext>,
+        workflow_adaptive: Option<crate::workflow::AdaptiveWorkflowOverrides>,
     ) -> KernelResult<AgentLoopResult> {
-        // Check metering quota before starting
+        // Resolve orchestration context for this turn (from parameter or pending queue)
+        let mut orchestration_for_turn = orchestration_incoming;
+        if orchestration_for_turn.is_none() {
+            orchestration_for_turn = self
+                .pending_orchestration_ctx
+                .remove(&agent_id)
+                .map(|(_, v)| v);
+        }
+        let trace_ctx = orchestration_for_turn.clone();
+        let llm_billing_id = self.llm_quota_billing_agent(agent_id);
+        let billing_resources = self
+            .registry
+            .get(llm_billing_id)
+            .map(|e| e.manifest.resources.clone())
+            .unwrap_or_else(|| entry.manifest.resources.clone());
+        // Check metering quota before starting (cost pools follow LLM billing agent when inheriting)
         self.metering
-            .check_quota(agent_id, &entry.manifest.resources)
+            .check_quota(llm_billing_id, &billing_resources)
             .map_err(KernelError::OpenFang)?;
+
+        if let Some(ref ctx) = trace_ctx {
+            if ctx.depth == 0
+                && ctx.orchestrator_id == agent_id
+                && self
+                    .orchestration_trace_started
+                    .insert(ctx.trace_id.clone())
+            {
+                let pattern = serde_json::to_string(&ctx.pattern)
+                    .unwrap_or_else(|_| "\"ad_hoc\"".to_string());
+                let initial_input = openfang_types::truncate_str(message, 500).to_string();
+                self.record_orchestration_trace(
+                    openfang_types::orchestration_trace::OrchestrationTraceEvent {
+                        trace_id: ctx.trace_id.clone(),
+                        orchestrator_id: ctx.orchestrator_id,
+                        agent_id,
+                        parent_agent_id: None,
+                        event_type:
+                            openfang_types::orchestration_trace::TraceEventType::OrchestrationStart {
+                                pattern,
+                                initial_input,
+                            },
+                        timestamp: chrono::Utc::now(),
+                        metadata: std::collections::HashMap::new(),
+                    },
+                );
+            }
+        }
 
         let mut session = self
             .memory
@@ -2851,6 +3012,12 @@ impl OpenFangKernel {
             }
         }
 
+        if let Some(ref w) = workflow_adaptive {
+            if let Some(mt) = w.max_tokens {
+                manifest.model.max_tokens = u32::try_from(mt).unwrap_or(manifest.model.max_tokens);
+            }
+        }
+
         // Build workspace-aware skill snapshot BEFORE tool list and prompt building.
         // Loading order: bundled → global (~/.openfang/skills) → workspace skills.
         // Each layer overrides duplicates from the previous layer. (#851, #808)
@@ -2873,8 +3040,27 @@ impl OpenFangKernel {
 
         // Use the workspace-aware snapshot for tool resolution so both global
         // and workspace skill tools are visible to the LLM.
-        let tools = self.available_tools_with_registry(agent_id, Some(&skill_snapshot));
-        let tools = entry.mode.filter_tools(tools);
+        let mut tools = self.available_tools_with_registry(agent_id, Some(&skill_snapshot));
+        tools = entry.mode.filter_tools(tools);
+        if let Some(ref w) = workflow_adaptive {
+            if let Some(ref allow) = w.tool_allowlist {
+                if !allow.is_empty() {
+                    let allowed: HashSet<&str> = allow.iter().map(|s| s.as_str()).collect();
+                    tools.retain(|t| allowed.contains(t.name.as_str()));
+                }
+            }
+            if !w.allow_subagents {
+                const ORCH_TOOLS: &[&str] = &[
+                    "agent_send",
+                    "agent_spawn",
+                    "agent_delegate",
+                    "agent_map_reduce",
+                    "agent_supervise",
+                    "agent_coordinate",
+                ];
+                tools.retain(|t| !ORCH_TOOLS.contains(&t.name.as_str()));
+            }
+        }
 
         info!(
             agent = %entry.name,
@@ -3069,6 +3255,13 @@ impl OpenFangKernel {
         };
 
         let ainl_library_root = self.config.home_dir.join("ainl-library");
+
+        // Create live orchestration context for concurrent updates during tool execution
+        let orchestration_live: Option<Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>> =
+            orchestration_for_turn.as_ref().map(|ctx| {
+                Arc::new(tokio::sync::RwLock::new(ctx.clone()))
+            });
+
         let phase_cb_storage = self
             .self_handle
             .get()
@@ -3085,12 +3278,19 @@ impl OpenFangKernel {
         let (redirect_tx, redirect_rx) = tokio::sync::mpsc::channel::<String>(8);
         self.redirect_channels.insert(agent_id, redirect_tx);
 
-        let runtime_limits_turn = {
+        let mut runtime_limits_turn = {
             let g = self.runtime_limits_live.read().unwrap();
             openfang_types::runtime_limits::EffectiveRuntimeLimits::from_global_and_manifest(
                 &g, &manifest,
             )
         };
+        if let Some(ref w) = workflow_adaptive {
+            if w.max_iterations > 0 {
+                runtime_limits_turn.max_iterations = w.max_iterations;
+                let g = self.runtime_limits_live.read().unwrap();
+                runtime_limits_turn.re_clamp_after_override(&g);
+            }
+        }
 
         let result = run_agent_loop(
             &manifest,
@@ -3126,6 +3326,8 @@ impl OpenFangKernel {
             Some(btw_rx),
             Some(redirect_rx),
             runtime_limits_turn,
+            orchestration_for_turn,
+            orchestration_live.as_ref(),
         )
         .await;
 
@@ -3164,7 +3366,7 @@ impl OpenFangKernel {
             result.total_usage.output_tokens,
         );
         let _ = self.metering.record(&openfang_memory::usage::UsageRecord {
-            agent_id,
+            agent_id: llm_billing_id,
             model: model.clone(),
             input_tokens: result.total_usage.input_tokens,
             output_tokens: result.total_usage.output_tokens,
@@ -3185,6 +3387,57 @@ impl OpenFangKernel {
             openfang_types::config::UsageFooterMode::Tokens => {
                 // Tokens are already in result.total_usage, omit cost
                 result.cost_usd = None;
+            }
+        }
+
+        if let Some(ref ctx) = trace_ctx {
+            let parent = ctx
+                .call_chain
+                .len()
+                .checked_sub(2)
+                .and_then(|i| ctx.call_chain.get(i).copied());
+            self.record_orchestration_trace(
+                openfang_types::orchestration_trace::OrchestrationTraceEvent {
+                    trace_id: ctx.trace_id.clone(),
+                    orchestrator_id: ctx.orchestrator_id,
+                    agent_id,
+                    parent_agent_id: parent,
+                    event_type:
+                        openfang_types::orchestration_trace::TraceEventType::AgentCompleted {
+                            result_size: result.response.len(),
+                            tokens_in: result.total_usage.input_tokens,
+                            tokens_out: result.total_usage.output_tokens,
+                            duration_ms: result.latency_ms.unwrap_or(0),
+                            cost_usd: cost,
+                        },
+                    timestamp: chrono::Utc::now(),
+                    metadata: std::collections::HashMap::new(),
+                },
+            );
+
+            if ctx.depth == 0 && ctx.orchestrator_id == agent_id {
+                if let Some(cost) = self.orchestration_traces.trace_cost(&ctx.trace_id) {
+                    let agents_used: Vec<AgentId> =
+                        cost.by_agent.iter().map(|l| l.agent_id).collect();
+                    self.record_orchestration_trace(
+                        openfang_types::orchestration_trace::OrchestrationTraceEvent {
+                            trace_id: ctx.trace_id.clone(),
+                            orchestrator_id: ctx.orchestrator_id,
+                            agent_id,
+                            parent_agent_id: None,
+                            event_type:
+                                openfang_types::orchestration_trace::TraceEventType::OrchestrationComplete {
+                                    total_tokens: cost.total_tokens,
+                                    total_cost_usd: cost.total_cost_usd,
+                                    total_duration_ms: cost.total_duration_ms,
+                                    agents_used,
+                                },
+                            timestamp: chrono::Utc::now(),
+                            metadata: std::collections::HashMap::new(),
+                        },
+                    );
+                }
+                self.orchestration_trace_started.remove(&ctx.trace_id);
             }
         }
 
@@ -3962,6 +4215,10 @@ impl OpenFangKernel {
         );
 
         info!(agent = %entry.name, id = %agent_id, "Agent killed");
+        for mut pool in self.agent_pool_workers.iter_mut() {
+            pool.value_mut().retain(|id| *id != agent_id);
+        }
+
         Ok(())
     }
 
@@ -4464,22 +4721,39 @@ impl OpenFangKernel {
     /// Publish an event to the bus and evaluate triggers.
     ///
     /// Any matching triggers will dispatch messages to the subscribing agents.
-    /// Returns the list of (agent_id, message) pairs that were triggered.
-    pub async fn publish_event(&self, event: Event) -> Vec<(AgentId, String)> {
+    /// Each dispatch includes an [`OrchestrationContext`] (trace-aware for orchestration events,
+    /// minimal `AdHoc` with trigger metadata otherwise — see `TriggerEngine::evaluate`).
+    pub async fn publish_event(&self, event: Event) -> Vec<crate::triggers::TriggerDispatch> {
         // Evaluate triggers before publishing (so describe_event works on the event)
-        let triggered = self.triggers.evaluate(&event);
+        let budget = self
+            .runtime_limits_live
+            .read()
+            .unwrap()
+            .orchestration_default_budget_ms;
+        let triggered = self.triggers.evaluate(&event, budget);
 
         // Publish to the event bus
         self.event_bus.publish(event).await;
 
         // Actually dispatch triggered messages to agents
         if let Some(weak) = self.self_handle.get() {
-            for (agent_id, message) in &triggered {
+            for dispatch in &triggered {
                 if let Some(kernel) = weak.upgrade() {
-                    let aid = *agent_id;
-                    let msg = message.clone();
+                    let aid = dispatch.agent_id;
+                    let msg = dispatch.message.clone();
+                    let orch = dispatch.orchestration_ctx.clone();
+                    let handle: Option<Arc<dyn KernelHandle>> = kernel
+                        .self_handle
+                        .get()
+                        .and_then(|w| w.upgrade())
+                        .map(|arc| arc as Arc<dyn KernelHandle>);
                     tokio::spawn(async move {
-                        if let Err(e) = kernel.send_message(aid, &msg).await {
+                        if let Err(e) = kernel
+                            .send_message_with_handle_and_blocks(
+                                aid, &msg, handle, None, None, None, orch, None,
+                            )
+                            .await
+                        {
                             warn!(agent = %aid, "Trigger dispatch failed: {e}");
                         }
                     });
@@ -4532,6 +4806,43 @@ impl OpenFangKernel {
         self.workflows.register(workflow).await
     }
 
+    /// Build [`OrchestrationContext`] for one workflow step (`OrchestrationPattern::Workflow`).
+    ///
+    /// Uses a stable `trace_id` per run (`wf:<workflow_uuid>:run:<run_uuid>`) so all steps share
+    /// a trace; applies [`RuntimeLimitsConfig::orchestration_default_budget_ms`] when set.
+    #[must_use]
+    pub fn orchestration_context_for_workflow_step(
+        &self,
+        agent_id: AgentId,
+        workflow_id: WorkflowId,
+        run_id: WorkflowRunId,
+        step_index: usize,
+        step_name: String,
+    ) -> openfang_types::orchestration::OrchestrationContext {
+        use openfang_types::orchestration::{
+            OrchestrationContext, OrchestrationPattern, OrchestrationWorkflowId,
+        };
+        let mut ctx = OrchestrationContext::new_root(
+            agent_id,
+            OrchestrationPattern::Workflow {
+                workflow_id: OrchestrationWorkflowId(workflow_id.0),
+                step_index,
+                step_name,
+            },
+            None, // Workflows use their own settings, not inheriting efficient_mode
+        );
+        ctx.trace_id = format!("wf:{}:run:{}", workflow_id.0, run_id.0);
+        let budget = self
+            .runtime_limits_live
+            .read()
+            .unwrap()
+            .orchestration_default_budget_ms;
+        if ctx.remaining_budget_ms.is_none() {
+            ctx.remaining_budget_ms = budget;
+        }
+        ctx
+    }
+
     /// Run a workflow pipeline end-to-end.
     pub async fn run_workflow(
         &self,
@@ -4566,8 +4877,47 @@ impl OpenFangKernel {
         };
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
-        let send_message = |agent_id: AgentId, message: String| async move {
-            self.send_message(agent_id, &message)
+        let send_message = |agent_id: AgentId,
+                            message: String,
+                            step: &crate::workflow::WorkflowStep,
+                            step_index: usize| {
+            let adaptive = match &step.mode {
+                StepMode::Adaptive {
+                    max_iterations,
+                    tool_allowlist,
+                    allow_subagents,
+                    max_tokens,
+                } => Some(crate::workflow::AdaptiveWorkflowOverrides {
+                    max_iterations: *max_iterations,
+                    tool_allowlist: tool_allowlist.clone(),
+                    allow_subagents: *allow_subagents,
+                    max_tokens: *max_tokens,
+                }),
+                _ => None,
+            };
+            let orch = self.orchestration_context_for_workflow_step(
+                agent_id,
+                workflow_id,
+                run_id,
+                step_index,
+                step.name.clone(),
+            );
+            async move {
+                let handle: Option<Arc<dyn KernelHandle>> = self
+                    .self_handle
+                    .get()
+                    .and_then(|w| w.upgrade())
+                    .map(|arc| arc as Arc<dyn KernelHandle>);
+                self.send_message_with_handle_and_blocks(
+                    agent_id,
+                    &message,
+                    handle,
+                    None,
+                    None,
+                    None,
+                    Some(orch),
+                    adaptive,
+                )
                 .await
                 .map(|r| {
                     (
@@ -4577,6 +4927,7 @@ impl OpenFangKernel {
                     )
                 })
                 .map_err(|e| format!("{e}"))
+            }
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
@@ -4597,6 +4948,85 @@ impl OpenFangKernel {
         })?;
 
         Ok((run_id, output))
+    }
+
+    /// Walks `inherit_parent_quota` metadata to the agent whose rolling token/cost bucket applies.
+    #[must_use]
+    pub fn llm_quota_billing_agent(&self, mut id: AgentId) -> AgentId {
+        loop {
+            let Some(entry) = self.registry.get(id) else {
+                return id;
+            };
+            let inherit = entry
+                .manifest
+                .metadata
+                .get("inherit_parent_quota")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !inherit {
+                return id;
+            }
+            let Some(p) = entry.parent else {
+                return id;
+            };
+            id = p;
+        }
+    }
+
+    /// Quota + usage snapshot for an agent and its spawned descendants (`GET /api/orchestration/quota-tree/...`).
+    pub fn orchestration_quota_tree(
+        &self,
+        root: AgentId,
+    ) -> Option<openfang_types::orchestration_trace::OrchestrationQuotaTreeNode> {
+        self.orchestration_quota_tree_node(root)
+    }
+
+    fn orchestration_quota_tree_node(
+        &self,
+        id: AgentId,
+    ) -> Option<openfang_types::orchestration_trace::OrchestrationQuotaTreeNode> {
+        let entry = self.registry.get(id)?;
+        let inherits = entry
+            .manifest
+            .metadata
+            .get("inherit_parent_quota")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let billing_id = self.llm_quota_billing_agent(id);
+        let billing_entry = self.registry.get(billing_id);
+        let has_billing = billing_entry.is_some();
+        let q = billing_entry
+            .as_ref()
+            .map(|b| &b.manifest.resources)
+            .unwrap_or(&entry.manifest.resources);
+        let usage_id = if has_billing { billing_id } else { id };
+        let (used_tokens, _) = self.scheduler.get_usage(usage_id).unwrap_or((0, 0));
+        let self_q = &entry.manifest.resources;
+        let children: Vec<_> = entry
+            .children
+            .iter()
+            .filter_map(|c| self.orchestration_quota_tree_node(*c))
+            .collect();
+        Some(
+            openfang_types::orchestration_trace::OrchestrationQuotaTreeNode {
+                agent_id: id,
+                name: entry.name.clone(),
+                quota: openfang_types::orchestration_trace::OrchestrationQuotaSnapshot {
+                    max_llm_tokens_per_hour: q.max_llm_tokens_per_hour,
+                    used_llm_tokens: used_tokens,
+                    max_tool_calls_per_minute: q.max_tool_calls_per_minute,
+                    max_cost_per_hour_usd: q.max_cost_per_hour_usd,
+                    inherits_parent: inherits,
+                    max_subagents: self_q.max_subagents,
+                    active_subagents: entry.children.len() as u32,
+                    max_spawn_depth: self_q.max_spawn_depth,
+                    spawn_subtree_height: self.registry.spawn_subtree_height(id),
+                    llm_token_billing_agent_id: (billing_id != id && has_billing)
+                        .then_some(billing_id),
+                },
+                children,
+            },
+        )
     }
 
     /// Auto-load workflow definitions from a directory.
@@ -5555,6 +5985,7 @@ impl OpenFangKernel {
                 api_key,
                 base_url,
                 skip_permissions: true,
+                model_hint: Some(manifest.model.model.clone()),
                 ..Default::default()
             };
 
@@ -5622,6 +6053,7 @@ impl OpenFangKernel {
                         .or_else(|| dm.base_url.clone())
                         .or_else(|| self.lookup_provider_url(&fb_provider)),
                     skip_permissions: true,
+                    model_hint: Some(fb_model_name.clone()),
                     ..Default::default()
                 };
                 match self.llm_factory.get_driver(&config) {
@@ -6615,6 +7047,10 @@ impl OpenFangKernel {
 
                 let mut cmd = tokio::process::Command::new(&bin);
                 cmd.arg("run");
+                // Shipped cron graphs use `R http.GET` for loopback API + upstream checks; the AINL
+                // CLI registers `http` only when explicitly enabled (unlike `web` / `queue`).
+                cmd.arg("--enable-adapter");
+                cmd.arg("http");
                 if *json_output {
                     cmd.arg("--json");
                 }
@@ -6865,6 +7301,7 @@ fn append_cron_output_to_agent_session(
     session.messages.push(Message {
         role: Role::Assistant,
         content: MessageContent::Text(body),
+        orchestration_ctx: None,
     });
 
     if let Err(e) = kernel.memory.save_session(&session) {
@@ -6974,6 +7411,173 @@ fn manifest_to_capabilities(manifest: &AgentManifest) -> Vec<Capability> {
     }
 
     caps
+}
+
+fn agent_entry_satisfies_required_caps(entry: &AgentEntry, required: &[Capability]) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+    let granted = manifest_to_capabilities(&entry.manifest);
+    granted_capabilities_cover_required(&granted, required)
+}
+
+fn delegate_tag_score(entry: &AgentEntry, preferred_tags: &[String]) -> usize {
+    preferred_tags
+        .iter()
+        .filter(|t| {
+            entry
+                .tags
+                .iter()
+                .any(|et| et.eq_ignore_ascii_case(t.as_str()))
+        })
+        .count()
+}
+
+fn delegate_task_relevance(task: &str, entry: &AgentEntry) -> usize {
+    let name_l = entry.name.to_lowercase();
+    let desc_l = entry.manifest.description.to_lowercase();
+    let mut score = 0usize;
+    for word in task
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+    {
+        if name_l.contains(word) {
+            score += 3;
+        }
+        if desc_l.contains(word) {
+            score += 2;
+        }
+        for tag in &entry.tags {
+            if tag.to_lowercase().contains(word) {
+                score += 2;
+            }
+        }
+    }
+    score
+}
+
+fn delegate_combined_score(entry: &AgentEntry, task: &str, preferred_tags: &[String]) -> usize {
+    delegate_tag_score(entry, preferred_tags) * 10 + delegate_task_relevance(task, entry)
+}
+
+fn build_tool_to_agents_map(entries: &[AgentEntry]) -> HashMap<String, HashSet<AgentId>> {
+    let mut m: HashMap<String, HashSet<AgentId>> = HashMap::new();
+    for e in entries {
+        // Get the effective tool list after applying allowlist/blocklist filters
+        let effective_tools: Vec<&String> = e.manifest.capabilities.tools
+            .iter()
+            .filter(|tool| {
+                // If allowlist is non-empty, tool must be in it
+                let allowed_by_allowlist = e.manifest.tool_allowlist.is_empty()
+                    || e.manifest.tool_allowlist.contains(tool);
+
+                // Tool must NOT be in blocklist
+                let not_blocked = !e.manifest.tool_blocklist.contains(tool);
+
+                allowed_by_allowlist && not_blocked
+            })
+            .collect();
+
+        for t in effective_tools {
+            m.entry(t.clone()).or_default().insert(e.id);
+        }
+    }
+    m
+}
+
+fn filter_entries_by_tool_intersection(
+    entries: Vec<AgentEntry>,
+    tools: &[String],
+) -> Vec<AgentEntry> {
+    if tools.is_empty() {
+        return entries;
+    }
+    let index = build_tool_to_agents_map(&entries);
+    let sets: Vec<&HashSet<AgentId>> = tools.iter().filter_map(|t| index.get(t)).collect();
+    if sets.is_empty() {
+        return entries;
+    }
+    let mut intersection: HashSet<AgentId> = sets[0].clone();
+    for s in sets.iter().skip(1) {
+        intersection = intersection.intersection(s).copied().collect();
+    }
+    entries
+        .into_iter()
+        .filter(|e| intersection.contains(&e.id))
+        .collect()
+}
+
+fn prefilter_entries_for_capabilities(
+    entries: Vec<AgentEntry>,
+    required: &[Capability],
+) -> Vec<AgentEntry> {
+    if required.is_empty() {
+        return entries;
+    }
+    let mut tool_names: Vec<String> = Vec::new();
+    let mut all_tools = true;
+    for c in required {
+        match c {
+            Capability::ToolInvoke(t) => tool_names.push(t.clone()),
+            _ => {
+                all_tools = false;
+                break;
+            }
+        }
+    }
+    if all_tools && !tool_names.is_empty() {
+        filter_entries_by_tool_intersection(entries, &tool_names)
+    } else {
+        entries
+    }
+}
+
+fn delegate_profile_text(e: &AgentEntry) -> String {
+    format!(
+        "{} {}\nTags: {}\nTools: {}",
+        e.name,
+        e.manifest.description,
+        e.tags.join(", "),
+        e.manifest.capabilities.tools.join(", ")
+    )
+}
+
+fn cosine_similarity_f32(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na < 1e-12 || nb < 1e-12 {
+        return 0.0;
+    }
+    f64::from(dot / (na * nb))
+}
+
+fn catalog_effective_cost(
+    cat: &openfang_runtime::model_catalog::ModelCatalog,
+    entry: &AgentEntry,
+) -> f64 {
+    let model = entry.manifest.model.model.as_str();
+    let provider = entry.manifest.model.provider.as_str();
+    if let Some(m) = cat.find_model_for_provider(model, provider) {
+        return m.input_cost_per_m + m.output_cost_per_m;
+    }
+    if let Some(m) = cat.find_model(model) {
+        return m.input_cost_per_m + m.output_cost_per_m;
+    }
+    let mp = cat.models_by_provider(provider);
+    if mp.is_empty() {
+        return 1.0;
+    }
+    let mut costs: Vec<f64> = mp
+        .iter()
+        .map(|m| m.input_cost_per_m + m.output_cost_per_m)
+        .collect();
+    costs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    costs[costs.len() / 2]
 }
 
 /// Apply global budget defaults to an agent's resource quota.
@@ -7219,6 +7823,373 @@ impl KernelHandle for OpenFangKernel {
         Ok((id.to_string(), name))
     }
 
+    fn resolve_agent_id(&self, agent_id: &str) -> Result<AgentId, String> {
+        match agent_id.parse() {
+            Ok(id) => Ok(id),
+            Err(_) => self
+                .registry
+                .find_by_name(agent_id)
+                .map(|e| e.id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}")),
+        }
+    }
+
+    async fn send_to_agent_with_context(
+        &self,
+        agent_id: &str,
+        message: &str,
+        orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+    ) -> Result<String, String> {
+        let id: AgentId = match agent_id.parse() {
+            Ok(id) => id,
+            Err(_) => self
+                .registry
+                .find_by_name(agent_id)
+                .map(|e| e.id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}"))?,
+        };
+        let handle: Option<Arc<dyn KernelHandle>> = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn KernelHandle>);
+        let result = self
+            .send_message_with_handle_and_blocks(
+                id,
+                message,
+                handle,
+                None,
+                None,
+                None,
+                orchestration_ctx,
+                None,
+            )
+            .await
+            .map_err(|e| format!("Send failed: {e}"))?;
+        Ok(result.response)
+    }
+
+    async fn spawn_agent_with_context(
+        &self,
+        manifest_toml: &str,
+        parent_id: Option<&str>,
+        orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+    ) -> Result<(String, String), String> {
+        let content_hash = openfang_types::manifest_signing::hash_manifest(manifest_toml);
+        tracing::debug!(hash = %content_hash, "Manifest SHA-256 computed for integrity tracking");
+
+        let manifest: AgentManifest =
+            toml::from_str(manifest_toml).map_err(|e| format!("Invalid manifest: {e}"))?;
+        let name = manifest.name.clone();
+        let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
+        let new_id = self
+            .spawn_agent_with_parent(manifest, parent, None)
+            .map_err(|e| format!("Spawn failed: {e}"))?;
+        let mut ctx = match (parent_id.and_then(|p| p.parse().ok()), orchestration_ctx) {
+            (Some(_p), Some(o)) => o.child(new_id),
+            (Some(p), None) => openfang_types::orchestration::OrchestrationContext::new_root(
+                p,
+                openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                None, // New spawned agents use their own settings
+            )
+            .child(new_id),
+            (None, Some(o)) => o.child(new_id),
+            (None, None) => openfang_types::orchestration::OrchestrationContext::new_root(
+                new_id,
+                openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                None, // New spawned agents use their own settings
+            ),
+        };
+        let budget = self
+            .runtime_limits_live
+            .read()
+            .unwrap()
+            .orchestration_default_budget_ms;
+        if ctx.remaining_budget_ms.is_none() {
+            ctx.remaining_budget_ms = budget;
+        }
+        self.pending_orchestration_ctx.insert(new_id, ctx);
+        Ok((new_id.to_string(), name))
+    }
+
+    fn find_by_capabilities(
+        &self,
+        required_caps: &[Capability],
+        preferred_tags: &[String],
+        exclude_agents: &[AgentId],
+    ) -> Vec<kernel_handle::AgentInfo> {
+        let all = self.registry.list();
+        let narrowed = prefilter_entries_for_capabilities(all, required_caps);
+        let mut scored: Vec<(kernel_handle::AgentInfo, usize)> = narrowed
+            .into_iter()
+            .filter(|e| !exclude_agents.contains(&e.id))
+            .filter(|e| agent_entry_satisfies_required_caps(e, required_caps))
+            .map(|e| {
+                let tag_score = delegate_tag_score(&e, preferred_tags);
+                (
+                    kernel_handle::AgentInfo {
+                        id: e.id.to_string(),
+                        name: e.name.clone(),
+                        state: format!("{:?}", e.state),
+                        model_provider: e.manifest.model.provider.clone(),
+                        model_name: e.manifest.model.model.clone(),
+                        description: e.manifest.description.clone(),
+                        tags: e.tags.clone(),
+                        tools: e.manifest.capabilities.tools.clone(),
+                    },
+                    tag_score,
+                )
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        scored.into_iter().map(|(i, _)| i).collect()
+    }
+
+    async fn select_agent_for_task(
+        &self,
+        task_description: &str,
+        required_caps: &[Capability],
+        preferred_tags: &[String],
+        selection_strategy: openfang_types::orchestration::SelectionStrategy,
+        options: openfang_types::orchestration::DelegateSelectionOptions,
+    ) -> Result<AgentId, String> {
+        use openfang_types::orchestration::SelectionStrategy;
+        use openfang_types::agent::AgentState;
+        let all = self.registry.list();
+        // Exclude only Terminated agents (final state)
+        // Include Running, Created, Suspended, and Crashed - we'll auto-start them if selected
+        let available: Vec<AgentEntry> = all
+            .into_iter()
+            .filter(|e| !matches!(e.state, AgentState::Terminated))
+            .collect();
+        let narrowed = prefilter_entries_for_capabilities(available, required_caps);
+        let mut candidates: Vec<(AgentEntry, usize)> = narrowed
+            .into_iter()
+            .filter(|e| agent_entry_satisfies_required_caps(e, required_caps))
+            .map(|e| {
+                let combined = delegate_combined_score(&e, task_description, preferred_tags);
+                (e, combined)
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Err("No agents found matching required capabilities".to_string());
+        }
+
+        // Auto-spawn pool worker if all candidates are busy
+        if let Some(ref pool_name) = options.auto_spawn_pool {
+            let all_busy = candidates.iter().all(|(entry, _score)| {
+                self.agent_turn_inflight
+                    .get(&entry.id)
+                    .map(|count| *count >= options.auto_spawn_threshold)
+                    .unwrap_or(false)
+            });
+
+            if all_busy {
+                tracing::info!(
+                    pool = %pool_name,
+                    threshold = options.auto_spawn_threshold,
+                    candidates_count = candidates.len(),
+                    "All matching agents busy, attempting auto-spawn from pool"
+                );
+
+                match self.spawn_agent_pool_worker(pool_name, None).await {
+                    Ok((id_str, name)) => {
+                        if let Ok(new_id) = id_str.parse::<AgentId>() {
+                            if let Some(new_entry) = self.registry.get(new_id) {
+                                tracing::info!(
+                                    agent = %name,
+                                    id = %new_id,
+                                    pool = %pool_name,
+                                    "Auto-spawned pool worker for delegation"
+                                );
+                                // Add new agent to candidates with score
+                                let score = delegate_combined_score(&new_entry, task_description, preferred_tags);
+                                candidates.push((new_entry, score));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            pool = %pool_name,
+                            error = %e,
+                            "Auto-spawn failed, proceeding with existing busy agents"
+                        );
+                    }
+                }
+            }
+        }
+
+        if options.semantic_ranking {
+            if let Some(driver) = self.embedding_driver.as_ref() {
+                let mut texts: Vec<String> = Vec::with_capacity(1 + candidates.len());
+                texts.push(task_description.to_string());
+                for (e, _) in &candidates {
+                    texts.push(delegate_profile_text(e));
+                }
+                let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                match driver.embed(&refs).await {
+                    Ok(vecs) if vecs.len() == texts.len() && !vecs[0].is_empty() => {
+                        let task_v = &vecs[0];
+                        for (i, (_entry, score)) in candidates.iter_mut().enumerate() {
+                            let sim = cosine_similarity_f32(task_v, &vecs[i + 1]);
+                            *score = score.saturating_add((sim * 10_000.0) as usize);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::debug!(error = %e, "delegate semantic ranking skipped");
+                    }
+                }
+            }
+        }
+
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        let ids: Vec<AgentId> = candidates.iter().map(|(e, _)| e.id).collect();
+
+        // Select agent based on strategy
+        let selected_id = match selection_strategy {
+            SelectionStrategy::BestMatch => candidates[0].0.id,
+            SelectionStrategy::RoundRobin => {
+                let i = self.delegate_round_robin.fetch_add(1, Ordering::Relaxed);
+                ids[i % ids.len()]
+            }
+            SelectionStrategy::Random => {
+                let mut rng = rand::thread_rng();
+                let idx = rand::Rng::gen_range(&mut rng, 0..ids.len());
+                ids[idx]
+            }
+            SelectionStrategy::LeastBusy => {
+                let mut by_busy = candidates;
+                by_busy.sort_by(|a, b| {
+                    let ia = self
+                        .agent_turn_inflight
+                        .get(&a.0.id)
+                        .map(|v| *v)
+                        .unwrap_or(0);
+                    let ib = self
+                        .agent_turn_inflight
+                        .get(&b.0.id)
+                        .map(|v| *v)
+                        .unwrap_or(0);
+                    ia.cmp(&ib)
+                        .then_with(|| a.0.last_active.cmp(&b.0.last_active))
+                });
+                by_busy[0].0.id
+            }
+            SelectionStrategy::CostEfficient => {
+                let cat = self
+                    .model_catalog
+                    .read()
+                    .map_err(|_| "model catalog lock")?;
+                let mut best_id = candidates[0].0.id;
+                let mut best_cost = f64::MAX;
+                for (e, _) in &candidates {
+                    let c = catalog_effective_cost(&cat, e);
+                    if c < best_cost {
+                        best_cost = c;
+                        best_id = e.id;
+                    }
+                }
+                best_id
+            }
+        };
+
+        // Auto-start agent if not already Running (Created, Suspended, or Crashed)
+        if let Some(entry) = self.registry.get(selected_id) {
+            if entry.state != AgentState::Running {
+                tracing::info!(
+                    agent = %entry.name,
+                    id = %selected_id,
+                    previous_state = ?entry.state,
+                    "Auto-starting agent for orchestration delegation"
+                );
+                let _ = self.registry.set_state(selected_id, AgentState::Running);
+            }
+        }
+
+        Ok(selected_id)
+    }
+
+    fn list_agent_pools(&self) -> Vec<serde_json::Value> {
+        self.config
+            .agent_pools
+            .iter()
+            .map(|p| {
+                let mut ids: Vec<AgentId> = self
+                    .agent_pool_workers
+                    .get(&p.name)
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+                ids.retain(|id| self.registry.get(*id).is_some());
+                serde_json::json!({
+                    "name": p.name,
+                    "manifest_path": p.manifest_path,
+                    "max_instances": p.max_instances,
+                    "running": ids.len(),
+                    "agent_ids": ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                })
+            })
+            .collect()
+    }
+
+    async fn spawn_agent_pool_worker(
+        &self,
+        pool_name: &str,
+        parent_id: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let pool = self
+            .config
+            .agent_pools
+            .iter()
+            .find(|p| p.name == pool_name)
+            .ok_or_else(|| format!("Unknown agent pool: {pool_name}"))?;
+        let path = if pool.manifest_path.is_absolute() {
+            pool.manifest_path.clone()
+        } else {
+            self.config.home_dir.join(&pool.manifest_path)
+        };
+        {
+            let mut slot = self
+                .agent_pool_workers
+                .entry(pool_name.to_string())
+                .or_default();
+            slot.retain(|id| self.registry.get(*id).is_some());
+            if slot.len() >= pool.max_instances as usize {
+                return Err(format!(
+                    "Pool {pool_name} is at max_instances ({})",
+                    pool.max_instances
+                ));
+            }
+        }
+        let toml_str = std::fs::read_to_string(&path)
+            .map_err(|e| format!("read pool manifest {}: {e}", path.display()))?;
+        let (id_s, name) = KernelHandle::spawn_agent(self, &toml_str, parent_id).await?;
+        let aid: AgentId = id_s
+            .parse()
+            .map_err(|_| "invalid agent id from spawn".to_string())?;
+        self.agent_pool_workers
+            .entry(pool_name.to_string())
+            .or_default()
+            .push(aid);
+        Ok((id_s, name))
+    }
+
+    fn record_orchestration_trace(
+        &self,
+        event: openfang_types::orchestration_trace::OrchestrationTraceEvent,
+    ) {
+        self.orchestration_traces.push(event.clone());
+        let evt = Event::new(
+            event.agent_id,
+            EventTarget::Broadcast,
+            EventPayload::OrchestrationTrace(event),
+        );
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let bus = Arc::clone(&self.event_bus);
+            handle.spawn(async move { bus.publish(evt).await });
+        }
+    }
+
     async fn send_to_agent(&self, agent_id: &str, message: &str) -> Result<String, String> {
         // Try UUID first, then fall back to name lookup
         let id: AgentId = match agent_id.parse() {
@@ -7379,16 +8350,30 @@ impl KernelHandle for OpenFangKernel {
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
+        orchestration_meta: Option<serde_json::Value>,
+        priority: i64,
     ) -> Result<String, String> {
         self.memory
-            .task_post(title, description, assigned_to, created_by)
+            .task_post(
+                title,
+                description,
+                assigned_to,
+                created_by,
+                orchestration_meta.as_ref(),
+                priority,
+            )
             .await
             .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String> {
+    async fn task_claim(
+        &self,
+        agent_id: &str,
+        prefer_orchestration_trace_id: Option<&str>,
+        strategy: openfang_types::task_queue::TaskClaimStrategy,
+    ) -> Result<Option<serde_json::Value>, String> {
         self.memory
-            .task_claim(agent_id)
+            .task_claim(agent_id, prefer_orchestration_trace_id, strategy)
             .await
             .map_err(|e| format!("Task claim failed: {e}"))
     }
@@ -7405,6 +8390,24 @@ impl KernelHandle for OpenFangKernel {
             .task_list(status)
             .await
             .map_err(|e| format!("Task list failed: {e}"))
+    }
+
+    fn set_pending_orchestration_ctx(
+        &self,
+        agent_id: &str,
+        mut ctx: openfang_types::orchestration::OrchestrationContext,
+    ) -> Result<(), String> {
+        let id = self.resolve_agent_id(agent_id)?;
+        let budget = self
+            .runtime_limits_live
+            .read()
+            .unwrap()
+            .orchestration_default_budget_ms;
+        if ctx.remaining_budget_ms.is_none() {
+            ctx.remaining_budget_ms = budget;
+        }
+        self.pending_orchestration_ctx.insert(id, ctx);
+        Ok(())
     }
 
     async fn publish_event(
@@ -7729,7 +8732,7 @@ impl KernelHandle for OpenFangKernel {
 
         let decision = self
             .approval_manager
-            .request_approval(req, Some(&self.event_bus))
+            .request_approval(req, Some(self.event_bus.as_ref()))
             .await;
         Ok(decision == ApprovalDecision::Approved)
     }

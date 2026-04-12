@@ -726,6 +726,8 @@ impl LlmDriver for OpenAIDriver {
                 .map(|u| TokenUsage {
                     input_tokens: u.prompt_tokens,
                     output_tokens: u.completion_tokens,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                 })
                 .unwrap_or_default();
 
@@ -1559,6 +1561,8 @@ fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
                 usage: TokenUsage {
                     input_tokens: 0,
                     output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                 },
             });
         }
@@ -1569,10 +1573,7 @@ fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
         content: vec![],
         tool_calls,
         stop_reason: StopReason::ToolUse,
-        usage: TokenUsage {
-            input_tokens: 0,
-            output_tokens: 0,
-        },
+        usage: TokenUsage::default(),
     })
 }
 

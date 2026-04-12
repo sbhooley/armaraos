@@ -67,6 +67,7 @@ export class AgentResource {
   update(id: string, data: Record<string, unknown>): Promise<unknown>;
   setMode(id: string, mode: string): Promise<unknown>;
   setModel(id: string, model: string): Promise<unknown>;
+  /** Blocking turn; body may include `tools`: `{ name, input, result, is_error }[]` (omitted when empty). */
   message(id: string, text: string, opts?: MessageOpts): Promise<unknown>;
   stream(id: string, text: string, opts?: MessageOpts): AsyncGenerator<StreamEvent>;
   session(id: string): Promise<unknown>;

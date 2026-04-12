@@ -206,6 +206,8 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 **Notes:** OpenRouter is a unified gateway to 200+ models from many providers. Model IDs use the upstream format (e.g. `google/gemini-2.5-flash`). You can use any model from OpenRouter's catalog by specifying the full model path with the `openrouter/` prefix.
 
+**ArmaraOS product defaults:** new templates and bundled examples that pin OpenRouter use **`nvidia/nemotron-3-super-120b-a12b:free`** as the default `:free` chat model (`DEFAULT_OPENROUTER_MODEL_ID`). Rate-limit / overload **fallback** ids are separate (`OPENROUTER_FREE_FALLBACK_MODELS`). Full behavior, chat error mapping, and contributor file list: **[openrouter.md](openrouter.md)**.
+
 ---
 
 ### 7. Mistral AI

@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.3
 system_prompt = """You are Planner, a project planning specialist running inside the ArmaraOS.

@@ -8,6 +8,8 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use openfang_types::agent::AgentId;
 use openfang_types::event::{Event, EventPayload, LifecycleEvent, SystemEvent};
+use openfang_types::orchestration::{OrchestrationContext, OrchestrationPattern};
+use openfang_types::orchestration_trace::OrchestrationTraceEvent;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -56,6 +58,104 @@ pub enum TriggerPattern {
     All,
     /// Match custom events by content substring.
     ContentMatch { substring: String },
+    /// Match orchestration trace events (multi-agent observability).
+    ///
+    /// `event_types` uses [`openfang_types::orchestration_trace::TraceEventType::discriminant_name`]
+    /// values (e.g. `agent_failed`). Empty = all types.
+    OrchestrationTrace {
+        /// Empty = all trace event types.
+        event_types: Vec<String>,
+        #[serde(default)]
+        trace_id_substring: Option<String>,
+        #[serde(default)]
+        orchestrator_id: Option<AgentId>,
+    },
+}
+
+/// Result of evaluating triggers — includes orchestration context for every wake (trace events
+/// carry the distributed trace; other patterns get a minimal `AdHoc` context with trigger metadata).
+#[derive(Debug, Clone)]
+pub struct TriggerDispatch {
+    pub agent_id: AgentId,
+    pub message: String,
+    pub orchestration_ctx: Option<OrchestrationContext>,
+}
+
+fn trigger_pattern_kind(pattern: &TriggerPattern) -> &'static str {
+    match pattern {
+        TriggerPattern::All => "all",
+        TriggerPattern::Lifecycle => "lifecycle",
+        TriggerPattern::AgentSpawned { .. } => "agent_spawned",
+        TriggerPattern::AgentTerminated => "agent_terminated",
+        TriggerPattern::System => "system",
+        TriggerPattern::SystemKeyword { .. } => "system_keyword",
+        TriggerPattern::MemoryUpdate => "memory_update",
+        TriggerPattern::MemoryKeyPattern { .. } => "memory_key_pattern",
+        TriggerPattern::ContentMatch { .. } => "content_match",
+        TriggerPattern::OrchestrationTrace { .. } => "orchestration_trace",
+    }
+}
+
+fn orchestration_ctx_for_generic_trigger(
+    trigger_id: TriggerId,
+    pattern: &TriggerPattern,
+    subscriber: AgentId,
+    event_description: &str,
+    default_budget_ms: Option<u64>,
+) -> OrchestrationContext {
+    let mut ctx = OrchestrationContext::new_root(
+        subscriber,
+        OrchestrationPattern::AdHoc,
+        None, // Trigger events use subscriber's own settings
+    );
+    // Stable id per trigger (not a fresh UUID every wake) so trace lists and logs are not
+    // flooded with one-off traces for chatty triggers.
+    ctx.trace_id = format!("trigger-wake-{}", trigger_id.0);
+    ctx.shared_vars.insert(
+        "trigger_id".to_string(),
+        serde_json::json!(trigger_id.to_string()),
+    );
+    ctx.shared_vars.insert(
+        "trigger_pattern".to_string(),
+        serde_json::json!(trigger_pattern_kind(pattern)),
+    );
+    ctx.shared_vars.insert(
+        "trigger_event_preview".to_string(),
+        serde_json::json!(openfang_types::truncate_str(event_description, 500)),
+    );
+    if ctx.remaining_budget_ms.is_none() {
+        ctx.remaining_budget_ms = default_budget_ms;
+    }
+    ctx
+}
+
+fn orchestration_ctx_for_trace_trigger(
+    ev: &OrchestrationTraceEvent,
+    subscriber: AgentId,
+    default_budget_ms: Option<u64>,
+) -> OrchestrationContext {
+    let mut ctx = OrchestrationContext::new_root(
+        subscriber,
+        OrchestrationPattern::AdHoc,
+        None, // Trigger events use subscriber's own settings
+    );
+    ctx.trace_id = ev.trace_id.clone();
+    ctx.orchestrator_id = ev.orchestrator_id;
+    ctx.call_chain = vec![ev.orchestrator_id, subscriber];
+    ctx.depth = 1;
+    ctx.shared_vars = ev.metadata.clone();
+    ctx.shared_vars.insert(
+        "trigger_source_agent".to_string(),
+        serde_json::json!(ev.agent_id.to_string()),
+    );
+    ctx.shared_vars.insert(
+        "trigger_event_type".to_string(),
+        serde_json::json!(ev.event_type.discriminant_name()),
+    );
+    if ctx.remaining_budget_ms.is_none() {
+        ctx.remaining_budget_ms = default_budget_ms;
+    }
+    ctx
 }
 
 /// A registered trigger definition.
@@ -269,9 +369,17 @@ impl TriggerEngine {
         self.triggers.iter().map(|e| e.value().clone()).collect()
     }
 
-    /// Evaluate an event against all triggers. Returns a list of
-    /// (agent_id, message_to_send) pairs for matching triggers.
-    pub fn evaluate(&self, event: &Event) -> Vec<(AgentId, String)> {
+    /// Evaluate an event against all triggers. Returns dispatches for matching triggers.
+    ///
+    /// `EventPayload::OrchestrationTrace` payloads use the trace's
+    /// `trace_id` and metadata. All other matches include a minimal [`OrchestrationContext`]
+    /// (`trigger_id`, `trigger_pattern`, `trigger_event_preview` in `shared_vars`) for observability,
+    /// with `trace_id` of the form `trigger-wake-<trigger_uuid>` (stable per trigger).
+    pub fn evaluate(
+        &self,
+        event: &Event,
+        default_orch_budget_ms: Option<u64>,
+    ) -> Vec<TriggerDispatch> {
         let event_description = describe_event(event);
         let mut matches = Vec::new();
 
@@ -292,7 +400,27 @@ impl TriggerEngine {
                 let message = trigger
                     .prompt_template
                     .replace("{{event}}", &event_description);
-                matches.push((trigger.agent_id, message));
+                let orchestration_ctx =
+                    if let EventPayload::OrchestrationTrace(ref ev) = event.payload {
+                        orchestration_ctx_for_trace_trigger(
+                            ev,
+                            trigger.agent_id,
+                            default_orch_budget_ms,
+                        )
+                    } else {
+                        orchestration_ctx_for_generic_trigger(
+                            trigger.id,
+                            &trigger.pattern,
+                            trigger.agent_id,
+                            &event_description,
+                            default_orch_budget_ms,
+                        )
+                    };
+                matches.push(TriggerDispatch {
+                    agent_id: trigger.agent_id,
+                    message,
+                    orchestration_ctx: Some(orchestration_ctx),
+                });
                 trigger.fire_count += 1;
 
                 debug!(
@@ -362,6 +490,34 @@ fn matches_pattern(pattern: &TriggerPattern, event: &Event, description: &str) -
         TriggerPattern::ContentMatch { substring } => description
             .to_lowercase()
             .contains(&substring.to_lowercase()),
+        TriggerPattern::OrchestrationTrace {
+            event_types,
+            trace_id_substring,
+            orchestrator_id,
+        } => {
+            if let EventPayload::OrchestrationTrace(ev) = &event.payload {
+                if let Some(oid) = orchestrator_id {
+                    if oid != &ev.orchestrator_id {
+                        return false;
+                    }
+                }
+                if let Some(sub) = trace_id_substring {
+                    if !ev.trace_id.contains(sub.as_str()) {
+                        return false;
+                    }
+                }
+                if !event_types.is_empty()
+                    && !event_types
+                        .iter()
+                        .any(|t| t == ev.event_type.discriminant_name())
+                {
+                    return false;
+                }
+                true
+            } else {
+                false
+            }
+        }
     }
 }
 
@@ -481,6 +637,12 @@ fn describe_event(event: &Event) -> String {
                 "Approval pending: {tool_name} for agent {agent_id} ({request_id}): {action_summary}"
             ),
         },
+        EventPayload::OrchestrationTrace(ev) => {
+            format!(
+                "Orchestration trace {} — {:?}",
+                ev.trace_id, ev.event_type
+            )
+        }
         EventPayload::Custom(data) => {
             format!("Custom event ({} bytes)", data.len())
         }
@@ -525,10 +687,23 @@ mod tests {
             }),
         );
 
-        let matches = engine.evaluate(&event);
+        let matches = engine.evaluate(&event, None);
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].0, watcher);
-        assert!(matches[0].1.contains("new-agent"));
+        assert_eq!(matches[0].agent_id, watcher);
+        assert!(matches[0].message.contains("new-agent"));
+        let ctx = matches[0].orchestration_ctx.as_ref().expect("ctx");
+        assert_eq!(ctx.orchestrator_id, watcher);
+        assert!(
+            ctx.trace_id.starts_with("trigger-wake-"),
+            "expected stable generic trace id, got {}",
+            ctx.trace_id
+        );
+        assert_eq!(
+            ctx.shared_vars
+                .get("trigger_pattern")
+                .and_then(|v| v.as_str()),
+            Some("lifecycle")
+        );
     }
 
     #[test]
@@ -553,7 +728,7 @@ mod tests {
                 name: "coder".to_string(),
             }),
         );
-        assert_eq!(engine.evaluate(&event).len(), 1);
+        assert_eq!(engine.evaluate(&event, None).len(), 1);
 
         // This should NOT match
         let event2 = Event::new(
@@ -564,7 +739,7 @@ mod tests {
                 name: "researcher".to_string(),
             }),
         );
-        assert_eq!(engine.evaluate(&event2).len(), 0);
+        assert_eq!(engine.evaluate(&event2, None).len(), 0);
     }
 
     #[test]
@@ -587,10 +762,10 @@ mod tests {
         );
 
         // First two should match
-        assert_eq!(engine.evaluate(&event).len(), 1);
-        assert_eq!(engine.evaluate(&event).len(), 1);
+        assert_eq!(engine.evaluate(&event, None).len(), 1);
+        assert_eq!(engine.evaluate(&event, None).len(), 1);
         // Third should not
-        assert_eq!(engine.evaluate(&event).len(), 0);
+        assert_eq!(engine.evaluate(&event, None).len(), 0);
     }
 
     #[test]
@@ -636,7 +811,7 @@ mod tests {
                 usage_percent: 85.0,
             }),
         );
-        assert_eq!(engine.evaluate(&event).len(), 1);
+        assert_eq!(engine.evaluate(&event, None).len(), 1);
     }
 
     // -- reassign_agent_triggers (#519) ------------------------------------
@@ -662,9 +837,9 @@ mod tests {
                 status: "ok".to_string(),
             }),
         );
-        let matches = engine.evaluate(&event);
+        let matches = engine.evaluate(&event, None);
         assert_eq!(matches.len(), 2);
-        assert!(matches.iter().all(|(id, _)| *id == new_agent));
+        assert!(matches.iter().all(|d| d.agent_id == new_agent));
     }
 
     #[test]
@@ -761,5 +936,47 @@ mod tests {
             !restored[0].enabled,
             "Disabled state should survive take/restore"
         );
+    }
+
+    #[test]
+    fn test_orchestration_trace_trigger_carries_context() {
+        use openfang_types::orchestration_trace::{OrchestrationTraceEvent, TraceEventType};
+
+        let engine = TriggerEngine::new();
+        let watcher = AgentId::new();
+        let orch = AgentId::new();
+        engine.register(
+            watcher,
+            TriggerPattern::OrchestrationTrace {
+                event_types: vec!["agent_failed".to_string()],
+                trace_id_substring: None,
+                orchestrator_id: Some(orch),
+            },
+            "Trace: {{event}}".to_string(),
+            0,
+        );
+
+        let ev = OrchestrationTraceEvent {
+            trace_id: "tid-1".to_string(),
+            orchestrator_id: orch,
+            agent_id: AgentId::new(),
+            parent_agent_id: None,
+            event_type: TraceEventType::AgentFailed {
+                error: "boom".to_string(),
+            },
+            timestamp: chrono::Utc::now(),
+            metadata: std::collections::HashMap::new(),
+        };
+        let event = Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::OrchestrationTrace(ev.clone()),
+        );
+        let matches = engine.evaluate(&event, None);
+        assert_eq!(matches.len(), 1);
+        let ctx = matches[0].orchestration_ctx.as_ref().expect("ctx");
+        assert_eq!(ctx.trace_id, "tid-1");
+        assert_eq!(ctx.orchestrator_id, orch);
+        assert_eq!(ctx.call_chain, vec![orch, watcher]);
     }
 }

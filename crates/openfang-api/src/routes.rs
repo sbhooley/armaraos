@@ -12,7 +12,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use openfang_channels::bridge::channel_command_specs;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
-    ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
+    AggregationStrategy, ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
 };
 use openfang_kernel::OpenFangKernel;
 use openfang_runtime::kernel_handle::KernelHandle;
@@ -512,6 +512,7 @@ pub fn inject_attachments_into_session(
     session.messages.push(Message {
         role: Role::User,
         content: MessageContent::Blocks(image_blocks),
+        orchestration_ctx: None,
     });
 
     if let Err(e) = kernel.memory.save_session(&session) {
@@ -614,6 +615,8 @@ pub async fn send_message(
             content_blocks,
             req.sender_id,
             req.sender_name,
+            None,
+            None,
         )
         .await
     {
@@ -680,6 +683,7 @@ pub async fn send_message(
                     skill_draft_path,
                     compression_savings_pct: result.compression_savings_pct,
                     compressed_input: result.compressed_input.clone(),
+                    tools: Vec::new(),
                 })),
             )
         }
@@ -1168,6 +1172,18 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 // Workflow routes
 // ---------------------------------------------------------------------------
 
+fn parse_workflow_collect_aggregation(
+    step: &serde_json::Value,
+) -> Result<Option<AggregationStrategy>, String> {
+    match step.get("collect_aggregation") {
+        None => Ok(None),
+        Some(v) if v.is_null() => Ok(None),
+        Some(v) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| e.to_string()),
+    }
+}
+
 /// POST /api/workflows — Register a new workflow.
 pub async fn create_workflow(
     State(state): State<Arc<AppState>>,
@@ -1223,6 +1239,16 @@ pub async fn create_workflow(
                 max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
                 until: s["until"].as_str().unwrap_or("").to_string(),
             },
+            "adaptive" => StepMode::Adaptive {
+                max_iterations: s["max_iterations"].as_u64().unwrap_or(20) as u32,
+                tool_allowlist: s["tool_allowlist"].as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                }),
+                allow_subagents: s["allow_subagents"].as_bool().unwrap_or(true),
+                max_tokens: s["max_tokens"].as_u64(),
+            },
             _ => StepMode::Sequential,
         };
 
@@ -1234,6 +1260,20 @@ pub async fn create_workflow(
             _ => ErrorMode::Fail,
         };
 
+        let collect_aggregation = match parse_workflow_collect_aggregation(s) {
+            Ok(v) => v,
+            Err(e) => {
+                return api_json_error(
+                    StatusCode::BAD_REQUEST,
+                    &rid,
+                    PATH,
+                    "Invalid collect_aggregation",
+                    e,
+                    Some("Use type: concatenate | json_array | consensus | best_of | summarize | custom (see docs)."),
+                );
+            }
+        };
+
         steps.push(WorkflowStep {
             name: step_name,
             agent,
@@ -1242,6 +1282,7 @@ pub async fn create_workflow(
             timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
             error_mode,
             output_var: s["output_var"].as_str().map(String::from),
+            collect_aggregation,
         });
     }
 
@@ -1481,6 +1522,16 @@ pub async fn update_workflow(
                 max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
                 until: s["until"].as_str().unwrap_or("").to_string(),
             },
+            "adaptive" => StepMode::Adaptive {
+                max_iterations: s["max_iterations"].as_u64().unwrap_or(20) as u32,
+                tool_allowlist: s["tool_allowlist"].as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                }),
+                allow_subagents: s["allow_subagents"].as_bool().unwrap_or(true),
+                max_tokens: s["max_tokens"].as_u64(),
+            },
             _ => StepMode::Sequential,
         };
 
@@ -1492,6 +1543,20 @@ pub async fn update_workflow(
             _ => ErrorMode::Fail,
         };
 
+        let collect_aggregation = match parse_workflow_collect_aggregation(s) {
+            Ok(v) => v,
+            Err(e) => {
+                return api_json_error(
+                    StatusCode::BAD_REQUEST,
+                    &rid,
+                    PATH,
+                    "Invalid collect_aggregation",
+                    e,
+                    Some("Use type: concatenate | json_array | consensus | best_of | summarize | custom (see docs)."),
+                );
+            }
+        };
+
         steps.push(WorkflowStep {
             name: step_name,
             agent,
@@ -1500,6 +1565,7 @@ pub async fn update_workflow(
             timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
             error_mode,
             output_var: s["output_var"].as_str().map(String::from),
+            collect_aggregation,
         });
     }
 
@@ -2141,6 +2207,7 @@ pub async fn send_message_stream(
         req.sender_id,
         req.sender_name,
         None, // SSE streaming doesn't support image attachments yet
+        None,
     ) {
         Ok(pair) => pair,
         Err(e) => {
@@ -9242,6 +9309,7 @@ pub async fn mcp_http(
                 None
             },
             Some(&*state.kernel.process_manager),
+            None,
         )
         .await;
 
@@ -14247,7 +14315,7 @@ pub async fn create_approval(
     tokio::spawn(async move {
         kernel
             .approval_manager
-            .request_approval(approval_req, Some(&kernel.event_bus))
+            .request_approval(approval_req, Some(kernel.event_bus.as_ref()))
             .await;
     });
 
@@ -16215,6 +16283,27 @@ pub async fn comms_task(
         );
     }
 
+    let mut payload_val = req.payload.clone().unwrap_or(serde_json::json!({}));
+    if let Some(tid) = &req.orchestration_trace_id {
+        if let serde_json::Value::Object(ref mut obj) = payload_val {
+            let mut orch = obj
+                .get("orchestration")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if let Some(om) = orch.as_object_mut() {
+                om.insert("trace_id".to_string(), serde_json::json!(tid));
+            }
+            obj.insert("orchestration".to_string(), orch);
+        } else {
+            payload_val = serde_json::json!({ "orchestration": { "trace_id": tid } });
+        }
+    }
+    let payload_ref = if payload_val == serde_json::json!({}) {
+        None
+    } else {
+        Some(&payload_val)
+    };
+
     match state
         .kernel
         .memory
@@ -16223,6 +16312,8 @@ pub async fn comms_task(
             &req.description,
             req.assigned_to.as_deref(),
             Some("ui-user"),
+            payload_ref,
+            req.priority,
         )
         .await
     {
@@ -16434,6 +16525,115 @@ fn remove_toml_section(content: &str, section: &str) -> String {
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration traces & quota tree
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize)]
+pub struct OrchestrationTracesQuery {
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// GET /api/orchestration/traces — Recent orchestration traces (summaries).
+pub async fn list_orchestration_traces(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<OrchestrationTracesQuery>,
+) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200) as usize;
+    let summaries = state.kernel.orchestration_traces.list_summaries(limit);
+    Json(summaries)
+}
+
+/// GET /api/orchestration/traces/:trace_id — All events for one trace.
+pub async fn get_orchestration_trace(
+    State(state): State<Arc<AppState>>,
+    Path(trace_id): Path<String>,
+) -> impl IntoResponse {
+    let events = state
+        .kernel
+        .orchestration_traces
+        .events_for_trace(&trace_id);
+    if events.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "trace not found"})),
+        )
+            .into_response();
+    }
+    Json(events).into_response()
+}
+
+/// GET /api/orchestration/traces/:trace_id/live — Best-effort shared_vars + budget snapshot (in-process).
+pub async fn get_orchestration_trace_live(
+    State(state): State<Arc<AppState>>,
+    Path(trace_id): Path<String>,
+) -> impl IntoResponse {
+    match state.kernel.orchestration_trace_live.get(&trace_id) {
+        Some(v) => Json(v.value().clone()).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no live snapshot for this trace"})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/orchestration/traces/:trace_id/tree — Reconstructed delegation tree.
+pub async fn get_orchestration_trace_tree(
+    State(state): State<Arc<AppState>>,
+    Path(trace_id): Path<String>,
+) -> impl IntoResponse {
+    match state.kernel.orchestration_traces.trace_tree(&trace_id) {
+        Some(tree) => Json(tree).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "trace not found"})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/orchestration/traces/:trace_id/cost — Token/cost rollup from completed steps.
+pub async fn get_orchestration_trace_cost(
+    State(state): State<Arc<AppState>>,
+    Path(trace_id): Path<String>,
+) -> impl IntoResponse {
+    match state.kernel.orchestration_traces.trace_cost(&trace_id) {
+        Some(cost) => Json(cost).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "trace not found"})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/orchestration/quota-tree/:agent_id — Quota + usage for an agent and descendants.
+pub async fn get_orchestration_quota_tree(
+    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    let id: openfang_types::agent::AgentId = match agent_id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid agent id"})),
+            )
+                .into_response();
+        }
+    };
+    match state.kernel.orchestration_quota_tree(id) {
+        Some(tree) => Json(tree).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "agent not found"})),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

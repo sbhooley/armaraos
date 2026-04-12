@@ -5,6 +5,7 @@
 //!
 //! LLM tests require GROQ_API_KEY. Non-LLM tests verify the kernel-level
 //! workflow wiring without making real API calls.
+//! `test_workflow_e2e_adaptive_with_groq` exercises Adaptive `StepMode` through `run_workflow`.
 
 use openfang_kernel::workflow::{
     ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
@@ -126,6 +127,7 @@ memory_write = ["self.*"]
                 timeout_secs: 30,
                 error_mode: ErrorMode::Fail,
                 output_var: Some("alpha_out".to_string()),
+                collect_aggregation: None,
             },
             WorkflowStep {
                 name: "step-beta".to_string(),
@@ -137,6 +139,7 @@ memory_write = ["self.*"]
                 timeout_secs: 30,
                 error_mode: ErrorMode::Fail,
                 output_var: None,
+                collect_aggregation: None,
             },
         ],
         created_at: chrono::Utc::now(),
@@ -215,6 +218,7 @@ memory_write = ["self.*"]
             timeout_secs: 30,
             error_mode: ErrorMode::Fail,
             output_var: None,
+            collect_aggregation: None,
         }],
         created_at: chrono::Utc::now(),
     };
@@ -347,6 +351,7 @@ async fn test_workflow_e2e_with_groq() {
                 timeout_secs: 60,
                 error_mode: ErrorMode::Fail,
                 output_var: None,
+                collect_aggregation: None,
             },
             WorkflowStep {
                 name: "summarize".to_string(),
@@ -358,6 +363,7 @@ async fn test_workflow_e2e_with_groq() {
                 timeout_secs: 60,
                 error_mode: ErrorMode::Fail,
                 output_var: None,
+                collect_aggregation: None,
             },
         ],
         created_at: chrono::Utc::now(),
@@ -405,6 +411,74 @@ async fn test_workflow_e2e_with_groq() {
     // List runs
     let runs = kernel.workflows.list_runs(None).await;
     assert_eq!(runs.len(), 1);
+
+    kernel.shutdown();
+}
+
+/// End-to-end: single **Adaptive** workflow step through the real Groq path (kernel `run_workflow`).
+/// Verifies adaptive overrides reach the agent loop when `GROQ_API_KEY` is set.
+#[tokio::test]
+async fn test_workflow_e2e_adaptive_with_groq() {
+    if std::env::var("GROQ_API_KEY").is_err() {
+        eprintln!("GROQ_API_KEY not set, skipping E2E adaptive workflow test");
+        return;
+    }
+
+    let config = test_config("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY");
+    let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
+    let kernel = Arc::new(kernel);
+    kernel.set_self_handle();
+
+    let _agent_id = spawn_test_agent(
+        &kernel,
+        "wf-adaptive-agent",
+        "You are a helper. Answer briefly in one short sentence.",
+    );
+
+    let workflow = Workflow {
+        id: WorkflowId::new(),
+        name: "single-adaptive-step".to_string(),
+        description: "E2E adaptive step".to_string(),
+        steps: vec![WorkflowStep {
+            name: "adaptive-once".to_string(),
+            agent: StepAgent::ByName {
+                name: "wf-adaptive-agent".to_string(),
+            },
+            prompt_template: "What is 2+2? Reply with just the number.".to_string(),
+            mode: StepMode::Adaptive {
+                max_iterations: 3,
+                tool_allowlist: None,
+                allow_subagents: false,
+                max_tokens: None,
+            },
+            timeout_secs: 90,
+            error_mode: ErrorMode::Fail,
+            output_var: None,
+            collect_aggregation: None,
+        }],
+        created_at: chrono::Utc::now(),
+    };
+
+    let wf_id = kernel.register_workflow(workflow).await;
+
+    let result = kernel.run_workflow(wf_id, "ignored".to_string()).await;
+
+    assert!(
+        result.is_ok(),
+        "Adaptive workflow should complete: {:?}",
+        result.err()
+    );
+    let (run_id, output) = result.unwrap();
+    assert!(!output.is_empty(), "output should not be empty");
+
+    let run = kernel.workflows.get_run(run_id).await.unwrap();
+    assert!(matches!(
+        run.state,
+        openfang_kernel::workflow::WorkflowRunState::Completed
+    ));
+    assert_eq!(run.step_results.len(), 1);
+    assert_eq!(run.step_results[0].step_name, "adaptive-once");
+    assert!(run.step_results[0].output_tokens > 0);
 
     kernel.shutdown();
 }

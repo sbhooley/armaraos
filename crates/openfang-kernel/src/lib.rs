@@ -21,6 +21,7 @@ mod internal_automation_probe;
 pub mod kernel;
 pub mod metering;
 pub mod openclaw_workspace;
+pub mod orchestration_trace;
 pub mod pairing;
 pub mod registry;
 pub mod scheduler;

@@ -165,6 +165,100 @@ pub fn capability_matches(granted: &Capability, required: &Capability) -> bool {
     }
 }
 
+/// True when every `required` capability is satisfied by some grant in `granted`
+/// (delegation / `find_by_capabilities` / `select_agent_for_task`).
+#[must_use]
+pub fn granted_capabilities_cover_required(
+    granted: &[Capability],
+    required: &[Capability],
+) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+    required
+        .iter()
+        .all(|req| granted.iter().any(|g| capability_matches(g, req)))
+}
+
+/// Map `agent_delegate` JSON strings to [`Capability`] values.
+/// Tool names (e.g. `file_read`, `web_fetch`) become [`Capability::ToolInvoke`].
+/// `"*"` / `"tool_all"` entries are skipped (no extra constraint — same as omitting tools).
+#[must_use]
+pub fn delegate_requirement_strings_to_capabilities(req: &[String]) -> Vec<Capability> {
+    req.iter()
+        .filter_map(|s| {
+            let t = s.trim();
+            if t.is_empty() || t == "*" || t.eq_ignore_ascii_case("tool_all") {
+                return None;
+            }
+            Some(Capability::ToolInvoke(t.to_string()))
+        })
+        .collect()
+}
+
+fn parse_capability_object(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Capability, String> {
+    if let Some(s) = map.get("tool_invoke").and_then(|v| v.as_str()) {
+        return Ok(Capability::ToolInvoke(s.to_string()));
+    }
+    if map.get("tool_all").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(Capability::ToolAll);
+    }
+    if let Some(s) = map.get("memory_read").and_then(|v| v.as_str()) {
+        return Ok(Capability::MemoryRead(s.to_string()));
+    }
+    if let Some(s) = map.get("memory_write").and_then(|v| v.as_str()) {
+        return Ok(Capability::MemoryWrite(s.to_string()));
+    }
+    if let Some(s) = map.get("net_connect").and_then(|v| v.as_str()) {
+        return Ok(Capability::NetConnect(s.to_string()));
+    }
+    if let Some(s) = map.get("shell_exec").and_then(|v| v.as_str()) {
+        return Ok(Capability::ShellExec(s.to_string()));
+    }
+    if let Some(s) = map.get("agent_message").and_then(|v| v.as_str()) {
+        return Ok(Capability::AgentMessage(s.to_string()));
+    }
+    if let Some(s) = map.get("ofp_connect").and_then(|v| v.as_str()) {
+        return Ok(Capability::OfpConnect(s.to_string()));
+    }
+    if map.get("agent_spawn").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(Capability::AgentSpawn);
+    }
+    if map.get("ofp_discover").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(Capability::OfpDiscover);
+    }
+    Err(
+        "capability object needs one of: tool_invoke, tool_all, memory_read, memory_write, \
+         net_connect, shell_exec, agent_message, ofp_connect, agent_spawn, ofp_discover"
+            .to_string(),
+    )
+}
+
+/// Parse `required_capabilities` JSON array: tool name strings and/or capability objects.
+pub fn parse_capability_requirements_array(
+    arr: &[serde_json::Value],
+) -> Result<Vec<Capability>, String> {
+    let mut out = Vec::new();
+    for v in arr {
+        match v {
+            serde_json::Value::String(s) => {
+                out.extend(delegate_requirement_strings_to_capabilities(
+                    std::slice::from_ref(s),
+                ));
+            }
+            serde_json::Value::Object(map) => {
+                out.push(parse_capability_object(map)?);
+            }
+            _ => {
+                return Err("required_capabilities entries must be strings or objects".to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Validate that child capabilities are a subset of parent capabilities.
 /// This prevents privilege escalation: a restricted parent cannot create
 /// an unrestricted child.
@@ -312,5 +406,57 @@ mod tests {
             Capability::ShellExec("*".to_string()),
         ];
         assert!(validate_capability_inheritance(&parent, &child).is_err());
+    }
+
+    #[test]
+    fn granted_capabilities_cover_required_empty() {
+        assert!(granted_capabilities_cover_required(&[], &[]));
+        assert!(granted_capabilities_cover_required(
+            &[Capability::ToolInvoke("a".to_string())],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn granted_capabilities_cover_required_tools() {
+        let g = vec![
+            Capability::ToolInvoke("file_read".to_string()),
+            Capability::ToolInvoke("shell_exec".to_string()),
+        ];
+        let req = vec![Capability::ToolInvoke("file_read".to_string())];
+        assert!(granted_capabilities_cover_required(&g, &req));
+        assert!(!granted_capabilities_cover_required(
+            &g,
+            &[Capability::ToolInvoke("web_fetch".to_string())]
+        ));
+    }
+
+    #[test]
+    fn delegate_requirement_strings_maps_tools_and_skips_wildcard_token() {
+        let v = vec![
+            "file_read".to_string(),
+            "*".to_string(),
+            "  tool_all  ".to_string(),
+        ];
+        let c = delegate_requirement_strings_to_capabilities(&v);
+        assert_eq!(c.len(), 1);
+        assert!(matches!(
+            &c[0],
+            Capability::ToolInvoke(s) if s == "file_read"
+        ));
+    }
+
+    #[test]
+    fn parse_capability_requirements_array_mixed() {
+        let arr = vec![
+            serde_json::json!("web_fetch"),
+            serde_json::json!({"memory_read": "*"}),
+            serde_json::json!({"agent_spawn": true}),
+        ];
+        let c = parse_capability_requirements_array(&arr).expect("parse");
+        assert_eq!(c.len(), 3);
+        assert!(matches!(&c[0], Capability::ToolInvoke(s) if s == "web_fetch"));
+        assert!(matches!(&c[1], Capability::MemoryRead(s) if s == "*"));
+        assert!(matches!(&c[2], Capability::AgentSpawn));
     }
 }

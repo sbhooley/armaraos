@@ -832,7 +832,8 @@ async fn dispatch_message(
                     for jh in handles_vec {
                         if let Ok((name, _aid, result)) = jh.await {
                             match result {
-                                Ok(r) => responses.push(format!("[{name}]: {r}")),
+                                Ok(r) if !r.is_empty() => responses.push(format!("[{name}]: {r}")),
+                                Ok(_) => {}, // Skip empty (silent) responses
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
                         }
@@ -842,7 +843,8 @@ async fn dispatch_message(
                     for (name, maybe_id) in &targets {
                         if let Some(aid) = maybe_id {
                             match handle.send_message(*aid, &text).await {
-                                Ok(r) => responses.push(format!("[{name}]: {r}")),
+                                Ok(r) if !r.is_empty() => responses.push(format!("[{name}]: {r}")),
+                                Ok(_) => {}, // Skip empty (silent) responses
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
                         }
@@ -853,7 +855,10 @@ async fn dispatch_message(
             typing_task.abort();
 
             let combined = responses.join("\n\n");
-            send_response(adapter, &message.sender, combined, thread_id, output_format).await;
+            // Only send if we have at least one non-empty response
+            if !combined.is_empty() {
+                send_response(adapter, &message.sender, combined, thread_id, output_format).await;
+            }
             return;
         }
     }
@@ -975,7 +980,10 @@ async fn dispatch_message(
             if lifecycle_reactions {
                 send_lifecycle_reaction(adapter, &message.sender, msg_id, AgentPhase::Done).await;
             }
-            send_response(adapter, &message.sender, response, thread_id, output_format).await;
+            // Skip sending empty responses (agent chose NO_REPLY/[[silent]])
+            if !response.is_empty() {
+                send_response(adapter, &message.sender, response, thread_id, output_format).await;
+            }
             handle
                 .record_delivery(
                     agent_id,
@@ -1004,8 +1012,11 @@ async fn dispatch_message(
                             )
                             .await;
                         }
-                        send_response(adapter, &message.sender, response, thread_id, output_format)
-                            .await;
+                        // Skip sending empty responses (agent chose NO_REPLY/[[silent]])
+                        if !response.is_empty() {
+                            send_response(adapter, &message.sender, response, thread_id, output_format)
+                                .await;
+                        }
                         handle
                             .record_delivery(
                                 new_id,
@@ -1372,7 +1383,10 @@ async fn dispatch_with_blocks(
             if lifecycle_reactions {
                 send_lifecycle_reaction(adapter, &message.sender, msg_id, AgentPhase::Done).await;
             }
-            send_response(adapter, &message.sender, response, thread_id, output_format).await;
+            // Skip sending empty responses (agent chose NO_REPLY/[[silent]])
+            if !response.is_empty() {
+                send_response(adapter, &message.sender, response, thread_id, output_format).await;
+            }
             handle
                 .record_delivery(
                     agent_id,

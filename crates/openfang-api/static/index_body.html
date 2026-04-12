@@ -368,6 +368,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
               <span class="nav-label">Runtime</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'orchestration-traces' }" @click="navigate('orchestration-traces')" :aria-current="page === 'orchestration-traces' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/></svg></span>
+              <span class="nav-label">Orchestration</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'settings' }" @click="navigate('settings')" :aria-current="page === 'settings' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></span>
               <span class="nav-label">Settings</span>
@@ -1804,7 +1808,10 @@
           <!-- Quick-start templates — spawn + chat in one click -->
           <div>
             <div class="agents-section-label" style="margin-bottom:12px" x-text="agents.length ? 'Or Start a New Agent' : 'Start Chatting'"></div>
-            <div class="card-grid">
+            <p class="text-xs" style="margin:-4px 0 12px;line-height:1.5;color:var(--warning-dim,#d97706)" x-show="tplLoadError" x-text="tplLoadError"></p>
+            <p class="text-xs text-dim" style="margin:-4px 0 8px" x-show="tplLoading">Loading templates...</p>
+            <p class="text-xs text-dim" style="margin:-4px 0 8px" x-show="!tplLoading && builtinTemplates.length === 0">No templates available.</p>
+            <div class="card-grid" x-show="!tplLoading && builtinTemplates.length > 0">
               <template x-for="t in builtinTemplates" :key="t.name">
                 <div class="card chat-template-card" style="cursor:pointer" @click="t.manifest_toml ? spawnFromTemplate(t) : spawnBuiltin(t)">
                   <div class="flex justify-between items-center mb-1">
@@ -1840,7 +1847,7 @@
                 <div x-show="spawnMode === 'toml'">
                   <div class="form-group">
                     <label>Agent Manifest (TOML)</label>
-                    <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "openrouter"&#10;model = "stepfun/step-3.5-flash:free"&#10;system_prompt = "You are helpful."'></textarea>
+                    <textarea class="form-textarea" style="height:200px;font-size:11px" x-model="spawnToml" placeholder='name = "my-agent"&#10;module = "builtin:chat"&#10;[model]&#10;provider = "openrouter"&#10;model = "nvidia/nemotron-3-super-120b-a12b:free"&#10;system_prompt = "You are helpful."'></textarea>
                   </div>
                   <button class="btn btn-primary btn-block mt-4" @click="spawnAgent()" :disabled="spawning">
                     <span x-show="!spawning">Spawn Agent</span><span x-show="spawning">Spawning...</span>
@@ -1914,7 +1921,7 @@
                     </div>
                     <div class="form-group">
                       <label>Model</label>
-                      <input class="form-input" x-model="spawnForm.model" placeholder="e.g. stepfun/step-3.5-flash:free">
+                      <input class="form-input" x-model="spawnForm.model" placeholder="e.g. nvidia/nemotron-3-super-120b-a12b:free">
                     </div>
                     <div class="form-group">
                       <label>System Prompt</label>
@@ -6296,7 +6303,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="card" style="text-align:left;margin-bottom:16px;border-left:3px solid var(--accent);max-width:520px;margin-left:auto;margin-right:auto">
                 <div class="card-header">Recommended: OpenRouter (free to start)</div>
                 <p style="font-size:12px;color:var(--text-dim);line-height:1.65;margin:0">
-                  We recommend <strong>OpenRouter</strong>: visit <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> for a <strong>free API key</strong>. ArmaraOS is pre-configured to use the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> by default. You can switch to any other model or a paid provider anytime in Settings or when creating agents.
+                  We recommend <strong>OpenRouter</strong>: visit <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> for a <strong>free API key</strong>. ArmaraOS is pre-configured to use the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> by default. You can switch to any other model or a paid provider anytime in Settings or when creating agents.
                 </p>
               </div>
               <div class="card" style="text-align:left;margin-bottom:20px">
@@ -6345,7 +6352,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Connect an LLM Provider</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;line-height:1.6">
-                ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> (create a key in the OpenRouter dashboard). This app defaults to the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> for new agents unless you configure a different provider or model later.
+                ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> (create a key in the OpenRouter dashboard). This app defaults to the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> for new agents unless you configure a different provider or model later.
               </p>
               <div class="info-card" x-show="showWizardNetworkBanner" style="border-left-color:var(--accent);margin-bottom:14px">
                 <div class="flex justify-between items-start gap-2">
@@ -6489,7 +6496,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Create Your First Agent</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Pick a template to get started quickly. You can customize the agent later or create more from the Agents page.</p>
               <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 16px;line-height:1.5">
-                Templates use <strong>OpenRouter</strong> with the <strong>free</strong> model <code style="font-size:11px">stepfun/step-3.5-flash:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
+                Templates use <strong>OpenRouter</strong> with the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
               </p>
 
               <!-- Category filter pills -->
@@ -7105,6 +7112,163 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadChannels()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload channels</button>
               <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadIntegrations()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload integrations</button>
               <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" @click="daemonPromptShutdown()" :disabled="daemonCtlLoading.shutdown">Shut down</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="page === 'orchestration-traces'">
+      <div x-data="orchestrationTracesPage" x-init="init()" class="orchestration-traces-page-root">
+        <div class="page-header">
+          <h2>Orchestration traces</h2>
+          <p class="text-dim text-sm" style="margin:0">Recent multi-agent delegations (ring buffer, not persisted). Live updates also appear on <code class="text-xs">GET /api/events/stream</code> as <code class="text-xs">OrchestrationTrace</code>.</p>
+        </div>
+        <div class="page-body">
+          <div class="flex flex-wrap gap-2 mb-2 items-end">
+            <button type="button" class="btn btn-primary btn-sm" @click="loadSummaries()" :disabled="loading">Refresh list</button>
+            <input type="search" class="form-input text-xs" style="min-width:140px;max-width:240px;padding:6px 10px" placeholder="Trace id contains…" x-model="traceListFilter" autocomplete="off" aria-label="Filter traces by id substring" />
+            <label class="flex flex-col gap-0.5 text-xs text-dim" style="margin:0">From
+              <input type="datetime-local" class="form-input text-xs" style="padding:4px 8px;max-width:200px" x-model="traceDateFrom" title="Filter by last event (UTC stored; compare with local picker)" />
+            </label>
+            <label class="flex flex-col gap-0.5 text-xs text-dim" style="margin:0">To
+              <input type="datetime-local" class="form-input text-xs" style="padding:4px 8px;max-width:200px" x-model="traceDateTo" />
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" @click="clearDateFilters()">Clear dates</button>
+          </div>
+          <p class="text-dim text-xs mb-3" style="margin-top:0">Date filters apply to <code class="text-xs">last_event_at</code> on each trace summary.</p>
+          <div class="card mb-3">
+            <div class="card-header">Quota tree (by agent UUID)</div>
+            <div class="p-3 flex flex-wrap gap-2 items-end">
+              <input type="text" class="form-input" style="min-width:220px;max-width:100%" placeholder="Agent UUID" x-model="agentIdForQuota" />
+              <button type="button" class="btn btn-ghost btn-sm" @click="loadQuotaTree()">Load quota tree</button>
+            </div>
+          </div>
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+          <div x-show="!loading" class="grid gap-3" style="grid-template-columns:minmax(240px,1fr) minmax(0,2fr);align-items:start">
+            <div class="card">
+              <div class="card-header">Recent traces</div>
+              <div class="p-2" style="max-height:70vh;overflow:auto">
+                <template x-if="summaries.length === 0">
+                  <p class="text-dim text-sm" style="margin:0">No traces yet. Orchestration context is recorded when agents delegate via tools.</p>
+                </template>
+                <template x-if="summaries.length > 0 && filteredSummaries().length === 0">
+                  <p class="text-dim text-sm" style="margin:0">No traces match the filter.</p>
+                </template>
+                <template x-for="row in filteredSummaries()" :key="row.trace_id">
+                  <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;margin-bottom:4px;text-align:left"
+                    :class="{ 'btn-primary': selectedTraceId === row.trace_id }"
+                    @click="selectTrace(row.trace_id)">
+                    <span class="text-xs font-mono" x-text="row.trace_id"></span>
+                    <span class="text-xs text-dim block" x-text="'events: ' + row.event_count"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">Detail</div>
+              <div class="p-3" style="max-height:70vh;overflow:auto">
+                <p class="text-dim text-sm" x-show="!selectedTraceId && !detailTree">Select a trace or load a quota tree.</p>
+                <p class="text-sm" style="color:var(--error)" x-show="detailError" x-text="detailError"></p>
+                <template x-if="selectedTraceId && detailEvents">
+                  <div class="mb-3">
+                    <label class="text-xs font-semibold block mb-1">Event type filter</label>
+                    <input type="text" class="form-input text-xs w-full" style="padding:6px 10px;max-width:420px" placeholder="e.g. agent_completed, agent_failed (comma-separated; empty = all)" x-model="eventTypeFilter" @input="refreshViz()" autocomplete="off" />
+                    <p class="text-dim text-xs" style="margin:4px 0 0">Narrows Gantt + events JSON below. Uses snake_case event <code class="text-xs">type</code> names.</p>
+                  </div>
+                </template>
+                <template x-if="delegationGraphRows.length">
+                  <div class="mb-3 orch-delegation-graph">
+                    <div class="text-xs font-semibold mb-1">Delegation graph</div>
+                    <p class="text-dim text-xs" style="margin:0 0 8px">Interactive force-directed graph. Drag nodes, click to copy ID.</p>
+                    <div id="d3-delegation-graph-svg" style="width:100%;min-height:400px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--border,#2d2d44)"></div>
+                    <details class="mt-2">
+                      <summary class="text-xs font-semibold cursor-pointer text-dim">Show tree view</summary>
+                      <div class="orch-tree-scroll mt-2" role="tree">
+                        <template x-for="(gr, gi) in delegationGraphRows" :key="gr.agentId + '-' + gi">
+                          <div class="orch-tree-row" :style="'--orch-hue:' + agentHue(gr.agentId) + ';padding-left:' + (8 + gr.depth * 14) + 'px'" @click="copyAgentId(gr.agentId)" title="Click to copy agent id">
+                            <span class="orch-tree-glyph" x-text="gr.hasChildren ? '├' : '·'"></span>
+                            <span class="font-mono text-xs orch-tree-id" x-text="gr.label"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </details>
+                  </div>
+                </template>
+                <template x-if="quotaChartRows.length && !selectedTraceId">
+                  <div class="mb-3 orch-quota-chart-block">
+                    <div class="text-xs font-semibold mb-1">Quota usage (LLM tokens / hour)</div>
+                    <p class="text-dim text-xs" style="margin:0 0 8px">Bar = used vs max per agent; <code class="text-xs">0</code> max = unlimited (bar shows 0%).</p>
+                    <template x-for="(qr, qi) in quotaChartRows" :key="qr.agentId + '-q-' + qi">
+                      <div class="orch-quota-row" :style="'--orch-hue:' + agentHue(qr.agentId) + ';padding-left:' + (6 + qr.depth * 12) + 'px'">
+                        <div class="orch-quota-label text-xs">
+                          <span class="font-mono" x-text="qr.label"></span>
+                          <span class="text-dim" x-show="qr.displayName" x-text="' · ' + qr.displayName"></span>
+                          <span class="text-dim block" x-text="qr.inherits ? 'inherits quota' : ''"></span>
+                        </div>
+                        <div class="orch-quota-track" role="presentation">
+                          <div class="orch-quota-fill" :style="'width:' + qr.usedPct + '%'" :title="'used ' + qr.used + ' / max ' + qr.max"></div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="ganttData && ganttData.rows.length">
+                  <div class="mb-3 orch-gantt-block">
+                    <div class="text-xs font-semibold mb-1">Timeline (Gantt)</div>
+                    <p class="text-dim text-xs font-mono" style="margin:0 0 8px" x-text="formatGanttRange()"></p>
+                    <template x-for="row in ganttData.rows" :key="row.agentId">
+                      <div class="orch-gantt-row" :style="'--orch-hue:' + agentHue(row.agentId)">
+                        <div class="orch-gantt-label font-mono text-xs" x-text="row.label" :title="row.agentId"></div>
+                        <div class="orch-gantt-bar" role="presentation">
+                          <template x-for="(seg, idx) in row.segments" :key="idx">
+                            <div class="orch-gantt-seg" :class="'orch-kind-' + seg.kind" :title="seg.title" :style="'left:' + seg.leftPct + '%;width:' + seg.widthPct + '%'"></div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="heatmapData && heatmapData.rows.length">
+                  <div class="mb-3 orch-heatmap-block">
+                    <div class="text-xs font-semibold mb-1">Token usage heatmap (in / out)</div>
+                    <p class="text-dim text-xs" style="margin:0 0 8px">Intensity is relative to the largest agent total in this trace.</p>
+                    <template x-for="hr in heatmapData.rows" :key="hr.agentId">
+                      <div class="orch-heatmap-row" :style="'--orch-hue:' + agentHue(hr.agentId)">
+                        <span class="orch-heatmap-label font-mono text-xs" x-text="hr.label" :title="hr.agentId"></span>
+                        <div class="orch-heatmap-cells" role="img" :aria-label="'tokens in ' + hr.tokensIn + ' out ' + hr.tokensOut">
+                          <div class="orch-cell orch-cell-in" :style="'opacity:' + (0.12 + (hr.inPct / 100) * 0.83)" :title="'prompt tokens ' + hr.tokensIn"></div>
+                          <div class="orch-cell orch-cell-out" :style="'opacity:' + (0.12 + (hr.outPct / 100) * 0.83)" :title="'completion tokens ' + hr.tokensOut"></div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="detailCost">
+                  <details class="mb-3 orch-raw-details">
+                    <summary class="text-xs font-semibold cursor-pointer">Cost rollup (JSON)</summary>
+                    <pre class="text-xs font-mono mt-2" style="white-space:pre-wrap;word-break:break-word;margin:0" x-text="JSON.stringify(detailCost, null, 2)"></pre>
+                  </details>
+                </template>
+                <template x-if="detailTree && selectedTraceId">
+                  <details class="mb-3 orch-raw-details">
+                    <summary class="text-xs font-semibold cursor-pointer">Delegation tree (JSON)</summary>
+                    <pre class="text-xs font-mono mt-2" style="white-space:pre-wrap;word-break:break-word;margin:0" x-text="JSON.stringify(detailTree, null, 2)"></pre>
+                  </details>
+                </template>
+                <template x-if="detailTree && !selectedTraceId">
+                  <details class="mb-3 orch-raw-details">
+                    <summary class="text-xs font-semibold cursor-pointer">Quota tree (JSON)</summary>
+                    <pre class="text-xs font-mono mt-2" style="white-space:pre-wrap;word-break:break-word;margin:0" x-text="JSON.stringify(detailTree, null, 2)"></pre>
+                  </details>
+                </template>
+                <template x-if="detailEvents">
+                  <details class="orch-raw-details">
+                    <summary class="text-xs font-semibold cursor-pointer">Events (JSON)<span class="text-dim font-normal" x-show="eventTypeFilter" x-text="' — filtered'"></span></summary>
+                    <pre class="text-xs font-mono mt-2" style="white-space:pre-wrap;word-break:break-word;margin:0" x-text="eventsJsonForDisplay()"></pre>
+                  </details>
+                </template>
+              </div>
             </div>
           </div>
         </div>

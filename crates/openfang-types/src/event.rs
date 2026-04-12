@@ -3,6 +3,7 @@
 //! All inter-agent and system communication flows through events.
 
 use crate::agent::AgentId;
+use crate::orchestration_trace::OrchestrationTraceEvent;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -82,6 +83,8 @@ pub enum EventPayload {
     Network(NetworkEvent),
     /// System event (health, resources).
     System(SystemEvent),
+    /// Multi-agent orchestration trace step (also in ring buffer; mirrored here for SSE).
+    OrchestrationTrace(OrchestrationTraceEvent),
     /// User-defined payload.
     Custom(Vec<u8>),
 }

@@ -19,6 +19,8 @@ pub struct AnthropicDriver {
     api_key: Zeroizing<String>,
     base_url: String,
     client: reqwest::Client,
+    /// Use Bearer auth (OpenRouter) instead of x-api-key (direct Anthropic).
+    use_bearer_auth: bool,
 }
 
 impl AnthropicDriver {
@@ -28,10 +30,14 @@ impl AnthropicDriver {
     }
 
     pub fn with_client(api_key: String, base_url: String, client: reqwest::Client) -> Self {
+        // Auto-detect OpenRouter from base URL
+        let use_bearer_auth = base_url.contains("openrouter.ai");
+
         Self {
             api_key: Zeroizing::new(api_key),
             base_url,
             client,
+            use_bearer_auth,
         }
     }
 }
@@ -49,7 +55,7 @@ struct ApiRequest {
     model: String,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
+    system: Option<ApiSystemPrompt>,
     messages: Vec<ApiMessage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<ApiTool>,
@@ -57,6 +63,31 @@ struct ApiRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
+}
+
+/// System prompt can be a string or array of text blocks (for prompt caching).
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ApiSystemPrompt {
+    Text(String),
+    Blocks(Vec<ApiSystemBlock>),
+}
+
+/// System prompt block with optional cache control.
+#[derive(Debug, Serialize)]
+struct ApiSystemBlock {
+    #[serde(rename = "type")]
+    block_type: String, // "text"
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
+}
+
+/// Prompt caching control marker.
+#[derive(Debug, Serialize, Clone)]
+struct CacheControl {
+    #[serde(rename = "type")]
+    cache_type: String, // "ephemeral"
 }
 
 #[derive(Debug, Serialize)]
@@ -76,9 +107,17 @@ enum ApiContent {
 #[serde(tag = "type")]
 enum ApiContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     #[serde(rename = "image")]
-    Image { source: ApiImageSource },
+    Image {
+        source: ApiImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -91,6 +130,8 @@ enum ApiContentBlock {
         content: String,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         is_error: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
 }
 
@@ -132,10 +173,16 @@ enum ResponseContentBlock {
     Thinking { thinking: String },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct ApiUsage {
     input_tokens: u64,
     output_tokens: u64,
+    /// Tokens written to cache (prompt caching).
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+    /// Tokens read from cache (prompt caching).
+    #[serde(default)]
+    cache_read_input_tokens: u64,
 }
 
 /// Anthropic API error response.
@@ -178,12 +225,15 @@ impl LlmDriver for AnthropicDriver {
         });
 
         // Build API messages, filtering out system messages
-        let api_messages: Vec<ApiMessage> = request
+        let mut api_messages: Vec<ApiMessage> = request
             .messages
             .iter()
             .filter(|m| m.role != Role::System)
             .map(convert_message)
             .collect();
+
+        // Add prompt caching markers to messages for optimal cache hit rates
+        add_cache_markers_to_messages(&mut api_messages);
 
         // Build tools
         let api_tools: Vec<ApiTool> = request
@@ -196,10 +246,13 @@ impl LlmDriver for AnthropicDriver {
             })
             .collect();
 
+        // Build system prompt with caching
+        let system_with_cache = build_system_with_cache(system);
+
         let api_request = ApiRequest {
             model: request.model.clone(),
             max_tokens: request.max_tokens,
-            system,
+            system: system_with_cache,
             messages: api_messages,
             tools: api_tools,
             temperature: Some(request.temperature),
@@ -212,10 +265,16 @@ impl LlmDriver for AnthropicDriver {
             let url = format!("{}/v1/messages", self.base_url);
             debug!(url = %url, attempt, "Sending Anthropic API request");
 
-            let resp = self
-                .client
-                .post(&url)
-                .header("x-api-key", self.api_key.as_str())
+            let mut req = self.client.post(&url);
+
+            // Use Bearer auth for OpenRouter, x-api-key for direct Anthropic
+            if self.use_bearer_auth {
+                req = req.header("authorization", format!("Bearer {}", self.api_key.as_str()));
+            } else {
+                req = req.header("x-api-key", self.api_key.as_str());
+            }
+
+            let resp = req
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&api_request)
@@ -258,7 +317,21 @@ impl LlmDriver for AnthropicDriver {
             let api_response: ApiResponse =
                 serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
 
-            return Ok(convert_response(api_response));
+            let response = convert_response(api_response);
+
+            // Log prompt caching statistics when caching is active
+            if response.usage.cache_creation_input_tokens > 0 || response.usage.cache_read_input_tokens > 0 {
+                debug!(
+                    cache_write = response.usage.cache_creation_input_tokens,
+                    cache_read = response.usage.cache_read_input_tokens,
+                    cache_hit_rate = response.usage.cache_hit_rate(),
+                    input = response.usage.input_tokens,
+                    output = response.usage.output_tokens,
+                    "Anthropic prompt caching active"
+                );
+            }
+
+            return Ok(response);
         }
 
         Err(LlmError::Api {
@@ -286,12 +359,15 @@ impl LlmDriver for AnthropicDriver {
             })
         });
 
-        let api_messages: Vec<ApiMessage> = request
+        let mut api_messages: Vec<ApiMessage> = request
             .messages
             .iter()
             .filter(|m| m.role != Role::System)
             .map(convert_message)
             .collect();
+
+        // Add prompt caching markers to messages
+        add_cache_markers_to_messages(&mut api_messages);
 
         let api_tools: Vec<ApiTool> = request
             .tools
@@ -303,10 +379,13 @@ impl LlmDriver for AnthropicDriver {
             })
             .collect();
 
+        // Build system prompt with caching
+        let system_with_cache = build_system_with_cache(system);
+
         let api_request = ApiRequest {
             model: request.model.clone(),
             max_tokens: request.max_tokens,
-            system,
+            system: system_with_cache,
             messages: api_messages,
             tools: api_tools,
             temperature: Some(request.temperature),
@@ -319,10 +398,16 @@ impl LlmDriver for AnthropicDriver {
             let url = format!("{}/v1/messages", self.base_url);
             debug!(url = %url, attempt, "Sending Anthropic streaming request");
 
-            let resp = self
-                .client
-                .post(&url)
-                .header("x-api-key", self.api_key.as_str())
+            let mut req = self.client.post(&url);
+
+            // Use Bearer auth for OpenRouter, x-api-key for direct Anthropic
+            if self.use_bearer_auth {
+                req = req.header("authorization", format!("Bearer {}", self.api_key.as_str()));
+            } else {
+                req = req.header("x-api-key", self.api_key.as_str());
+            }
+
+            let resp = req
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .json(&api_request)
@@ -396,6 +481,12 @@ impl LlmDriver for AnthropicDriver {
                         "message_start" => {
                             if let Some(it) = json["message"]["usage"]["input_tokens"].as_u64() {
                                 usage.input_tokens = it;
+                            }
+                            if let Some(ct) = json["message"]["usage"]["cache_creation_input_tokens"].as_u64() {
+                                usage.cache_creation_input_tokens = ct;
+                            }
+                            if let Some(rt) = json["message"]["usage"]["cache_read_input_tokens"].as_u64() {
+                                usage.cache_read_input_tokens = rt;
                             }
                         }
                         "content_block_start" => {
@@ -545,6 +636,18 @@ impl LlmDriver for AnthropicDriver {
                 .send(StreamEvent::ContentComplete { stop_reason, usage })
                 .await;
 
+            // Log prompt caching statistics when caching is active
+            if usage.cache_creation_input_tokens > 0 || usage.cache_read_input_tokens > 0 {
+                debug!(
+                    cache_write = usage.cache_creation_input_tokens,
+                    cache_read = usage.cache_read_input_tokens,
+                    cache_hit_rate = usage.cache_hit_rate(),
+                    input = usage.input_tokens,
+                    output = usage.output_tokens,
+                    "Anthropic prompt caching active (streaming)"
+                );
+            }
+
             return Ok(CompletionResponse {
                 content,
                 stop_reason,
@@ -582,6 +685,61 @@ fn ensure_object(v: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Build system prompt with prompt caching enabled.
+/// Converts a string system prompt to blocks format with cache_control on the last block.
+fn build_system_with_cache(system: Option<String>) -> Option<ApiSystemPrompt> {
+    system.map(|text| {
+        if text.is_empty() {
+            ApiSystemPrompt::Text(text)
+        } else {
+            // Use blocks format with cache_control for prompt caching
+            ApiSystemPrompt::Blocks(vec![ApiSystemBlock {
+                block_type: "text".to_string(),
+                text,
+                cache_control: Some(CacheControl {
+                    cache_type: "ephemeral".to_string(),
+                }),
+            }])
+        }
+    })
+}
+
+/// Add cache_control markers to messages for optimal cache hit rates.
+/// Marks the last content block of the second-to-last message (if >= 2 messages).
+/// This caches conversation history while keeping the current user message fresh.
+fn add_cache_markers_to_messages(messages: &mut [ApiMessage]) {
+    if messages.len() < 2 {
+        return;
+    }
+
+    // Mark the second-to-last message's last content block for caching.
+    // This creates a cache breakpoint for conversation history.
+    let target_idx = messages.len() - 2;
+
+    if let ApiContent::Blocks(blocks) = &mut messages[target_idx].content {
+        if let Some(last_block) = blocks.last_mut() {
+            let cache_ctrl = Some(CacheControl {
+                cache_type: "ephemeral".to_string(),
+            });
+
+            match last_block {
+                ApiContentBlock::Text { cache_control, .. } => {
+                    *cache_control = cache_ctrl;
+                }
+                ApiContentBlock::Image { cache_control, .. } => {
+                    *cache_control = cache_ctrl;
+                }
+                ApiContentBlock::ToolResult { cache_control, .. } => {
+                    *cache_control = cache_ctrl;
+                }
+                ApiContentBlock::ToolUse { .. } => {
+                    // ToolUse doesn't support cache_control
+                }
+            }
+        }
+    }
+}
+
 /// Convert an OpenFang Message to an Anthropic API message.
 fn convert_message(msg: &Message) -> ApiMessage {
     let role = match msg.role {
@@ -596,15 +754,17 @@ fn convert_message(msg: &Message) -> ApiMessage {
             let api_blocks: Vec<ApiContentBlock> = blocks
                 .iter()
                 .filter_map(|block| match block {
-                    ContentBlock::Text { text, .. } => {
-                        Some(ApiContentBlock::Text { text: text.clone() })
-                    }
+                    ContentBlock::Text { text, .. } => Some(ApiContentBlock::Text {
+                        text: text.clone(),
+                        cache_control: None,
+                    }),
                     ContentBlock::Image { media_type, data } => Some(ApiContentBlock::Image {
                         source: ApiImageSource {
                             source_type: "base64".to_string(),
                             media_type: media_type.clone(),
                             data: data.clone(),
                         },
+                        cache_control: None,
                     }),
                     ContentBlock::ToolUse {
                         id, name, input, ..
@@ -622,6 +782,7 @@ fn convert_message(msg: &Message) -> ApiMessage {
                         tool_use_id: tool_use_id.clone(),
                         content: content.clone(),
                         is_error: *is_error,
+                        cache_control: None,
                     }),
                     ContentBlock::Thinking { .. } => None,
                     ContentBlock::Unknown => None,
@@ -680,6 +841,8 @@ fn convert_response(api: ApiResponse) -> CompletionResponse {
         usage: TokenUsage {
             input_tokens: api.usage.input_tokens,
             output_tokens: api.usage.output_tokens,
+            cache_creation_input_tokens: api.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: api.usage.cache_read_input_tokens,
         },
     }
 }
@@ -712,6 +875,7 @@ mod tests {
             usage: ApiUsage {
                 input_tokens: 100,
                 output_tokens: 50,
+                ..Default::default()
             },
         };
 
@@ -766,6 +930,7 @@ mod tests {
                 input: serde_json::Value::String(r#"{"query": "test"}"#.to_string()),
                 provider_metadata: None,
             }]),
+            orchestration_ctx: None,
         };
         let api_msg = convert_message(&msg);
         if let ApiContent::Blocks(blocks) = api_msg.content {

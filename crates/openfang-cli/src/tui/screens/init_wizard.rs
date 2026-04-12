@@ -72,7 +72,7 @@ const PROVIDERS: &[ProviderInfo] = &[
         name: "openrouter",
         display: "OpenRouter",
         env_var: "OPENROUTER_API_KEY",
-        default_model: "stepfun/step-3.5-flash:free",
+        default_model: "nvidia/nemotron-3-super-120b-a12b:free",
         needs_key: true,
         hint: "free tier",
     },

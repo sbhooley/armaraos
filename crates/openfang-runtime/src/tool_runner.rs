@@ -7,16 +7,27 @@ use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 use crate::web_search::{parse_ddg_results, WebToolsContext};
 use openfang_skills::registry::SkillRegistry;
+use openfang_types::orchestration::orchestration_context_from_claimed_task;
 use openfang_types::taint::{TaintLabel, TaintSink, TaintedValue};
+use openfang_types::task_queue::TaskClaimStrategy;
 use openfang_types::tool::{ToolDefinition, ToolResult};
 use openfang_types::tool_compat::normalize_tool_name;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Fallback max inter-agent depth when not running inside an agent task scope.
 const DEFAULT_MAX_AGENT_CALL_DEPTH: u32 = 5;
+
+/// Helper to get efficient_mode from orchestration context for inheritance.
+/// Returns the existing orchestration context's efficient_mode, or None if starting a new tree.
+/// When None, child agents will use their manifest metadata or global config default.
+fn get_efficient_mode(
+    orchestration_ctx: Option<&openfang_types::orchestration::OrchestrationContext>,
+) -> Option<String> {
+    orchestration_ctx.and_then(|ctx| ctx.efficient_mode.clone())
+}
 
 /// Check if a tool name refers to a shell execution tool.
 ///
@@ -90,6 +101,19 @@ tokio::task_local! {
     pub static CANVAS_MAX_BYTES: usize;
 }
 
+/// Shared orchestration context for the current agent turn (wall-clock budget + `shared_vars`).
+pub type OrchestrationLive =
+    Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>;
+
+async fn orch_snapshot(
+    orch: Option<&OrchestrationLive>,
+) -> Option<openfang_types::orchestration::OrchestrationContext> {
+    match orch {
+        Some(a) => Some(a.read().await.clone()),
+        None => None,
+    }
+}
+
 fn effective_max_agent_call_depth() -> u32 {
     MAX_AGENT_CALL_DEPTH_LIMIT
         .try_with(|c| c.get())
@@ -134,6 +158,7 @@ pub async fn execute_tool(
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
+    orchestration_live: Option<&OrchestrationLive>,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
@@ -318,8 +343,20 @@ pub async fn execute_tool(
         }
 
         // Inter-agent tools (require kernel handle)
-        "agent_send" => tool_agent_send(input, kernel).await,
-        "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
+        "agent_send" => tool_agent_send(input, kernel, orchestration_live, caller_agent_id).await,
+        "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id, orchestration_live).await,
+        "agent_delegate" => {
+            tool_agent_delegate(input, kernel, orchestration_live, caller_agent_id).await
+        }
+        "agent_map_reduce" => {
+            tool_agent_map_reduce(input, kernel, orchestration_live, caller_agent_id).await
+        }
+        "agent_supervise" => {
+            tool_agent_supervise(input, kernel, orchestration_live, caller_agent_id).await
+        }
+        "agent_coordinate" => {
+            tool_agent_coordinate(input, kernel, orchestration_live, caller_agent_id).await
+        }
         "agent_list" => tool_agent_list(kernel),
         "agent_kill" => tool_agent_kill(input, kernel),
 
@@ -330,8 +367,14 @@ pub async fn execute_tool(
 
         // Collaboration tools
         "agent_find" => tool_agent_find(input, kernel),
-        "task_post" => tool_task_post(input, kernel, caller_agent_id).await,
-        "task_claim" => tool_task_claim(kernel, caller_agent_id).await,
+        "agent_find_capabilities" => tool_agent_find_capabilities(input, kernel),
+        "agent_pool_list" => tool_agent_pool_list(kernel).await,
+        "agent_pool_spawn" => tool_agent_pool_spawn(input, kernel, caller_agent_id).await,
+        "task_post" => tool_task_post(input, kernel, caller_agent_id, orchestration_live).await,
+        "task_claim" => tool_task_claim(input, kernel, caller_agent_id, orchestration_live).await,
+        "orchestration_shared_merge" => {
+            tool_orchestration_shared_merge(input, orchestration_live).await
+        }
         "task_complete" => tool_task_complete(input, kernel).await,
         "task_list" => tool_task_list(input, kernel).await,
         "event_publish" => tool_event_publish(input, kernel).await,
@@ -712,7 +755,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Inter-agent tools ---
         ToolDefinition {
             name: "agent_send".to_string(),
-            description: "Send a message to another agent and receive their response. Accepts UUID or agent name. Use agent_find first to discover agents.".to_string(),
+            description: "Send a simple message to a specific agent you already know. USE WHEN: You know exactly which agent to talk to (by name/ID) and just need to exchange information. For capability-based selection, use agent_delegate instead.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -734,6 +777,95 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["manifest_toml"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_delegate".to_string(),
+            description: "Delegate a task to the most capable agent based on required capabilities. USE WHEN: You need specialized skills you lack (e.g., web research, code analysis). The task is well-defined and can be completed independently. NOT FOR: Simple tasks you can do yourself, or when you need tight collaboration.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string", "description": "Message/instruction for the selected agent" },
+                    "required_capabilities": {
+                        "type": "array",
+                        "description": "Tool name strings and/or objects like {\"tool_invoke\":\"web_fetch\"}, {\"memory_read\":\"*\"}, {\"agent_spawn\": true}",
+                        "items": { "type": ["string", "object"] }
+                    },
+                    "preferred_tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional tags; agents matching more tags rank higher"
+                    },
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["best_match", "round_robin", "random", "least_busy", "cost_efficient"],
+                        "description": "How to choose among candidates (default: best_match)"
+                    },
+                    "semantic_ranking": { "type": "boolean", "description": "When true (default), blend embedding similarity into ranking if the host has an embedding driver" },
+                    "auto_spawn_pool": {
+                        "type": "string",
+                        "description": "Pool name to auto-spawn workers from when all matching agents are busy (requires [[agent_pools]] config)"
+                    },
+                    "auto_spawn_threshold": {
+                        "type": "integer",
+                        "description": "Minimum in-flight tasks to consider agent 'busy' for auto-spawn (default: 1)"
+                    },
+                    "delegate_options": {
+                        "type": "object",
+                        "properties": {
+                            "semantic_ranking": { "type": "boolean" },
+                            "auto_spawn_pool": { "type": "string" },
+                            "auto_spawn_threshold": { "type": "integer" }
+                        }
+                    }
+                },
+                "required": ["task"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_map_reduce".to_string(),
+            description: "Process multiple independent items in parallel (swarm of up to 3 agents). USE WHEN: You have 3+ similar tasks that can run independently (e.g., analyzing multiple documents, processing data chunks). NOT FOR: Single tasks, or when results must build on each other. Items are processed in parallel waves.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "items": { "type": "array", "items": { "type": "string" }, "description": "Work items to process" },
+                    "map_prompt_template": { "type": "string", "description": "Prompt with {{item}} replaced per item" },
+                    "map_agent": { "type": "string", "description": "Target agent id or name for map step" },
+                    "max_parallelism": { "type": "integer", "description": "Parallel map calls per wave (default 3, max 3)" },
+                    "reduce_prompt_template": { "type": "string", "description": "Optional; {{results}} replaced with concatenated map outputs" },
+                    "reduce_agent": { "type": "string", "description": "Agent for reduce, or \"self\" to finish in current agent" }
+                },
+                "required": ["items", "map_prompt_template", "map_agent"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_supervise".to_string(),
+            description: "Delegate with oversight and validation. USE WHEN: The task is critical and needs verification (success_criteria), or may take too long (timeout protection). You're acting as a supervisor ensuring quality. NOT FOR: Simple delegation without quality requirements.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": { "type": "string", "description": "Target agent UUID or name" },
+                    "task": { "type": "string", "description": "Message/instruction" },
+                    "max_duration_secs": { "type": "integer", "description": "Timeout in seconds (default 600)" },
+                    "success_criteria": { "type": "string", "description": "If set, response must contain this substring (case-insensitive)" }
+                },
+                "required": ["agent_id", "task"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_coordinate".to_string(),
+            description: "Orchestrate a workflow where tasks depend on each other's outputs. USE WHEN: You have a multi-step plan where later steps need earlier results (e.g., 'research topic' → 'write summary' → 'create presentation'). Tasks automatically run in parallel when dependencies allow. NOT FOR: Independent tasks (use map_reduce) or single-step delegation.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "description": "Nodes: { id, agent, prompt, depends_on? }",
+                        "items": { "type": "object" }
+                    },
+                    "timeout_per_task": { "type": "integer", "description": "Per-task timeout seconds (default 300)" }
+                },
+                "required": ["tasks"]
             }),
         },
         ToolDefinition {
@@ -802,24 +934,76 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "agent_find_capabilities".to_string(),
+            description: "List agents whose manifest grants satisfy all required capabilities (same matching rules as agent_delegate). Use preferred_tags and exclude_agent_ids to narrow results.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "required_capabilities": {
+                        "type": "array",
+                        "description": "Tool strings and/or capability objects (see agent_delegate)",
+                        "items": { "type": ["string", "object"] }
+                    },
+                    "preferred_tags": { "type": "array", "items": { "type": "string" } },
+                    "exclude_agent_ids": { "type": "array", "items": { "type": "string" }, "description": "Agent UUIDs to skip" }
+                },
+                "required": ["required_capabilities"]
+            }),
+        },
+        ToolDefinition {
+            name: "agent_pool_list".to_string(),
+            description: "List configured [[agent_pools]] entries with running worker counts and agent IDs.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "agent_pool_spawn".to_string(),
+            description: "Spawn a worker agent from a named pool manifest (respects max_instances).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pool_name": { "type": "string", "description": "Name from `[[agent_pools]]`" }
+                },
+                "required": ["pool_name"]
+            }),
+        },
+        ToolDefinition {
             name: "task_post".to_string(),
-            description: "Post a task to the shared task queue for another agent to pick up.".to_string(),
+            description: "Post a task to the shared task queue for another agent to pick up. When running inside an orchestration, trace metadata is stored for sticky routing on claim.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "Short task title" },
                     "description": { "type": "string", "description": "Detailed task description" },
-                    "assigned_to": { "type": "string", "description": "Agent name or ID to assign the task to (optional)" }
+                    "assigned_to": { "type": "string", "description": "Agent name or ID to assign the task to (optional)" },
+                    "payload": { "type": "object", "description": "Optional JSON merged into the task payload (e.g. custom routing hints)" },
+                    "priority": { "type": "integer", "description": "Higher runs first when claiming (default 0)" }
                 },
                 "required": ["title", "description"]
             }),
         },
         ToolDefinition {
             name: "task_claim".to_string(),
-            description: "Claim the next available task from the task queue assigned to you or unassigned.".to_string(),
+            description: "Claim the next available task from the task queue assigned to you or unassigned. Prefer tasks for the current orchestration trace when in an orchestrated turn (or pass prefer_orchestration_trace_id). When the claimed task payload includes orchestration.trace_id (from task_post), the runtime rebuilds OrchestrationContext: it updates the live orchestration lock for the rest of this turn when present, and queues the same context for the agent's next user turn when not.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "prefer_orchestration_trace_id": { "type": "string", "description": "Optional trace_id to prefer sticky tasks posted under that orchestration" },
+                    "strategy": { "type": "string", "description": "default | prefer_unassigned | sticky_only" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "orchestration_shared_merge".to_string(),
+            description: "Merge key/value pairs into the live orchestration shared_vars map (visible to this agent and propagated to delegated calls).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "patch": { "type": "object", "description": "Object whose keys are merged into shared_vars" }
+                },
+                "required": ["patch"]
             }),
         },
         ToolDefinition {
@@ -1860,14 +2044,25 @@ fn require_kernel(
 async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    orchestration_live: Option<&OrchestrationLive>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
+    let orchestration_ctx = orch_snapshot(orchestration_live).await;
     let agent_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
     let message = input["message"]
         .as_str()
         .ok_or("Missing 'message' parameter")?;
+
+    if let Some(ref ctx) = orchestration_ctx {
+        if ctx.budget_exhausted() {
+            return Err(
+                "Orchestration wall-clock budget is exhausted; cannot agent_send.".to_string(),
+            );
+        }
+    }
 
     // Check + increment inter-agent call depth
     let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
@@ -1880,9 +2075,27 @@ async fn tool_agent_send(
         ));
     }
 
+    let target_id = kh.resolve_agent_id(agent_id)?;
+    let child_ctx =
+        match caller_agent_id.and_then(|s| s.parse::<openfang_types::agent::AgentId>().ok()) {
+            Some(caller_id) => {
+                let base = orchestration_ctx.clone().unwrap_or_else(|| {
+                    let efficient_mode = get_efficient_mode(orchestration_ctx.as_ref());
+                    openfang_types::orchestration::OrchestrationContext::new_root(
+                        caller_id,
+                        openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                        efficient_mode,
+                    )
+                });
+                Some(base.child(target_id))
+            }
+            None => orchestration_ctx.clone().map(|ctx| ctx.child(target_id)),
+        };
+
     AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message).await
+            kh.send_to_agent_with_context(agent_id, message, child_ctx)
+                .await
         })
         .await
 }
@@ -1891,15 +2104,434 @@ async fn tool_agent_spawn(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     parent_id: Option<&str>,
+    orchestration_live: Option<&OrchestrationLive>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
+    let spawn_ctx = orch_snapshot(orchestration_live).await;
+    let (id, name) = kh
+        .spawn_agent_with_context(manifest_toml, parent_id, spawn_ctx)
+        .await?;
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
+}
+
+async fn tool_agent_delegate(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    orchestration_live: Option<&OrchestrationLive>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let orchestration_ctx = orch_snapshot(orchestration_live).await;
+    if let Some(ref ctx) = orchestration_ctx {
+        if ctx.budget_exhausted() {
+            return Err(
+                "Orchestration wall-clock budget is exhausted; cannot delegate.".to_string(),
+            );
+        }
+    }
+    let task = input["task"].as_str().ok_or("Missing 'task'")?;
+    let required_caps = match input
+        .get("required_capabilities")
+        .and_then(|v| v.as_array())
+    {
+        Some(arr) => openfang_types::capability::parse_capability_requirements_array(arr)?,
+        None => Vec::new(),
+    };
+    let preferred_tags: Vec<String> = input["preferred_tags"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let strategy = input["strategy"]
+        .as_str()
+        .and_then(|s| match s {
+            "round_robin" => Some(openfang_types::orchestration::SelectionStrategy::RoundRobin),
+            "least_busy" => Some(openfang_types::orchestration::SelectionStrategy::LeastBusy),
+            "cost_efficient" => {
+                Some(openfang_types::orchestration::SelectionStrategy::CostEfficient)
+            }
+            "best_match" => Some(openfang_types::orchestration::SelectionStrategy::BestMatch),
+            "random" => Some(openfang_types::orchestration::SelectionStrategy::Random),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let delegate_options =
+        if let Some(o) = input.get("delegate_options").and_then(|v| v.as_object()) {
+            openfang_types::orchestration::DelegateSelectionOptions {
+                semantic_ranking: o
+                    .get("semantic_ranking")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                auto_spawn_pool: o
+                    .get("auto_spawn_pool")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                auto_spawn_threshold: o
+                    .get("auto_spawn_threshold")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as u32,
+            }
+        } else {
+            openfang_types::orchestration::DelegateSelectionOptions {
+                semantic_ranking: input
+                    .get("semantic_ranking")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                auto_spawn_pool: input
+                    .get("auto_spawn_pool")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                auto_spawn_threshold: input
+                    .get("auto_spawn_threshold")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1) as u32,
+            }
+        };
+    let selected = kh
+        .select_agent_for_task(
+            task,
+            &required_caps,
+            &preferred_tags,
+            strategy,
+            delegate_options,
+        )
+        .await?;
+    let delegator = caller_agent_id
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(selected);
+    let cap_str = format!("{required_caps:?}");
+    let mut child = orchestration_ctx
+        .clone()
+        .unwrap_or_else(|| {
+            let efficient_mode = get_efficient_mode(orchestration_ctx.as_ref());
+            openfang_types::orchestration::OrchestrationContext::new_root(
+                delegator,
+                openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                efficient_mode,
+            )
+        })
+        .child(selected);
+    child.pattern = openfang_types::orchestration::OrchestrationPattern::Delegation {
+        delegator_id: delegator,
+        capability_required: cap_str,
+    };
+    let trace_id = child.trace_id.clone();
+    let orchestrator_id = child.orchestrator_id;
+    let parent_of_delegator = orchestration_ctx.as_ref().and_then(|c| {
+        let n = c.call_chain.len();
+        if n >= 2 {
+            c.call_chain.get(n - 2).copied()
+        } else {
+            None
+        }
+    });
+    let out = kh
+        .send_to_agent_with_context(&selected.to_string(), task, Some(child))
+        .await?;
+    kh.record_orchestration_trace(
+        openfang_types::orchestration_trace::OrchestrationTraceEvent {
+            trace_id,
+            orchestrator_id,
+            agent_id: delegator,
+            parent_agent_id: parent_of_delegator,
+            event_type: openfang_types::orchestration_trace::TraceEventType::AgentDelegated {
+                target_agent: selected,
+                task: task.to_string(),
+            },
+            timestamp: chrono::Utc::now(),
+            metadata: std::collections::HashMap::new(),
+        },
+    );
+    Ok(out)
+}
+
+async fn tool_agent_map_reduce(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    orchestration_live: Option<&OrchestrationLive>,
+    _caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let orchestration_ctx = orch_snapshot(orchestration_live).await;
+    // Note: map_reduce uses child contexts, inheriting efficient_mode through ctx.child()
+    // If no orchestration context exists, agents use their own manifest settings
+    let items: Vec<String> = input["items"]
+        .as_array()
+        .ok_or("Missing 'items'")?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    if items.is_empty() {
+        return Err("items array is empty".to_string());
+    }
+    let map_prompt_template = input["map_prompt_template"]
+        .as_str()
+        .ok_or("Missing 'map_prompt_template'")?;
+    let map_agent = input["map_agent"].as_str().ok_or("Missing 'map_agent'")?;
+    let max_parallelism = input["max_parallelism"].as_u64().unwrap_or(3).clamp(1, 3) as usize;
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let mut map_results: Vec<serde_json::Value> = Vec::new();
+    let map_target_id = kh
+        .resolve_agent_id(map_agent)
+        .unwrap_or_else(|_| openfang_types::agent::AgentId::new());
+    let kh_arc = Arc::clone(kh);
+    let mut global_idx: usize = 0;
+
+    for chunk in items.chunks(max_parallelism) {
+        let mut futs = Vec::new();
+        for item in chunk.iter() {
+            let idx = global_idx;
+            global_idx += 1;
+            let prompt = map_prompt_template.replace("{{item}}", item);
+            let child_ctx = orchestration_ctx.as_ref().map(|ctx| {
+                let mut c = ctx.child(map_target_id);
+                c.pattern = openfang_types::orchestration::OrchestrationPattern::MapReduce {
+                    job_id: job_id.clone(),
+                    phase: openfang_types::orchestration::MapReducePhase::Map,
+                    item_index: Some(idx),
+                };
+                c
+            });
+            let kh2 = Arc::clone(&kh_arc);
+            let target = map_agent.to_string();
+            let item_owned = item.clone();
+            futs.push(async move {
+                let r = kh2
+                    .send_to_agent_with_context(&target, &prompt, child_ctx)
+                    .await;
+                (item_owned, r)
+            });
+        }
+        for (item, r) in futures::future::join_all(futs).await {
+            let text = r?;
+            map_results.push(serde_json::json!({"item": item, "result": text}));
+        }
+    }
+
+    let reduce_template = input["reduce_prompt_template"].as_str();
+    let Some(reduce_template) = reduce_template else {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "map_results": map_results,
+            "job_id": job_id,
+        }))
+        .map_err(|e| e.to_string());
+    };
+
+    let combined = map_results
+        .iter()
+        .filter_map(|v| v.get("result").and_then(|x| x.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
+    let reduce_prompt = reduce_template.replace("{{results}}", &combined);
+    let reduce_agent = input["reduce_agent"].as_str().unwrap_or("self");
+    if reduce_agent == "self" {
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "map_results": map_results,
+            "reduce_prompt": reduce_prompt,
+            "note": "reduce_agent=self: continue in your reasoning using reduce_prompt to produce the final answer.",
+            "job_id": job_id,
+        }))
+        .map_err(|e| e.to_string());
+    }
+
+    let reduce_target_id = kh
+        .resolve_agent_id(reduce_agent)
+        .unwrap_or_else(|_| openfang_types::agent::AgentId::new());
+    let reduce_ctx = orchestration_ctx.as_ref().map(|ctx| {
+        let mut c = ctx.child(reduce_target_id);
+        c.pattern = openfang_types::orchestration::OrchestrationPattern::MapReduce {
+            job_id: job_id.clone(),
+            phase: openfang_types::orchestration::MapReducePhase::Reduce,
+            item_index: None,
+        };
+        c
+    });
+    let reduced = kh
+        .send_to_agent_with_context(reduce_agent, &reduce_prompt, reduce_ctx)
+        .await?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "map_results": map_results,
+        "reduce_result": reduced,
+        "job_id": job_id,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+async fn tool_agent_supervise(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    orchestration_live: Option<&OrchestrationLive>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let orchestration_ctx = orch_snapshot(orchestration_live).await;
+    let agent_id = input["agent_id"].as_str().ok_or("Missing 'agent_id'")?;
+    let task = input["task"].as_str().ok_or("Missing 'task'")?;
+    let max_duration = input["max_duration_secs"].as_u64().unwrap_or(600);
+    let target = kh.resolve_agent_id(agent_id)?;
+    let supervisor_id = caller_agent_id
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(target);
+    let mut ctx = orchestration_ctx
+        .clone()
+        .unwrap_or_else(|| {
+            let efficient_mode = get_efficient_mode(orchestration_ctx.as_ref());
+            openfang_types::orchestration::OrchestrationContext::new_root(
+                supervisor_id,
+                openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                efficient_mode,
+            )
+        })
+        .child(target);
+    ctx.pattern = openfang_types::orchestration::OrchestrationPattern::Supervisor {
+        supervisor_id,
+        task_type: "supervised_task".to_string(),
+    };
+    let fut = kh.send_to_agent_with_context(agent_id, task, Some(ctx));
+    match tokio::time::timeout(std::time::Duration::from_secs(max_duration), fut).await {
+        Ok(Ok(response)) => {
+            if let Some(crit) = input.get("success_criteria").and_then(|v| v.as_str()) {
+                let lc = crit.to_lowercase();
+                if !response.to_lowercase().contains(&lc) {
+                    return Ok(format!(
+                        "Supervised task completed but success_criteria '{crit}' not found in response.\n\n{response}"
+                    ));
+                }
+            }
+            Ok(response)
+        }
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(format!("Supervised task timed out after {max_duration}s")),
+    }
+}
+
+async fn tool_agent_coordinate(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    orchestration_live: Option<&OrchestrationLive>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let orchestration_ctx = orch_snapshot(orchestration_live).await;
+    // Get efficient_mode for orchestration inheritance
+    let efficient_mode = get_efficient_mode(orchestration_ctx.as_ref());
+    let tasks = input["tasks"].as_array().ok_or("Missing 'tasks'")?;
+    if tasks.is_empty() {
+        return Err("tasks array is empty".to_string());
+    }
+    let timeout_per_task = input["timeout_per_task"].as_u64().unwrap_or(300);
+    let coordinator_id = caller_agent_id
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default();
+    let task_group_id = uuid::Uuid::new_v4().to_string();
+
+    #[derive(Debug, Clone)]
+    struct Node {
+        id: String,
+        agent: String,
+        prompt: String,
+        deps: Vec<String>,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    for t in tasks {
+        let id = t["id"].as_str().ok_or("task missing id")?.to_string();
+        let agent = t["agent"].as_str().ok_or("task missing agent")?.to_string();
+        let prompt = t["prompt"]
+            .as_str()
+            .ok_or("task missing prompt")?
+            .to_string();
+        let deps: Vec<String> = t["depends_on"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        nodes.push(Node {
+            id,
+            agent,
+            prompt,
+            deps,
+        });
+    }
+
+    let mut outputs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut pending: std::collections::HashSet<String> =
+        nodes.iter().map(|n| n.id.clone()).collect();
+    let mut results_json = Vec::new();
+
+    while !pending.is_empty() {
+        let ready: Vec<Node> = nodes
+            .iter()
+            .filter(|n| pending.contains(&n.id) && n.deps.iter().all(|d| outputs.contains_key(d)))
+            .cloned()
+            .collect();
+        if ready.is_empty() {
+            return Err("Coordinate: cyclic dependency or missing task id".to_string());
+        }
+        let mut wave = Vec::new();
+        for node in ready {
+            pending.remove(&node.id);
+            let mut prompt = node.prompt.clone();
+            for (k, v) in &outputs {
+                let placeholder = ["{{", k.as_str(), "}}"].concat();
+                prompt = prompt.replace(&placeholder, v);
+            }
+            let kh2 = Arc::clone(kh);
+            let oid = orchestration_ctx.clone();
+            let cid = coordinator_id;
+            let gid = task_group_id.clone();
+            let id_copy = node.id.clone();
+            let agent_copy = node.agent.clone();
+            let efficient_mode_copy = efficient_mode.clone();
+            wave.push(async move {
+                let target_id = kh2
+                    .resolve_agent_id(&agent_copy)
+                    .unwrap_or_else(|_| openfang_types::agent::AgentId::new());
+                let mut c = oid
+                    .unwrap_or_else(|| {
+                        openfang_types::orchestration::OrchestrationContext::new_root(
+                            cid,
+                            openfang_types::orchestration::OrchestrationPattern::AdHoc,
+                            efficient_mode_copy,
+                        )
+                    })
+                    .child(target_id);
+                c.pattern = openfang_types::orchestration::OrchestrationPattern::Coordination {
+                    coordinator_id: cid,
+                    task_id: gid,
+                };
+                let r = tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_per_task),
+                    kh2.send_to_agent_with_context(&agent_copy, &prompt, Some(c)),
+                )
+                .await;
+                (id_copy, r)
+            });
+        }
+        for (id, r) in futures::future::join_all(wave).await {
+            match r {
+                Ok(Ok(text)) => {
+                    outputs.insert(id.clone(), text.clone());
+                    results_json.push(serde_json::json!({"id": id, "output": text}));
+                }
+                Ok(Err(e)) => return Err(format!("Task {id} failed: {e}")),
+                Err(_) => return Err(format!("Task {id} timed out after {timeout_per_task}s")),
+            }
+        }
+    }
+
+    serde_json::to_string_pretty(&serde_json::json!({ "results": results_json }))
+        .map_err(|e| e.to_string())
 }
 
 fn tool_agent_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
@@ -2032,10 +2664,105 @@ fn tool_agent_find(
     serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
+fn tool_agent_find_capabilities(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let caps = match input
+        .get("required_capabilities")
+        .and_then(|v| v.as_array())
+    {
+        Some(arr) => openfang_types::capability::parse_capability_requirements_array(arr)?,
+        None => return Err("Missing 'required_capabilities' array".to_string()),
+    };
+    let preferred_tags: Vec<String> = input["preferred_tags"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let exclude: Vec<openfang_types::agent::AgentId> = input["exclude_agent_ids"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().and_then(|s| s.parse().ok()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let agents = kh.find_by_capabilities(&caps, &preferred_tags, &exclude);
+    let result: Vec<serde_json::Value> = agents
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "id": a.id,
+                "name": a.name,
+                "state": a.state,
+                "description": a.description,
+                "tags": a.tags,
+                "tools": a.tools,
+                "model": format!("{}:{}", a.model_provider, a.model_name),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
+}
+
+async fn tool_agent_pool_list(kernel: Option<&Arc<dyn KernelHandle>>) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let rows = kh.list_agent_pools();
+    serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())
+}
+
+async fn tool_agent_pool_spawn(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let pool_name = input["pool_name"]
+        .as_str()
+        .or_else(|| input["name"].as_str())
+        .ok_or("Missing 'pool_name'")?;
+    let (id, name) = kh
+        .spawn_agent_pool_worker(pool_name, caller_agent_id)
+        .await?;
+    Ok(format!("Spawned pool worker {name} ({id})."))
+}
+
+async fn tool_orchestration_shared_merge(
+    input: &serde_json::Value,
+    orch: Option<&OrchestrationLive>,
+) -> Result<String, String> {
+    let Some(a) = orch else {
+        return Err(
+            "orchestration_shared_merge requires an active orchestration context".to_string(),
+        );
+    };
+    let patch = input
+        .get("patch")
+        .and_then(|v| v.as_object())
+        .ok_or("Missing 'patch' object")?;
+    let n = patch.len();
+    let mut w = a.write().await;
+    let mut m = HashMap::new();
+    for (k, v) in patch {
+        m.insert(k.clone(), v.clone());
+    }
+    w.merge_shared_vars(m);
+    let total = w.shared_vars.len();
+    Ok(format!(
+        "Merged {n} key(s) into orchestration shared_vars ({total} total)."
+    ))
+}
+
 async fn tool_task_post(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    orchestration_live: Option<&OrchestrationLive>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
@@ -2043,20 +2770,81 @@ async fn tool_task_post(
         .as_str()
         .ok_or("Missing 'description' parameter")?;
     let assigned_to = input["assigned_to"].as_str();
+    let mut meta = serde_json::Map::new();
+    if let Some(extra) = input.get("payload").and_then(|v| v.as_object()) {
+        for (k, v) in extra {
+            meta.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(o) = orchestration_live {
+        let g = o.read().await;
+        meta.insert(
+            "orchestration".to_string(),
+            serde_json::json!({
+                "trace_id": g.trace_id,
+                "orchestrator_id": g.orchestrator_id.to_string(),
+            }),
+        );
+    }
+    let payload = if meta.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(meta))
+    };
+    let priority = input.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
     let task_id = kh
-        .task_post(title, description, assigned_to, caller_agent_id)
+        .task_post(
+            title,
+            description,
+            assigned_to,
+            caller_agent_id,
+            payload,
+            priority,
+        )
         .await?;
     Ok(format!("Task created with ID: {task_id}"))
 }
 
 async fn tool_task_claim(
+    input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    orchestration_live: Option<&OrchestrationLive>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.unwrap_or("");
-    match kh.task_claim(agent_id).await? {
+    let prefer = input
+        .get("prefer_orchestration_trace_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let prefer = if let Some(s) = prefer {
+        Some(s)
+    } else if let Some(o) = orchestration_live {
+        Some(o.read().await.trace_id.clone())
+    } else {
+        None
+    };
+    let strategy = input
+        .get("strategy")
+        .and_then(|v| v.as_str())
+        .map(|s| match s {
+            "prefer_unassigned" => TaskClaimStrategy::PreferUnassigned,
+            "sticky_only" => TaskClaimStrategy::StickyOnly,
+            _ => TaskClaimStrategy::Default,
+        })
+        .unwrap_or_default();
+    match kh.task_claim(agent_id, prefer.as_deref(), strategy).await? {
         Some(task) => {
+            if let Ok(claimant) = kh.resolve_agent_id(agent_id) {
+                if let Some(ctx) =
+                    orchestration_context_from_claimed_task(&task, claimant)
+                {
+                    let _ = kh.set_pending_orchestration_ctx(agent_id, ctx.clone());
+                    if let Some(live) = orchestration_live {
+                        *live.write().await = ctx;
+                    }
+                }
+            }
             serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
         }
         None => Ok("No tasks available.".to_string()),
@@ -4041,12 +4829,19 @@ mod tests {
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
+        assert!(names.contains(&"agent_delegate"));
+        assert!(names.contains(&"agent_map_reduce"));
+        assert!(names.contains(&"agent_supervise"));
+        assert!(names.contains(&"agent_coordinate"));
         assert!(names.contains(&"agent_list"));
         assert!(names.contains(&"agent_kill"));
         assert!(names.contains(&"memory_store"));
         assert!(names.contains(&"memory_recall"));
-        // 6 collaboration tools
+        // Collaboration / orchestration tools
         assert!(names.contains(&"agent_find"));
+        assert!(names.contains(&"agent_find_capabilities"));
+        assert!(names.contains(&"agent_pool_list"));
+        assert!(names.contains(&"agent_pool_spawn"));
         assert!(names.contains(&"task_post"));
         assert!(names.contains(&"task_claim"));
         assert!(names.contains(&"task_complete"));
@@ -4123,6 +4918,7 @@ mod tests {
                 None, // tts_engine
                 None, // docker_config
                 None, // process_manager
+                None, // orchestration_live
             )
             .await;
             assert!(
@@ -4156,8 +4952,16 @@ mod tests {
         let tools = builtin_tool_definitions();
         let collab_tools = [
             "agent_find",
+            "agent_find_capabilities",
+            "agent_pool_list",
+            "agent_pool_spawn",
+            "agent_delegate",
+            "agent_map_reduce",
+            "agent_supervise",
+            "agent_coordinate",
             "task_post",
             "task_claim",
+            "orchestration_shared_merge",
             "task_complete",
             "task_list",
             "event_publish",
@@ -4205,6 +5009,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(
@@ -4235,6 +5040,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4262,6 +5068,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4289,6 +5096,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4316,6 +5124,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -4343,6 +5152,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4370,6 +5180,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4398,6 +5209,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4430,6 +5242,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -4476,6 +5289,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         // Should NOT be the capability-enforcement "Permission denied" — it should
@@ -4512,6 +5326,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4682,6 +5497,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);
@@ -4728,6 +5544,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // orchestration_live
         )
         .await;
         assert!(result.is_error);

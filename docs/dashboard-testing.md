@@ -107,13 +107,23 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 
 ## Notification center (bell)
 
-Persistent queue (not toasts): fixed **bell** top-right; **badge** = number of rows in the panel. Implemented in `static/js/app.js` (`Alpine.store('notifyCenter')`), `static/index_body.html`, `static/css/layout.css`. Rebuild the daemon after editing embedded static assets.
+Persistent queue (not toasts): fixed **bell** top-right; **badge** = number of rows in the panel. Implemented in `static/js/app.js` (`Alpine.store('notifyCenter')`), `static/index_body.html`, `static/css/layout.css`, and **`static/js/pages/command-palette.js`** (palette action **Notifications**). Rebuild the daemon after editing embedded static assets.
+
+**Data sources:**
+
+| Row type | Source |
+|----------|--------|
+| Pending approvals | Poll **`GET /api/approvals`**; immediate refresh when kernel SSE emits **`ApprovalPending`** |
+| Budget threshold | Poll **`GET /api/budget`** (compare spend vs limit × **`alert_threshold`**) |
+| Kernel events (crash, quota, health, cron, …) | Same SSE client as sidebar: **`GET /api/events/stream`** → `notifyCenter.ingestKernelEvent` |
+
+**Layout (no overlap with header actions):** `:root` defines **`--notify-bell-reserve`** (default **56px**). **`.main-content`** uses **`padding-right: calc(var(--notify-bell-reserve) + env(safe-area-inset-right))`** so in-flow controls (page headers, chat toolbar) stay left of the fixed bell; the bell uses **`right: calc(14px + env(safe-area-inset-right))`**. **Focus mode** clears that extra padding (bell hidden with other chrome). On narrow viewports (**`max-width: 480px`**), the right gutter is preserved so the bell does not cover content.
 
 **A11y & UX:** With the panel **closed**, new rows update a visually hidden **`aria-live="polite"`** region (“New notification: …”). With the panel **open**, **Tab** / **Shift+Tab** cycle focus within the panel (focus trap); closing restores focus to the element that had focus before open (usually the bell). Command palette (**Cmd/Ctrl+K**) includes **Notifications** → opens the panel.
 
 **Persistence:** Dismissing a **kernel** row (id `k-<event id>`) stores that id in **`localStorage`** key **`armaraos-notify-dismissed-kernel`** (capped list) so a full page reload does not show the same SSE event again. Synthetic rows **`approval-pending`** and **`budget-alert`** are not stored there.
 
-**Automated checks:** `./scripts/verify-dashboard-smoke.sh` curls **`GET /`** and asserts **`notify-bell-btn`** or **`notify-center-root`** appears in HTML, and curls **`GET /api/budget`** + **`GET /api/approvals`**. Integration tests: `cargo test -p openfang-api --test api_integration_test test_get_budget_status_json_shape test_get_approvals_list_json_shape` (plus existing `test_kernel_events_stream_sse_smoke`).
+**Automated checks:** `./scripts/verify-dashboard-smoke.sh` curls **`GET /`** and asserts **`notify-bell-btn`** or **`notify-center-root`** appears in HTML, and curls **`GET /api/budget`** + **`GET /api/approvals`**. Integration tests (substring filter matches both): `cargo test -p openfang-api --test api_integration_test json_shape`. Kernel SSE smoke: `cargo test -p openfang-api --test api_integration_test test_kernel_events_stream_sse_smoke`.
 
 **Manual smoke (daemon + dashboard in browser):**
 
@@ -123,6 +133,7 @@ Persistent queue (not toasts): fixed **bell** top-right; **badge** = number of r
 4. **Kernel-driven rows** — From live SSE, confirm new rows can appear for **agent crashed** (Lifecycle **Crashed**), **Quota enforced** / **Quota warning**, **Health check failed** (debounced per agent like toasts, ~90s), and **Cron job failed**. Each row should be individually **Dismiss**-able; after dismiss + reload, the same event id should not reappear.
 5. **Focus mode** — Toggle focus mode (sidebar / chat UX). The bell + panel should **hide** with other chrome (same behavior as the mobile menu button).
 6. **Command palette** — Open the palette, search **Notifications**, confirm it opens the notification panel.
+7. **Layout** — On a page with a dense top-right toolbar (e.g. **Agents** chat), confirm header actions sit **left** of the bell strip (no overlap); rotate a notched device or use browser safe-area emulation if available.
 
 ## Logs page (Live, Daemon, Audit Trail)
 
@@ -268,6 +279,41 @@ curl -s http://127.0.0.1:4200/ | grep -c "commandPalette"
 - The **Quick open** section in the sidebar shows the most recently used agents at the top, ordered by last activity time (stored in `localStorage` under `armaraos-recent-agents`).
 - After chatting with an agent, navigate away and back — that agent should be first in the strip.
 - Agents that are deleted from the system should be filtered out of the strip on next load.
+
+### HTTP chat fallback — tool cards and assets
+
+When the agent WebSocket is not connected, chat uses **`POST /api/agents/{id}/message`** (blocking). The response may include a top-level **`tools`** array (`name`, `input` as a JSON string, `result`, `is_error`) — one entry per tool execution for **the whole turn** (all LLM iterations in that request). The UI maps them into the same in-bubble **tool cluster** as the WebSocket path (`tool_start` / `tool_end` / `tool_result`). There is **no** token streaming on this path; the assistant reply appears once when the request completes.
+
+**Manual checks:**
+
+1. Disconnect or block WebSocket (e.g. devtools offline on WS only) so the toast **“Using HTTP mode (no streaming)”** appears.
+2. Ask the agent to run a safe built-in tool (e.g. **`file_read`** on a small file in the workspace).
+3. Expect **tool cluster** chrome (intro strip + collapsible cards + final assistant bubble styling) on the completed message, not only plain text.
+4. After changing **`index_body.html`**, **`components.css`**, or **`chat.js`**, rebuild the daemon — the dashboard HTML/CSS/JS are **embedded** from `crates/openfang-api` at compile time (`webchat.rs` / `include_str!`). Restart **`openfang start`** (or the desktop shell) so the browser does not keep an old bundle.
+
+**Optional API check (daemon running, loopback):**
+
+```bash
+AGENT_ID=$(curl -s http://127.0.0.1:4200/api/agents | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+curl -sS -H "Content-Type: application/json" \
+  -d "{\"message\":\"Use file_read on README.md (or any small file). Reply ok.\"}" \
+  "http://127.0.0.1:4200/api/agents/$AGENT_ID/message" | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); print('tools', len(d.get('tools') or []), [t.get('name') for t in d.get('tools') or []])"
+```
+
+Expect a non-zero tool count when the model actually invoked **`file_read`** (model-dependent).
+
+### LLM error banner (`humanizeChatError`)
+
+Provider failures show a dismissible amber/red banner; **hover** shows the raw daemon message (`lastStreamErrorTechnical`).
+
+**Manual checks (wording only; use a dev key you can revoke):**
+
+1. **401 / invalid key** — With an intentionally wrong `OPENROUTER_API_KEY`, send chat once: banner should steer toward **Settings / API key**, not billing.
+2. **403** — If you can reproduce a provider **403** without invalid key text (e.g. model access), banner should **not** claim only a bad key; copy should mention access / hover for details (see **[openrouter.md](openrouter.md)**).
+3. **Billing-like body** — If the raw error includes insufficient-credit wording, banner should mention **credits / provider dashboard**, not exclusively the API key field.
+
+Contract: `static/js/pages/chat.js` → `humanizeChatError`.
 
 ### Chat history and tool call persistence
 

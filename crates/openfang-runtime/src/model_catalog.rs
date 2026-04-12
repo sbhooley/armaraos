@@ -1964,20 +1964,6 @@ fn builtin_models() -> Vec<ModelCatalogEntry> {
         },
         // ArmaraOS — additional OpenRouter pass-through (chat + media catalog)
         ModelCatalogEntry {
-            id: "openrouter/stepfun/step-3.5-flash:free".into(),
-            display_name: "StepFun 3.5 Flash (OpenRouter, free)".into(),
-            provider: "openrouter".into(),
-            tier: ModelTier::Fast,
-            context_window: 131_072,
-            max_output_tokens: 8_192,
-            input_cost_per_m: 0.0,
-            output_cost_per_m: 0.0,
-            supports_tools: true,
-            supports_vision: true,
-            supports_streaming: true,
-            aliases: vec![],
-        },
-        ModelCatalogEntry {
             id: "openrouter/nvidia/nemotron-3-super-120b-a12b:free".into(),
             display_name: "NVIDIA Nemotron 3 Super 120B A12B (OpenRouter, free)".into(),
             provider: "openrouter".into(),

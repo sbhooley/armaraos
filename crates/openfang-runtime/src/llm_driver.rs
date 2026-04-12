@@ -196,6 +196,9 @@ pub struct DriverConfig {
     pub skip_permissions: bool,
     /// Optional shared HTTP client (injected by [`crate::drivers::factory::LlmDriverFactory`]).
     pub http_client: Option<std::sync::Arc<reqwest::Client>>,
+    /// Optional model hint for routing decisions (e.g., "anthropic/claude-sonnet-4").
+    /// Used to auto-detect when OpenRouter is being used with Anthropic models to enable caching.
+    pub model_hint: Option<String>,
 }
 
 impl Default for DriverConfig {
@@ -206,6 +209,7 @@ impl Default for DriverConfig {
             base_url: None,
             skip_permissions: true,
             http_client: None,
+            model_hint: None,
         }
     }
 }
@@ -216,11 +220,12 @@ impl serde::Serialize for DriverConfig {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("DriverConfig", 4)?;
+        let mut s = serializer.serialize_struct("DriverConfig", 5)?;
         s.serialize_field("provider", &self.provider)?;
         s.serialize_field("api_key", &self.api_key)?;
         s.serialize_field("base_url", &self.base_url)?;
         s.serialize_field("skip_permissions", &self.skip_permissions)?;
+        s.serialize_field("model_hint", &self.model_hint)?;
         s.end()
     }
 }
@@ -237,6 +242,8 @@ impl<'de> serde::Deserialize<'de> for DriverConfig {
             base_url: Option<String>,
             #[serde(default = "default_skip_permissions")]
             skip_permissions: bool,
+            #[serde(default)]
+            model_hint: Option<String>,
         }
         let v = DriverConfigDe::deserialize(deserializer)?;
         Ok(DriverConfig {
@@ -245,6 +252,7 @@ impl<'de> serde::Deserialize<'de> for DriverConfig {
             base_url: v.base_url,
             skip_permissions: v.skip_permissions,
             http_client: None,
+            model_hint: v.model_hint,
         })
     }
 }
@@ -322,6 +330,7 @@ mod tests {
                 usage: TokenUsage {
                     input_tokens: 10,
                     output_tokens: 5,
+                    ..Default::default()
                 },
             },
         ];
@@ -350,6 +359,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 5,
                         output_tokens: 3,
+                        ..Default::default()
                     },
                 })
             }

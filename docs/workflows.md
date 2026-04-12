@@ -1,5 +1,7 @@
 # Workflow Engine Guide
 
+**Quick copy-paste:** see **`docs/workflow-examples.md`** for compact JSON and a curl register/run recipe. **Hands-on:** **`docs/orchestration-walkthrough.md`**.
+
 ## Overview
 
 The ArmaraOS workflow engine enables multi-step agent pipelines -- orchestrated sequences of tasks where each step routes work to a specific agent, and output from one step flows as input to the next. Workflows let you compose complex behaviors from simple, single-purpose agents without writing any Rust code.
@@ -10,9 +12,27 @@ Use workflows when you need to:
 - Fan work out to several agents in parallel and collect their results.
 - Conditionally branch execution based on an earlier step's output.
 - Iterate a step in a loop until a quality gate is met.
+- Run an **adaptive** step: a full multi-iteration agent loop (tools, sub-agents, orchestration context) inside one workflow step.
 - Build reproducible, auditable multi-agent processes that can be triggered via API or CLI.
 
 The implementation lives in `openfang-kernel/src/workflow.rs`. The workflow engine is decoupled from the kernel through closures -- it never directly owns or references the kernel, making it testable in isolation.
+
+---
+
+## Orchestration and traces (§1)
+
+When the **kernel** runs a workflow (`OpenFangKernel::run_workflow`) or the **HTTP channel bridge** runs workflow text (`run_workflow_text` in `openfang-api`), each step that enters the normal **agent / LLM** path does so with **`Some(OrchestrationContext)`**:
+
+| Field / behavior | Value |
+|------------------|--------|
+| **`pattern`** | `OrchestrationPattern::Workflow { workflow_id, step_index, step_name }` — identifies the definition and the step inside the run. |
+| **`trace_id`** | One id per **run**, shared by every step: `wf:{workflow_uuid}:run:{run_uuid}`. Filter this in **Monitor → Orchestration traces** (`#orchestration-traces`) or `openfang orchestration …`. |
+| **`orchestrator_id` / `call_chain`** | Rooted at the **step’s target agent** for that turn; nested **`agent_send`** / **`agent_spawn`** extend the chain as usual. |
+| **`remaining_budget_ms`** | If unset when the context is built, the kernel may set it from **`[runtime_limits] orchestration_default_budget_ms`** in `config.toml` (`RuntimeLimitsConfig` in `openfang-types`). |
+
+**Adaptive** mode is special only in **length of the turn**: it runs a **multi-iteration** agent loop with optional tool allowlists and overrides. **Sequential**, **loop** iterations, **fan_out** branches, **conditional** steps, and agent-driven **collect** (BestOf / Summarize / Custom) still receive the same **Workflow** pattern for each **engine** invocation of the step callback.
+
+**Engine wiring:** `WorkflowEngine::execute_run` passes a **`step_index: usize`** into the injected async sender so the **`step_index`** inside **`OrchestrationPattern::Workflow`** matches the engine’s ordering (including fan-out list indices and loop iteration counts).
 
 ---
 
@@ -73,8 +93,12 @@ Each step in the `steps` array has the following fields:
 | `max_retries` | (inside `ErrorMode::Retry`) | `u32` | `3` | Number of retries when `error_mode` is `"retry"`. |
 | `output_var` | `output_var` | `Option<String>` | `null` | If set, stores this step's output in a named variable for later reference. |
 | `condition` | (inside `StepMode::Conditional`) | `String` | `""` | Substring to match in previous output (case-insensitive). |
-| `max_iterations` | (inside `StepMode::Loop`) | `u32` | `5` | Maximum loop iterations before forced termination. |
+| `max_iterations` | (`StepMode::Loop` or `StepMode::Adaptive`) | `u32` | `5` (loop), `20` (adaptive) | Loop: max iterations before exit. Adaptive: max agent-loop iterations for the step (`POST /api/workflows` defaults). |
 | `until` | (inside `StepMode::Loop`) | `String` | `""` | Substring to match in output to terminate the loop (case-insensitive). |
+| `tool_allowlist` | (when `mode` is `"adaptive"`) | `string[]` | `null` | If set, restricts which tools the agent may use during this step. |
+| `allow_subagents` | (when `mode` is `"adaptive"`) | `bool` | `true` | Whether `agent_spawn` / delegation tools are allowed for this step. |
+| `max_tokens` | (when `mode` is `"adaptive"`) | `u64` | `null` | Optional token budget hint for the adaptive step. |
+| `collect_aggregation` | `collect_aggregation` | object | `null` | When `mode` is `"collect"`, how to merge fan-out outputs. Tagged JSON: `type` is `concatenate` \| `json_array` \| `consensus` \| `best_of` \| `summarize` \| `custom` (see **Collect** below). |
 
 ### Agent Resolution
 
@@ -119,7 +143,40 @@ If any fan-out step fails or times out, the entire workflow fails immediately.
 { "mode": "collect" }
 ```
 
-The `collect` step gathers all outputs from the preceding fan-out group. It does not execute an agent -- it is a **data-only** step that joins all accumulated outputs with the separator `"\n\n---\n\n"` and sets the result as `{{input}}` for subsequent steps.
+The `collect` step merges accumulated fan-out outputs and sets the result as `{{input}}` for subsequent steps.
+
+**Default:** concatenate with separator `"\n\n---\n\n"` (same as `{"type":"concatenate","separator":"\n\n---\n\n"}`).
+
+**Optional `collect_aggregation`** (per step, `POST` / `PUT /api/workflows` and on-disk JSON): tagged object, `type` in `snake_case` matching serde:
+
+| `type` | Fields | Behavior |
+|--------|--------|----------|
+| `concatenate` | `separator` (string) | Join with separator |
+| `json_array` | — | JSON array string of all outputs |
+| `consensus` | `threshold` (f32, 0–1) | Plurality / threshold vote on trimmed outputs |
+| `best_of` | `evaluator_agent` (name), `criteria` (string) | Evaluator must reply with a **1-based** candidate index; merged value is that fan-out output |
+| `summarize` | `summarizer_agent` (name), `max_length` (optional usize) | Summarizer’s reply becomes the merged value |
+| `custom` | `aggregator_agent` (name), `aggregation_prompt` (string) | Prompt expanded with `{{outputs}}`, `{{outputs_json}}`, `{{input}}` (workflow initial), `{{var}}` |
+
+Agent-driven strategies (`best_of`, `summarize`, `custom`) invoke the named agent via the same runtime path as other steps; an extra `StepResult` row is recorded (`*:best_of`, `*:summarize`, or `*:custom`). With **one** fan-out output, the agent is not called (that output is passed through).
+
+Example (`best_of`):
+
+```json
+{
+  "name": "pick-best",
+  "agent_name": "dummy",
+  "prompt": "{{input}}",
+  "mode": "collect",
+  "collect_aggregation": {
+    "type": "best_of",
+    "evaluator_agent": "judge",
+    "criteria": "accuracy and clarity"
+  }
+}
+```
+
+(`agent_name` is still required by the API schema; for pure collect it can point at any existing agent — only `evaluator_agent` / `summarizer_agent` / `aggregator_agent` are used for merging when those strategies are set.)
 
 A typical fan-out/collect pattern:
 
@@ -151,6 +208,40 @@ The step repeats up to `max_iterations` times. After each iteration, the engine 
 Each iteration feeds its output back as `{{input}}` for the next iteration. Step results are recorded with names like `"refine (iter 1)"`, `"refine (iter 2)"`, etc.
 
 If the `until` condition is never met, the loop runs exactly `max_iterations` times and continues to the next step with the last iteration's output.
+
+### Adaptive
+
+```json
+{
+  "mode": "adaptive",
+  "max_iterations": 10,
+  "tool_allowlist": ["web_search", "agent_spawn", "agent_delegate"],
+  "allow_subagents": true,
+  "max_tokens": 50000
+}
+```
+
+An **adaptive** step runs a **full agent loop** for one user message (the expanded `prompt`), not a single model reply. Like other LLM steps, it receives **`OrchestrationPattern::Workflow`** and the shared per-run **`trace_id`** (see **Orchestration and traces** above); the kernel additionally passes **adaptive overrides** (`max_iterations`, `tool_allowlist`, `allow_subagents`, `max_tokens`) into the same path as interactive chat (`send_message_with_handle_and_blocks`). Design detail: [agent-orchestration-design.md](agent-orchestration-design.md) §1 / §4.
+
+**REST shape (`POST /api/workflows`):** keep `mode` as the string `"adaptive"` and put the fields above as **siblings** of `name`, `agent_name`, `prompt`, etc. Do **not** nest them under an `"adaptive"` object (that shape is for raw `Workflow` JSON deserialized directly by serde).
+
+**Defaults** (from `crates/openfang-api/src/routes.rs`): `max_iterations` defaults to **20** if omitted; `allow_subagents` defaults to **true**; `tool_allowlist` and `max_tokens` default to unset.
+
+**Example step** (after a planning step stored `outline` in `output_var`):
+
+```json
+{
+  "name": "deep-research",
+  "agent_name": "researcher",
+  "prompt": "Research thoroughly. Topic: {{input}}\nOutline: {{outline}}",
+  "mode": "adaptive",
+  "max_iterations": 10,
+  "tool_allowlist": ["web_search", "agent_spawn", "agent_coordinate"],
+  "allow_subagents": true,
+  "timeout_secs": 900,
+  "output_var": "research"
+}
+```
 
 ---
 
@@ -541,10 +632,21 @@ Register a new workflow definition.
       "timeout_secs": 120,
       "error_mode": "fail",
       "output_var": "research"
+    },
+    {
+      "name": "step-2-adaptive",
+      "agent_name": "researcher",
+      "prompt": "Go deeper on: {{input}}\nPrior notes: {{research}}",
+      "mode": "adaptive",
+      "max_iterations": 8,
+      "allow_subagents": true,
+      "timeout_secs": 600
     }
   ]
 }
 ```
+
+See **Step Modes → Adaptive** above for all optional fields (`tool_allowlist`, `max_tokens`, defaults).
 
 **Response (201 Created):**
 ```json

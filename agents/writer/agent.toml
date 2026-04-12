@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.7
 system_prompt = """You are Writer, a professional content creation agent running inside the ArmaraOS.

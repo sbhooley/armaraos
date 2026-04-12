@@ -55,6 +55,7 @@ use openfang_channels::ntfy::NtfyAdapter;
 use openfang_channels::webhook::WebhookAdapter;
 use openfang_channels::wecom::WeComAdapter;
 use openfang_kernel::OpenFangKernel;
+use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_types::agent::AgentId;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -107,6 +108,10 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .send_message_with_blocks(agent_id, &text, blocks)
             .await
             .map_err(|e| format!("{e}"))?;
+        // Silent/NO_REPLY responses should not be forwarded to channels
+        if result.silent {
+            return Ok(String::new());
+        }
         Ok(result.response)
     }
 
@@ -338,6 +343,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
 
         let kernel = self.kernel.clone();
         let registry_ref = &self.kernel.registry;
+        let wf_id = wf.id;
         let result = self
             .kernel
             .workflows
@@ -354,11 +360,42 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                         Some((entry.id, entry.name.clone()))
                     }
                 },
-                |agent_id, message| {
+                |agent_id, message, step, step_index| {
                     let k = kernel.clone();
+                    let adaptive = match &step.mode {
+                        openfang_kernel::workflow::StepMode::Adaptive {
+                            max_iterations,
+                            tool_allowlist,
+                            allow_subagents,
+                            max_tokens,
+                        } => Some(openfang_kernel::workflow::AdaptiveWorkflowOverrides {
+                            max_iterations: *max_iterations,
+                            tool_allowlist: tool_allowlist.clone(),
+                            allow_subagents: *allow_subagents,
+                            max_tokens: *max_tokens,
+                        }),
+                        _ => None,
+                    };
+                    let orch = k.orchestration_context_for_workflow_step(
+                        agent_id,
+                        wf_id,
+                        run_id,
+                        step_index,
+                        step.name.clone(),
+                    );
                     async move {
+                        let handle: Arc<dyn KernelHandle> = k.clone() as Arc<dyn KernelHandle>;
                         let result = k
-                            .send_message(agent_id, &message)
+                            .send_message_with_handle_and_blocks(
+                                agent_id,
+                                &message,
+                                Some(handle),
+                                None,
+                                None,
+                                None,
+                                Some(orch),
+                                adaptive,
+                            )
                             .await
                             .map_err(|e| format!("{e}"))?;
                         Ok((
@@ -989,6 +1026,54 @@ fn parse_trigger_pattern(s: &str) -> Option<openfang_kernel::triggers::TriggerPa
     if let Some(rest) = s.strip_prefix("match:") {
         return Some(TriggerPattern::ContentMatch {
             substring: rest.to_string(),
+        });
+    }
+    if s == "orch_trace" || s == "orchestration_trace" {
+        return Some(TriggerPattern::OrchestrationTrace {
+            event_types: vec![],
+            trace_id_substring: None,
+            orchestrator_id: None,
+        });
+    }
+    if let Some(rest) = s
+        .strip_prefix("orch_trace:")
+        .or_else(|| s.strip_prefix("orchestration_trace:"))
+    {
+        let mut event_types: Vec<String> = Vec::new();
+        let mut trace_id_substring: Option<String> = None;
+        let mut orchestrator_id: Option<openfang_types::agent::AgentId> = None;
+        for part in rest.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some((k, v)) = part.split_once('=') {
+                let key = k.trim();
+                let val = v.trim();
+                match key {
+                    "types" => {
+                        event_types = val
+                            .split('|')
+                            .map(|x| x.trim().to_string())
+                            .filter(|x| !x.is_empty())
+                            .collect();
+                    }
+                    "trace" | "trace_id" | "trace_substring" => {
+                        trace_id_substring = Some(val.to_string());
+                    }
+                    "orchestrator" => {
+                        orchestrator_id = val.parse().ok();
+                    }
+                    _ => {}
+                }
+            } else {
+                event_types.push(part.to_string());
+            }
+        }
+        return Some(TriggerPattern::OrchestrationTrace {
+            event_types,
+            trace_id_substring,
+            orchestrator_id,
         });
     }
     match s {

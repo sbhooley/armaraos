@@ -114,6 +114,32 @@ impl AgentRegistry {
         }
     }
 
+    /// Longest downward path from `id` to any descendant (0 if no children).
+    pub fn spawn_subtree_height(&self, id: AgentId) -> u32 {
+        let Some(entry) = self.get(id) else {
+            return 0;
+        };
+        if entry.children.is_empty() {
+            return 0;
+        }
+        entry
+            .children
+            .iter()
+            .map(|c| 1 + self.spawn_subtree_height(*c))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Max height from `parent` after adding one new direct child as a leaf (used for `max_spawn_depth` checks).
+    pub fn spawn_height_if_add_leaf(&self, parent: AgentId) -> Option<u32> {
+        let entry = self.get(parent)?;
+        let mut m = 0u32;
+        for c in &entry.children {
+            m = m.max(1 + self.spawn_subtree_height(*c));
+        }
+        Some(m.max(1))
+    }
+
     /// Count of registered agents.
     pub fn count(&self) -> usize {
         self.agents.len()
@@ -578,6 +604,28 @@ mod tests {
         registry.register(entry).unwrap();
         registry.remove(id).unwrap();
         assert!(registry.get(id).is_none());
+    }
+
+    #[test]
+    fn test_spawn_subtree_height_chain() {
+        let registry = AgentRegistry::new();
+        let mut p = test_entry("p");
+        let pid = p.id;
+        let mut a = test_entry("a");
+        let aid = a.id;
+        let mut b = test_entry("b");
+        let bid = b.id;
+        p.children = vec![aid];
+        a.parent = Some(pid);
+        a.children = vec![bid];
+        b.parent = Some(aid);
+        registry.register(p).unwrap();
+        registry.register(a).unwrap();
+        registry.register(b).unwrap();
+        assert_eq!(registry.spawn_subtree_height(pid), 2);
+        assert_eq!(registry.spawn_height_if_add_leaf(pid).unwrap(), 2);
+        assert_eq!(registry.spawn_subtree_height(aid), 1);
+        assert_eq!(registry.spawn_height_if_add_leaf(aid).unwrap(), 1);
     }
 
     #[test]

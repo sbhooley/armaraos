@@ -373,6 +373,31 @@ pub async fn build_router(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
+        // Orchestration observability (traces + quota tree)
+        .route(
+            "/api/orchestration/traces",
+            axum::routing::get(routes::list_orchestration_traces),
+        )
+        .route(
+            "/api/orchestration/traces/{trace_id}/cost",
+            axum::routing::get(routes::get_orchestration_trace_cost),
+        )
+        .route(
+            "/api/orchestration/traces/{trace_id}/tree",
+            axum::routing::get(routes::get_orchestration_trace_tree),
+        )
+        .route(
+            "/api/orchestration/traces/{trace_id}/live",
+            axum::routing::get(routes::get_orchestration_trace_live),
+        )
+        .route(
+            "/api/orchestration/traces/{trace_id}",
+            axum::routing::get(routes::get_orchestration_trace),
+        )
+        .route(
+            "/api/orchestration/quota-tree/{agent_id}",
+            axum::routing::get(routes::get_orchestration_quota_tree),
+        )
         // Skills endpoints
         .route("/api/skills", axum::routing::get(routes::list_skills))
         .route(

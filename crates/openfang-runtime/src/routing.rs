@@ -198,6 +198,7 @@ mod tests {
             vec![Message {
                 role: Role::User,
                 content: MessageContent::text("Hello!"),
+                orchestration_ctx: None,
             }],
             vec![],
         );
@@ -216,6 +217,7 @@ mod tests {
                     "Write a function that implements async file reading with struct and impl blocks:\n\
                      ```rust\nfn main() { }\n```"
                 ),
+                orchestration_ctx: None,
             }],
             vec![],
         );
@@ -238,6 +240,7 @@ mod tests {
             vec![Message {
                 role: Role::User,
                 content: MessageContent::text("Use the available tools to solve this problem."),
+                orchestration_ctx: None,
             }],
             tools,
         );
@@ -257,6 +260,7 @@ mod tests {
                     "This is message {} with enough content to add some token weight to the conversation.",
                     i
                 )),
+                orchestration_ctx: None,
             })
             .collect();
         let request = make_request(messages, vec![]);
@@ -353,6 +357,7 @@ mod tests {
             vec![Message {
                 role: Role::User,
                 content: MessageContent::text("Hi"),
+                orchestration_ctx: None,
             }],
             vec![],
         );
@@ -363,6 +368,7 @@ mod tests {
             vec![Message {
                 role: Role::User,
                 content: MessageContent::text("Hi"),
+                orchestration_ctx: None,
             }],
             vec![],
         );

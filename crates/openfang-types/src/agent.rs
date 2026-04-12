@@ -264,6 +264,12 @@ pub struct ResourceQuota {
     pub max_cost_per_day_usd: f64,
     /// Maximum cost in USD per month (0.0 = unlimited).
     pub max_cost_per_month_usd: f64,
+    /// Maximum direct child agents this agent may spawn (`agent_spawn`). `0` = unlimited.
+    #[serde(default)]
+    pub max_subagents: u32,
+    /// Maximum spawn-tree height under this agent (longest path to a descendant). `0` = unlimited.
+    #[serde(default)]
+    pub max_spawn_depth: u32,
 }
 
 impl Default for ResourceQuota {
@@ -277,6 +283,8 @@ impl Default for ResourceQuota {
             max_cost_per_hour_usd: 0.0, // unlimited by default
             max_cost_per_day_usd: 0.0,  // unlimited
             max_cost_per_month_usd: 0.0, // unlimited
+            max_subagents: 0,
+            max_spawn_depth: 0,
         }
     }
 }

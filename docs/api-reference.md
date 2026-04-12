@@ -2,6 +2,8 @@
 
 ArmaraOS exposes a REST API, WebSocket endpoints, and SSE streaming when the daemon is running. The default listen address is `http://127.0.0.1:4200`.
 
+The embedded dashboard (Alpine shell) also drives the **notification center**: it reads **`GET /api/events/stream`** (kernel SSE), **`GET /api/approvals`**, and **`GET /api/budget`** for persistent rows and badges. See [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+
 All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. ArmaraOS implements 16 security systems including Merkle audit trails, taint tracking, WASM dual metering, Ed25519 manifest signing, SSRF protection, subprocess sandboxing, and secret zeroization.
 
 ## Table of Contents
@@ -29,6 +31,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Support diagnostics bundle](#support-diagnostics-redacted-bundle)
 - [ArmaraOS Home Browser Endpoints](#armaraos-home-browser-endpoints)
 - [WebSocket Protocol](#websocket-protocol)
+- [Orchestration traces & quota](#orchestration-traces--quota)
 - [SSE Streaming](#sse-streaming)
 - [OpenAI-Compatible API](#openai-compatible-api)
 - [Error Responses](#error-responses)
@@ -354,7 +357,7 @@ Replace allowlist and/or blocklist. Supply at least one of `tool_allowlist` or `
 
 ### POST /api/agents/{id}/message
 
-Send a message to an agent and receive the complete response.
+Send a message to an agent and receive the complete response after the **non-streaming** agent loop finishes (same loop path the kernel uses when the dashboard falls back from WebSocket to HTTP).
 
 **Request Body**:
 
@@ -364,20 +367,59 @@ Send a message to an agent and receive the complete response.
 }
 ```
 
-**Response** `200 OK`:
+Optional **`attachments`**: same shape as other agent routes (see request types in the OpenFang API crate). Optional **`sender_id`** / **`sender_name`** for channel-style provenance.
+
+**Response** `200 OK` — core fields (always present for a successful turn):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **`response`** | string | Final assistant text (may be empty when the agent chose **silent** / NO_REPLY). |
+| **`input_tokens`** | number | Sum of prompt tokens for the turn. |
+| **`output_tokens`** | number | Sum of completion tokens for the turn. |
+| **`iterations`** | number | Agent-loop iterations (LLM rounds) for this request. |
+
+**Optional fields** (omitted when not applicable; see `MessageResponse` in `crates/openfang-api/src/types.rs`):
+
+| Field | Description |
+|-------|-------------|
+| **`cost_usd`** | Estimated USD for the turn (when metering fills it in). |
+| **`latency_ms`** | Wall time for the full loop (LLM + tools). |
+| **`llm_fallback_note`** | Present when a fallback or free-tier model path was used instead of the primary. |
+| **`skill_draft_path`** | Filesystem path when a **`[learn]`**-prefixed message produced a skill draft. |
+| **`compression_savings_pct`** / **`compressed_input`** | Ultra Cost-Efficient Mode: same semantics as WebSocket `response` / SSE metadata. Omitted when compression is off or savings are 0. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md). |
+| **`tools`** | Array of **`ToolTurnRecord`** objects — **one entry per tool execution** in this HTTP turn (name, JSON **`input`** string, **`result`** string, **`is_error`**). Omitted when empty. Lets HTTP-only clients render the same tool cards as the WebSocket path (`tool_start` / `tool_end` / `tool_result`). Rust type: `openfang_types::message::ToolTurnRecord`; runtime accumulates into `AgentLoopResult.tool_turns`. |
+
+**Example** (with tools and compression):
 
 ```json
 {
-  "response": "Here are the files in the current directory:\n- Cargo.toml\n- README.md\n...",
-  "input_tokens": 142,
-  "output_tokens": 87,
-  "iterations": 1,
+  "response": "I read README.md; the first line is the project title.",
+  "input_tokens": 1200,
+  "output_tokens": 180,
+  "iterations": 2,
+  "cost_usd": 0.00042,
+  "latency_ms": 8123,
+  "tools": [
+    {
+      "name": "file_read",
+      "input": "{\"path\":\"README.md\"}",
+      "result": "# armaraos\n...",
+      "is_error": false
+    }
+  ],
   "compression_savings_pct": 34,
-  "compressed_input": "Understand why the dashboard…"
+  "compressed_input": "Summarize README…"
 }
 ```
 
-When **Ultra Cost-Efficient Mode** is active and the prompt compressor saves tokens, **`compression_savings_pct`** (1–100) and **`compressed_input`** (the text sent to the LLM) may be present. Omitted when there is no compression or zero savings. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
+**Session vs blocking message — two different `tools` shapes:**
+
+- **`POST …/message`** → top-level **`tools`**: flat list of completed executions for **this** request only (`ToolTurnRecord`).
+- **`GET …/session`** → optional **`messages[].tools`** on **Assistant** rows: UI-oriented objects keyed off **tool_use** blocks (may include **`running`**, **`expanded`**, **`input`** as structured JSON, **`result`**, **`is_error`**) built when serializing history. Use **`GET /session`** to reconstruct full chat; use **`POST /message`** for programmatic single-turn clients that need tool I/O without WebSocket.
+
+**Accumulation:** For a single **`POST …/message`** call, **`tools`** includes **every** tool result from **all** LLM iterations in that turn (same order the loop merged pre-resolved and executed results). **`WASM`** and **`Python`** module agents do not run the LLM tool loop — their responses omit **`tools`** (empty list).
+
+**CLI:** `openfang chat` daemon fallback (`crates/openfang-cli/src/tui/event.rs`) deserializes **`tools`** from the JSON body into **`AgentLoopResult.tool_turns`** when present.
 
 ### GET /api/agents/{id}/session
 
@@ -487,14 +529,20 @@ Create a new workflow definition.
 | `agent_id` | string | Agent UUID (use either this or `agent_name`) |
 | `agent_name` | string | Agent name (use either this or `agent_id`) |
 | `prompt` | string | Prompt template with `{{input}}` and `{{output_var}}` placeholders |
-| `mode` | string | `"sequential"`, `"fan_out"`, `"collect"`, `"conditional"`, `"loop"` |
+| `mode` | string | `"sequential"`, `"fan_out"`, `"collect"`, `"conditional"`, `"loop"`, `"adaptive"` |
 | `timeout_secs` | integer | Timeout per step (default: 120) |
 | `error_mode` | string | `"fail"`, `"skip"`, `"retry"` |
 | `max_retries` | integer | For `"retry"` error mode (default: 3) |
 | `output_var` | string | Variable name to store output for later steps |
 | `condition` | string | For `"conditional"` mode |
-| `max_iterations` | integer | For `"loop"` mode (default: 5) |
+| `max_iterations` | integer | For `"loop"` (default: 5) or `"adaptive"` (default: 20) |
 | `until` | string | For `"loop"` mode: stop condition |
+| `tool_allowlist` | string[] | For `"adaptive"` mode: optional tool names |
+| `allow_subagents` | boolean | For `"adaptive"` mode (default: true) |
+| `max_tokens` | integer | For `"adaptive"` mode: optional token hint |
+| `collect_aggregation` | object | For `"collect"` mode: tagged merge strategy (`type`: `concatenate`, `json_array`, `consensus`, `best_of`, `summarize`, `custom`). See `docs/workflows.md` Collect section. |
+
+`PUT /api/workflows/{id}` accepts the same `steps` shape as `POST /api/workflows`.
 
 **Response** `201 Created`:
 
@@ -507,6 +555,8 @@ Create a new workflow definition.
 ### POST /api/workflows/{id}/run
 
 Execute a workflow.
+
+**Orchestration:** Each LLM-driven step runs with **`OrchestrationContext`** and **`OrchestrationPattern::Workflow`** (workflow id, step index, step name). All steps in one run share **`trace_id`** `wf:{workflow_uuid}:run:{run_uuid}` so traces, **`task_post`** stickiness, and the dashboard **`#orchestration-traces`** view can follow the run. Optional default wall-clock budget: **`[runtime_limits] orchestration_default_budget_ms`** in `config.toml`. See **`docs/workflows.md`** (*Orchestration and traces*) and **`docs/agent-orchestration-design.md`** §4.
 
 **Request Body**:
 
@@ -2683,9 +2733,63 @@ Plain text (non-JSON) is also accepted and treated as a message.
 1. Client connects to `ws://host:port/api/agents/{id}/ws`.
 2. Server sends `{"type": "connected"}`.
 3. Client sends `{"type": "message", "content": "..."}`.
-4. Server sends `{"type": "thinking"}`, then zero or more `{"type": "text_delta"}` events, then `{"type": "response"}`.
+4. Server sends `{"type": "thinking"}` (and phase events as configured), then a mix of:
+   - **`text_delta`** — streaming assistant tokens;
+   - **`tool_start`** / **`tool_end`** / **`tool_result`** — tool name, parsed input, and execution result as the loop runs (dashboard builds expandable tool cards from these);
+   - then a final **`response`** when the turn completes (aggregated text + token counts + optional compression fields).
 5. Server periodically sends `{"type": "agents_updated"}` every 5 seconds.
 6. Client sends a Close frame or disconnects to end the session.
+
+When the WebSocket path is unavailable, the dashboard uses **`POST /api/agents/{id}/message`** instead; the JSON **`tools`** array on that response carries the same logical information as the streamed tool events for that single turn.
+
+---
+
+## Orchestration traces & quota
+
+**CLI:** `openfang orchestration …` (daemon required) — see **`docs/orchestration-guide.md`**.
+
+Multi-agent orchestration events are stored in a **bounded in-memory ring** (default **4096** events; oldest dropped when full). They are **not** persisted to disk. Each recorded step is also published on **`GET /api/events/stream`** as `EventPayload` variant **`OrchestrationTrace`** (same shape as the API).
+
+### GET /api/orchestration/traces
+
+Recent trace summaries. Query: `limit` (1–200, default 50).
+
+**Response** `200 OK`: JSON array of `{ trace_id, orchestrator_id, last_event_at, event_count }`.
+
+### GET /api/orchestration/traces/{trace_id}
+
+All events for one trace id.
+
+**Response** `200 OK`: JSON array of `OrchestrationTraceEvent`, or **404** if unknown.
+
+### GET /api/orchestration/traces/{trace_id}/tree
+
+Reconstructed delegation tree for the trace.
+
+**Response** `200 OK`: `OrchestrationTraceTreeNode`, or **404**.
+
+### GET /api/orchestration/traces/{trace_id}/cost
+
+Token and cost rollup from completed steps in the trace.
+
+**Response** `200 OK`: `OrchestrationTraceCostSummary`, or **404**.
+
+### GET /api/orchestration/quota-tree/{agent_id}
+
+Quota and usage for an agent and its descendants. **`agent_id`** must be a valid agent **UUID**.
+
+Each node includes `quota` (`OrchestrationQuotaSnapshot`): rolling LLM token limit/usage, tool/cost limits, **`inherits_parent`** (from manifest `metadata.inherit_parent_quota`), **`max_subagents`** / **`active_subagents`**, **`max_spawn_depth`** / **`spawn_subtree_height`**, and optional **`llm_token_billing_agent_id`** when token/cost metering is attributed to a parent (inheritance).
+
+**Response** `200 OK`: `OrchestrationQuotaTreeNode`, or **404** / **400**.
+
+### Pending orchestration context (agent runtime, not a REST body)
+
+There is **no** HTTP field for “pending orchestration” on `POST /api/agents/{id}/message`. The kernel stores **`pending_orchestration_ctx`** per agent id when:
+
+- **`spawn_agent_with_context`** seeds a child’s first turn, or
+- Built-in tools **`task_claim`** (after a successful claim with `payload.orchestration.trace_id`) and **`KernelHandle::set_pending_orchestration_ctx`** merge reconstructed **`OrchestrationContext`** for the agent’s **next** LLM turn (same mechanism as spawn-with-context).
+
+On the next message, the runtime consumes that pending map before `run_agent_loop_streaming` when no explicit orchestration was passed on the API call. See **`docs/task-queue-orchestration.md`**.
 
 ---
 
@@ -2759,6 +2863,10 @@ SSE tail of the **daemon tracing log file** (same path rules as `GET /api/logs/d
 ### GET /api/events/stream (kernel, SSE)
 
 SSE stream of kernel **`Event`** values (JSON per message): live bus traffic plus a short history on connect. Uses the same **loopback / Bearer / `token=`** auth rules as the log streams above.
+
+The dashboard’s **`Alpine.store('kernelEvents')`** and **notification center** (`notifyCenter.ingestKernelEvent`) both consume this stream; dismiss persistence for kernel-derived rows is client-side — [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+
+Payload `type` / `data` follows `EventPayload`: includes **`OrchestrationTrace`** with an `OrchestrationTraceEvent` when multi-agent orchestration steps are recorded (aligned with **`GET /api/orchestration/traces`**).
 
 ---
 

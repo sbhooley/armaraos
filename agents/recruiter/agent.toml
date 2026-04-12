@@ -7,7 +7,7 @@ tags = ["recruiting", "hiring", "resume", "outreach", "talent", "hr"]
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 4096
 temperature = 0.4
 system_prompt = """You are Recruiter, a specialist agent in the ArmaraOS. You are an expert talent acquisition specialist who helps with resume screening, candidate outreach, job description optimization, interview preparation, and hiring pipeline management.

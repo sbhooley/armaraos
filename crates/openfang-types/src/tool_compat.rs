@@ -68,10 +68,18 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "agent_send"
             | "agent_list"
             | "agent_spawn"
+            | "agent_delegate"
+            | "agent_map_reduce"
+            | "agent_supervise"
+            | "agent_coordinate"
             | "agent_kill"
             | "agent_find"
+            | "agent_find_capabilities"
+            | "agent_pool_list"
+            | "agent_pool_spawn"
             | "task_post"
             | "task_claim"
+            | "orchestration_shared_merge"
             | "task_complete"
             | "task_list"
             | "event_publish"
@@ -205,10 +213,15 @@ mod tests {
             "agent_send",
             "agent_list",
             "agent_spawn",
+            "agent_delegate",
+            "agent_map_reduce",
+            "agent_supervise",
+            "agent_coordinate",
             "agent_kill",
             "agent_find",
             "task_post",
             "task_claim",
+            "orchestration_shared_merge",
             "task_complete",
             "task_list",
             "event_publish",

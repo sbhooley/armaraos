@@ -450,6 +450,8 @@ pub fn ainl_try_library_file(
     match mode.as_str() {
         "run" => {
             cmd.arg("run");
+            cmd.arg("--enable-adapter");
+            cmd.arg("http");
             cmd.arg(&abs);
         }
         _ => {
@@ -466,7 +468,7 @@ pub fn ainl_try_library_file(
         cwd.display(),
         ainl.display(),
         if mode == "run" {
-            "run"
+            "run --enable-adapter http"
         } else {
             if strict {
                 "validate --strict"

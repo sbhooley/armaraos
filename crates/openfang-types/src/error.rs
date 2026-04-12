@@ -98,6 +98,10 @@ pub enum OpenFangError {
     /// Invalid user input.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    /// Orchestration wall-clock budget was exhausted before work could continue.
+    #[error("Orchestration budget exhausted: {0}")]
+    OrchestrationBudgetExhausted(String),
 }
 
 /// Alias for Result with OpenFangError.

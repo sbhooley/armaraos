@@ -6,6 +6,12 @@
 //! it into the agent loop.
 
 use async_trait::async_trait;
+use openfang_types::agent::AgentId;
+use openfang_types::capability::Capability;
+use openfang_types::orchestration::{
+    DelegateSelectionOptions, OrchestrationContext, SelectionStrategy,
+};
+use openfang_types::task_queue::TaskClaimStrategy;
 
 /// Agent info returned by list and discovery operations.
 #[derive(Debug, Clone)]
@@ -68,16 +74,27 @@ pub trait KernelHandle: Send + Sync {
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
 
     /// Post a task to the shared task queue. Returns the task ID.
+    ///
+    /// `orchestration_meta` is merged into the task `payload` JSON (e.g. `orchestration.trace_id`
+    /// for sticky routing on [`Self::task_claim`]).
     async fn task_post(
         &self,
         title: &str,
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
+        orchestration_meta: Option<serde_json::Value>,
+        priority: i64,
     ) -> Result<String, String>;
 
-    /// Claim the next available task (optionally filtered by assignee). Returns task JSON or None.
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String>;
+    /// Claim the next available task. With `prefer_orchestration_trace_id`, tries tasks posted
+    /// for that orchestration trace first (see task payload `orchestration.trace_id`).
+    async fn task_claim(
+        &self,
+        agent_id: &str,
+        prefer_orchestration_trace_id: Option<&str>,
+        strategy: TaskClaimStrategy,
+    ) -> Result<Option<serde_json::Value>, String>;
 
     /// Mark a task as completed with a result string.
     async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String>;
@@ -296,5 +313,104 @@ pub trait KernelHandle: Send + Sync {
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;
         self.spawn_agent(manifest_toml, parent_id).await
+    }
+
+    /// Resolve an agent reference (UUID or registered name) to an [`AgentId`].
+    ///
+    /// Default implementation accepts UUID strings only; the kernel overrides with registry lookup.
+    fn resolve_agent_id(&self, agent_id: &str) -> Result<AgentId, String> {
+        agent_id
+            .parse()
+            .map_err(|_| "Agent selection: use a full agent UUID with this host".to_string())
+    }
+
+    /// Send a message with optional orchestration context (backward compatible with [`send_to_agent`](Self::send_to_agent)).
+    async fn send_to_agent_with_context(
+        &self,
+        agent_id: &str,
+        message: &str,
+        orchestration_ctx: Option<OrchestrationContext>,
+    ) -> Result<String, String> {
+        let _ = orchestration_ctx;
+        self.send_to_agent(agent_id, message).await
+    }
+
+    /// Spawn with optional orchestration context for the child agent's first turn.
+    async fn spawn_agent_with_context(
+        &self,
+        manifest_toml: &str,
+        parent_id: Option<&str>,
+        orchestration_ctx: Option<OrchestrationContext>,
+    ) -> Result<(String, String), String> {
+        let _ = orchestration_ctx;
+        self.spawn_agent(manifest_toml, parent_id).await
+    }
+
+    /// Agents whose manifests grant **all** of the required [`Capability`] values
+    /// (kernel expands `[capabilities]` / tools the same way as runtime enforcement).
+    fn find_by_capabilities(
+        &self,
+        required_caps: &[Capability],
+        preferred_tags: &[String],
+        exclude_agents: &[AgentId],
+    ) -> Vec<AgentInfo> {
+        let _ = (required_caps, preferred_tags, exclude_agents);
+        vec![]
+    }
+
+    /// Pick one agent for a task using `strategy`.
+    ///
+    /// `task_description` ranks candidates (with `preferred_tags`) for [`SelectionStrategy::BestMatch`]
+    /// and as a tie-breaker for other strategies.
+    async fn select_agent_for_task(
+        &self,
+        task_description: &str,
+        required_caps: &[Capability],
+        preferred_tags: &[String],
+        selection_strategy: SelectionStrategy,
+        options: DelegateSelectionOptions,
+    ) -> Result<AgentId, String> {
+        let _ = (
+            task_description,
+            required_caps,
+            preferred_tags,
+            selection_strategy,
+            options,
+        );
+        Err("Agent selection not available".to_string())
+    }
+
+    /// Configured `[[agent_pools]]` entries with live worker counts.
+    fn list_agent_pools(&self) -> Vec<serde_json::Value> {
+        vec![]
+    }
+
+    /// Spawn another worker from a manifest pool (up to `max_instances`).
+    async fn spawn_agent_pool_worker(
+        &self,
+        pool_name: &str,
+        parent_id: Option<&str>,
+    ) -> Result<(String, String), String> {
+        let _ = (pool_name, parent_id);
+        Err("Agent pool operations are not available on this host".to_string())
+    }
+
+    /// Record an orchestration trace event (bounded ring buffer on the real kernel; default no-op).
+    fn record_orchestration_trace(
+        &self,
+        _event: openfang_types::orchestration_trace::OrchestrationTraceEvent,
+    ) {
+    }
+
+    /// Queue orchestration context for the agent's next LLM turn (picked up like `spawn_agent_with_context`).
+    ///
+    /// Used when [`crate::tool_runner::tool_task_claim`] reconstructs context from task payload.
+    fn set_pending_orchestration_ctx(
+        &self,
+        agent_id: &str,
+        ctx: OrchestrationContext,
+    ) -> Result<(), String> {
+        let _ = (agent_id, ctx);
+        Err("set_pending_orchestration_ctx not available".to_string())
     }
 }

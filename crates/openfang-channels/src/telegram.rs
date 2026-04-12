@@ -774,7 +774,11 @@ async fn parse_telegram_update(
     // Security: check allowed_users (compare as strings for consistency)
     let user_id_str = user_id.to_string();
     if !allowed_users.is_empty() && !allowed_users.iter().any(|u| u == &user_id_str) {
-        debug!("Telegram: ignoring message from unlisted user {user_id}");
+        info!(
+            update_id,
+            sender_id = %user_id_str,
+            "Telegram: ignoring inbound message — sender not in allowed_users; add this numeric id or clear the list"
+        );
         return None;
     }
 

@@ -52,9 +52,35 @@ function humanizeChatError(raw) {
     };
   }
 
-  if (/401|403|unauthorized|invalid api key|api key not|authentication failed|permission denied|forbidden/.test(low)) {
+  // Before generic 401/403: providers often use 402/403 for credits or model access — not a bad API key.
+  if (/402|payment required|insufficient credits|insufficient balance|not enough credits|exceed.*credit|purchase credits|billing issue|charged error/i.test(low)) {
+    return {
+      text: 'The provider reported a billing or credit limitation. Confirm balance and model pricing on the provider site (e.g. openrouter.com → Credits). Your API key may still be valid.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/no endpoints found|not allowed to use|does not have access to this model|cannot access this model|model.*not.*available.*account|access.*denied.*model/i.test(low)) {
+    return {
+      text: 'This model is not available for your account or key (not necessarily an invalid key). Choose another model in Settings or confirm access on the provider site.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  // Genuine missing/wrong key is usually 401 or explicit invalid-key text — not every 403.
+  if (/\b401\b|invalid api key|api key not|authentication failed|bad api key|wrong api key/i.test(low)) {
     return {
       text: 'Sign-in with the AI provider failed. Check your API key under Settings, then try again.',
+      rateLimited: false,
+      rawForDebug: s
+    };
+  }
+
+  if (/\b403\b|permission denied|forbidden/.test(low)) {
+    return {
+      text: 'The provider refused access (HTTP 403). That is often model or account restrictions, not a wrong API key — hover the error for details. Confirm the model id and your OpenRouter account can use it.',
       rateLimited: false,
       rawForDebug: s
     };
@@ -1983,6 +2009,7 @@ function chatPage() {
       this.scrollToBottom(true);
 
       try {
+        var self = this;
         var httpBody = { message: finalText };
         if (uploadedFiles && uploadedFiles.length) httpBody.attachments = uploadedFiles;
         var res = await OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/message', httpBody);
@@ -2001,7 +2028,23 @@ function chatPage() {
         }
         var httpCompressedInput = (res.compressed_input && res.compression_savings_pct > 0) ? res.compressed_input : null;
         this._recordEcoSaving(res.compression_savings_pct);
-        this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: [], ts: Date.now(),
+        var httpTools = [];
+        if (res.tools && res.tools.length) {
+          var httpNow = Date.now();
+          for (var hti = 0; hti < res.tools.length; hti++) {
+            var ht = res.tools[hti];
+            httpTools.push({
+              id: (ht.name || 'tool') + '-http-' + hti + '-' + httpNow,
+              name: ht.name || '',
+              running: false,
+              expanded: true,
+              input: typeof ht.input === 'string' ? ht.input : JSON.stringify(ht.input != null ? ht.input : {}),
+              result: ht.result || '',
+              is_error: !!ht.is_error
+            });
+          }
+        }
+        this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
           compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
           savingsPct: res.compression_savings_pct || 0 });
       } catch(e) {

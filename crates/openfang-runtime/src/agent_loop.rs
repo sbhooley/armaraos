@@ -497,6 +497,8 @@ pub async fn run_agent_loop(
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     runtime_limits: EffectiveRuntimeLimits,
+    orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+    orchestration_live: Option<&tool_runner::OrchestrationLive>,
 ) -> OpenFangResult<AgentLoopResult> {
     tool_runner::MAX_AGENT_CALL_DEPTH_LIMIT
         .scope(
@@ -587,6 +589,12 @@ pub async fn run_agent_loop(
             .collect();
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
+    }
+
+    // Orchestration context: append hierarchical orchestration details to system prompt
+    if let Some(ref octx) = orchestration_ctx {
+        system_prompt.push_str("\n\n## Orchestration Context\n");
+        system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
     // Ultra Cost-Efficient Mode: compress user message before storing in session / LLM context.
@@ -1127,10 +1135,12 @@ pub async fn run_agent_loop(
                 session.messages.push(Message {
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks.clone()),
+                    orchestration_ctx: None,
                 });
                 messages.push(Message {
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks),
+                    orchestration_ctx: None,
                 });
 
                 // Build allowed tool names list for capability enforcement
@@ -1279,6 +1289,7 @@ pub async fn run_agent_loop(
                                         tts_engine,
                                         docker_config,
                                         process_manager,
+                                        orchestration_live,
                                     ),
                                 ),
                             ))
@@ -1443,6 +1454,7 @@ pub async fn run_agent_loop(
                 let tool_results_msg = Message {
                     role: Role::User,
                     content: MessageContent::Blocks(tool_result_blocks.clone()),
+                    orchestration_ctx: None,
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
@@ -2133,6 +2145,8 @@ pub async fn run_agent_loop_streaming(
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     runtime_limits: EffectiveRuntimeLimits,
+    orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+    orchestration_live: Option<&tool_runner::OrchestrationLive>,
 ) -> OpenFangResult<AgentLoopResult> {
     tool_runner::MAX_AGENT_CALL_DEPTH_LIMIT
         .scope(
@@ -2223,6 +2237,12 @@ pub async fn run_agent_loop_streaming(
             .collect();
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
+    }
+
+    // Orchestration context: append hierarchical orchestration details to system prompt
+    if let Some(ref octx) = orchestration_ctx {
+        system_prompt.push_str("\n\n## Orchestration Context\n");
+        system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
     // Ultra Cost-Efficient Mode: compress user message before LLM context (streaming path).
@@ -2776,10 +2796,12 @@ pub async fn run_agent_loop_streaming(
                 session.messages.push(Message {
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks.clone()),
+                    orchestration_ctx: None,
                 });
                 messages.push(Message {
                     role: Role::Assistant,
                     content: MessageContent::Blocks(assistant_blocks),
+                    orchestration_ctx: None,
                 });
 
                 let allowed_tool_names: Vec<String> =
@@ -2921,6 +2943,7 @@ pub async fn run_agent_loop_streaming(
                                         tts_engine,
                                         docker_config,
                                         process_manager,
+                                        orchestration_live,
                                     ),
                                 ),
                             ))
@@ -3129,6 +3152,7 @@ pub async fn run_agent_loop_streaming(
                 let tool_results_msg = Message {
                     role: Role::User,
                     content: MessageContent::Blocks(tool_result_blocks.clone()),
+                    orchestration_ctx: None,
                 };
                 session.messages.push(tool_results_msg.clone());
                 messages.push(tool_results_msg);
@@ -4314,6 +4338,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -4325,6 +4350,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 10,
                         output_tokens: 0,
+                        ..Default::default()
                     },
                 })
             }
@@ -4348,6 +4374,7 @@ mod tests {
                 usage: TokenUsage {
                     input_tokens: 10,
                     output_tokens: 0,
+                    ..Default::default()
                 },
             })
         }
@@ -4372,6 +4399,7 @@ mod tests {
                 usage: TokenUsage {
                     input_tokens: 10,
                     output_tokens: 8,
+                    ..Default::default()
                 },
             })
         }
@@ -4417,6 +4445,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should complete without error");
@@ -4474,6 +4504,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should complete without error");
@@ -4534,6 +4566,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should complete without error");
@@ -4591,6 +4625,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should complete without error");
@@ -4641,6 +4677,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4687,6 +4725,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 10,
                         output_tokens: 0,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -4701,6 +4740,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 15,
                         output_tokens: 8,
+                        ..Default::default()
                     },
                 })
             }
@@ -4724,6 +4764,7 @@ mod tests {
                 usage: TokenUsage {
                     input_tokens: 10,
                     output_tokens: 0,
+                    ..Default::default()
                 },
             })
         }
@@ -4769,6 +4810,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should recover via retry");
@@ -4820,6 +4863,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Loop should complete with fallback");
@@ -4874,6 +4919,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -5741,6 +5788,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 18,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -5754,6 +5802,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 24,
                         output_tokens: 8,
+                        ..Default::default()
                     },
                 })
             }
@@ -5779,6 +5828,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 20,
                         output_tokens: 15,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -5793,6 +5843,7 @@ mod tests {
                     usage: TokenUsage {
                         input_tokens: 30,
                         output_tokens: 12,
+                        ..Default::default()
                     },
                 })
             }
@@ -5854,6 +5905,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Agent loop should complete");
@@ -5928,6 +5981,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -6004,6 +6059,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Normal loop should complete");
@@ -6071,6 +6128,8 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // orchestration_ctx
+            None, // orchestration_live
         )
         .await
         .expect("Streaming loop should complete");

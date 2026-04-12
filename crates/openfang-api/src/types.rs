@@ -1,5 +1,6 @@
 //! Request/response types for the OpenFang API.
 
+use openfang_types::message::ToolTurnRecord;
 use serde::{Deserialize, Serialize};
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -79,6 +80,9 @@ pub struct MessageResponse {
     /// The compressed version of the user message (only present when savings_pct > 0; powers diff UI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compressed_input: Option<String>,
+    /// Tool calls from this turn (HTTP clients without WebSocket tool events).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolTurnRecord>,
 }
 
 /// Request to install a skill from the marketplace.

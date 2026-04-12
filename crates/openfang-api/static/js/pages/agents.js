@@ -27,7 +27,7 @@ function validateManifestToml(toml) {
 }
 
 var SPAWN_DEFAULT_PROVIDER = 'openrouter';
-var SPAWN_DEFAULT_MODEL = 'stepfun/step-3.5-flash:free';
+var SPAWN_DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 
 function spawnModelFromManifestToml(toml) {
   var provider = '?';
@@ -37,6 +37,72 @@ function spawnModelFromManifestToml(toml) {
   if (mp) provider = mp[1];
   if (mm) model = mm[1];
   return { provider: provider, model: model };
+}
+
+/** Built-in quick-start cards on Chat → All Agents (do not depend on GET /api/templates). */
+function staticChatBuiltinTemplates() {
+  return [
+    {
+      name: 'Armara',
+      description: 'Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
+      category: 'General',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'full',
+      system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.',
+      manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
+    },
+    {
+      name: 'Code Helper',
+      description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
+      category: 'Development',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'coding',
+      system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.',
+      manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
+    },
+    {
+      name: 'Researcher',
+      description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
+      category: 'Research',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'research',
+      system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.',
+      manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
+    },
+    {
+      name: 'Writer',
+      description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
+      category: 'Writing',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'full',
+      system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.',
+      manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
+    },
+    {
+      name: 'Data Analyst',
+      description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
+      category: 'Development',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'coding',
+      system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.',
+      manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
+    },
+    {
+      name: 'DevOps Engineer',
+      description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
+      category: 'Development',
+      provider: SPAWN_DEFAULT_PROVIDER,
+      model: SPAWN_DEFAULT_MODEL,
+      profile: 'automation',
+      system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.',
+      manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
+    }
+  ];
 }
 
 function agentsPage() {
@@ -128,7 +194,7 @@ function agentsPage() {
     selectedCategory: 'All',
     searchQuery: '',
 
-    builtinTemplates: [],
+    builtinTemplates: staticChatBuiltinTemplates(),
 
     // ── Profile Descriptions ──
     profileDescriptions: {
@@ -275,81 +341,28 @@ function agentsPage() {
     },
 
     async loadTemplates() {
+      var self = this;
       this.tplLoading = true;
       this.tplLoadError = '';
+      var builtins = staticChatBuiltinTemplates();
       try {
         var results = await Promise.all([
-          OpenFangAPI.get('/api/templates'),
+          OpenFangAPI.get('/api/templates').catch(function(e) {
+            self.tplLoadError =
+              (e && e.message ? 'Could not load disk templates (' + e.message + ').' : 'Could not load disk templates.') +
+              ' Quick-start cards below still work.';
+            return { templates: [] };
+          }),
           OpenFangAPI.get('/api/providers').catch(function() { return { providers: [] }; })
         ]);
-        // Combine static and dynamic templates
-        this.builtinTemplates = [
-          {
-            name: 'Armara',
-            description: 'Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more.',
-            category: 'General',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'full',
-            system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.',
-            manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
-          },
-          {
-            name: 'Code Helper',
-            description: 'A programming-focused agent that writes, reviews, and debugs code across multiple languages.',
-            category: 'Development',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'coding',
-            system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.',
-            manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
-          },
-          {
-            name: 'Researcher',
-            description: 'An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries.',
-            category: 'Research',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'research',
-            system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.',
-            manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
-          },
-          {
-            name: 'Writer',
-            description: 'A creative writing agent that helps with drafting, editing, and improving written content of all kinds.',
-            category: 'Writing',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'full',
-            system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.',
-            manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
-          },
-          {
-            name: 'Data Analyst',
-            description: 'A data-focused agent that helps analyze datasets, create queries, and interpret statistical results.',
-            category: 'Development',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'coding',
-            system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.',
-            manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
-          },
-          {
-            name: 'DevOps Engineer',
-            description: 'A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting.',
-            category: 'Development',
-            provider: SPAWN_DEFAULT_PROVIDER,
-            model: SPAWN_DEFAULT_MODEL,
-            profile: 'automation',
-            system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.',
-            manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "openrouter"\nmodel = "stepfun/step-3.5-flash:free"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
-          },
-          ...results[0].templates || []
-        ];
-        this.tplProviders = results[1].providers || [];
-      } catch(e) {
-        this.builtinTemplates = [];
-        this.tplLoadError = e.message || 'Could not load templates.';
+        var extra = (results[0] && results[0].templates) || [];
+        this.builtinTemplates = builtins.concat(extra);
+        this.tplProviders = (results[1] && results[1].providers) || [];
+      } catch (e) {
+        this.builtinTemplates = builtins;
+        this.tplLoadError =
+          (this.tplLoadError ? this.tplLoadError + ' ' : '') +
+          ((e && e.message) || 'Unexpected error while loading templates.');
       }
       this.tplLoading = false;
     },

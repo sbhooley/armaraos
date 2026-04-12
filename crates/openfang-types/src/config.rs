@@ -1259,6 +1259,23 @@ pub struct KernelConfig {
     /// "off" | "balanced" (default, ~50–60 % reduction) | "aggressive" (~60 % reduction).
     #[serde(default = "default_efficient_mode")]
     pub efficient_mode: String,
+    /// Named agent pools sharing a manifest template (`[[agent_pools]]`).
+    #[serde(default)]
+    pub agent_pools: Vec<AgentPoolConfigEntry>,
+}
+
+/// One pool: spawn multiple workers from the same manifest up to `max_instances`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPoolConfigEntry {
+    pub name: String,
+    /// Path to `agent.toml` (relative to [`KernelConfig::home_dir`] or absolute).
+    pub manifest_path: PathBuf,
+    #[serde(default = "default_agent_pool_max_instances")]
+    pub max_instances: u32,
+}
+
+fn default_agent_pool_max_instances() -> u32 {
+    8
 }
 
 fn default_efficient_mode() -> String {
@@ -1590,6 +1607,7 @@ impl Default for KernelConfig {
             runtime_limits: crate::runtime_limits::RuntimeLimitsConfig::default(),
             llm: LlmConfig::default(),
             efficient_mode: default_efficient_mode(),
+            agent_pools: Vec::new(),
         }
     }
 }
@@ -1800,7 +1818,16 @@ pub fn openfang_home_dir() -> PathBuf {
 
 /// Default OpenRouter model id for fresh installs (no `openrouter/` prefix; drivers add the provider).
 /// Kept in sync with desktop `apply_desktop_bundled_llm_defaults` and the model catalog.
-pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "stepfun/step-3.5-flash:free";
+pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "nvidia/nemotron-3-super-120b-a12b:free";
+
+/// OpenRouter `:free` models tried in order when the primary hits rate limit / overload after
+/// built-in retries. Entries equal to the **primary** `request.model` are skipped to avoid a
+/// duplicate call. IDs change as OpenRouter rotates free endpoints — confirm on openrouter.ai
+/// (models search `free`, or the free-models collection).
+pub const OPENROUTER_FREE_FALLBACK_MODELS: &[&str] = &[
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "meta-llama/llama-3.1-8b-instruct:free",
+];
 
 /// Default LLM model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

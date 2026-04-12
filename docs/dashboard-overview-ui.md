@@ -105,6 +105,10 @@ The dashboard sidebar exposes **Get started** as its **own section above Chat**.
 
 The **App Store** route is **`#ainl-library`**. In the library UI, the collapsible section that lists synced programs on disk is titled **AI Native Lang Programs Available** (user-facing copy; implementation in `index_body.html` near `app-store-section-toggle-title`). Deeper layout for that page lives in `js/pages/ainl-library.js` and `components.css` (`app-store-*` classes). OOTB disk layout: [ootb-ainl.md](ootb-ainl.md).
 
+## Global notification bell (all routes)
+
+The **notification center** is not overview-specific: the bell lives in the root shell (`index_body.html` / `app.js` / `layout.css`) so it appears on every hash route. **`--notify-bell-reserve`** + **`.main-content`** right padding keep page chrome from sliding under the fixed bell; focus mode hides the bell and clears that padding. Behavior, API wiring, and QA checklist: [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+
 ## Manual verification
 
 See **docs/dashboard-testing.md** (manual browser checklist): confirm Quick actions appear after load (**seven** tiles), navigate to the correct tabs (including **Daemon & runtime** → `#runtime`), and that the loading state shows the skeleton then swaps to buttons without large layout shift.

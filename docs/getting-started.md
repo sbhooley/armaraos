@@ -310,6 +310,7 @@ The embedded WebChat UI allows you to:
 - **Config schema at a glance:** Open **Settings** — the line under the tab bar shows **Config schema** as `effective (binary N)` (with **`⚠ mismatch`** when the file and binary disagree) plus API, log level, and home path; **System** repeats it as a stat tile, and **Daemon & runtime** shows the same schema line. Details: [Troubleshooting — Config schema in the dashboard](troubleshooting.md#config-schema-in-the-dashboard-at-a-glance).
 - View all running agents
 - Chat with any agent in real-time (via WebSocket)
+- If the agent WebSocket is unavailable, the UI falls back to **`POST /api/agents/{id}/message`**; the JSON may include **`tools`** so tool runs still show as expandable cards (see [API Reference](api-reference.md), section **POST /api/agents/{id}/message**).
 - See streaming responses as they are generated
 - View token usage per message
 

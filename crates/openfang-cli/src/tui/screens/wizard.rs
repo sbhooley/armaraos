@@ -22,7 +22,7 @@ const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         name: "openrouter",
         env_var: "OPENROUTER_API_KEY",
-        default_model: "stepfun/step-3.5-flash:free",
+        default_model: "nvidia/nemotron-3-super-120b-a12b:free",
         needs_key: true,
     },
     ProviderInfo {
@@ -507,7 +507,7 @@ fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let prompt = Paragraph::new(vec![
         Line::from(vec![Span::raw("  Choose your LLM provider:")]),
         Line::from(vec![Span::styled(
-            "  Tip: OpenRouter first — free key at openrouter.com; default free model stepfun/step-3.5-flash:free.",
+            "  Tip: OpenRouter first — free key at openrouter.com; default free model nvidia/nemotron-3-super-120b-a12b:free.",
             theme::dim_style(),
         )]),
     ]);

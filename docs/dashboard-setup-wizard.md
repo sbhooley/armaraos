@@ -42,7 +42,7 @@ The TOML must match the **`AgentManifest`** shape: **`name`**, **`description`**
 
 **`profile`** must be a valid **`ToolProfile`** variant: `minimal`, `coding`, `research`, `messaging`, `automation`, `full`, or `custom`. Wizard templates map each archetype to one of these (for example general assistant → `automation`, coding templates → `coding`).
 
-Default models per provider in the wizard (e.g. OpenRouter’s bundled free default, Anthropic’s default id) are defined in `wizard.js` (`defaultModelForProvider`). Template cards show the **effective** provider and default model when a provider is already configured.
+Default models per provider in the wizard (e.g. OpenRouter’s bundled free default, Anthropic’s default id) are defined in `wizard.js` (`defaultModelForProvider`). The OpenRouter default id and rate-limit fallback list are also documented in **[openrouter.md](openrouter.md)** (`DEFAULT_OPENROUTER_MODEL_ID`, `OPENROUTER_FREE_FALLBACK_MODELS` in `openfang-types`). Template cards show the **effective** provider and default model when a provider is already configured.
 
 ## Step 6: Summary
 

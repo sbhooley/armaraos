@@ -20,6 +20,7 @@ use openfang_types::memory::{
     ConsolidationReport, Entity, ExportFormat, GraphMatch, GraphPattern, ImportReport, Memory,
     MemoryFilter, MemoryFragment, MemoryId, MemorySource, Relation,
 };
+use openfang_types::task_queue::TaskClaimStrategy;
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{info, warn};
@@ -483,18 +484,26 @@ impl MemorySubstrate {
     // -----------------------------------------------------------------
 
     /// Post a new task to the shared queue. Returns the task ID.
+    ///
+    /// `payload_json` is stored in the `payload` BLOB (UTF-8 JSON) for routing metadata
+    /// (`orchestration.trace_id`, etc.). When `None`, stores `{}`.
     pub async fn task_post(
         &self,
         title: &str,
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
+        payload_json: Option<&serde_json::Value>,
+        priority: i64,
     ) -> OpenFangResult<String> {
         let pool = self.pool.clone();
         let title = title.to_string();
         let description = description.to_string();
         let assigned_to = assigned_to.unwrap_or("").to_string();
         let created_by = created_by.unwrap_or("").to_string();
+        let payload_bytes: Vec<u8> = payload_json
+            .map(|v| serde_json::to_vec(v).unwrap_or_else(|_| b"{}".to_vec()))
+            .unwrap_or_else(|| b"{}".to_vec());
 
         tokio::task::spawn_blocking(move || {
             let id = uuid::Uuid::new_v4().to_string();
@@ -502,8 +511,8 @@ impl MemorySubstrate {
             let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
             db.execute(
                 "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9)",
-                rusqlite::params![id, &created_by, &title, b"", now, title, description, assigned_to, created_by],
+                 VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![id, &created_by, &title, payload_bytes, priority, now, title, description, assigned_to, created_by],
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
             Ok(id)
@@ -513,22 +522,126 @@ impl MemorySubstrate {
     }
 
     /// Claim the next pending task (optionally for a specific assignee). Returns task JSON or None.
-    pub async fn task_claim(&self, agent_id: &str) -> OpenFangResult<Option<serde_json::Value>> {
+    ///
+    /// When `prefer_orchestration_trace_id` is set, first tries pending tasks whose `payload`
+    /// JSON contains that `orchestration.trace_id` (sticky routing for the same distributed trace).
+    /// If none match, falls back to the default queue behavior.
+    pub async fn task_claim(
+        &self,
+        agent_id: &str,
+        prefer_orchestration_trace_id: Option<&str>,
+        strategy: TaskClaimStrategy,
+    ) -> OpenFangResult<Option<serde_json::Value>> {
         let pool = self.pool.clone();
         let agent_id = agent_id.to_string();
+        let prefer = prefer_orchestration_trace_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let db = pool.get().map_err(|e| OpenFangError::Internal(e.to_string()))?;
-            // Find first pending task assigned to this agent, or any unassigned pending task
-            let mut stmt = db.prepare(
-                "SELECT id, title, description, assigned_to, created_by, created_at
+
+            if matches!(strategy, TaskClaimStrategy::StickyOnly) && prefer.is_none() {
+                return Ok(None);
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            fn finish_claim(
+                db: &rusqlite::Connection,
+                agent_id: &str,
+                id: String,
+                title: String,
+                description: String,
+                assigned: String,
+                created_by: String,
+                created_at: String,
+                payload: Vec<u8>,
+            ) -> OpenFangResult<Option<serde_json::Value>> {
+                db.execute(
+                    "UPDATE task_queue SET status = 'in_progress', assigned_to = ?2 WHERE id = ?1",
+                    rusqlite::params![id, agent_id],
+                )
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+                let payload_val: serde_json::Value =
+                    serde_json::from_slice(&payload).unwrap_or(serde_json::json!({}));
+                Ok(Some(serde_json::json!({
+                    "id": id,
+                    "title": title,
+                    "description": description,
+                    "status": "in_progress",
+                    "assigned_to": if assigned.is_empty() { agent_id } else { assigned.as_str() },
+                    "created_by": created_by,
+                    "created_at": created_at,
+                    "payload": payload_val,
+                })))
+            }
+
+            if let Some(ref tid) = prefer {
+                let mut stmt = db
+                    .prepare(
+                        "SELECT id, title, description, assigned_to, created_by, created_at, payload
+                         FROM task_queue
+                         WHERE status = 'pending'
+                           AND (assigned_to = ?1 OR assigned_to = '')
+                           AND json_extract(CAST(payload AS TEXT), '$.orchestration.trace_id') = ?2
+                         ORDER BY priority DESC, created_at ASC
+                         LIMIT 1",
+                    )
+                    .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+                match stmt.query_row(rusqlite::params![agent_id, tid], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                    ))
+                }) {
+                    Ok((id, title, description, assigned, created_by, created_at, payload)) => {
+                        return finish_claim(
+                            &db,
+                            &agent_id,
+                            id,
+                            title,
+                            description,
+                            assigned,
+                            created_by,
+                            created_at,
+                            payload,
+                        );
+                    }
+                    Err(rusqlite::Error::QueryReturnedNoRows) => {
+                        if matches!(strategy, TaskClaimStrategy::StickyOnly) {
+                            return Ok(None);
+                        }
+                    }
+                    Err(e) => return Err(OpenFangError::Memory(e.to_string())),
+                }
+            } else if matches!(strategy, TaskClaimStrategy::StickyOnly) {
+                return Ok(None);
+            }
+
+            // Default: first pending task assigned to this agent, or any unassigned pending task
+            let order_tail = match strategy {
+                TaskClaimStrategy::PreferUnassigned => {
+                    "ORDER BY CASE WHEN assigned_to = '' THEN 0 ELSE 1 END, priority DESC, created_at ASC"
+                }
+                TaskClaimStrategy::Default | TaskClaimStrategy::StickyOnly => {
+                    "ORDER BY priority DESC, created_at ASC"
+                }
+            };
+            let sql = format!(
+                "SELECT id, title, description, assigned_to, created_by, created_at, payload
                  FROM task_queue
                  WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '')
-                 ORDER BY priority DESC, created_at ASC
+                 {order_tail}
                  LIMIT 1"
-            ).map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            );
+            let mut stmt = db
+                .prepare(&sql)
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
-            let result = stmt.query_row(rusqlite::params![agent_id], |row| {
+            match stmt.query_row(rusqlite::params![agent_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -536,27 +649,20 @@ impl MemorySubstrate {
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
                 ))
-            });
-
-            match result {
-                Ok((id, title, description, assigned, created_by, created_at)) => {
-                    // Update status to in_progress
-                    db.execute(
-                        "UPDATE task_queue SET status = 'in_progress', assigned_to = ?2 WHERE id = ?1",
-                        rusqlite::params![id, agent_id],
-                    ).map_err(|e| OpenFangError::Memory(e.to_string()))?;
-
-                    Ok(Some(serde_json::json!({
-                        "id": id,
-                        "title": title,
-                        "description": description,
-                        "status": "in_progress",
-                        "assigned_to": if assigned.is_empty() { &agent_id } else { &assigned },
-                        "created_by": created_by,
-                        "created_at": created_at,
-                    })))
-                }
+            }) {
+                Ok((id, title, description, assigned, created_by, created_at, payload)) => finish_claim(
+                    &db,
+                    &agent_id,
+                    id,
+                    title,
+                    description,
+                    assigned,
+                    created_by,
+                    created_at,
+                    payload,
+                ),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
                 Err(e) => Err(OpenFangError::Memory(e.to_string())),
             }
@@ -747,6 +853,7 @@ impl Memory for MemorySubstrate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openfang_types::task_queue::TaskClaimStrategy;
 
     #[tokio::test]
     async fn test_substrate_kv() {
@@ -787,6 +894,8 @@ mod tests {
                 "Check the auth module for issues",
                 Some("auditor"),
                 Some("orchestrator"),
+                None,
+                0,
             )
             .await
             .unwrap();
@@ -808,12 +917,17 @@ mod tests {
                 "Security audit the /api/login endpoint",
                 Some("auditor"),
                 None,
+                None,
+                0,
             )
             .await
             .unwrap();
 
         // Claim the task
-        let claimed = substrate.task_claim("auditor").await.unwrap();
+        let claimed = substrate
+            .task_claim("auditor", None, TaskClaimStrategy::Default)
+            .await
+            .unwrap();
         assert!(claimed.is_some());
         let claimed = claimed.unwrap();
         assert_eq!(claimed["id"], task_id);
@@ -834,8 +948,31 @@ mod tests {
     #[tokio::test]
     async fn test_task_claim_empty() {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
-        let claimed = substrate.task_claim("nobody").await.unwrap();
+        let claimed = substrate
+            .task_claim("nobody", None, TaskClaimStrategy::Default)
+            .await
+            .unwrap();
         assert!(claimed.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_task_claim_sticky_trace() {
+        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let meta = serde_json::json!({"orchestration": {"trace_id": "trace-sticky-1"}});
+        substrate
+            .task_post("Sticky", "Work item", None, None, Some(&meta), 0)
+            .await
+            .unwrap();
+        let claimed = substrate
+            .task_claim(
+                "any-worker",
+                Some("trace-sticky-1"),
+                TaskClaimStrategy::Default,
+            )
+            .await
+            .unwrap();
+        let t = claimed.expect("claimed task");
+        assert_eq!(t["payload"]["orchestration"]["trace_id"], "trace-sticky-1");
     }
 
     /// Hammer the pooled SQLite substrate from many concurrent async tasks (file-backed DB;

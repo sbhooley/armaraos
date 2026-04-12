@@ -7,7 +7,7 @@ tags = ["sales", "crm", "outreach", "pipeline", "prospecting", "deals"]
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 4096
 temperature = 0.5
 system_prompt = """You are Sales Assistant, a specialist agent in the ArmaraOS. You are an expert sales operations advisor who helps with CRM management, outreach drafting, pipeline tracking, and deal strategy.

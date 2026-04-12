@@ -73,6 +73,7 @@ const AFTER_HELP: &str = "\
   openfang doctor               Run diagnostic health checks
   openfang channel setup        Interactive channel setup wizard
   openfang cron list            List scheduled jobs
+  openfang orchestration list   Recent multi-agent orchestration traces
   openfang uninstall            Completely remove OpenFang from your system
 
 \x1b[1;36mQuick Start:\x1b[0m
@@ -126,6 +127,9 @@ enum Commands {
     /// Manage workflows (list, create, run) [*].
     #[command(subcommand)]
     Workflow(WorkflowCommands),
+    /// Inspect orchestration traces and quota (list, trace, cost, tree, live, quota, export, watch) [*].
+    #[command(subcommand)]
+    Orchestration(OrchestrationCommands),
     /// Manage event triggers (list, create, delete) [*].
     #[command(subcommand)]
     Trigger(TriggerCommands),
@@ -550,6 +554,76 @@ enum WorkflowCommands {
         workflow_id: String,
         /// Input text for the workflow.
         input: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum OrchestrationCommands {
+    /// List recent orchestration traces (summaries).
+    List {
+        /// Max rows (1–200, default 50).
+        #[arg(long)]
+        limit: Option<u32>,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show all events for a trace.
+    Trace {
+        /// Trace id (UUID).
+        trace_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show token/cost rollup for a trace.
+    Cost {
+        /// Trace id (UUID).
+        trace_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show reconstructed delegation tree for a trace.
+    Tree {
+        /// Trace id (UUID).
+        trace_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show live snapshot (shared_vars / budget) for an active trace.
+    Live {
+        /// Trace id (UUID).
+        trace_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show quota tree for an agent (resources + descendants).
+    Quota {
+        /// Agent id (UUID).
+        agent_id: String,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export events, tree, and cost for a trace as one JSON document.
+    Export {
+        /// Trace id (UUID).
+        trace_id: String,
+        /// Write to file (default: stdout).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Poll orchestration summaries or a trace live snapshot (Ctrl+C to stop).
+    Watch {
+        /// If set, poll `/traces/:id/live` instead of listing traces.
+        #[arg(long)]
+        trace: Option<String>,
+        /// Seconds between polls.
+        #[arg(long, default_value_t = 3)]
+        interval_secs: u64,
     },
 }
 
@@ -1010,6 +1084,31 @@ fn main() {
             }
             WorkflowCommands::Delete { workflow_id } => cmd_workflow_delete(&workflow_id),
             WorkflowCommands::Run { workflow_id, input } => cmd_workflow_run(&workflow_id, &input),
+        },
+        Some(Commands::Orchestration(sub)) => match sub {
+            OrchestrationCommands::List { limit, json } => cmd_orchestration_list(limit, json),
+            OrchestrationCommands::Trace { trace_id, json } => {
+                cmd_orchestration_trace(&trace_id, json)
+            }
+            OrchestrationCommands::Cost { trace_id, json } => {
+                cmd_orchestration_cost(&trace_id, json)
+            }
+            OrchestrationCommands::Tree { trace_id, json } => {
+                cmd_orchestration_tree(&trace_id, json)
+            }
+            OrchestrationCommands::Live { trace_id, json } => {
+                cmd_orchestration_live(&trace_id, json)
+            }
+            OrchestrationCommands::Quota { agent_id, json } => {
+                cmd_orchestration_quota(&agent_id, json)
+            }
+            OrchestrationCommands::Export { trace_id, output } => {
+                cmd_orchestration_export(&trace_id, output.as_ref())
+            }
+            OrchestrationCommands::Watch {
+                trace,
+                interval_secs,
+            } => cmd_orchestration_watch(trace.as_deref(), interval_secs),
         },
         Some(Commands::Trigger(sub)) => match sub {
             TriggerCommands::List { agent_id } => cmd_trigger_list(agent_id.as_deref()),
@@ -1501,7 +1600,7 @@ fn provider_list() -> Vec<(&'static str, &'static str, &'static str, &'static st
         (
             "openrouter",
             "OPENROUTER_API_KEY",
-            "stepfun/step-3.5-flash:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
             "OpenRouter",
         ),
     ]
@@ -3409,6 +3508,352 @@ fn cmd_workflow_delete(workflow_id: &str) {
         );
         std::process::exit(1);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration trace commands (daemon API)
+// ---------------------------------------------------------------------------
+
+fn cmd_orchestration_list(limit: Option<u32>, json: bool) {
+    let base = require_daemon("orchestration list");
+    let client = daemon_client();
+    let lim = limit.unwrap_or(50).clamp(1, 200);
+    let url = format!("{base}/api/orchestration/traces?limit={lim}");
+    let body = daemon_json(client.get(&url).send());
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    match body.as_array() {
+        Some(rows) if rows.is_empty() => println!("No orchestration traces."),
+        Some(rows) => {
+            let hdr_last = "LAST_EVENT";
+            println!(
+                "{:<40} {:<38} {:>6}  {hdr_last}",
+                "TRACE_ID", "ORCHESTRATOR", "EVENTS"
+            );
+            println!("{}", "-".repeat(120));
+            for r in rows {
+                println!(
+                    "{:<40} {:<38} {:>6}  {}",
+                    r["trace_id"].as_str().unwrap_or("?"),
+                    r["orchestrator_id"].as_str().unwrap_or("?"),
+                    r["event_count"].as_u64().unwrap_or(0),
+                    r["last_event_at"].as_str().unwrap_or("?"),
+                );
+            }
+        }
+        None => println!("Unexpected response."),
+    }
+}
+
+fn cmd_orchestration_trace(trace_id: &str, json: bool) {
+    let base = require_daemon("orchestration trace");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .get(format!(
+                "{base}/api/orchestration/traces/{}",
+                encode_trace_path(trace_id)
+            ))
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    let Some(events) = body.as_array() else {
+        eprintln!(
+            "Trace not found: {}",
+            body["error"].as_str().unwrap_or("unknown error")
+        );
+        std::process::exit(1);
+    };
+    println!("Trace {trace_id} — {} events", events.len());
+    for (i, ev) in events.iter().enumerate() {
+        let t = ev["event_type"].as_object();
+        let kind = t
+            .and_then(|m| m.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let ts = ev["timestamp"].as_str().unwrap_or("");
+        println!("  {:>3}. [{kind}] {ts}", i + 1);
+    }
+}
+
+fn cmd_orchestration_cost(trace_id: &str, json: bool) {
+    let base = require_daemon("orchestration cost");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .get(format!(
+                "{base}/api/orchestration/traces/{}/cost",
+                encode_trace_path(trace_id)
+            ))
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    if body.get("error").is_some() {
+        eprintln!(
+            "{}",
+            body["error"].as_str().unwrap_or("Trace cost not available")
+        );
+        std::process::exit(1);
+    }
+    println!("Trace: {}", body["trace_id"].as_str().unwrap_or(trace_id));
+    println!(
+        "  Total tokens: {}  Cost: ${:.4}  Duration: {} ms",
+        body["total_tokens"].as_u64().unwrap_or(0),
+        body["total_cost_usd"].as_f64().unwrap_or(0.0),
+        body["total_duration_ms"].as_u64().unwrap_or(0)
+    );
+    if let Some(rows) = body["by_agent"].as_array() {
+        println!("  By agent:");
+        for r in rows {
+            println!(
+                "    {}  in:{} out:{}  ${:.4}  {}ms",
+                r["agent_id"].as_str().unwrap_or("?"),
+                r["tokens_in"].as_u64().unwrap_or(0),
+                r["tokens_out"].as_u64().unwrap_or(0),
+                r["cost_usd"].as_f64().unwrap_or(0.0),
+                r["duration_ms"].as_u64().unwrap_or(0)
+            );
+        }
+    }
+}
+
+fn cmd_orchestration_tree(trace_id: &str, json: bool) {
+    let base = require_daemon("orchestration tree");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .get(format!(
+                "{base}/api/orchestration/traces/{}/tree",
+                encode_trace_path(trace_id)
+            ))
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    if body.get("error").is_some() {
+        eprintln!(
+            "{}",
+            body["error"].as_str().unwrap_or("Trace tree not found")
+        );
+        std::process::exit(1);
+    }
+    println!("Call tree (trace {trace_id}):");
+    print_orchestration_tree_node(&body, 0);
+}
+
+fn print_orchestration_tree_node(node: &serde_json::Value, depth: usize) {
+    let pad = "  ".repeat(depth);
+    let id = node["agent_id"].as_str().unwrap_or("?");
+    let parent = node["parent_agent_id"]
+        .as_str()
+        .map(|p| format!(" (parent {p})"))
+        .unwrap_or_default();
+    println!("{pad}{id}{parent}");
+    if let Some(children) = node["children"].as_array() {
+        for c in children {
+            print_orchestration_tree_node(c, depth + 1);
+        }
+    }
+}
+
+fn cmd_orchestration_live(trace_id: &str, json: bool) {
+    let base = require_daemon("orchestration live");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .get(format!(
+                "{base}/api/orchestration/traces/{}/live",
+                encode_trace_path(trace_id)
+            ))
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    if body.get("error").is_some() {
+        eprintln!(
+            "{}",
+            body["error"]
+                .as_str()
+                .unwrap_or("No live snapshot (trace inactive or completed)")
+        );
+        std::process::exit(1);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&body).unwrap_or_default()
+    );
+}
+
+fn cmd_orchestration_quota(agent_id: &str, json: bool) {
+    let base = require_daemon("orchestration quota");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .get(format!(
+                "{base}/api/orchestration/quota-tree/{}",
+                encode_trace_path(agent_id)
+            ))
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    if body.get("error").is_some() {
+        eprintln!("{}", body["error"].as_str().unwrap_or("Agent not found"));
+        std::process::exit(1);
+    }
+    print_quota_tree_node(&body, 0);
+}
+
+fn print_quota_tree_node(node: &serde_json::Value, depth: usize) {
+    let pad = "  ".repeat(depth);
+    let name = node["name"].as_str().unwrap_or("?");
+    let id = node["agent_id"].as_str().unwrap_or("?");
+    let q = &node["quota"];
+    println!(
+        "{pad}{name} ({id})  tokens {}/{} hr  subagents {}/{}  depth {}/{}",
+        q["used_llm_tokens"].as_u64().unwrap_or(0),
+        q["max_llm_tokens_per_hour"].as_u64().unwrap_or(0),
+        q["active_subagents"].as_u64().unwrap_or(0),
+        q["max_subagents"].as_u64().unwrap_or(0),
+        q["spawn_subtree_height"].as_u64().unwrap_or(0),
+        q["max_spawn_depth"].as_u64().unwrap_or(0),
+    );
+    if let Some(b) = q["llm_token_billing_agent_id"].as_str() {
+        println!("{pad}  billing agent: {b}");
+    }
+    if let Some(children) = node["children"].as_array() {
+        for c in children {
+            print_quota_tree_node(c, depth + 1);
+        }
+    }
+}
+
+fn cmd_orchestration_export(trace_id: &str, output: Option<&PathBuf>) {
+    let base = require_daemon("orchestration export");
+    let client = daemon_client();
+    let enc = encode_trace_path(trace_id);
+    let events = daemon_json(
+        client
+            .get(format!("{base}/api/orchestration/traces/{enc}"))
+            .send(),
+    );
+    if !events.is_array() {
+        eprintln!(
+            "Trace not found: {}",
+            events["error"].as_str().unwrap_or("unknown")
+        );
+        std::process::exit(1);
+    }
+    let tree = daemon_json(
+        client
+            .get(format!("{base}/api/orchestration/traces/{enc}/tree"))
+            .send(),
+    );
+    let cost = daemon_json(
+        client
+            .get(format!("{base}/api/orchestration/traces/{enc}/cost"))
+            .send(),
+    );
+    let doc = serde_json::json!({
+        "trace_id": trace_id,
+        "events": events,
+        "tree": tree,
+        "cost": cost,
+    });
+    let s = serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string());
+    match output {
+        Some(path) => {
+            std::fs::write(path, s.as_bytes()).unwrap_or_else(|e| {
+                eprintln!("Write failed: {e}");
+                std::process::exit(1);
+            });
+            println!("Exported to {}", path.display());
+        }
+        None => println!("{s}"),
+    }
+}
+
+fn cmd_orchestration_watch(trace: Option<&str>, interval_secs: u64) {
+    let base = require_daemon("orchestration watch");
+    let client = daemon_client();
+    let sleep = std::time::Duration::from_secs(interval_secs.max(1));
+    println!("Polling every {}s (Ctrl+C to stop)", sleep.as_secs());
+    loop {
+        if let Some(tid) = trace {
+            let body = daemon_json(
+                client
+                    .get(format!(
+                        "{base}/api/orchestration/traces/{}/live",
+                        encode_trace_path(tid)
+                    ))
+                    .send(),
+            );
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            );
+        } else {
+            let body = daemon_json(
+                client
+                    .get(format!("{base}/api/orchestration/traces?limit=25"))
+                    .send(),
+            );
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(sleep);
+    }
+}
+
+/// Encode a path segment for URLs (UUIDs pass through; unsafe chars are percent-encoded).
+fn encode_trace_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(c),
+            _ => {
+                use std::fmt::Write;
+                for b in c.encode_utf8(&mut [0; 4]).bytes() {
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

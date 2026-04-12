@@ -237,6 +237,7 @@ mod tests {
                         Role::Assistant
                     },
                     content: MessageContent::Text(text),
+                    orchestration_ctx: None,
                 }
             })
             .collect()
@@ -295,6 +296,7 @@ mod tests {
                     content: big_result.clone(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -304,6 +306,7 @@ mod tests {
                     content: big_result,
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
         ];
         // Tiny context window to force all stages
@@ -342,6 +345,7 @@ mod tests {
                     content: chinese_result,
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
         ];
         // Tiny context window to force stage 3 tool truncation
@@ -365,6 +369,7 @@ mod tests {
                     input: serde_json::json!({}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -374,6 +379,7 @@ mod tests {
                     content: "file contents".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::user("thanks"),
         ];

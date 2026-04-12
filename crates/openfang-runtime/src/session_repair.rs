@@ -110,6 +110,7 @@ pub fn validate_and_repair_with_stats(messages: &[Message]) -> (Vec<Message>, Re
         cleaned.push(Message {
             role: msg.role,
             content: new_content,
+            orchestration_ctx: msg.orchestration_ctx.clone(),
         });
     }
 
@@ -310,6 +311,7 @@ fn reorder_tool_results(messages: &mut Vec<Message>) -> usize {
                     Message {
                         role: Role::User,
                         content: MessageContent::Blocks(blocks),
+                        orchestration_ctx: None,
                     },
                 );
             }
@@ -401,6 +403,7 @@ fn insert_synthetic_results(messages: &mut Vec<Message>) -> usize {
                 Message {
                     role: Role::User,
                     content: MessageContent::Blocks(blocks),
+                    orchestration_ctx: None,
                 },
             );
         }
@@ -710,6 +713,7 @@ mod tests {
                     content: "some result".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::assistant("Done"),
         ];
@@ -744,6 +748,7 @@ mod tests {
             Message {
                 role: Role::User,
                 content: MessageContent::Text(String::new()),
+                orchestration_ctx: None,
             },
             Message::assistant("Hi"),
         ];
@@ -763,6 +768,7 @@ mod tests {
                     input: serde_json::json!({"query": "rust"}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -772,6 +778,7 @@ mod tests {
                     content: "Results found".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::assistant("Here are the results"),
         ];
@@ -795,6 +802,7 @@ mod tests {
                     input: serde_json::json!({"query": "rust"}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message::user("While you search, I have another question"),
             Message {
@@ -805,6 +813,7 @@ mod tests {
                     content: "Search results".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::assistant("Here are results"),
         ];
@@ -849,6 +858,7 @@ mod tests {
                     input: serde_json::json!({"path": "/etc/hosts"}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message::assistant("I tried to read the file"),
         ];
@@ -887,6 +897,7 @@ mod tests {
                     input: serde_json::json!({}),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -896,6 +907,7 @@ mod tests {
                     content: "First result".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message {
                 role: Role::User,
@@ -905,6 +917,7 @@ mod tests {
                     content: "Duplicate result".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::assistant("Done"),
         ];
@@ -995,11 +1008,13 @@ mod tests {
                     content: "lost".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             Message::user("World"),
             Message {
                 role: Role::User,
                 content: MessageContent::Text(String::new()),
+                orchestration_ctx: None,
             },
             Message::assistant("Hi"),
         ];
@@ -1022,6 +1037,7 @@ mod tests {
                     text: String::new(),
                     provider_metadata: None,
                 }]),
+                orchestration_ctx: None,
             },
             Message::user("Never mind"),
             Message::assistant("OK"),
@@ -1068,6 +1084,7 @@ mod tests {
                         provider_metadata: None,
                     },
                 ]),
+                orchestration_ctx: None,
             },
             // Only tu-a has a result, tu-b is missing
             Message {
@@ -1078,6 +1095,7 @@ mod tests {
                     content: "search result".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             // Orphaned result from a non-existent tool use
             Message {
@@ -1088,11 +1106,13 @@ mod tests {
                     content: "ghost result".to_string(),
                     is_error: false,
                 }]),
+                orchestration_ctx: None,
             },
             // Empty message
             Message {
                 role: Role::User,
                 content: MessageContent::Text(String::new()),
+                orchestration_ctx: None,
             },
             Message::assistant("Done"),
         ];
@@ -1144,6 +1164,7 @@ mod tests {
                         is_error: false,
                     },
                 ]),
+                orchestration_ctx: None,
             },
             Message::assistant("Hi"),
         ];

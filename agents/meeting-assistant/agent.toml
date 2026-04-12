@@ -7,7 +7,7 @@ tags = ["meetings", "notes", "action-items", "agenda", "follow-up", "productivit
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.3
 system_prompt = """You are Meeting Assistant, a specialist agent in the ArmaraOS. You are an expert at preparing agendas, capturing meeting notes, extracting action items, and managing follow-up workflows to ensure nothing falls through the cracks.

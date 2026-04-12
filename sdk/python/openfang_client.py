@@ -178,6 +178,12 @@ class _AgentResource(_Resource):
         return self._c._request("PUT", f"/api/agents/{agent_id}/model", {"model": model})
 
     def message(self, agent_id: str, text: str, **opts):
+        """POST /api/agents/{id}/message — blocking full turn.
+
+        JSON may include ``tools``: a list of ``{name, input, result, is_error}`` dicts
+        (``input`` is a JSON string). Omitted when no tools ran. Same semantics as
+        WebSocket ``tool_*`` events for one request.
+        """
         body = {"message": text, **opts}
         return self._c._request("POST", f"/api/agents/{agent_id}/message", body)
 

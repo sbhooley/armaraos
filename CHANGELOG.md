@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **HTTP API:** `POST /api/agents/{id}/message` may include a top-level **`tools`** array — one **`ToolTurnRecord`** per tool execution in that blocking turn (`name`, **`input`** as a JSON string, **`result`**, **`is_error`**). Omitted when empty. Populated from **`AgentLoopResult.tool_turns`** in **`openfang-runtime`** (non-streaming and streaming agent loops accumulate the same list for parity).
+- **Types:** **`ToolTurnRecord`** in **`openfang_types::message`** (shared by API JSON and runtime).
+
+### Changed
+
+- **Dashboard → Chat:** HTTP fallback (`static/js/pages/chat.js` **`_sendPayload`**) maps **`res.tools`** into the same in-bubble tool-cluster model as WebSocket **`tool_start`** / **`tool_end`** / **`tool_result`**.
+
+### Fixed
+
+- **Dashboard:** Tool cards no longer disappeared when chat fell back to HTTP because the client always pushed **`tools: []`** after **`POST …/message`**.
+
+### Documentation
+
+- **`docs/api-reference.md`**, **`docs/architecture.md`**, **`docs/dashboard-testing.md`**, **`docs/troubleshooting.md`**, **`docs/getting-started.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`CLAUDE.md`**, **`sdk/javascript/index.d.ts`**, **`sdk/javascript/index.js`**, **`sdk/python/openfang_client.py`**: HTTP **`tools`** contract, QA, troubleshooting, SDK hints, and integration-test notes.
+
 ## [0.7.2] - 2026-04-10
 
 ### Added
@@ -189,7 +206,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 
 ### Changed
 
-- **Default models:** Bundled `agents/*/agent.toml`, TUI templates/wizard, and related surfaces align on **OpenRouter** with **`stepfun/step-3.5-flash:free`** (or provider-appropriate fallbacks) for new-agent defaults.
+- **Default models:** Bundled `agents/*/agent.toml`, TUI templates/wizard, and related surfaces align on **OpenRouter** with **`nvidia/nemotron-3-super-120b-a12b:free`** (or provider-appropriate fallbacks) for new-agent defaults.
 - **Hands:** Bundled predictor and other packaged hands metadata updates (`HAND.toml`, `SKILL.md`, `bundled.rs`).
 - **Kernel / runtime / types:** Registry, agent manifest handling, approval/heartbeat hooks, LLM driver and agent-loop adjustments to match the above.
 - **Dashboard static client (`api.js`):** `wsConnect` reuses an existing open socket for the same agent id (callback refresh only); `wsDisconnect` still used when backing out of chat or switching sessions.
@@ -253,7 +270,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 
 ### Fixed
 
-- **LLM resilience:** When rate limited or overloaded after retries, agents automatically attempt OpenRouter free-model fallbacks (`stepfun/step-3.5-flash:free`, then `nvidia/nemotron-3-super-120b-a12b:free`) to keep the UX flowing.
+- **LLM resilience:** When rate limited or overloaded after retries, agents automatically attempt OpenRouter free-model fallbacks (see `OPENROUTER_FREE_FALLBACK_MODELS` in `openfang-types`, e.g. Nemotron then Llama 3.1 8B `:free`) to keep the UX flowing.
 
 ## [0.6.0] - 2026-04-01
 

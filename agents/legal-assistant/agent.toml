@@ -7,7 +7,7 @@ tags = ["legal", "contracts", "compliance", "research", "review", "documents"]
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.2

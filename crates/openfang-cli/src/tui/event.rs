@@ -303,7 +303,7 @@ pub fn spawn_inprocess_stream(
         // send_message_streaming() finds the reactor.
         let _guard = rt.enter();
 
-        match kernel.send_message_streaming(agent_id, &message, None, None, None, None) {
+        match kernel.send_message_streaming(agent_id, &message, None, None, None, None, None) {
             Ok((mut rx, handle)) => {
                 rt.block_on(async {
                     while let Some(ev) = rx.recv().await {
@@ -421,6 +421,7 @@ pub fn spawn_daemon_stream(
                             usage: openfang_types::message::TokenUsage {
                                 input_tokens: total_input_tokens,
                                 output_tokens: total_output_tokens,
+                                ..Default::default()
                             },
                         }));
                     }
@@ -434,6 +435,7 @@ pub fn spawn_daemon_stream(
             total_usage: openfang_types::message::TokenUsage {
                 input_tokens: total_input_tokens,
                 output_tokens: total_output_tokens,
+                ..Default::default()
             },
             iterations: 0,
             cost_usd: None,
@@ -474,6 +476,7 @@ fn daemon_fallback(
             total_usage: openfang_types::message::TokenUsage {
                 input_tokens,
                 output_tokens,
+                ..Default::default()
             },
             iterations: body["iterations"].as_u64().unwrap_or(0) as u32,
             cost_usd: body["cost_usd"].as_f64(),

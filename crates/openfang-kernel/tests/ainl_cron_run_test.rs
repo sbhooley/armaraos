@@ -24,7 +24,7 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
     let fake_ainl = home.join("fake-ainl");
     let mut f = std::fs::File::create(&fake_ainl).expect("fake file");
     f.write_all(
-        b"#!/bin/sh\nif [ \"$1\" != \"run\" ]; then exit 1; fi\nshift\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --json) shift ;;\n    --frame-json) shift; shift ;;\n    *) break ;;\n  esac\ndone\n# remaining arg is .ainl path\necho '{\"ok\":true,\"label\":\"test\",\"result\":42,\"runtime_version\":\"stub\"}'\nexit 0\n",
+        b"#!/bin/sh\nif [ \"$1\" != \"run\" ]; then exit 1; fi\nshift\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --enable-adapter) shift; shift ;;\n    --json) shift ;;\n    --frame-json) shift; shift ;;\n    *) break ;;\n  esac\ndone\n# remaining arg is .ainl path\necho '{\"ok\":true,\"label\":\"test\",\"result\":42,\"runtime_version\":\"stub\"}'\nexit 0\n",
     )
     .expect("script");
     drop(f);
@@ -98,7 +98,7 @@ async fn cron_run_job_ainl_run_passes_frame_json() {
     let fake_ainl = home.join("fake-ainl");
     let mut f = std::fs::File::create(&fake_ainl).expect("fake file");
     f.write_all(
-        b"#!/bin/sh\nif [ \"$1\" != \"run\" ]; then exit 1; fi\nshift\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --json) shift ;;\n    --frame-json) shift; shift ;;\n    *) break ;;\n  esac\ndone\necho '{\"ok\":true,\"label\":\"test\",\"result\":42,\"runtime_version\":\"stub\"}'\nexit 0\n",
+        b"#!/bin/sh\nif [ \"$1\" != \"run\" ]; then exit 1; fi\nshift\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --enable-adapter) shift; shift ;;\n    --json) shift ;;\n    --frame-json) shift; shift ;;\n    *) break ;;\n  esac\ndone\necho '{\"ok\":true,\"label\":\"test\",\"result\":42,\"runtime_version\":\"stub\"}'\nexit 0\n",
     )
     .expect("script");
     drop(f);
@@ -189,6 +189,7 @@ if [ "$1" != "run" ]; then exit 1; fi
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
+    --enable-adapter) shift; shift ;;
     --json) shift ;;
     --frame-json) shift; shift ;;
     *) break ;;
@@ -305,6 +306,7 @@ if [ "$1" != "run" ]; then exit 1; fi
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
+    --enable-adapter) shift; shift ;;
     --json) shift ;;
     --frame-json) shift; shift ;;
     *) break ;;
@@ -418,6 +420,7 @@ if [ "$1" != "run" ]; then exit 1; fi
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
+    --enable-adapter) shift; shift ;;
     --json) shift ;;
     --frame-json) shift; shift ;;
     *) break ;;
@@ -518,6 +521,7 @@ if [ "$1" != "run" ]; then exit 1; fi
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
+    --enable-adapter) shift; shift ;;
     --json) shift ;;
     --frame-json) shift; shift ;;
     *) break ;;

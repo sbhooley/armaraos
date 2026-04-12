@@ -7,7 +7,7 @@ tags = ["email", "communication", "triage", "drafting", "scheduling", "productiv
 
 [model]
 provider = "openrouter"
-model = "stepfun/step-3.5-flash:free"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.4
 system_prompt = """You are Email Assistant, a specialist agent in the ArmaraOS. Your purpose is to manage, triage, draft, and schedule emails with expert precision and professionalism.

@@ -203,7 +203,9 @@ class AgentResource {
     return this._c._request("PUT", "/api/agents/" + id + "/model", { model: model });
   }
 
-  /** Send a message and get the full response. */
+  /** Send a message and get the full response (blocking). Response may include `tools`:
+   *  `{ name, input, result, is_error }[]` — tool executions for this turn when the agent used tools (HTTP parity with WS tool_* events). Omitted when empty.
+   */
   async message(id, text, opts) {
     var body = Object.assign({ message: text }, opts || {});
     return this._c._request("POST", "/api/agents/" + id + "/message", body);

@@ -9,6 +9,9 @@ pub struct Message {
     pub role: Role,
     /// The content of the message.
     pub content: MessageContent,
+    /// Optional multi-agent orchestration context (call chain, pattern, trace id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestration_ctx: Option<crate::orchestration::OrchestrationContext>,
 }
 
 /// The role of a message sender in an LLM conversation.
@@ -173,6 +176,7 @@ impl Message {
         Self {
             role: Role::System,
             content: MessageContent::Text(content.into()),
+            orchestration_ctx: None,
         }
     }
 
@@ -181,6 +185,7 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::Text(content.into()),
+            orchestration_ctx: None,
         }
     }
 
@@ -189,6 +194,7 @@ impl Message {
         Self {
             role: Role::User,
             content: MessageContent::Blocks(blocks),
+            orchestration_ctx: None,
         }
     }
 
@@ -197,6 +203,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: MessageContent::Text(content.into()),
+            orchestration_ctx: None,
         }
     }
 }
@@ -222,12 +229,28 @@ pub struct TokenUsage {
     pub input_tokens: u64,
     /// Tokens generated in the output.
     pub output_tokens: u64,
+    /// Tokens written to cache (Anthropic prompt caching).
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    /// Tokens read from cache (Anthropic prompt caching).
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
 }
 
 impl TokenUsage {
     /// Total tokens used.
     pub fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
+    }
+
+    /// Cache hit rate percentage (0-100).
+    /// Returns the percentage of input tokens that were read from cache.
+    pub fn cache_hit_rate(&self) -> u8 {
+        let total_input = self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens;
+        if total_input == 0 {
+            return 0;
+        }
+        ((self.cache_read_input_tokens as f64 / total_input as f64) * 100.0).round() as u8
     }
 }
 
@@ -245,6 +268,16 @@ pub struct ReplyDirectives {
     pub current_thread: bool,
     /// Suppress the response from being sent.
     pub silent: bool,
+}
+
+/// One tool execution in an agent turn (HTTP API + dashboard tool cards).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolTurnRecord {
+    pub name: String,
+    /// JSON string of tool input arguments.
+    pub input: String,
+    pub result: String,
+    pub is_error: bool,
 }
 
 #[cfg(test)]
@@ -266,6 +299,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 100,
             output_tokens: 50,
+            ..Default::default()
         };
         assert_eq!(usage.total(), 150);
     }

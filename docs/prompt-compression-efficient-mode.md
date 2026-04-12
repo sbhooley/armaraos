@@ -84,6 +84,7 @@ The AINL repo’s `ainl run --efficient-mode …` sets **`AINL_EFFICIENT_MODE`**
 
 - **`compression_savings_pct`** (`u8`, 0–100) — omitted when zero.
 - **`compressed_input`** (`string`, optional) — text actually sent to the LLM when savings &gt; 0; powers the **Eco Diff** UI.
+- **`tools`** — optional array of tool executions for that blocking turn (same field name as elsewhere; unrelated to compression). See [api-reference.md](api-reference.md) (**POST /api/agents/{id}/message**).
 
 ### WebSocket (`/api/agents/{id}/ws`)
 

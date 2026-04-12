@@ -238,6 +238,11 @@
 
 .sidebar-toggle:hover { color: var(--text); }
 
+/* Horizontal space for fixed notification bell (viewport top-right) so page headers and actions never sit underneath it */
+:root {
+  --notify-bell-reserve: 56px;
+}
+
 /* Main content area */
 .main-content {
   flex: 1;
@@ -246,6 +251,8 @@
   min-width: 0;
   overflow: hidden;
   background: var(--bg);
+  /* Gutters: right = bell + notch safe area (mirrors mobile menu offset on the left) */
+  padding-right: calc(var(--notify-bell-reserve) + env(safe-area-inset-right, 0px));
 }
 
 /* Page wrapper divs (rendered by x-if) must fill the column
@@ -298,11 +305,11 @@
   padding: 6px 10px !important;
 }
 
-/* Persistent notification center (bell) — sibling of main, fixed top-right */
+/* Persistent notification center (bell) — sibling of main, fixed top-right (sits in main-content’s reserved padding) */
 .notify-center-root {
   position: fixed;
   top: 10px;
-  right: 14px;
+  right: calc(14px + env(safe-area-inset-right, 0px));
   z-index: 102;
   pointer-events: none;
 }
@@ -320,6 +327,9 @@
   z-index: 103;
   padding: 6px 10px !important;
   border-radius: var(--radius-md, 8px);
+}
+.notify-bell-btn[aria-expanded="true"] {
+  background: transparent !important;
 }
 .notify-bell-badge {
   position: absolute;
@@ -471,7 +481,13 @@
   .card-grid { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: 1fr; }
   .input-area { padding: 8px 12px; }
-  .main-content { padding: 0; }
+  /* Keep notification bell gutter; previous `padding: 0` caused overlap on narrow screens */
+  .main-content {
+    padding-left: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-right: calc(var(--notify-bell-reserve) + env(safe-area-inset-right, 0px));
+  }
   .table-wrap { font-size: 10px; }
   .modal { margin: 8px; max-height: calc(100vh - 16px); }
 }
@@ -487,7 +503,11 @@
 /* Focus mode — hide sidebar for distraction-free chat */
 .app-layout.focus-mode .sidebar { display: none; }
 .app-layout.focus-mode .sidebar-overlay { display: none; }
-.app-layout.focus-mode .main-content { max-width: 100%; margin-left: 0; }
+.app-layout.focus-mode .main-content {
+  max-width: 100%;
+  margin-left: 0;
+  padding-right: 0; /* bell hidden */
+}
 .app-layout.focus-mode .mobile-menu-btn { display: none !important; }
 
 /* Attribution — bottom-right (below sidebar z-index, above main content) */
@@ -515,4 +535,153 @@
 .app-powered-by a:focus-visible {
   outline: 2px solid #dc2626;
   outline-offset: 2px;
+}
+
+/* Orchestration traces — Gantt timeline + token heatmap */
+.orchestration-traces-page-root .orch-gantt-block {
+  margin-top: 4px;
+}
+.orchestration-traces-page-root .orch-gantt-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.orchestration-traces-page-root .orch-gantt-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+.orchestration-traces-page-root .orch-gantt-bar {
+  position: relative;
+  height: 24px;
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(127, 127, 127, 0.15);
+}
+.orchestration-traces-page-root .orch-gantt-seg {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 4px;
+  min-width: 2px;
+  box-sizing: border-box;
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-completed {
+  background: hsla(var(--orch-hue, 200), 72%, 52%, 0.88);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-failed {
+  background: hsla(0, 70%, 50%, 0.92);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-delegate {
+  background: hsla(var(--orch-hue, 200), 65%, 58%, 0.55);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-delegate-target {
+  background: hsla(var(--orch-hue, 200), 85%, 55%, 0.45);
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-marker {
+  background: hsla(var(--orch-hue, 200), 45%, 55%, 0.5);
+}
+.orchestration-traces-page-root .orch-heatmap-block {
+  margin-top: 4px;
+}
+.orchestration-traces-page-root .orch-heatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.orchestration-traces-page-root .orch-heatmap-label {
+  flex: 0 0 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+.orchestration-traces-page-root .orch-heatmap-cells {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.orchestration-traces-page-root .orch-cell {
+  flex: 1;
+  height: 20px;
+  border-radius: 5px;
+  background: hsl(var(--orch-hue, 210), 58%, 42%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.orchestration-traces-page-root .orch-cell-out {
+  filter: brightness(1.12) saturate(1.08);
+}
+.orchestration-traces-page-root .orch-raw-details summary {
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.8;
+}
+.orchestration-traces-page-root .orch-raw-details summary:hover {
+  opacity: 1;
+}
+
+/* Delegation graph (indented tree) */
+.orchestration-traces-page-root .orch-tree-scroll {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid rgba(127, 127, 127, 0.2);
+  border-radius: 8px;
+  padding: 8px 6px;
+  background: rgba(0, 0, 0, 0.12);
+}
+.orchestration-traces-page-root .orch-tree-row {
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: 4px;
+  margin: 1px 0;
+  border-left: 2px solid hsla(var(--orch-hue, 200), 65%, 50%, 0.55);
+}
+.orchestration-traces-page-root .orch-tree-row:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+.orchestration-traces-page-root .orch-tree-glyph {
+  opacity: 0.45;
+  margin-right: 6px;
+  font-size: 11px;
+}
+.orchestration-traces-page-root .orch-tree-id {
+  color: hsl(var(--orch-hue, 210), 55%, 72%);
+}
+
+/* Quota bar chart */
+.orchestration-traces-page-root .orch-quota-chart-block {
+  margin-top: 4px;
+}
+.orchestration-traces-page-root .orch-quota-row {
+  margin-bottom: 10px;
+}
+.orchestration-traces-page-root .orch-quota-label {
+  margin-bottom: 4px;
+  opacity: 0.95;
+}
+.orchestration-traces-page-root .orch-quota-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+  max-width: 100%;
+}
+.orchestration-traces-page-root .orch-quota-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(
+    90deg,
+    hsla(var(--orch-hue, 200), 70%, 48%, 0.85),
+    hsla(var(--orch-hue, 200), 55%, 58%, 0.75)
+  );
+  min-width: 2px;
+  transition: width 0.2s ease;
 }

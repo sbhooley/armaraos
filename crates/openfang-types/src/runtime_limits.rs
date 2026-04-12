@@ -49,6 +49,11 @@ pub struct RuntimeLimitsConfig {
     pub workflow_run_ttl_secs: Option<u64>,
     /// When `true` **and** `ARMARAOS_UNBOUNDED=1`, apply [`UNBOUNDED_*`] ceilings instead of tight [`BOUNDED_*`] caps.
     pub allow_unbounded_agent_loop: bool,
+    /// When set, new [`OrchestrationContext`](crate::orchestration::OrchestrationContext) roots that do not
+    /// already have `remaining_budget_ms` get this wall-clock budget (e.g. spawn + orchestration triggers).
+    /// `None` leaves the budget unset (no wall-clock cap). TOML: `[runtime_limits] orchestration_default_budget_ms`.
+    #[serde(default)]
+    pub orchestration_default_budget_ms: Option<u64>,
 }
 
 impl Default for RuntimeLimitsConfig {
@@ -61,6 +66,7 @@ impl Default for RuntimeLimitsConfig {
             workflow_max_retained_runs: 200,
             workflow_run_ttl_secs: None,
             allow_unbounded_agent_loop: false,
+            orchestration_default_budget_ms: None,
         }
     }
 }
@@ -101,6 +107,9 @@ impl RuntimeLimitsConfig {
         if let Some(0) = self.workflow_run_ttl_secs {
             self.workflow_run_ttl_secs = None;
         }
+        if let Some(0) = self.orchestration_default_budget_ms {
+            self.orchestration_default_budget_ms = None;
+        }
     }
 
     fn apply_ceiling(&mut self, unbounded: bool) {
@@ -119,6 +128,10 @@ impl RuntimeLimitsConfig {
             if let Some(ttl) = self.workflow_run_ttl_secs {
                 self.workflow_run_ttl_secs = Some(ttl.clamp(1, UNBOUNDED_MAX_WORKFLOW_TTL_SECS));
             }
+            if let Some(ms) = self.orchestration_default_budget_ms {
+                const MAX_MS: u64 = 90 * 24 * 3600 * 1000;
+                self.orchestration_default_budget_ms = Some(ms.min(MAX_MS));
+            }
         } else {
             self.max_iterations = self.max_iterations.clamp(1, BOUNDED_CEILING_ITERATIONS);
             self.max_continuations = self.max_continuations.clamp(1, BOUNDED_CEILING_CONTINUE);
@@ -134,6 +147,10 @@ impl RuntimeLimitsConfig {
             if let Some(ttl) = self.workflow_run_ttl_secs {
                 // Bounded mode: still allow long TTL but cap absurd values.
                 self.workflow_run_ttl_secs = Some(ttl.clamp(1, UNBOUNDED_MAX_WORKFLOW_TTL_SECS));
+            }
+            if let Some(ms) = self.orchestration_default_budget_ms {
+                const MAX_MS: u64 = 90 * 24 * 3600 * 1000;
+                self.orchestration_default_budget_ms = Some(ms.min(MAX_MS));
             }
         }
     }
@@ -215,6 +232,7 @@ impl EffectiveRuntimeLimits {
             workflow_max_retained_runs: self.workflow_max_retained_runs,
             workflow_run_ttl_secs: self.workflow_run_ttl_secs,
             allow_unbounded_agent_loop: allow_unbounded_cfg,
+            orchestration_default_budget_ms: None,
         };
         tmp.sanitize_minima();
         let unbounded = unbounded_runtime_mode_active(&tmp);
@@ -225,6 +243,11 @@ impl EffectiveRuntimeLimits {
         self.max_agent_call_depth = tmp.max_agent_call_depth;
         self.workflow_max_retained_runs = tmp.workflow_max_retained_runs;
         self.workflow_run_ttl_secs = tmp.workflow_run_ttl_secs;
+    }
+
+    /// Re-apply global ceilings after caller-side numeric overrides (e.g. workflow adaptive step).
+    pub fn re_clamp_after_override(&mut self, global: &RuntimeLimitsConfig) {
+        self.clamp_merged(global.allow_unbounded_agent_loop);
     }
 }
 
@@ -313,6 +336,7 @@ mod tests {
             workflow_max_retained_runs: 99_999,
             workflow_run_ttl_secs: Some(999_999_999),
             allow_unbounded_agent_loop: false,
+            orchestration_default_budget_ms: None,
         };
         c.clamp_bounds();
         assert_eq!(c.max_iterations, BOUNDED_CEILING_ITERATIONS);

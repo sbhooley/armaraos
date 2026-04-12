@@ -99,10 +99,60 @@ pub struct WorkflowStep {
     /// Optional variable name to store this step's output in.
     #[serde(default)]
     pub output_var: Option<String>,
+    /// When `mode` is [`StepMode::Collect`], how to merge preceding fan-out outputs.
+    #[serde(default)]
+    pub collect_aggregation: Option<AggregationStrategy>,
 }
 
 fn default_timeout() -> u64 {
     120
+}
+
+fn default_allow_subagents() -> bool {
+    true
+}
+
+/// How to aggregate fan-out outputs in a `Collect` step (design: `docs/agent-orchestration-design.md` §5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AggregationStrategy {
+    /// Join with separator (default workflow collect behavior).
+    Concatenate { separator: String },
+    /// JSON array of fan-out strings.
+    JsonArray,
+    /// Majority / plurality vote on normalized responses (`threshold` 0.0–1.0 = minimum fraction).
+    Consensus { threshold: f32 },
+    /// Evaluator agent picks the best fan-out output (1-based index in reply).
+    BestOf {
+        evaluator_agent: String,
+        criteria: String,
+    },
+    /// Summarizer agent merges all fan-out outputs into one text.
+    Summarize {
+        summarizer_agent: String,
+        max_length: Option<usize>,
+    },
+    Custom {
+        aggregator_agent: String,
+        aggregation_prompt: String,
+    },
+}
+
+impl Default for AggregationStrategy {
+    fn default() -> Self {
+        Self::Concatenate {
+            separator: "\n\n---\n\n".to_string(),
+        }
+    }
+}
+
+/// Overrides for one workflow step running in `Adaptive` mode (full agent loop limits).
+#[derive(Debug, Clone, Default)]
+pub struct AdaptiveWorkflowOverrides {
+    pub max_iterations: u32,
+    pub tool_allowlist: Option<Vec<String>>,
+    pub allow_subagents: bool,
+    pub max_tokens: Option<u64>,
 }
 
 /// How to identify the agent for a step.
@@ -130,6 +180,16 @@ pub enum StepMode {
     Conditional { condition: String },
     /// Loop — repeat this step until output contains `until` or `max_iterations` reached.
     Loop { max_iterations: u32, until: String },
+    /// Adaptive — one user message with overridden loop limits / tools (full agent turn).
+    Adaptive {
+        max_iterations: u32,
+        #[serde(default)]
+        tool_allowlist: Option<Vec<String>>,
+        #[serde(default = "default_allow_subagents")]
+        allow_subagents: bool,
+        #[serde(default)]
+        max_tokens: Option<u64>,
+    },
 }
 
 /// Error handling mode for a workflow step.
@@ -366,34 +426,186 @@ impl WorkflowEngine {
         result
     }
 
+    /// Numbered list of candidate outputs (1-based) for evaluator prompts.
+    fn format_numbered_candidates(outputs: &[String]) -> String {
+        outputs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}. {}", i + 1, s))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn best_of_prompt(criteria: &str, outputs: &[String]) -> String {
+        let body = Self::format_numbered_candidates(outputs);
+        format!(
+            "You are evaluating multiple candidate responses.\n\n\
+             Criteria:\n{criteria}\n\n\
+             Candidates:\n\n{body}\n\n\
+             Reply with ONLY the number (1 to {}) of the single best candidate. No other text.",
+            outputs.len()
+        )
+    }
+
+    fn summarize_prompt(max_length: Option<usize>, outputs: &[String]) -> String {
+        let numbered = Self::format_numbered_candidates(outputs);
+        let limit = match max_length {
+            Some(n) => format!("Keep the summary under approximately {n} characters."),
+            None => String::new(),
+        };
+        format!("Summarize the following texts into one coherent response. {limit}\n\n{numbered}")
+    }
+
+    /// Expands `{{outputs}}`, `{{outputs_json}}`, `{{input}}`, and `{{var}}` placeholders.
+    fn expand_custom_aggregation_prompt(
+        template: &str,
+        outputs: &[String],
+        workflow_initial: &str,
+        vars: &HashMap<String, String>,
+    ) -> String {
+        let outputs_json = serde_json::to_string(outputs).unwrap_or_else(|_| "[]".to_string());
+        let outputs_block = Self::format_numbered_candidates(outputs);
+        let mut result = template
+            .replace("{{outputs_json}}", &outputs_json)
+            .replace("{{outputs}}", &outputs_block)
+            .replace("{{input}}", workflow_initial);
+        for (key, value) in vars {
+            result = result.replace(&format!("{{{{{key}}}}}"), value);
+        }
+        result
+    }
+
+    /// Parse a 1-based candidate index from the evaluator reply.
+    fn parse_best_of_choice(reply: &str, n: usize) -> Result<usize, String> {
+        if n == 0 {
+            return Err("no candidates for BestOf".to_string());
+        }
+        let trimmed = reply.trim();
+        for token in trimmed.split_whitespace() {
+            let t = token.trim_matches(|c: char| ".,;:!?()[]{}\"'".contains(c));
+            if let Ok(v) = t.parse::<usize>() {
+                if (1..=n).contains(&v) {
+                    return Ok(v - 1);
+                }
+            }
+        }
+        for word in trimmed.split(|c: char| !c.is_ascii_digit()) {
+            if word.is_empty() {
+                continue;
+            }
+            if let Ok(v) = word.parse::<usize>() {
+                if (1..=n).contains(&v) {
+                    return Ok(v - 1);
+                }
+            }
+        }
+        Err(format!(
+            "could not parse candidate index 1..{n} from evaluator reply: {reply:?}"
+        ))
+    }
+
+    fn synth_aggregate_step(
+        collect_step: &WorkflowStep,
+        agent: StepAgent,
+        prompt: String,
+    ) -> WorkflowStep {
+        WorkflowStep {
+            name: format!("{}→aggregate", collect_step.name),
+            agent,
+            prompt_template: prompt,
+            mode: StepMode::Sequential,
+            timeout_secs: collect_step.timeout_secs,
+            error_mode: collect_step.error_mode.clone(),
+            output_var: None,
+            collect_aggregation: None,
+        }
+    }
+
+    /// Merge fan-out step outputs for a `Collect` step (pure strategies only).
+    ///
+    /// For [`AggregationStrategy::BestOf`], [`AggregationStrategy::Summarize`], and
+    /// [`AggregationStrategy::Custom`], use the async collect path in [`Self::execute_run`].
+    pub fn apply_aggregation(
+        strategy: &AggregationStrategy,
+        outputs: &[String],
+    ) -> Result<String, String> {
+        if outputs.is_empty() {
+            return Ok(String::new());
+        }
+        match strategy {
+            AggregationStrategy::Concatenate { separator } => Ok(outputs.join(separator)),
+            AggregationStrategy::JsonArray => {
+                serde_json::to_string(outputs).map_err(|e| e.to_string())
+            }
+            AggregationStrategy::Consensus { threshold } => {
+                let t = threshold.clamp(0.0, 1.0);
+                let n = outputs.len();
+                let mut counts: HashMap<String, usize> = HashMap::new();
+                for o in outputs {
+                    let k = o.trim().to_string();
+                    *counts.entry(k).or_insert(0) += 1;
+                }
+                let need = ((n as f32) * t).ceil().max(1.0) as usize;
+                let mut best: Option<(String, usize)> = None;
+                for (s, c) in counts {
+                    let better = best.as_ref().map(|(_, bc)| c > *bc).unwrap_or(true);
+                    if better {
+                        best = Some((s, c));
+                    }
+                }
+                if let Some((s, c)) = best {
+                    if c >= need {
+                        return Ok(s);
+                    }
+                }
+                Ok(outputs.join("\n"))
+            }
+            AggregationStrategy::BestOf { .. }
+            | AggregationStrategy::Summarize { .. }
+            | AggregationStrategy::Custom { .. } => Err(
+                "apply_aggregation() supports only concatenate/json_array/consensus; use agent collect path"
+                    .to_string(),
+            ),
+        }
+    }
+
     /// Execute a single step with error mode handling. Returns (output, input_tokens, output_tokens).
     async fn execute_step_with_error_mode<F, Fut>(
         step: &WorkflowStep,
+        step_index: usize,
         agent_id: AgentId,
         prompt: String,
-        send_message: &F,
+        send_message: &mut F,
     ) -> Result<Option<(String, u64, u64)>, String>
     where
-        F: Fn(AgentId, String) -> Fut,
+        F: FnMut(AgentId, String, &WorkflowStep, usize) -> Fut,
         Fut: std::future::Future<Output = Result<(String, u64, u64), String>>,
     {
         let timeout_dur = std::time::Duration::from_secs(step.timeout_secs);
 
         match &step.error_mode {
             ErrorMode::Fail => {
-                let result = tokio::time::timeout(timeout_dur, send_message(agent_id, prompt))
-                    .await
-                    .map_err(|_| {
-                        format!(
-                            "Step '{}' timed out after {}s",
-                            step.name, step.timeout_secs
-                        )
-                    })?
-                    .map_err(|e| format!("Step '{}' failed: {}", step.name, e))?;
+                let result = tokio::time::timeout(
+                    timeout_dur,
+                    send_message(agent_id, prompt, step, step_index),
+                )
+                .await
+                .map_err(|_| {
+                    format!(
+                        "Step '{}' timed out after {}s",
+                        step.name, step.timeout_secs
+                    )
+                })?
+                .map_err(|e| format!("Step '{}' failed: {}", step.name, e))?;
                 Ok(Some(result))
             }
             ErrorMode::Skip => {
-                match tokio::time::timeout(timeout_dur, send_message(agent_id, prompt)).await {
+                match tokio::time::timeout(
+                    timeout_dur,
+                    send_message(agent_id, prompt, step, step_index),
+                )
+                .await
+                {
                     Ok(Ok(result)) => Ok(Some(result)),
                     Ok(Err(e)) => {
                         warn!("Step '{}' failed (skipping): {e}", step.name);
@@ -411,8 +623,11 @@ impl WorkflowEngine {
             ErrorMode::Retry { max_retries } => {
                 let mut last_err = String::new();
                 for attempt in 0..=*max_retries {
-                    match tokio::time::timeout(timeout_dur, send_message(agent_id, prompt.clone()))
-                        .await
+                    match tokio::time::timeout(
+                        timeout_dur,
+                        send_message(agent_id, prompt.clone(), step, step_index),
+                    )
+                    .await
                     {
                         Ok(Ok(result)) => return Ok(Some(result)),
                         Ok(Err(e)) => {
@@ -449,14 +664,17 @@ impl WorkflowEngine {
     ///
     /// This method takes a closure that sends messages to agents,
     /// so the workflow engine remains decoupled from the kernel.
+    ///
+    /// The closure receives `step_index`: the index of `step` in the workflow definition
+    /// (`0..steps.len()`), including fan-out branches (each fan-out step uses its own index).
     pub async fn execute_run<F, Fut>(
         &self,
         run_id: WorkflowRunId,
         agent_resolver: impl Fn(&StepAgent) -> Option<(AgentId, String)>,
-        send_message: F,
+        mut send_message: F,
     ) -> Result<String, String>
     where
-        F: Fn(AgentId, String) -> Fut,
+        F: FnMut(AgentId, String, &WorkflowStep, usize) -> Fut,
         Fut: std::future::Future<Output = Result<(String, u64, u64), String>>,
     {
         // Get the run and workflow
@@ -483,6 +701,7 @@ impl WorkflowEngine {
             "Starting workflow execution"
         );
 
+        let run_initial_input = input.clone();
         let mut current_input = input;
         let mut all_outputs: Vec<String> = Vec::new();
         let mut variables: HashMap<String, String> = HashMap::new();
@@ -498,7 +717,7 @@ impl WorkflowEngine {
             );
 
             match &step.mode {
-                StepMode::Sequential => {
+                StepMode::Sequential | StepMode::Adaptive { .. } => {
                     let (agent_id, agent_name) = agent_resolver(&step.agent)
                         .ok_or_else(|| format!("Agent not found for step '{}'", step.name))?;
 
@@ -506,9 +725,14 @@ impl WorkflowEngine {
                         Self::expand_variables(&step.prompt_template, &current_input, &variables);
 
                     let start = std::time::Instant::now();
-                    let result =
-                        Self::execute_step_with_error_mode(step, agent_id, prompt, &send_message)
-                            .await;
+                    let result = Self::execute_step_with_error_mode(
+                        step,
+                        i,
+                        agent_id,
+                        prompt,
+                        &mut send_message,
+                    )
+                    .await;
                     let duration_ms = start.elapsed().as_millis() as u64;
 
                     match result {
@@ -581,7 +805,7 @@ impl WorkflowEngine {
                         step_infos.push((*idx, fan_step.name.clone(), agent_id, agent_name));
                         futures.push(tokio::time::timeout(
                             timeout_dur,
-                            send_message(agent_id, prompt),
+                            send_message(agent_id, prompt, fan_step, *idx),
                         ));
                     }
 
@@ -651,7 +875,218 @@ impl WorkflowEngine {
                 }
 
                 StepMode::Collect => {
-                    current_input = all_outputs.join("\n\n---\n\n");
+                    let strategy = step
+                        .collect_aggregation
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_default();
+                    current_input = match &strategy {
+                        AggregationStrategy::Concatenate { .. }
+                        | AggregationStrategy::JsonArray
+                        | AggregationStrategy::Consensus { .. } => {
+                            Self::apply_aggregation(&strategy, &all_outputs)?
+                        }
+                        AggregationStrategy::BestOf {
+                            evaluator_agent,
+                            criteria,
+                        } => {
+                            if all_outputs.is_empty() {
+                                String::new()
+                            } else if all_outputs.len() == 1 {
+                                all_outputs[0].clone()
+                            } else {
+                                let prompt = Self::best_of_prompt(criteria, &all_outputs);
+                                let agg_agent = StepAgent::ByName {
+                                    name: evaluator_agent.clone(),
+                                };
+                                let (agent_id, agent_name) = agent_resolver(&agg_agent)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "Evaluator agent '{evaluator_agent}' not found for collect BestOf"
+                                        )
+                                    })?;
+                                let synth =
+                                    Self::synth_aggregate_step(step, agg_agent, prompt.clone());
+                                let start = std::time::Instant::now();
+                                let result = Self::execute_step_with_error_mode(
+                                    &synth,
+                                    i,
+                                    agent_id,
+                                    prompt,
+                                    &mut send_message,
+                                )
+                                .await;
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                match result {
+                                    Ok(Some((reply, input_tokens, output_tokens))) => {
+                                        let idx =
+                                            Self::parse_best_of_choice(&reply, all_outputs.len())?;
+                                        let picked = all_outputs[idx].clone();
+                                        let step_result = StepResult {
+                                            step_name: format!("{}:best_of", step.name),
+                                            agent_id: agent_id.to_string(),
+                                            agent_name,
+                                            output: reply,
+                                            input_tokens,
+                                            output_tokens,
+                                            duration_ms,
+                                        };
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.step_results.push(step_result);
+                                        }
+                                        picked
+                                    }
+                                    Ok(None) => {
+                                        return Err(format!(
+                                            "Collect BestOf step '{}' was skipped",
+                                            step.name
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.state = WorkflowRunState::Failed;
+                                            r.error = Some(e.clone());
+                                            r.completed_at = Some(Utc::now());
+                                        }
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                        }
+                        AggregationStrategy::Summarize {
+                            summarizer_agent,
+                            max_length,
+                        } => {
+                            if all_outputs.is_empty() {
+                                String::new()
+                            } else if all_outputs.len() == 1 {
+                                all_outputs[0].clone()
+                            } else {
+                                let prompt = Self::summarize_prompt(*max_length, &all_outputs);
+                                let agg_agent = StepAgent::ByName {
+                                    name: summarizer_agent.clone(),
+                                };
+                                let (agent_id, agent_name) = agent_resolver(&agg_agent)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "Summarizer agent '{summarizer_agent}' not found for collect"
+                                        )
+                                    })?;
+                                let synth =
+                                    Self::synth_aggregate_step(step, agg_agent, prompt.clone());
+                                let start = std::time::Instant::now();
+                                let result = Self::execute_step_with_error_mode(
+                                    &synth,
+                                    i,
+                                    agent_id,
+                                    prompt,
+                                    &mut send_message,
+                                )
+                                .await;
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                match result {
+                                    Ok(Some((summary, input_tokens, output_tokens))) => {
+                                        let step_result = StepResult {
+                                            step_name: format!("{}:summarize", step.name),
+                                            agent_id: agent_id.to_string(),
+                                            agent_name,
+                                            output: summary.clone(),
+                                            input_tokens,
+                                            output_tokens,
+                                            duration_ms,
+                                        };
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.step_results.push(step_result);
+                                        }
+                                        summary
+                                    }
+                                    Ok(None) => {
+                                        return Err(format!(
+                                            "Collect Summarize step '{}' was skipped",
+                                            step.name
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.state = WorkflowRunState::Failed;
+                                            r.error = Some(e.clone());
+                                            r.completed_at = Some(Utc::now());
+                                        }
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                        }
+                        AggregationStrategy::Custom {
+                            aggregator_agent,
+                            aggregation_prompt,
+                        } => {
+                            if all_outputs.is_empty() {
+                                String::new()
+                            } else if all_outputs.len() == 1 {
+                                all_outputs[0].clone()
+                            } else {
+                                let prompt = Self::expand_custom_aggregation_prompt(
+                                    aggregation_prompt,
+                                    &all_outputs,
+                                    &run_initial_input,
+                                    &variables,
+                                );
+                                let agg_agent = StepAgent::ByName {
+                                    name: aggregator_agent.clone(),
+                                };
+                                let (agent_id, agent_name) = agent_resolver(&agg_agent)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "Aggregator agent '{aggregator_agent}' not found for collect"
+                                        )
+                                    })?;
+                                let synth =
+                                    Self::synth_aggregate_step(step, agg_agent, prompt.clone());
+                                let start = std::time::Instant::now();
+                                let result = Self::execute_step_with_error_mode(
+                                    &synth,
+                                    i,
+                                    agent_id,
+                                    prompt,
+                                    &mut send_message,
+                                )
+                                .await;
+                                let duration_ms = start.elapsed().as_millis() as u64;
+                                match result {
+                                    Ok(Some((out, input_tokens, output_tokens))) => {
+                                        let step_result = StepResult {
+                                            step_name: format!("{}:custom", step.name),
+                                            agent_id: agent_id.to_string(),
+                                            agent_name,
+                                            output: out.clone(),
+                                            input_tokens,
+                                            output_tokens,
+                                            duration_ms,
+                                        };
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.step_results.push(step_result);
+                                        }
+                                        out
+                                    }
+                                    Ok(None) => {
+                                        return Err(format!(
+                                            "Collect Custom step '{}' was skipped",
+                                            step.name
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        if let Some(r) = self.runs.write().await.get_mut(&run_id) {
+                                            r.state = WorkflowRunState::Failed;
+                                            r.error = Some(e.clone());
+                                            r.completed_at = Some(Utc::now());
+                                        }
+                                        return Err(e);
+                                    }
+                                }
+                            }
+                        }
+                    };
                     all_outputs.clear();
                     all_outputs.push(current_input.clone());
                     if let Some(ref var) = step.output_var {
@@ -682,9 +1117,14 @@ impl WorkflowEngine {
                         Self::expand_variables(&step.prompt_template, &current_input, &variables);
 
                     let start = std::time::Instant::now();
-                    let result =
-                        Self::execute_step_with_error_mode(step, agent_id, prompt, &send_message)
-                            .await;
+                    let result = Self::execute_step_with_error_mode(
+                        step,
+                        i,
+                        agent_id,
+                        prompt,
+                        &mut send_message,
+                    )
+                    .await;
                     let duration_ms = start.elapsed().as_millis() as u64;
 
                     match result {
@@ -738,9 +1178,10 @@ impl WorkflowEngine {
                         let start = std::time::Instant::now();
                         let result = Self::execute_step_with_error_mode(
                             step,
+                            i,
                             agent_id,
                             prompt,
-                            &send_message,
+                            &mut send_message,
                         )
                         .await;
                         let duration_ms = start.elapsed().as_millis() as u64;
@@ -841,6 +1282,7 @@ mod tests {
                     timeout_secs: 30,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "summarize".to_string(),
@@ -852,6 +1294,7 @@ mod tests {
                     timeout_secs: 30,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -929,7 +1372,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sender = |_id: AgentId, msg: String| async move {
+        let sender = |_id: AgentId, msg: String, _step: &WorkflowStep, _idx: usize| async move {
             Ok((format!("Processed: {msg}"), 100u64, 50u64))
         };
 
@@ -943,6 +1386,72 @@ mod tests {
         assert!(matches!(run.state, WorkflowRunState::Completed));
         assert_eq!(run.step_results.len(), 2);
         assert!(run.output.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_execute_run_adaptive_step() {
+        let engine = WorkflowEngine::new();
+        let wf = Workflow {
+            id: WorkflowId::new(),
+            name: "adaptive-exec".to_string(),
+            description: "".to_string(),
+            steps: vec![WorkflowStep {
+                name: "think".to_string(),
+                agent: StepAgent::ByName {
+                    name: "agent-a".to_string(),
+                },
+                prompt_template: "Task: {{input}}".to_string(),
+                mode: StepMode::Adaptive {
+                    max_iterations: 7,
+                    tool_allowlist: Some(vec!["web_search".to_string()]),
+                    allow_subagents: false,
+                    max_tokens: Some(4096),
+                },
+                timeout_secs: 10,
+                error_mode: ErrorMode::Fail,
+                output_var: None,
+                collect_aggregation: None,
+            }],
+            created_at: Utc::now(),
+        };
+        let wf_id = engine.register(wf).await;
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "hello".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
+
+        let sender = |_id: AgentId, _msg: String, step: &WorkflowStep, idx: usize| {
+            assert_eq!(idx, 0);
+            match &step.mode {
+                StepMode::Adaptive {
+                    max_iterations,
+                    tool_allowlist,
+                    allow_subagents,
+                    max_tokens,
+                } => {
+                    assert_eq!(*max_iterations, 7);
+                    assert_eq!(tool_allowlist, &Some(vec!["web_search".to_string()]));
+                    assert!(!*allow_subagents);
+                    assert_eq!(*max_tokens, Some(4096));
+                }
+                _ => panic!("expected Adaptive mode"),
+            }
+            async { Ok(("adaptive-result".to_string(), 3u64, 4u64)) }
+        };
+
+        let result = engine.execute_run(run_id, mock_resolver, sender).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "adaptive-result");
+
+        let run = engine.get_run(run_id).await.unwrap();
+        assert!(matches!(run.state, WorkflowRunState::Completed));
+        assert_eq!(run.step_results.len(), 1);
+        assert_eq!(run.step_results[0].step_name, "think");
+        assert_eq!(run.step_results[0].output, "adaptive-result");
     }
 
     #[tokio::test]
@@ -963,6 +1472,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "only-if-error".to_string(),
@@ -976,6 +1486,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -990,8 +1501,9 @@ mod tests {
             .await
             .unwrap();
 
-        let sender =
-            |_id: AgentId, msg: String| async move { Ok((format!("OK: {msg}"), 10u64, 5u64)) };
+        let sender = |_id: AgentId, msg: String, _step: &WorkflowStep, _idx: usize| async move {
+            Ok((format!("OK: {msg}"), 10u64, 5u64))
+        };
 
         let result = engine.execute_run(run_id, mock_resolver, sender).await;
         assert!(result.is_ok());
@@ -1019,6 +1531,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "only-if-error".to_string(),
@@ -1032,6 +1545,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -1047,7 +1561,7 @@ mod tests {
             .unwrap();
 
         // This sender returns output containing "ERROR"
-        let sender = |_id: AgentId, _msg: String| async move {
+        let sender = |_id: AgentId, _msg: String, _step: &WorkflowStep, _idx: usize| async move {
             Ok(("Found an ERROR in the data".to_string(), 10u64, 5u64))
         };
 
@@ -1079,6 +1593,7 @@ mod tests {
                 timeout_secs: 10,
                 error_mode: ErrorMode::Fail,
                 output_var: None,
+                collect_aggregation: None,
             }],
             created_at: Utc::now(),
         };
@@ -1094,7 +1609,7 @@ mod tests {
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
-        let sender = move |_id: AgentId, _msg: String| {
+        let sender = move |_id: AgentId, _msg: String, _step: &WorkflowStep, _idx: usize| {
             let cc = cc.clone();
             async move {
                 let n = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1132,6 +1647,7 @@ mod tests {
                 timeout_secs: 10,
                 error_mode: ErrorMode::Fail,
                 output_var: None,
+                collect_aggregation: None,
             }],
             created_at: Utc::now(),
         };
@@ -1145,7 +1661,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sender = |_id: AgentId, _msg: String| async move {
+        let sender = |_id: AgentId, _msg: String, _step: &WorkflowStep, _idx: usize| async move {
             Ok(("iteration output".to_string(), 10u64, 5u64))
         };
 
@@ -1174,6 +1690,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Skip,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "succeeds".to_string(),
@@ -1185,6 +1702,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -1201,7 +1719,7 @@ mod tests {
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
-        let sender = move |_id: AgentId, _msg: String| {
+        let sender = move |_id: AgentId, _msg: String, _step: &WorkflowStep, _idx: usize| {
             let cc = cc.clone();
             async move {
                 let n = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1239,6 +1757,7 @@ mod tests {
                 timeout_secs: 10,
                 error_mode: ErrorMode::Retry { max_retries: 2 },
                 output_var: None,
+                collect_aggregation: None,
             }],
             created_at: Utc::now(),
         };
@@ -1254,7 +1773,7 @@ mod tests {
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
-        let sender = move |_id: AgentId, _msg: String| {
+        let sender = move |_id: AgentId, _msg: String, _step: &WorkflowStep, _idx: usize| {
             let cc = cc.clone();
             async move {
                 let n = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1290,6 +1809,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: Some("first_result".to_string()),
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "transform".to_string(),
@@ -1301,6 +1821,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: Some("second_result".to_string()),
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "combine".to_string(),
@@ -1313,6 +1834,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -1329,7 +1851,7 @@ mod tests {
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
-        let sender = move |_id: AgentId, msg: String| {
+        let sender = move |_id: AgentId, msg: String, _step: &WorkflowStep, _idx: usize| {
             let cc = cc.clone();
             async move {
                 let n = cc.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1367,6 +1889,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "task-b".to_string(),
@@ -1378,6 +1901,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
                 WorkflowStep {
                     name: "collect".to_string(),
@@ -1389,6 +1913,7 @@ mod tests {
                     timeout_secs: 10,
                     error_mode: ErrorMode::Fail,
                     output_var: None,
+                    collect_aggregation: None,
                 },
             ],
             created_at: Utc::now(),
@@ -1403,8 +1928,9 @@ mod tests {
             .await
             .unwrap();
 
-        let sender =
-            |_id: AgentId, msg: String| async move { Ok((format!("Done: {msg}"), 10u64, 5u64)) };
+        let sender = |_id: AgentId, msg: String, _step: &WorkflowStep, _idx: usize| async move {
+            Ok((format!("Done: {msg}"), 10u64, 5u64))
+        };
 
         let result = engine.execute_run(run_id, mock_resolver, sender).await;
         assert!(result.is_ok());
@@ -1462,5 +1988,168 @@ mod tests {
         let json = serde_json::to_string(&mode).unwrap();
         let parsed: StepMode = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, StepMode::Loop { max_iterations: 5, until } if until == "done"));
+    }
+
+    #[tokio::test]
+    async fn test_step_mode_adaptive_serialization() {
+        let mode = StepMode::Adaptive {
+            max_iterations: 10,
+            tool_allowlist: Some(vec!["a".to_string(), "b".to_string()]),
+            allow_subagents: true,
+            max_tokens: Some(8192),
+        };
+        let json = serde_json::to_string(&mode).unwrap();
+        let parsed: StepMode = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            StepMode::Adaptive {
+                max_iterations: 10,
+                ref tool_allowlist,
+                allow_subagents: true,
+                max_tokens: Some(8192),
+            } if tool_allowlist.as_ref().map(|v| v.len()) == Some(2)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_workflow_json_roundtrip_with_adaptive_step() {
+        let wf = Workflow {
+            id: WorkflowId::new(),
+            name: "json-adaptive".to_string(),
+            description: "rt".to_string(),
+            steps: vec![WorkflowStep {
+                name: "ad".to_string(),
+                agent: StepAgent::ByName {
+                    name: "x".to_string(),
+                },
+                prompt_template: "p".to_string(),
+                mode: StepMode::Adaptive {
+                    max_iterations: 3,
+                    tool_allowlist: None,
+                    allow_subagents: false,
+                    max_tokens: None,
+                },
+                timeout_secs: 1,
+                error_mode: ErrorMode::Fail,
+                output_var: Some("out".to_string()),
+                collect_aggregation: None,
+            }],
+            created_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&wf).unwrap();
+        let back: Workflow = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "json-adaptive");
+        assert!(matches!(
+            back.steps[0].mode,
+            StepMode::Adaptive {
+                max_iterations: 3,
+                tool_allowlist: None,
+                allow_subagents: false,
+                max_tokens: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_apply_aggregation_rejects_agent_strategies() {
+        let s = AggregationStrategy::BestOf {
+            evaluator_agent: "e".to_string(),
+            criteria: "c".to_string(),
+        };
+        assert!(
+            WorkflowEngine::apply_aggregation(&s, &["a".to_string(), "b".to_string()]).is_err()
+        );
+    }
+
+    #[test]
+    fn test_aggregation_strategy_best_of_json() {
+        let j = r#"{"type":"best_of","evaluator_agent":"j1","criteria":"x"}"#;
+        let s: AggregationStrategy = serde_json::from_str(j).unwrap();
+        assert!(matches!(
+            s,
+            AggregationStrategy::BestOf {
+                ref evaluator_agent,
+                ..
+            } if evaluator_agent == "j1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_collect_best_of_execute_run() {
+        let engine = WorkflowEngine::new();
+        let wf = Workflow {
+            id: WorkflowId::new(),
+            name: "bestof-collect".to_string(),
+            description: String::new(),
+            steps: vec![
+                WorkflowStep {
+                    name: "fan1".to_string(),
+                    agent: StepAgent::ByName {
+                        name: "worker".to_string(),
+                    },
+                    prompt_template: "{{input}}".to_string(),
+                    mode: StepMode::FanOut,
+                    timeout_secs: 30,
+                    error_mode: ErrorMode::Fail,
+                    output_var: None,
+                    collect_aggregation: None,
+                },
+                WorkflowStep {
+                    name: "fan2".to_string(),
+                    agent: StepAgent::ByName {
+                        name: "worker".to_string(),
+                    },
+                    prompt_template: "{{input}}".to_string(),
+                    mode: StepMode::FanOut,
+                    timeout_secs: 30,
+                    error_mode: ErrorMode::Fail,
+                    output_var: None,
+                    collect_aggregation: None,
+                },
+                WorkflowStep {
+                    name: "merge".to_string(),
+                    agent: StepAgent::ByName {
+                        name: "judge".to_string(),
+                    },
+                    prompt_template: String::new(),
+                    mode: StepMode::Collect,
+                    timeout_secs: 30,
+                    error_mode: ErrorMode::Fail,
+                    output_var: None,
+                    collect_aggregation: Some(AggregationStrategy::BestOf {
+                        evaluator_agent: "judge".to_string(),
+                        criteria: "accuracy".to_string(),
+                    }),
+                },
+            ],
+            created_at: Utc::now(),
+        };
+        let wf_id = engine.register(wf).await;
+        let run_id = engine
+            .create_run(
+                wf_id,
+                "seed".to_string(),
+                WorkflowRetentionLimits::legacy_default(),
+            )
+            .await
+            .unwrap();
+
+        let sender = |_id: AgentId, _msg: String, _step: &WorkflowStep, idx: usize| async move {
+            if idx < 2 {
+                Ok((format!("C{}", idx + 1), 1u64, 1u64))
+            } else {
+                Ok(("2".to_string(), 1u64, 1u64))
+            }
+        };
+
+        let result = engine.execute_run(run_id, mock_resolver, sender).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "C2");
+
+        let run = engine.get_run(run_id).await.unwrap();
+        assert!(run
+            .step_results
+            .iter()
+            .any(|s| s.step_name == "merge:best_of"));
     }
 }
