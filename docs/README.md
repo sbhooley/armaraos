@@ -19,7 +19,6 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
 | [Architecture](architecture.md) | Workspace crate graph, kernel boot, agent lifecycle, memory + graph-memory substrates |
-| [AINL graph memory (runtime)](graph-memory.md) | Per-agent **`ainl_memory.db`**, **`GraphMemoryWriter`** wiring, persona lines in the chat system prompt, vs scheduled **`bundle.ainlbundle`** |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Agent automation hardening](agent-automation-hardening.md) | Tool args, persist vs re-scrape, loop guard interaction, phases, workspace habits; skill-mint stub cron reference |
@@ -61,6 +60,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | Guide | Description |
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
+| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, vs orchestration traces |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
 | [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
@@ -133,7 +133,7 @@ See **[data-directory.md](data-directory.md)** for overrides and migration from 
 |------|-------------|
 | `~/.armaraos/config.toml` | Main configuration file |
 | `~/.armaraos/data/openfang.db` | Main SQLite database (kernel / memory substrate) |
-| `~/.armaraos/agents/<id>/ainl_memory.db` | Optional per-agent **`ainl-memory`** graph store (episodes, facts, persona for LLM prompt); see [data-directory.md](data-directory.md) |
+| `~/.armaraos/agents/<id>/ainl_memory.db` | Optional per-agent **`ainl-memory`** graph store (episodes, facts, persona for LLM prompt); see [graph-memory.md](graph-memory.md), [data-directory.md](data-directory.md) |
 | `~/.armaraos/agents/<id>/bundle.ainlbundle` | Optional **AINL bundle** for scheduled **`ainl run`** round-trip; see [scheduled-ainl.md](scheduled-ainl.md) |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/daemon.json` | Daemon PID and port info |

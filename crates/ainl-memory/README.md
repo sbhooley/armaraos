@@ -57,7 +57,7 @@ let episodes = store.query_recent_episodes("agent-A", 10).unwrap();
 
 ### High-level `GraphMemory` API (used by ArmaraOS `openfang-runtime`)
 
-The **`GraphMemory`** type (see **`src/lib.rs`**) wraps **`SqliteGraphStore`** with helpers including **`write_episode`**, **`write_fact`**, **`store_pattern`**, **`write_persona`**, **`recall_recent`**, and **`recall_by_type`** (filter by **`AinlNodeKind`**, e.g. **`Persona`**, within a time window). **`openfang-runtime`** exposes this through **`GraphMemoryWriter`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** for delegation episodes, facts, and **persona** traits that feed the chat **system prompt** hook. Scheduled **`ainl run`** uses a separate Python JSON bridge + **`.ainlbundle`** file; see ArmaraOS **`docs/scheduled-ainl.md`** and **ainativelang** **`docs/adapters/AINL_GRAPH_MEMORY.md`**.
+The **`GraphMemory`** type (see **`src/lib.rs`**) wraps **`SqliteGraphStore`** with helpers including **`write_episode`**, **`write_fact`**, **`store_pattern`**, **`write_persona`**, **`recall_recent`**, and **`recall_by_type`** (filter by **`AinlNodeKind`**, e.g. **`Persona`**, within a time window). **`openfang-runtime`** exposes this through **`GraphMemoryWriter`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** for delegation episodes, facts, and **persona** traits that feed the chat **system prompt** hook. Scheduled **`ainl run`** uses a separate Python JSON bridge + **`.ainlbundle`** file; see ArmaraOS **`docs/scheduled-ainl.md`**, **`docs/graph-memory.md`** (how **`openfang-runtime`** uses this crate), and **ainativelang** **`docs/adapters/AINL_GRAPH_MEMORY.md`**.
 
 ## Node Types
 
@@ -91,6 +91,10 @@ AINL Memory is designed as infrastructure that any agent framework can adopt:
 - No dependencies on specific agent runtimes
 - Simple trait-based API
 - Bring your own storage backend
+
+## ArmaraOS / `openfang-runtime` integration
+
+**ArmaraOS** opens **`GraphMemory`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** via **`openfang_runtime::graph_memory_writer::GraphMemoryWriter`** (async-friendly **`Arc<Mutex<GraphMemory>>`**). The agent loop records episodes and facts; **`GraphMemory::recall_by_type`**, **`write_persona`**, and **`AinlNodeKind`** support **persona** recall for the chat **system prompt** hook. Scheduled **`ainl run`** uses a different persistence path (**`AINLBundle`** / **`ainl_graph_memory`** JSON); see **armaraos** **`docs/graph-memory.md`** and **`docs/scheduled-ainl.md`**.
 
 ## Status
 

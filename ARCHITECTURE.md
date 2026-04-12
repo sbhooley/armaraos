@@ -138,12 +138,11 @@ Operator reference: **`docs/graph-memory.md`**.
 4. **Persona**: Agent traits learned over time
    - `trait_name`, `strength` (0.0-1.0), `learned_from` (turn IDs)
 
-### Design Constraints
+### Design constraints
 
-- **Zero refactoring**: AINL memory added alongside existing openfang-memory, no changes to core Memory trait
-- **Standalone crate**: ainl-memory can be published to crates.io independently
-- **Proof-of-concept**: Single delegation write validates the integration path
-- **Future**: Full kernel integration, retrieval at agent loop start, semantic fact extraction
+- **Standalone crate**: `ainl-memory` stays free of kernel imports; publishable to crates.io.
+- **Parallel substrate**: `openfang-memory` / `Memory` trait unchanged; graph DB is a separate file per agent.
+- **Follow-ups**: tighter `source_turn_id` links for semantic nodes; optional richer prompt retrieval from `recall_recent`.
 
 ### Query Capabilities
 
@@ -171,34 +170,26 @@ ArmaraOS maintains API compatibility with OpenFang:
 
 ### ArmaraOS ↔ AINL
 
-OrchestrationTraceEvent promotes to AINL Episode node:
-- Serialized as `trace_event` JSON field in Episode
-- Zero data loss: full trace preserved in graph memory
-- Enables future unified query: "Show me all delegations in trace-123"
+- **Delegate path**: `tool_agent_delegate` embeds a serialized `OrchestrationTraceEvent` into the graph episode when JSON serialization succeeds (correlate with dashboard / API traces via `trace_id`).
+- **Trace ring**: hot orchestration events still live under **`openfang-memory`** / kernel HTTP; the graph is an additional durable projection, not a replacement store.
 
-### Memory Layers
+### Memory layers
 
 ```
 ┌─────────────────────────────────────────┐
-│ AINL Graph Memory (Layer 3)            │
-│ - Episode nodes (with trace events)    │
-│ - Semantic facts                        │
-│ - Procedural patterns                   │
-│ - Persona traits                        │
+│ AINL graph memory (Layer 3)             │
+│ ~/.armaraos/agents/<id>/ainl_memory.db │
+│ Episodes, semantic facts, persona, …    │
 └─────────────────────────────────────────┘
-              ↕
+              ↕ (correlate by trace_id, agent id, time)
 ┌─────────────────────────────────────────┐
-│ OpenFang Memory (Layer 1)              │
-│ - Structured KV                         │
-│ - Semantic store                        │
-│ - Knowledge graph                       │
-│ - Session history                       │
+│ OpenFang memory (Layer 1)               │
+│ ~/.armaraos/data/openfang.db            │
+│ Sessions, semantic recall, traces, …   │
 └─────────────────────────────────────────┘
 ```
 
-Both coexist in same SQLite file, different table namespaces:
-- OpenFang: `memories`, `entities`, `relations`, `kv_store`, `sessions`
-- AINL: `ainl_graph_nodes`, `ainl_graph_edges`
+**Different SQLite files.** `ainl-memory` tables live only inside each per-agent `ainl_memory.db`.
 
 ---
 
@@ -227,10 +218,9 @@ Both coexist in same SQLite file, different table namespaces:
 
 ### AINL Memory Roadmap
 
-1. **Full Kernel Integration** (Week 2)
-   - Add `GraphMemory` to `Kernel` struct
-   - Expose via `KernelHandle::graph_memory()`
-   - Remove `OnceLock` workaround in tool_runner.rs
+1. **Optional kernel handle** (Week 2+)
+   - Optionally expose a `GraphMemory` / writer hook on `KernelHandle` for tools that lack `caller_agent_id`
+   - Today: per-loop `GraphMemoryWriter` in `agent_loop` + ad-hoc `GraphMemoryWriter::open` in `tool_runner` for delegate/A2A
 
 2. **Retrieval at Agent Loop Start** (Week 3)
    - Query recent episodes before LLM call
@@ -270,12 +260,12 @@ AINL Memory Substrate (execution IS memory)
 ```
 
 **Date of AINL Integration**: April 12, 2026  
-**Commit Message**: "feat: AINL graph-memory substrate - proof-of-concept delegation writes"
 
 ---
 
 ## References
 
+- [AINL graph memory (ArmaraOS)](docs/graph-memory.md)
 - [AINL Specification](https://github.com/sbhooley/ainativelang)
 - [OpenFang Documentation](https://github.com/sbhooley/armaraos/tree/main/docs)
 - [ArmaraOS Dashboard Testing](docs/dashboard-testing.md)

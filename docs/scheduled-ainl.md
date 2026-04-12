@@ -89,7 +89,7 @@ The AINL subprocess should have **`~/.armaraos/ainl-library`** on **`PYTHONPATH`
 
 **Post-run (Python → bundle):** After **`ainl` exits successfully**, the kernel schedules a **non-blocking** export (`tokio::task::spawn_blocking` → **`openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort`** in `crates/openfang-runtime/src/ainl_bundle_cron.rs`). That spawns **`python3`** with **`AINL_EXPORT_AGENT_ID`**, re-boots the bridge for that agent, merges the live graph with the previous bundle source (or a tiny default **`.ainl`** stub if no bundle existed yet), and **`AINLBundleBuilder.save`** over **`bundle.ainlbundle`**. Failures are logged only; they do not fail the cron job.
 
-**Related (chat LLM, not the AINL subprocess):** **`openfang-runtime`** opens per-agent SQLite **`~/.armaraos/agents/<id>/ainl_memory.db`** via **`GraphMemoryWriter`** and, in **`run_agent_loop` / `run_agent_loop_streaming`**, appends recent **Persona** nodes (strength ≥ **0.1**, last **90** days) to the **system prompt** as **`[Persona traits active: …]`**. That path uses the **`ainl-memory`** crate (Rust), separate from the JSON **`ainl_graph_memory`** file used inside **`ainl run`**. See **[data-directory.md](data-directory.md)** and **`AI_Native_Lang/docs/adapters/AINL_GRAPH_MEMORY.md`**.
+**Related (chat LLM, not the AINL subprocess):** **`openfang-runtime`** opens per-agent SQLite **`~/.armaraos/agents/<id>/ainl_memory.db`** via **`GraphMemoryWriter`** and, in **`run_agent_loop` / `run_agent_loop_streaming`**, appends recent **Persona** nodes (strength ≥ **0.1**, last **90** days) to the **system prompt** as **`[Persona traits active: …]`**. That path uses the **`ainl-memory`** crate (Rust), separate from the JSON **`ainl_graph_memory`** file used inside **`ainl run`**. See **[data-directory.md](data-directory.md)**, **[graph-memory.md](graph-memory.md)** (Rust runtime hub), and **`AI_Native_Lang/docs/adapters/AINL_GRAPH_MEMORY.md`**.
 
 ## Editing cron jobs
 
@@ -98,6 +98,7 @@ The API supports **updating** a job in place: **`PUT /api/cron/jobs/{id}`** with
 ## Related docs
 
 - [Data directory](data-directory.md) — `~/.armaraos/` layout (per-agent **`ainl_memory.db`**, **`bundle.ainlbundle`**)  
+- [AINL graph memory (runtime)](graph-memory.md) — **`GraphMemoryWriter`**, persona **system prompt** hook  
 - [Architecture](architecture.md) — **`openfang-runtime`**, **`ainl-memory`**, graph memory  
 - [AINL first (default language)](ainl-first-language.md)  
 - [OOTB AINL](ootb-ainl.md)  

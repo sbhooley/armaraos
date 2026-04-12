@@ -162,7 +162,7 @@ Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / 
 }
 ```
 
-`scheduled_ainl_host_adapter` describes scheduled **`ainl run`** env for this agent: **`AINL_HOST_ADAPTER_ALLOWLIST`** (`source` is `none`, `metadata` with `allowlist`, or `default_online` with `adapter_count`) and **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** via **`ainl_allow_ir_declared_adapters`** (`"1"` = ignore env allowlist in AINL Python, `"0"` = do not). See **`docs/scheduled-ainl.md`**.
+`scheduled_ainl_host_adapter` describes scheduled **`ainl run`** env for this agent: **`AINL_HOST_ADAPTER_ALLOWLIST`** (`source` is `none`, `metadata` with `allowlist`, or `default_online` with `adapter_count`) and **`AINL_ALLOW_IR_DECLARED_ADAPTERS`** via **`ainl_allow_ir_declared_adapters`** (`"1"` = ignore env allowlist in AINL Python, `"0"` = do not). When **`~/.armaraos/agents/<id>/bundle.ainlbundle`** exists, the kernel also sets **`AINL_BUNDLE_PATH`** and **`AINL_AGENT_ID`** on the **`ainl` child** (bundle pre-seed + post-run export). See **`docs/scheduled-ainl.md`** (*AINL bundle + graph memory*).
 
 ### POST /api/agents
 

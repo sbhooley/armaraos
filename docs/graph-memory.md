@@ -28,7 +28,7 @@ ArmaraOS records **typed graph nodes** from live agent execution using the stand
 | Same loops — after each successful **`execute_tool`** | **Semantic** via **`record_fact`** | Short “tool ran” fact; **`source_turn_id`** follow-up: not yet the parent episode UUID (see *Follow-ups*). |
 | **`tool_agent_delegate`** | **Episode** via **`GraphMemoryWriter::record_turn`** | Includes serialized **`OrchestrationTraceEvent`** when JSON serialization succeeds. |
 | **`tool_a2a_send`** (after **`A2aClient::send_task`** OK) | **Episode** via **`record_delegation`** | Implemented in **`tool_runner.rs`** (not **`a2a.rs`**) so **`caller_agent_id`** is available. |
-| Persona recall (loop start) | Prompt injection | Recent **persona** nodes (strength threshold / time window per **`agent_loop`**) are summarized into the **system prompt**. Details: [data-directory.md](data-directory.md) row for **`ainl_memory.db`**. |
+| Persona recall (each LLM call setup) | **`GraphMemoryWriter::recall_persona`** → **`[Persona traits active: …]`** on **system prompt** | After manifest prompt, **openfang-memory** recall, and optional **orchestration** appendix, **`run_agent_loop` / `run_agent_loop_streaming`** query **Persona** nodes in the last **90** days with strength ≥ **0.1**, format **`trait (strength=0.xx)`**, append before Ultra Cost-Efficient Mode compression. |
 
 **Non-fatal open:** if home resolution or SQLite creation fails, **`GraphMemoryWriter::open`** returns **`Err`** and the agent loop runs without graph writes.
 
@@ -55,14 +55,14 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 | Outbound A2A | **`tool_runner.rs`** — **`tool_a2a_send`** after **`send_task`**. |
 | HTTP client only | **`a2a.rs`** — **`A2aClient::send_task`** (no graph dependency; keeps crate boundaries clean). |
 
-**Tests:** `cargo test -p openfang-runtime graph_memory_writer`
+**Tests:** `cargo test -p openfang-runtime graph_memory_writer` (includes **`test_recall_persona_returns_persona_nodes`**).
 
 ---
 
 ## Follow-ups
 
 1. **`record_fact`**: link **`source_turn_id`** to the episode id produced for the same user turn (today a fresh UUID is used in some paths).
-2. **Prompt-time retrieval**: optional injection of **`recall_recent`** snippets into the system prompt (beyond persona) is not the default yet.
+2. **Episodes at prompt time**: optional injection of **`recall_recent`** episode summaries into the system prompt is not implemented yet (persona-only today).
 
 ---
 
