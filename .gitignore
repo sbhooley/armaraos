@@ -53,3 +53,5 @@ Thumbs.db
 *.swo
 *~
 .serena/
+# Local editor backup copies (e.g. *.rs.bak2)
+**/*.bak*
