@@ -8,6 +8,7 @@
 //! Agents interact with a single `Memory` trait that abstracts over all three stores.
 
 pub mod consolidation;
+pub mod graph; // AINL graph-memory substrate (spike)
 #[cfg(feature = "http-memory")]
 pub mod http_client;
 pub mod knowledge;

@@ -1,0 +1,26 @@
+[package]
+name = "ainl-memory"
+version = "0.1.1-alpha"
+edition = "2021"
+authors = ["Steven Hooley"]
+description = "AINL graph-memory substrate - agent memory as execution graph"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sbhooley/armaraos"
+keywords = ["ai", "agent", "memory", "graph", "ainl"]
+categories = ["development-tools", "database"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[test]]
+name = "graph_integration"
+path = "tests/graph_integration.rs"

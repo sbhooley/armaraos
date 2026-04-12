@@ -14,11 +14,43 @@ use openfang_types::tool::{ToolDefinition, ToolResult};
 use openfang_types::tool_compat::normalize_tool_name;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, warn};
 
 /// Fallback max inter-agent depth when not running inside an agent task scope.
 const DEFAULT_MAX_AGENT_CALL_DEPTH: u32 = 5;
+
+/// AINL graph memory instance (proof-of-concept integration)
+///
+/// Initialized on first delegation write. Located in ArmaraOS home directory.
+/// This is a minimal integration point - full kernel integration deferred to avoid
+/// refactoring existing memory substrate.
+static AINL_GRAPH_MEMORY: OnceLock<Mutex<Option<ainl_memory::GraphMemory>>> = OnceLock::new();
+
+/// Get or initialize the AINL graph memory
+fn ainl_graph_memory() -> Option<std::sync::MutexGuard<'static, Option<ainl_memory::GraphMemory>>> {
+    let memory_lock = AINL_GRAPH_MEMORY.get_or_init(|| {
+        // Try to open graph memory in ArmaraOS home
+        let home = dirs::home_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            .join(".armaraos");
+
+        let graph_db_path = home.join("graph_memory.db");
+
+        match ainl_memory::GraphMemory::new(&graph_db_path) {
+            Ok(memory) => {
+                tracing::info!("AINL graph memory initialized at {:?}", graph_db_path);
+                Mutex::new(Some(memory))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize AINL graph memory: {}", e);
+                Mutex::new(None)
+            }
+        }
+    });
+
+    memory_lock.lock().ok()
+}
 
 /// Helper to get efficient_mode from orchestration context for inheritance.
 /// Returns the existing orchestration context's efficient_mode, or None if starting a new tree.
@@ -2236,6 +2268,32 @@ async fn tool_agent_delegate(
     let out = kh
         .send_to_agent_with_context(&selected.to_string(), task, Some(child))
         .await?;
+
+    // AINL graph-memory write (proof-of-concept integration)
+    // Write delegation episode to graph memory alongside orchestration trace
+    if let Some(memory_guard) = ainl_graph_memory() {
+        if let Some(ref memory) = *memory_guard {
+            let trace_event = serde_json::to_value(&openfang_types::orchestration_trace::OrchestrationTraceEvent {
+                trace_id: trace_id.clone(),
+                orchestrator_id,
+                agent_id: delegator,
+                parent_agent_id: parent_of_delegator,
+                event_type: openfang_types::orchestration_trace::TraceEventType::AgentDelegated {
+                    target_agent: selected,
+                    task: task.to_string(),
+                },
+                timestamp: chrono::Utc::now(),
+                metadata: std::collections::HashMap::new(),
+            }).ok();
+
+            let _ = memory.write_episode(
+                vec!["agent_delegate".to_string()],
+                Some(selected.to_string()),
+                trace_event,
+            );
+        }
+    }
+
     kh.record_orchestration_trace(
         openfang_types::orchestration_trace::OrchestrationTraceEvent {
             trace_id,

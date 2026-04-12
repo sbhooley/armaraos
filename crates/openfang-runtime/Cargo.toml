@@ -9,6 +9,7 @@ description = "Agent runtime and execution environment for OpenFang"
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
+ainl-memory = { path = "../ainl-memory" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,6 +32,7 @@ dashmap = { workspace = true }
 regex-lite = { workspace = true }
 rusqlite = { workspace = true }
 rmcp = { workspace = true }
+dirs = { workspace = true }
 http = "1"
 tokio-tungstenite = "0.24"
 shlex = "1"

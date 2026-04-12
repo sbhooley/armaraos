@@ -83,6 +83,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-memory"
+version = "0.1.1-alpha"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "ainl-runtime"
+version = "0.1.1-alpha"
+dependencies = [
+ "ainl-memory",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4467,6 +4488,7 @@ dependencies = [
 name = "openfang-runtime"
 version = "0.7.2"
 dependencies = [
+ "ainl-memory",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -4474,6 +4496,7 @@ dependencies = [
  "calamine",
  "chrono",
  "dashmap",
+ "dirs 6.0.0",
  "futures",
  "hex",
  "http",
