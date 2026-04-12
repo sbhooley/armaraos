@@ -7079,6 +7079,10 @@ impl OpenFangKernel {
                 cmd.stderr(Stdio::piped());
                 cmd.kill_on_drop(true);
                 self.apply_resolved_env_to_ainl_command(&mut cmd, agent_id);
+                openfang_runtime::ainl_bundle_cron::apply_ainl_bundle_env(
+                    &mut cmd,
+                    &format!("{agent_id}"),
+                );
 
                 match tokio::time::timeout(timeout, cmd.output()).await {
                     Ok(Ok(output)) => {
@@ -7127,6 +7131,13 @@ impl OpenFangKernel {
                             self.publish_event(evt).await;
                             return Err(err_msg);
                         }
+
+                        let export_agent_id = format!("{agent_id}");
+                        tokio::task::spawn_blocking(move || {
+                            openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort(
+                                &export_agent_id,
+                            );
+                        });
 
                         // Always append scheduler output into the agent session (inbox-style),
                         // without triggering an LLM turn.

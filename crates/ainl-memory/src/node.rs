@@ -7,6 +7,26 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Coarse node kind for store queries (matches `node_type` column values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AinlNodeKind {
+    Episode,
+    Semantic,
+    Procedural,
+    Persona,
+}
+
+impl AinlNodeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Episode => "episode",
+            Self::Semantic => "semantic",
+            Self::Procedural => "procedural",
+            Self::Persona => "persona",
+        }
+    }
+}
+
 /// Core AINL node types - the vocabulary of agent memory.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]

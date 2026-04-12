@@ -43,7 +43,7 @@ pub mod node;
 pub mod query;
 pub mod store;
 
-pub use node::{AinlEdge, AinlMemoryNode, AinlNodeType};
+pub use node::{AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType};
 pub use query::{find_high_confidence_facts, find_patterns, find_strong_traits, recall_recent, walk_from};
 pub use store::{GraphStore, SqliteGraphStore};
 
@@ -153,6 +153,34 @@ impl GraphMemory {
     pub fn recall_recent(&self, seconds_ago: i64) -> Result<Vec<AinlMemoryNode>, String> {
         let since = chrono::Utc::now().timestamp() - seconds_ago;
         self.store.query_episodes_since(since, 100)
+    }
+
+    /// Recall nodes of a specific kind written in the last `seconds_ago` seconds.
+    pub fn recall_by_type(
+        &self,
+        kind: AinlNodeKind,
+        seconds_ago: i64,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        let since = chrono::Utc::now().timestamp() - seconds_ago;
+        self.store
+            .query_nodes_by_type_since(kind.as_str(), since, 500)
+    }
+
+    /// Write a persona trait node.
+    pub fn write_persona(
+        &self,
+        trait_name: &str,
+        strength: f32,
+        learned_from: Vec<Uuid>,
+    ) -> Result<Uuid, String> {
+        let node = AinlMemoryNode::new_persona(
+            trait_name.to_string(),
+            strength,
+            learned_from,
+        );
+        let node_id = node.id;
+        self.store.write_node(&node)?;
+        Ok(node_id)
     }
 
     /// Get direct access to the underlying store for advanced queries

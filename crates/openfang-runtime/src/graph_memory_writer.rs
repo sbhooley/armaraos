@@ -107,6 +107,14 @@ impl GraphMemoryWriter {
         let inner = self.inner.lock().await;
         inner.recall_recent(seconds_ago).unwrap_or_default()
     }
+
+    /// Recall PersonaNode entries from AINL graph memory within the last N seconds.
+    pub async fn recall_persona(&self, seconds_ago: i64) -> Vec<ainl_memory::AinlMemoryNode> {
+        let inner = self.inner.lock().await;
+        inner
+            .recall_by_type(ainl_memory::AinlNodeKind::Persona, seconds_ago)
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +166,38 @@ mod tests {
         assert_eq!(recent.len(), 1);
         if let ainl_memory::AinlNodeType::Episode { delegation_to, .. } = &recent[0].node_type {
             assert_eq!(delegation_to, &Some("agent-B".to_string()));
+        } else {
+            panic!("wrong node type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recall_persona_returns_persona_nodes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("persona_test.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "test".to_string(),
+        };
+
+        {
+            let inner = writer.inner.lock().await;
+            inner
+                .write_persona("prefers_brevity", 0.9, vec![])
+                .expect("write persona");
+        }
+
+        let nodes = writer.recall_persona(3600).await;
+        assert_eq!(nodes.len(), 1);
+        if let ainl_memory::AinlNodeType::Persona {
+            trait_name,
+            strength,
+            ..
+        } = &nodes[0].node_type
+        {
+            assert_eq!(trait_name, "prefers_brevity");
+            assert!((strength - 0.9).abs() < 0.01);
         } else {
             panic!("wrong node type");
         }

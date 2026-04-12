@@ -603,6 +603,46 @@ pub async fn run_agent_loop(
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
+    // Persona hook: query AINL graph memory for PersonaNodes and prepend
+    // to system prompt so the agent's learned traits affect every LLM call.
+    if let Some(ref gm) = graph_memory {
+        let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await; // 90 days
+        if !persona_nodes.is_empty() {
+            let traits: Vec<String> = persona_nodes
+                .iter()
+                .filter_map(|n| {
+                    if let ainl_memory::AinlNodeType::Persona {
+                        trait_name,
+                        strength,
+                        ..
+                    } = &n.node_type
+                    {
+                        if *strength >= 0.1 {
+                            Some(format!("{trait_name} (strength={strength:.2})"))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !traits.is_empty() {
+                let persona_instruction = format!(
+                    "\n\n[Persona traits active: {}]",
+                    traits.join(", ")
+                );
+                system_prompt.push_str(&persona_instruction);
+                debug!(
+                    agent_id = %session.agent_id,
+                    trait_count = traits.len(),
+                    "AINL persona hook: injected {} trait(s) into system prompt",
+                    traits.len()
+                );
+            }
+        }
+    }
+
     // Ultra Cost-Efficient Mode: compress user message before storing in session / LLM context.
     // Memory recall above intentionally uses the original `user_message` for semantic similarity.
     // Per-agent metadata `efficient_mode` wins over the global config (injected by kernel via
@@ -2274,6 +2314,45 @@ pub async fn run_agent_loop_streaming(
     if let Some(ref octx) = orchestration_ctx {
         system_prompt.push_str("\n\n## Orchestration Context\n");
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
+    }
+
+    // Persona hook (streaming): same as `run_agent_loop`.
+    if let Some(ref gm) = graph_memory {
+        let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await;
+        if !persona_nodes.is_empty() {
+            let traits: Vec<String> = persona_nodes
+                .iter()
+                .filter_map(|n| {
+                    if let ainl_memory::AinlNodeType::Persona {
+                        trait_name,
+                        strength,
+                        ..
+                    } = &n.node_type
+                    {
+                        if *strength >= 0.1 {
+                            Some(format!("{trait_name} (strength={strength:.2})"))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !traits.is_empty() {
+                let persona_instruction = format!(
+                    "\n\n[Persona traits active: {}]",
+                    traits.join(", ")
+                );
+                system_prompt.push_str(&persona_instruction);
+                debug!(
+                    agent_id = %session.agent_id,
+                    trait_count = traits.len(),
+                    "AINL persona hook: injected {} trait(s) into system prompt",
+                    traits.len()
+                );
+            }
+        }
     }
 
     // Ultra Cost-Efficient Mode: compress user message before LLM context (streaming path).

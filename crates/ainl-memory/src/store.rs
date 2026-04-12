@@ -91,6 +91,43 @@ impl SqliteGraphStore {
         Self::ensure_schema(&conn).map_err(|e| e.to_string())?;
         Ok(Self { conn })
     }
+
+    /// Nodes of a given `node_type` with `timestamp >= since_timestamp`, most recent first.
+    pub fn query_nodes_by_type_since(
+        &self,
+        node_type: &str,
+        since_timestamp: i64,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = ?1 AND timestamp >= ?2
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![node_type, since_timestamp, limit as i64],
+                |row| {
+                    let payload: String = row.get(0)?;
+                    Ok(payload)
+                },
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut nodes = Vec::new();
+        for row in rows {
+            let payload = row.map_err(|e| e.to_string())?;
+            let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            nodes.push(node);
+        }
+
+        Ok(nodes)
+    }
 }
 
 impl GraphStore for SqliteGraphStore {
