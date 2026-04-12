@@ -19,20 +19,29 @@ use uuid::Uuid;
 pub struct GraphMemoryWriter {
     inner: Arc<Mutex<GraphMemory>>,
     agent_id: String,
+    on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
 }
 
 impl GraphMemoryWriter {
     /// Open or create the AINL graph memory DB for this agent.
     /// Path: ~/.armaraos/agents/<agent_id>/ainl_memory.db
     pub fn open(agent_id: &str) -> Result<Self, String> {
+        Self::open_with_notify(agent_id, None)
+    }
+
+    /// Same as [`Self::open`], with an optional hook invoked after each successful write.
+    /// Arguments to the hook: `(agent_id, kind)` where `kind` is `episode`, `delegation`, or `fact`.
+    pub fn open_with_notify(
+        agent_id: &str,
+        on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    ) -> Result<Self, String> {
         let path = Self::db_path(agent_id)?;
-        std::fs::create_dir_all(path.parent().unwrap())
-            .map_err(|e| format!("create dir: {e}"))?;
-        let memory = GraphMemory::new(&path)
-            .map_err(|e| format!("open graph memory: {e}"))?;
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| format!("create dir: {e}"))?;
+        let memory = GraphMemory::new(&path).map_err(|e| format!("open graph memory: {e}"))?;
         Ok(Self {
             inner: Arc::new(Mutex::new(memory)),
             agent_id: agent_id.to_string(),
+            on_write,
         })
     }
 
@@ -45,6 +54,12 @@ impl GraphMemoryWriter {
             .join("ainl_memory.db"))
     }
 
+    fn fire_write_hook(&self, kind: &str) {
+        if let Some(f) = &self.on_write {
+            f(self.agent_id.clone(), kind.to_string());
+        }
+    }
+
     /// Record a completed agent turn as an EpisodeNode.
     pub async fn record_turn(
         &self,
@@ -52,15 +67,26 @@ impl GraphMemoryWriter {
         delegation_to: Option<String>,
         trace_json: Option<serde_json::Value>,
     ) {
-        let inner = self.inner.lock().await;
-        match inner.write_episode(tool_calls.clone(), delegation_to.clone(), trace_json) {
-            Ok(id) => debug!(
-                agent_id = %self.agent_id,
-                episode_id = %id,
-                tools = ?tool_calls,
-                delegation_to = ?delegation_to,
-                "AINL graph memory: episode written"
-            ),
+        let kind = if delegation_to.is_some() {
+            "delegation"
+        } else {
+            "episode"
+        };
+        let res = {
+            let inner = self.inner.lock().await;
+            inner.write_episode(tool_calls.clone(), delegation_to.clone(), trace_json)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    episode_id = %id,
+                    tools = ?tool_calls,
+                    delegation_to = ?delegation_to,
+                    "AINL graph memory: episode written"
+                );
+                self.fire_write_hook(kind);
+            }
             Err(e) => warn!(
                 agent_id = %self.agent_id,
                 error = %e,
@@ -70,20 +96,21 @@ impl GraphMemoryWriter {
     }
 
     /// Record a semantic fact learned during a turn.
-    pub async fn record_fact(
-        &self,
-        fact: String,
-        confidence: f32,
-        source_turn_id: Uuid,
-    ) {
-        let inner = self.inner.lock().await;
-        match inner.write_fact(fact.clone(), confidence, source_turn_id) {
-            Ok(id) => debug!(
-                agent_id = %self.agent_id,
-                fact_id = %id,
-                confidence = confidence,
-                "AINL graph memory: fact written"
-            ),
+    pub async fn record_fact(&self, fact: String, confidence: f32, source_turn_id: Uuid) {
+        let res = {
+            let inner = self.inner.lock().await;
+            inner.write_fact(fact.clone(), confidence, source_turn_id)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    fact_id = %id,
+                    confidence = confidence,
+                    "AINL graph memory: fact written"
+                );
+                self.fire_write_hook("fact");
+            }
             Err(e) => warn!(
                 agent_id = %self.agent_id,
                 error = %e,
@@ -94,12 +121,8 @@ impl GraphMemoryWriter {
 
     /// Record an A2A delegation as an EpisodeNode with delegation_to set.
     pub async fn record_delegation(&self, target_agent_id: &str, tool_calls: Vec<String>) {
-        self.record_turn(
-            tool_calls,
-            Some(target_agent_id.to_string()),
-            None,
-        )
-        .await;
+        self.record_turn(tool_calls, Some(target_agent_id.to_string()), None)
+            .await;
     }
 
     /// Recall recent episodes (last N seconds).
@@ -131,13 +154,16 @@ mod tests {
         let writer = GraphMemoryWriter {
             inner: Arc::new(Mutex::new(memory)),
             agent_id: "test-agent".to_string(),
+            on_write: None,
         };
 
-        writer.record_turn(
-            vec!["web_search".to_string(), "file_read".to_string()],
-            None,
-            None,
-        ).await;
+        writer
+            .record_turn(
+                vec!["web_search".to_string(), "file_read".to_string()],
+                None,
+                None,
+            )
+            .await;
 
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
@@ -158,9 +184,12 @@ mod tests {
         let writer = GraphMemoryWriter {
             inner: Arc::new(Mutex::new(memory)),
             agent_id: "test-agent".to_string(),
+            on_write: None,
         };
 
-        writer.record_delegation("agent-B", vec!["delegate".to_string()]).await;
+        writer
+            .record_delegation("agent-B", vec!["delegate".to_string()])
+            .await;
 
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
@@ -179,6 +208,7 @@ mod tests {
         let writer = GraphMemoryWriter {
             inner: Arc::new(Mutex::new(memory)),
             agent_id: "test".to_string(),
+            on_write: None,
         };
 
         {

@@ -2524,10 +2524,11 @@ impl OpenFangKernel {
             let ainl_library_root = kernel_clone.config.home_dir.join("ainl-library");
 
             // Create live orchestration context for concurrent updates during tool execution
-            let orchestration_live: Option<Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>> =
-                orchestration_for_turn.as_ref().map(|ctx| {
-                    Arc::new(tokio::sync::RwLock::new(ctx.clone()))
-                });
+            let orchestration_live: Option<
+                Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>,
+            > = orchestration_for_turn
+                .as_ref()
+                .map(|ctx| Arc::new(tokio::sync::RwLock::new(ctx.clone())));
 
             let result = run_agent_loop_streaming(
                 &manifest,
@@ -3257,10 +3258,11 @@ impl OpenFangKernel {
         let ainl_library_root = self.config.home_dir.join("ainl-library");
 
         // Create live orchestration context for concurrent updates during tool execution
-        let orchestration_live: Option<Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>> =
-            orchestration_for_turn.as_ref().map(|ctx| {
-                Arc::new(tokio::sync::RwLock::new(ctx.clone()))
-            });
+        let orchestration_live: Option<
+            Arc<tokio::sync::RwLock<openfang_types::orchestration::OrchestrationContext>>,
+        > = orchestration_for_turn
+            .as_ref()
+            .map(|ctx| Arc::new(tokio::sync::RwLock::new(ctx.clone())));
 
         let phase_cb_storage = self
             .self_handle
@@ -7078,11 +7080,14 @@ impl OpenFangKernel {
                 cmd.stdout(Stdio::piped());
                 cmd.stderr(Stdio::piped());
                 cmd.kill_on_drop(true);
-                self.apply_resolved_env_to_ainl_command(&mut cmd, agent_id);
+                // Bundle paths first; `apply_resolved_env_to_ainl_command` then clears or sets
+                // `AINL_HOST_ADAPTER_ALLOWLIST` as the last env policy step so the child never keeps a
+                // stale daemon export when the target agent is offline-style.
                 openfang_runtime::ainl_bundle_cron::apply_ainl_bundle_env(
                     &mut cmd,
                     &format!("{agent_id}"),
                 );
+                self.apply_resolved_env_to_ainl_command(&mut cmd, agent_id);
 
                 match tokio::time::timeout(timeout, cmd.output()).await {
                     Ok(Ok(output)) => {
@@ -7476,7 +7481,10 @@ fn build_tool_to_agents_map(entries: &[AgentEntry]) -> HashMap<String, HashSet<A
     let mut m: HashMap<String, HashSet<AgentId>> = HashMap::new();
     for e in entries {
         // Get the effective tool list after applying allowlist/blocklist filters
-        let effective_tools: Vec<&String> = e.manifest.capabilities.tools
+        let effective_tools: Vec<&String> = e
+            .manifest
+            .capabilities
+            .tools
             .iter()
             .filter(|tool| {
                 // If allowlist is non-empty, tool must be in it
@@ -7964,8 +7972,8 @@ impl KernelHandle for OpenFangKernel {
         selection_strategy: openfang_types::orchestration::SelectionStrategy,
         options: openfang_types::orchestration::DelegateSelectionOptions,
     ) -> Result<AgentId, String> {
-        use openfang_types::orchestration::SelectionStrategy;
         use openfang_types::agent::AgentState;
+        use openfang_types::orchestration::SelectionStrategy;
         let all = self.registry.list();
         // Exclude only Terminated agents (final state)
         // Include Running, Created, Suspended, and Crashed - we'll auto-start them if selected
@@ -8014,7 +8022,11 @@ impl KernelHandle for OpenFangKernel {
                                     "Auto-spawned pool worker for delegation"
                                 );
                                 // Add new agent to candidates with score
-                                let score = delegate_combined_score(&new_entry, task_description, preferred_tags);
+                                let score = delegate_combined_score(
+                                    &new_entry,
+                                    task_description,
+                                    preferred_tags,
+                                );
                                 candidates.push((new_entry, score));
                             }
                         }
@@ -8436,6 +8448,20 @@ impl KernelHandle for OpenFangKernel {
             EventPayload::Custom(payload_bytes),
         );
         OpenFangKernel::publish_event(self, event).await;
+        Ok(())
+    }
+
+    async fn notify_graph_memory_write(&self, agent_id: &str, kind: &str) -> Result<(), String> {
+        let aid = self.resolve_agent_id(agent_id)?;
+        let event = Event::new(
+            aid,
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::GraphMemoryWrite {
+                agent_id: aid,
+                kind: kind.to_string(),
+            }),
+        );
+        let _ = OpenFangKernel::publish_event(self, event).await;
         Ok(())
     }
 

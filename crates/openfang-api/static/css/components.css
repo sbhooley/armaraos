@@ -6731,3 +6731,71 @@ button.tool-card-header {
 .sessions-memory-pick {
   text-align: left;
 }
+
+/* Graph Memory panel */
+.graph-memory-panel {
+  padding: 0 4px;
+}
+.graph-memory-panel .pill,
+.graph-memory-panel .pill-active {
+  font-size: 0.72rem;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2, var(--surface-2));
+  color: var(--text-dim, var(--text-muted));
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-transform: capitalize;
+}
+.graph-memory-panel .pill-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface2, var(--surface-2)));
+}
+.graph-memory-panel .pill:hover {
+  border-color: var(--text-dim, var(--text-muted));
+  color: var(--text);
+}
+.node-badge-episode {
+  background: rgba(124, 158, 245, 0.15);
+  color: #7c9ef5;
+}
+.node-badge-semantic {
+  background: rgba(107, 232, 160, 0.15);
+  color: #6be8a0;
+}
+.node-badge-procedural {
+  background: rgba(245, 199, 90, 0.15);
+  color: #f5c75a;
+}
+.node-badge-persona {
+  background: rgba(201, 124, 245, 0.15);
+  color: #c97cf5;
+}
+.node-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.node-dot-episode {
+  background: #7c9ef5;
+}
+.node-dot-semantic {
+  background: #6be8a0;
+}
+.node-dot-procedural {
+  background: #f5c75a;
+}
+.node-dot-persona {
+  background: #c97cf5;
+  box-shadow: 0 0 6px #c97cf5;
+}
+:root {
+  --graph-bg: #0f0f13;
+}
+[data-theme="light"] {
+  --graph-bg: #1a1a24;
+}

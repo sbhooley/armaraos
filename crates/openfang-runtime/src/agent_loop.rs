@@ -34,6 +34,21 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+/// When a kernel handle is present, graph-memory writes publish `SystemEvent::GraphMemoryWrite` for dashboard SSE.
+fn graph_memory_sse_hook(
+    kernel: &Option<Arc<dyn KernelHandle>>,
+) -> Option<Arc<dyn Fn(String, String) + Send + Sync>> {
+    kernel.as_ref().map(|k| {
+        let k = Arc::clone(k);
+        Arc::new(move |agent_id: String, kind: String| {
+            let k = Arc::clone(&k);
+            tokio::spawn(async move {
+                let _ = k.notify_graph_memory_write(&agent_id, &kind).await;
+            });
+        }) as Arc<dyn Fn(String, String) + Send + Sync>
+    })
+}
+
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
 
@@ -508,9 +523,11 @@ pub async fn run_agent_loop(
                 info!(agent = %manifest.name, "Starting agent loop");
 
                 // Initialize AINL graph memory writer (non-fatal if it fails)
-                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open(
-                    &session.agent_id.to_string()
-                ).ok();
+                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
+                    &session.agent_id.to_string(),
+                    graph_memory_sse_hook(&kernel),
+                )
+                .ok();
 
                 let live_llm = kernel
                     .as_ref()
@@ -2221,9 +2238,11 @@ pub async fn run_agent_loop_streaming(
                 info!(agent = %manifest.name, "Starting streaming agent loop");
 
                 // Initialize AINL graph memory writer (non-fatal if it fails)
-                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open(
-                    &session.agent_id.to_string()
-                ).ok();
+                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
+                    &session.agent_id.to_string(),
+                    graph_memory_sse_hook(&kernel),
+                )
+                .ok();
 
                 let live_llm = kernel
                     .as_ref()

@@ -4,6 +4,7 @@
 //! The kernel runs in-process; the CLI connects over HTTP.
 
 pub mod channel_bridge;
+pub mod graph_memory;
 pub mod middleware;
 pub mod network_hints;
 pub mod openai_compat;

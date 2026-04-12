@@ -155,6 +155,10 @@ pub async fn build_router(
             axum::routing::get(routes::version_github_latest_release),
         )
         .route(
+            "/api/graph-memory",
+            axum::routing::get(crate::graph_memory::get_graph_memory),
+        )
+        .route(
             "/api/agents",
             axum::routing::get(routes::list_agents).post(routes::spawn_agent),
         )

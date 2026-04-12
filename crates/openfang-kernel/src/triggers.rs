@@ -636,6 +636,9 @@ fn describe_event(event: &Event) -> String {
             } => format!(
                 "Approval pending: {tool_name} for agent {agent_id} ({request_id}): {action_summary}"
             ),
+            SystemEvent::GraphMemoryWrite { agent_id, kind } => {
+                format!("Graph memory write: agent {agent_id}, kind={kind}")
+            }
         },
         EventPayload::OrchestrationTrace(ev) => {
             format!(

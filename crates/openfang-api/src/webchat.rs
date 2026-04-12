@@ -156,6 +156,9 @@ const WEBCHAT_HTML: &str = concat!(
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/vendor/chart.umd.min.js"),
     "\n</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/vendor/d3.min.js"),
+    "\n</script>\n",
     // App code
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/js/api.js"),
@@ -214,6 +217,8 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/runtime.js"),
     include_str!("../static/js/pages/orchestration-traces.js"),
+    "\n",
+    include_str!("../static/js/pages/graph-memory.js"),
     "\n</script>\n",
     // Alpine.js MUST be last — it processes x-data and fires alpine:init
     "<script nonce=\"__NONCE__\">\n",

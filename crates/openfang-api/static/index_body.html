@@ -251,6 +251,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
               <span class="nav-label">Sessions</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'graph-memory' }" @click="navigate('graph-memory')" :aria-current="page === 'graph-memory' ? 'page' : false" href="#graph-memory" title="Graph Memory">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/><line x1="7" y1="19" x2="17" y2="19"/></svg></span>
+              <span class="nav-label">Graph Memory</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
               <span class="nav-label">Approvals</span>
@@ -6867,7 +6871,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div class="app-store-section-panel" x-show="isSectionOpen('hero')" x-transition>
                   <div class="app-store-hero-row app-store-hero-row--body">
                     <div class="app-store-hero-copy">
-                      <p class="text-sm text-dim app-store-hero-text" style="margin-top:0"><strong>armaraos-programs/</strong> ships with the app. <code class="text-xs">demo/</code>, <code class="text-xs">examples/</code>, and <code class="text-xs">intelligence/</code> mirror from the upstream repo into <code class="text-xs" x-text="root || '~/.armaraos/ainl-library'"></code>. Use <strong>Validate</strong> on desktop or <strong>Copy</strong> for your terminal.</p>
+                      <p class="text-sm text-dim app-store-hero-text" style="margin-top:0"><strong>armaraos-programs/</strong> ships with the app. <code class="text-xs">demo/</code>, <code class="text-xs">examples/</code>, <code class="text-xs">modules/</code> (for intelligence includes), and <code class="text-xs">intelligence/</code> mirror from the upstream repo into <code class="text-xs" x-text="root || '~/.armaraos/ainl-library'"></code>. Use <strong>Validate</strong> on desktop or <strong>Copy</strong> for your terminal.</p>
                       <div class="app-store-hero-chips">
                         <span class="app-store-chip"><span class="app-store-chip-dot app-store-chip-dot--free"></span> <span x-text="total + ' programs'"></span></span>
                         <span class="app-store-chip text-dim" x-show="sync && sync.branch">Branch <span x-text="sync.branch"></span></span>
@@ -6905,9 +6909,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <input type="checkbox" x-model="loadHints" @change="loadLibrary()">
                     Load <code class="text-xs">#</code> comment hints <span class="text-xs">(capped)</span>
                   </label>
-                  <label class="text-sm text-dim flex items-center gap-2 cursor-pointer" x-show="isDesktopShell">
+                  <label class="text-sm text-dim flex items-center gap-2 cursor-pointer" x-show="isDesktopShell" title="CI-style adapter checks; many mirrored examples only pass without --strict">
                     <input type="checkbox" x-model="strictValidation">
-                    Strict <code class="text-xs">--strict</code>
+                    Strict <code class="text-xs">--strict</code> <span class="text-xs">(optional)</span>
                   </label>
                   <span class="text-xs text-dim ml-auto flex flex-wrap gap-2">
                     <a class="btn btn-ghost btn-sm" href="/api/ainl/library" target="_blank" rel="noopener noreferrer">Library JSON</a>
@@ -6937,9 +6941,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                         <div class="app-store-featured-name" x-text="c.name"></div>
                         <code class="app-store-featured-path" x-text="c.relative_path"></code>
                         <div class="app-store-featured-actions">
-                          <button type="button" class="btn btn-primary btn-sm" @click="trySample({ path: c.relative_path }, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Validate</button>
+                          <button type="button" class="btn btn-primary btn-sm" @click="trySample(c, 'validate')" :disabled="tryBusy" x-show="isDesktopShell">Validate</button>
                           <button type="button" class="btn btn-ghost btn-sm" @click="navigateToSchedulerWithAinl(c.relative_path)">Scheduler</button>
-                          <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand({ path: c.relative_path, absolute: buildAbsolute(c.relative_path) })">Copy CLI</button>
+                          <button type="button" class="btn btn-ghost btn-sm" @click="copyCommand(c)">Copy CLI</button>
                           <button type="button" class="btn btn-ghost btn-sm" @click="copySchedulerDeepLink(c.relative_path)">Copy link</button>
                         </div>
                       </div>
@@ -7113,6 +7117,90 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button type="button" class="btn btn-ghost btn-sm" @click="daemonPromptReloadIntegrations()" :disabled="daemonCtlLoading.config || daemonCtlLoading.channels || daemonCtlLoading.integrations">Reload integrations</button>
               <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" @click="daemonPromptShutdown()" :disabled="daemonCtlLoading.shutdown">Shut down</button>
             </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="page === 'graph-memory'">
+      <div x-data="graphMemoryPanel()" x-init="init()" class="graph-memory-panel page-body" style="padding:16px 20px 24px">
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <h2 class="page-header" style="margin:0;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Graph Memory</h2>
+            <span x-text="agentId" style="font-size:0.75rem;color:var(--text-dim);font-family:monospace;background:var(--surface2);padding:2px 8px;border-radius:4px"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <template x-for="kind in ['episode','semantic','procedural','persona']" :key="kind">
+              <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind"></button>
+            </template>
+            <select x-model="agentId" @change="fetchGraph()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%)">
+              <template x-for="a in agents" :key="a.id">
+                <option :value="a.id" x-text="a.id"></option>
+              </template>
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" @click="fetchGraph()">Refresh</button>
+          </div>
+        </div>
+        <div id="graph-memory-canvas" style="width:100%;height:calc(100vh - 220px);min-height:480px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
+          <svg id="gm-svg" width="100%" height="100%">
+            <defs>
+              <filter id="gm-glow">
+                <feGaussianBlur stdDeviation="3" result="blur"/>
+                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+              <marker id="gm-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L8,3 z" fill="rgba(255,255,255,0.25)"/>
+              </marker>
+            </defs>
+            <g id="gm-links"></g>
+            <g id="gm-nodes"></g>
+            <g id="gm-labels"></g>
+          </svg>
+          <div x-show="!loading && nodes.length === 0" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:rgba(255,255,255,0.3);pointer-events:none">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4">
+              <circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/>
+              <line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/>
+            </svg>
+            <p style="margin-top:12px;font-size:0.85rem">No graph memory yet for this agent</p>
+            <p style="font-size:0.75rem;margin-top:4px;opacity:0.6">Run an AINL program to populate the graph</p>
+          </div>
+          <div x-show="loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+            <div class="skeleton" style="width:60%;height:60%;border-radius:12px;opacity:0.15"></div>
+          </div>
+        </div>
+        <div x-show="selected" x-transition style="position:fixed;right:20px;top:80px;width:280px;max-width:calc(100vw - 40px);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:100">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+            <span :class="'node-badge node-badge-' + (selected && selected.kind ? selected.kind : '')" x-text="selected && selected.kind ? selected.kind : ''" style="font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:2px 8px;border-radius:4px"></span>
+            <button type="button" @click="selected = null" style="color:var(--text-dim);background:none;border:none;cursor:pointer;font-size:1.1rem" aria-label="Close">×</button>
+          </div>
+          <p x-text="selected && selected.label" style="font-size:0.88rem;font-weight:500;margin-bottom:8px;word-break:break-word"></p>
+          <p style="font-size:0.75rem;color:var(--text-dim)">ID: <code x-text="selected && selected.id ? (selected.id.slice(0,12) + '…') : ''" style="font-size:0.72rem"></code></p>
+          <p x-show="selected && selected.strength != null" style="font-size:0.75rem;color:var(--text-dim);margin-top:4px">
+            Strength: <span x-text="selected && selected.strength != null ? selected.strength.toFixed(2) : ''" style="color:var(--accent);font-weight:600"></span>
+          </p>
+          <p style="font-size:0.75rem;color:var(--text-dim);margin-top:4px">
+            Created: <span x-text="selected && selected.created_at ? new Date(selected.created_at * 1000).toLocaleString() : '—'"></span>
+          </p>
+          <div x-show="selected && connectedTo(selected.id).length > 0" style="margin-top:12px">
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Connected to</p>
+            <template x-for="n in connectedTo(selected && selected.id)" :key="n.id">
+              <div @click="selected = n" style="font-size:0.78rem;padding:4px 8px;border-radius:6px;background:var(--surface2);cursor:pointer;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+                <span :class="'node-dot node-dot-' + n.kind"></span>
+                <span x-text="n.label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap">
+          <template x-for="kind in ['episode','semantic','procedural','persona']" :key="'stat-' + kind">
+            <div style="font-size:0.78rem;color:var(--text-dim)">
+              <span :class="'node-dot node-dot-' + kind" style="display:inline-block;margin-right:5px"></span>
+              <span x-text="kind" style="text-transform:capitalize"></span>
+              <strong x-text="nodes.filter(function(n){ return n.kind===kind }).length" style="margin-left:4px;color:var(--text)"></strong>
+            </div>
+          </template>
+          <div style="font-size:0.78rem;color:var(--text-dim);margin-left:auto">
+            <span x-text="edges.length"></span> edges
           </div>
         </div>
       </div>

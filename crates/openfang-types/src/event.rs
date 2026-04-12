@@ -320,6 +320,13 @@ pub enum SystemEvent {
         /// Short preview of the action (truncated).
         action_summary: String,
     },
+    /// AINL graph memory (`ainl_memory.db`) was written for an agent (dashboard refresh).
+    GraphMemoryWrite {
+        /// Agent whose graph DB changed.
+        agent_id: AgentId,
+        /// High-level write kind: `episode`, `fact`, or `delegation`.
+        kind: String,
+    },
 }
 
 /// A complete event in the OpenFang event system.

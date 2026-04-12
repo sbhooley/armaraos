@@ -109,6 +109,12 @@ pub trait KernelHandle: Send + Sync {
         payload: serde_json::Value,
     ) -> Result<(), String>;
 
+    /// Notify dashboards that AINL graph memory was updated for `agent_id`.
+    async fn notify_graph_memory_write(&self, agent_id: &str, kind: &str) -> Result<(), String> {
+        let _ = (agent_id, kind);
+        Ok(())
+    }
+
     /// Add an entity to the knowledge graph.
     async fn knowledge_add_entity(
         &self,
