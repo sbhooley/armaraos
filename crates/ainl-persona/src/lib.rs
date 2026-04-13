@@ -17,7 +17,7 @@ pub mod persona_node;
 pub mod signals;
 
 pub use axes::{AxisState, PersonaAxis};
-pub use engine::EvolutionEngine;
+pub use engine::{EvolutionEngine, INGEST_SCORE_EPSILON};
 pub use extractor::GraphExtractor;
 pub use fitness::PersonaSnapshot;
 pub use signals::{MemoryNodeType, RawSignal};

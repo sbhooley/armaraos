@@ -13,6 +13,9 @@ use ainl_memory::SqliteGraphStore;
 use chrono::Utc;
 use std::collections::HashMap;
 
+/// Minimum absolute score delta on an axis for a signal to count as "applied" in [`EvolutionEngine::ingest_signals`].
+pub const INGEST_SCORE_EPSILON: f32 = 0.001;
+
 pub struct EvolutionEngine {
     pub agent_id: String,
     pub axes: HashMap<PersonaAxis, AxisState>,
@@ -32,12 +35,20 @@ impl EvolutionEngine {
         GraphExtractor::extract(store, &self.agent_id)
     }
 
-    pub fn ingest_signals(&mut self, signals: Vec<RawSignal>) {
+    /// Applies each signal to its axis EMA. Returns how many signals produced a score change
+    /// larger than [`INGEST_SCORE_EPSILON`] on an existing axis (skipped axes do not count).
+    pub fn ingest_signals(&mut self, signals: Vec<RawSignal>) -> usize {
+        let mut applied = 0usize;
         for sig in signals {
             if let Some(state) = self.axes.get_mut(&sig.axis) {
+                let prior = state.score;
                 state.update_weighted(sig.reward, sig.weight);
+                if (state.score - prior).abs() > INGEST_SCORE_EPSILON {
+                    applied += 1;
+                }
             }
         }
+        applied
     }
 
     /// Current axes as a snapshot (no writes).
