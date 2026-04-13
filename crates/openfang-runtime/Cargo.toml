@@ -9,7 +9,7 @@ description = "Agent runtime and execution environment for OpenFang"
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
-ainl-memory = { path = "../ainl-memory" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.3-alpha" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

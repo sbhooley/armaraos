@@ -20,7 +20,7 @@ AINL Runtime integrates memory into the execution loop:
 ```toml
 [dependencies]
 ainl-runtime = "0.1.0-alpha"
-ainl-memory = "0.1.0-alpha"
+ainl-memory = "0.1.3-alpha"
 ```
 
 ```rust

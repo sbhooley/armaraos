@@ -16,7 +16,7 @@ openfang-skills = { path = "../openfang-skills" }
 openfang-hands = { path = "../openfang-hands" }
 openfang-extensions = { path = "../openfang-extensions" }
 openfang-migrate = { path = "../openfang-migrate" }
-ainl-memory = { path = "../ainl-memory" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.3-alpha" }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
 dashmap = { workspace = true }

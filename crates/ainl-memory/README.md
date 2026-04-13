@@ -23,7 +23,7 @@ All stored as typed graph nodes with edges for traversal.
 
 ```toml
 [dependencies]
-ainl-memory = "0.1.0-alpha"
+ainl-memory = "0.1.3-alpha"
 ```
 
 ```rust
@@ -98,9 +98,11 @@ AINL Memory is designed as infrastructure that any agent framework can adopt:
 
 ## Status
 
-**Alpha (0.1.0-alpha)**
+**Alpha (`0.1.3-alpha` on crates.io when published; supersedes `0.1.2-alpha`).**
 
 API is subject to change. Production-ready for experimentation.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for schema and API deltas vs the previous crates.io release.
 
 ## License
 
