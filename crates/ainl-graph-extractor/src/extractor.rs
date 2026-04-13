@@ -27,12 +27,15 @@ impl GraphExtractorTask {
         }
     }
 
-    /// Runs semantic recurrence updates, then persona evolution (extract → ingest → persist via
-    /// `ainl_persona::persona_node::write_evolved_persona_snapshot`), and returns a report.
+    /// Semantic recurrence updates, then extract → ingest → snapshot → explicit persona write.
     pub fn run_pass(&mut self, store: &SqliteGraphStore) -> Result<ExtractionReport, String> {
         let semantic_nodes_updated = update_semantic_recurrence(store, &self.agent_id)?;
-        let (persona_snapshot, signals_ingested) =
-            self.evolution_engine.evolve_with_stats(store)?;
+        let signals = self.evolution_engine.extract_signals(store)?;
+        let signals_ingested = signals.len();
+        self.evolution_engine.ingest_signals(signals);
+        let persona_snapshot = self.evolution_engine.snapshot();
+        self.evolution_engine
+            .write_persona_node(store, &persona_snapshot)?;
         Ok(ExtractionReport {
             agent_id: self.agent_id.clone(),
             semantic_nodes_updated,

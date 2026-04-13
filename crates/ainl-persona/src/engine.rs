@@ -1,4 +1,8 @@
-//! `EvolutionEngine` — orchestrates extract → ingest → persist persona snapshot.
+//! `EvolutionEngine` — persona axes with explicit extract / ingest / snapshot / write phases.
+//!
+//! Callers can compose these steps for dry runs (skip [`Self::write_persona_node`]),
+//! correction ticks (`correction_tick` → [`Self::snapshot`] → [`Self::write_persona_node`]), or
+//! a full pass via [`Self::evolve`].
 
 use crate::axes::{default_axis_map, AxisState, PersonaAxis};
 use crate::extractor::GraphExtractor;
@@ -23,6 +27,11 @@ impl EvolutionEngine {
         }
     }
 
+    /// Read signals from the graph store for this agent (no writes).
+    pub fn extract_signals(&self, store: &SqliteGraphStore) -> Result<Vec<RawSignal>, String> {
+        GraphExtractor::extract(store, &self.agent_id)
+    }
+
     pub fn ingest_signals(&mut self, signals: Vec<RawSignal>) {
         for sig in signals {
             if let Some(state) = self.axes.get_mut(&sig.axis) {
@@ -31,27 +40,39 @@ impl EvolutionEngine {
         }
     }
 
-    pub fn evolve(&mut self, store: &SqliteGraphStore) -> Result<PersonaSnapshot, String> {
-        Ok(self.evolve_with_stats(store)?.0)
+    /// Current axes as a snapshot (no writes).
+    pub fn snapshot(&self) -> PersonaSnapshot {
+        PersonaSnapshot {
+            agent_id: self.agent_id.clone(),
+            axes: self.axes.clone(),
+            captured_at: Utc::now(),
+        }
     }
 
-    /// Like [`Self::evolve`], but returns how many raw signals were extracted this pass.
-    pub fn evolve_with_stats(
-        &mut self,
+    /// Persist `snapshot` to the evolution [`PersonaNode`](ainl_memory::PersonaNode) row.
+    ///
+    /// `snapshot.agent_id` must match this engine's agent id.
+    pub fn write_persona_node(
+        &self,
         store: &SqliteGraphStore,
-    ) -> Result<(PersonaSnapshot, usize), String> {
-        let signals = GraphExtractor::extract(store, &self.agent_id)?;
-        let n = signals.len();
+        snapshot: &PersonaSnapshot,
+    ) -> Result<(), String> {
+        if snapshot.agent_id != self.agent_id {
+            return Err(format!(
+                "PersonaSnapshot agent_id {:?} does not match engine agent_id {:?}",
+                snapshot.agent_id, self.agent_id
+            ));
+        }
+        persona_node::write_evolved_persona_snapshot(store, &self.agent_id, &snapshot.axes)
+    }
+
+    /// Full evolution pass: extract → ingest → snapshot → write.
+    pub fn evolve(&mut self, store: &SqliteGraphStore) -> Result<PersonaSnapshot, String> {
+        let signals = self.extract_signals(store)?;
         self.ingest_signals(signals);
-        persona_node::write_evolved_persona_snapshot(store, &self.agent_id, &self.axes)?;
-        Ok((
-            PersonaSnapshot {
-                agent_id: self.agent_id.clone(),
-                axes: self.axes.clone(),
-                captured_at: Utc::now(),
-            },
-            n,
-        ))
+        let snapshot = self.snapshot();
+        self.write_persona_node(store, &snapshot)?;
+        Ok(snapshot)
     }
 
     pub fn correction_tick(&mut self, axis: PersonaAxis, correction: f32) {
