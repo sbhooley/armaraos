@@ -1,107 +1,52 @@
-# AINL Runtime - Graph-Based Agent Programming Runtime
+# ainl-runtime
 
-**Execution runtime for AI Native Language (AINL) with integrated graph-memory.**
+**Alpha (0.2.0-alpha) — API subject to change.**
 
-AINL Runtime provides the execution context and memory integration for graph-based agent programming. It connects agent execution to the AINL Memory substrate, automatically recording delegations, tool calls, and learned facts as graph nodes.
+`ainl-runtime` is the **Rust orchestration layer** for the unified AINL **graph memory** stack: it coordinates [`ainl-memory`](https://crates.io/crates/ainl-memory), [`ainl-persona`](https://crates.io/crates/ainl-persona) axis state (via [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)), and optional **post-turn extraction**, with a [`TurnHooks`] seam for hosts (e.g. OpenFang).
 
-## Why AINL Runtime?
+It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AINL CLI, and **not** an LLM or IR parser.
 
-Traditional agent runtimes separate execution from memory storage:
-- Execute tools → Store text → Retrieve when needed
-- Memory is an afterthought, not part of the execution model
+## What v0.2 provides
 
-AINL Runtime integrates memory into the execution loop:
-- Every delegation is a graph node
-- Every tool call is recorded automatically
-- Memory IS the execution trace
+- **[`AinlRuntime`]** — owns a [`ainl_memory::GraphMemory`] over a [`SqliteGraphStore`], a stateful [`GraphExtractorTask`], and [`RuntimeConfig`].
+- **Boot** — [`AinlRuntime::load_artifact`] → [`AinlGraphArtifact`] (`export_graph` + `validate_graph`; fails on dangling edges).
+- **Turn pipeline** — [`AinlRuntime::run_turn`]: validate subgraph, compile persona lines from persona nodes, [`compile_memory_context`], capped BFS walk (`next` / `follows` / `DERIVED_FROM`), record an episodic node (user message + tools), run extractor every `extraction_interval` turns.
+- **Legacy API** — [`RuntimeContext`] + `record_*` + [`RuntimeContext::run_graph_extraction_pass`] unchanged for light callers.
 
-## Quick Start
+It still does **not** execute arbitrary AINL IR, call adapters, or route emit edges; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`].
+
+## Quick start (`AinlRuntime`)
 
 ```toml
 [dependencies]
-ainl-runtime = "0.1.0-alpha"
-ainl-memory = "0.1.3-alpha"
+ainl-runtime = "0.2.0-alpha"
 ```
 
 ```rust
-use ainl_runtime::{RuntimeConfig, RuntimeContext};
+use ainl_runtime::{AinlRuntime, RuntimeConfig, TurnInput};
 use ainl_memory::SqliteGraphStore;
 
-// Create a runtime with graph-backed memory
-let config = RuntimeConfig::default();
-let store = SqliteGraphStore::open("memory.db").unwrap();
-let runtime = RuntimeContext::new(config, Some(store));
-
-// Record a delegation
-runtime.record_delegation(
-    "agent-A".to_string(),
-    "agent-B".to_string(),
-    "trace-123".to_string(),
-    1, // depth
-).unwrap();
-
-// Record a tool execution
-runtime.record_tool_execution(
-    "agent-A".to_string(),
-    "file_read".to_string(),
-).unwrap();
-```
-
-## Features
-
-- **Graph-native memory**: Execution traces stored as graph nodes
-- **Delegation tracking**: Automatic recording of agent delegation chains
-- **Tool execution history**: Every tool call becomes a graph node
-- **Configurable depth limits**: Prevent infinite delegation loops
-- **Optional memory backend**: Can run with or without persistence
-
-## Integration with AINL Memory
-
-AINL Runtime depends on [ainl-memory](https://crates.io/crates/ainl-memory) for graph-based storage. The runtime automatically creates typed nodes for:
-
-- **Episode nodes**: Agent turns with tool calls and delegations
-- **Delegation chains**: Connected via graph edges
-- **Tool execution sequences**: Ordered by timestamp
-
-## Configuration
-
-```rust
-use ainl_runtime::RuntimeConfig;
-
-let config = RuntimeConfig {
-    max_delegation_depth: 10,
-    enable_graph_memory: true,
+let store = SqliteGraphStore::open(std::path::Path::new("memory.db"))?;
+let cfg = RuntimeConfig {
+    agent_id: "my-agent".into(),
+    extraction_interval: 10,
+    ..Default::default()
 };
+let mut rt = AinlRuntime::new(cfg, store);
+let _artifact = rt.load_artifact()?;
+let out = rt.run_turn(TurnInput {
+    user_message: "Hello".into(),
+    tools_invoked: vec!["file_read".into()],
+    ..Default::default()
+})?;
 ```
 
-- `max_delegation_depth`: Maximum depth for delegation chains (default: 10)
-- `enable_graph_memory`: Enable persistent graph storage (default: true)
+## `RuntimeConfig`
 
-## Status
-
-**Alpha (0.1.0-alpha)**
-
-API is subject to change. Production-ready for experimentation.
-
-Currently, this crate provides the core integration layer between agent runtimes and the AINL Memory graph substrate. Future versions will include:
-- Full AINL language parser
-- Graph-based workflow compilation
-- Built-in agent orchestration primitives
+- **`agent_id`**: `String` (empty disables graph extraction on [`RuntimeContext`]; required for [`AinlRuntime`] turns).
+- **`max_steps`**: cap for the exploratory BFS in `run_turn` (default `1000`).
+- **`extraction_interval`**: run `GraphExtractorTask::run_pass` every N turns (`0` = never).
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Contributing
-
-Contributions are welcome! This is early-stage infrastructure—your feedback shapes the API.
-
-## See Also
-
-- [ainl-memory](https://crates.io/crates/ainl-memory) - AINL graph-memory substrate
-- [AINL Specification](https://github.com/sbhooley/ainativelang) - AI Native Language design
+MIT OR Apache-2.0
