@@ -1,0 +1,21 @@
+[package]
+name = "ainl-graph-extractor"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Periodic graph extraction: semantic recurrence_count + persona evolution"
+
+[dependencies]
+ainl-memory = { path = "../ainl-memory" }
+ainl-persona = { path = "../ainl-persona" }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+uuid = { workspace = true }
+
+[[test]]
+name = "test_graph_extractor"
+path = "tests/test_graph_extractor.rs"

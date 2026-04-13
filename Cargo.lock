@@ -83,6 +83,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-graph-extractor"
+version = "0.1.0"
+dependencies = [
+ "ainl-memory",
+ "ainl-persona",
+ "chrono",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "ainl-memory"
 version = "0.1.2-alpha"
 dependencies = [

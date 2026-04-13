@@ -46,11 +46,8 @@ pub fn write_evolved_persona_snapshot(
     let mut node = match find_evolution_node(store, agent_id)? {
         Some(n) => n,
         None => {
-            let mut n = AinlMemoryNode::new_persona(
-                crate::EVOLUTION_TRAIT_NAME.to_string(),
-                0.5,
-                vec![],
-            );
+            let mut n =
+                AinlMemoryNode::new_persona(crate::EVOLUTION_TRAIT_NAME.to_string(), 0.5, vec![]);
             n.agent_id = agent_id.to_string();
             n
         }

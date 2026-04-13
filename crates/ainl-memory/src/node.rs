@@ -186,6 +186,9 @@ pub struct SemanticNode {
     /// must write `recurrence_count` directly; persona / domain extractors gate on this field only.
     #[serde(default)]
     pub recurrence_count: u32,
+    /// `reference_count` snapshot from the last graph-extractor pass (JSON key `_last_ref_snapshot`).
+    #[serde(rename = "_last_ref_snapshot", default)]
+    pub last_ref_snapshot: u32,
 }
 
 /// Episodic memory payload (one turn / moment).
@@ -436,6 +439,7 @@ impl AinlMemoryNode {
             decay_eligible: true,
             tags: Vec::new(),
             recurrence_count: 0,
+            last_ref_snapshot: 0,
         };
         Self::base(
             MemoryCategory::Semantic,

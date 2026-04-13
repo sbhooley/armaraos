@@ -32,14 +32,26 @@ impl EvolutionEngine {
     }
 
     pub fn evolve(&mut self, store: &SqliteGraphStore) -> Result<PersonaSnapshot, String> {
+        Ok(self.evolve_with_stats(store)?.0)
+    }
+
+    /// Like [`Self::evolve`], but returns how many raw signals were extracted this pass.
+    pub fn evolve_with_stats(
+        &mut self,
+        store: &SqliteGraphStore,
+    ) -> Result<(PersonaSnapshot, usize), String> {
         let signals = GraphExtractor::extract(store, &self.agent_id)?;
+        let n = signals.len();
         self.ingest_signals(signals);
         persona_node::write_evolved_persona_snapshot(store, &self.agent_id, &self.axes)?;
-        Ok(PersonaSnapshot {
-            agent_id: self.agent_id.clone(),
-            axes: self.axes.clone(),
-            captured_at: Utc::now(),
-        })
+        Ok((
+            PersonaSnapshot {
+                agent_id: self.agent_id.clone(),
+                axes: self.axes.clone(),
+                captured_at: Utc::now(),
+            },
+            n,
+        ))
     }
 
     pub fn correction_tick(&mut self, axis: PersonaAxis, correction: f32) {
