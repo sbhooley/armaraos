@@ -1,7 +1,9 @@
 //! Integration tests for persona evolution over graph memory.
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
-use ainl_persona::{persona_node, EvolutionEngine, GraphExtractor, MemoryNodeType, PersonaAxis};
+use ainl_persona::{
+    EvolutionEngine, GraphExtractor, MemoryNodeType, PersonaAxis, EVOLUTION_TRAIT_NAME,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -14,7 +16,7 @@ fn open_store() -> (tempfile::TempDir, SqliteGraphStore) {
 }
 
 fn approx_eq(a: f32, b: f32) -> bool {
-    (a - b).abs() < 0.025
+    (a - b).abs() < 0.001
 }
 
 fn ema_step(score: f32, reward: f32, weight: f32) -> f32 {
@@ -145,7 +147,6 @@ fn test_prior_dampening() {
         approx_eq(c, expected),
         "curiosity should reflect dampened prior, got {c}"
     );
-    assert!(c < 0.95, "prior must not copy raw 0.95 into axes wholesale");
 }
 
 #[test]
@@ -172,7 +173,8 @@ fn test_trigger_gating() {
     let mut sem = AinlMemoryNode::new_fact("x".into(), 0.5, turn_id);
     sem.agent_id = "agent-gate".into();
     if let AinlNodeType::Semantic { semantic } = &mut sem.node_type {
-        semantic.reference_count = 1;
+        // High retrieval count must NOT gate semantic extraction — only recurrence_count does.
+        semantic.reference_count = 99;
         semantic.recurrence_count = 0;
     }
     store.write_node(&sem).expect("write sem");
@@ -208,7 +210,7 @@ fn test_evolve_writes_persona_node() {
                 && matches!(
                     &n.node_type,
                     AinlNodeType::Persona { persona }
-                        if persona.trait_name == persona_node::EVOLUTION_TRAIT_NAME
+                        if persona.trait_name == EVOLUTION_TRAIT_NAME
                 )
         })
         .expect("evolution persona row");
@@ -225,9 +227,11 @@ fn test_evolve_writes_persona_node() {
 #[test]
 fn test_correction_tick() {
     let mut engine = EvolutionEngine::new("noop");
-    let before = engine.axes.get(&PersonaAxis::Curiosity).unwrap().score;
     engine.correction_tick(PersonaAxis::Curiosity, 0.99);
     let after = engine.axes.get(&PersonaAxis::Curiosity).unwrap().score;
-    assert!(after > before);
-    assert!((after - 0.598).abs() < 0.05, "after={after}");
+    let expected = ema_step(0.5, 0.99, 1.0);
+    assert!(
+        approx_eq(after, expected),
+        "correction_tick weighted EMA, after={after} expected={expected}"
+    );
 }

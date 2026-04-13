@@ -169,6 +169,8 @@ pub struct SemanticNode {
     pub contradiction_ids: Vec<String>,
     #[serde(default)]
     pub last_referenced_at: u64,
+    /// How many times this node has been retrieved from the store.
+    /// Managed by the recall path only — never written by extractors.
     #[serde(default)]
     pub reference_count: u32,
     #[serde(default = "default_decay_eligible")]
@@ -176,7 +178,12 @@ pub struct SemanticNode {
     /// Optional tag hints for analytics / persona (`ainl-persona`); omitted → empty.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Optional recurrence counter; when zero, callers may treat `reference_count` as the signal.
+    /// How many times this exact fact has recurred across separate extraction events.
+    /// Written by `graph_extractor` when the same fact is observed again.
+    ///
+    /// Do **not** use `reference_count` as a substitute: that field tracks retrieval frequency,
+    /// not extraction recurrence. They measure different things. `graph_extractor` (Prompt 2)
+    /// must write `recurrence_count` directly; persona / domain extractors gate on this field only.
     #[serde(default)]
     pub recurrence_count: u32,
 }

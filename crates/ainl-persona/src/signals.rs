@@ -184,16 +184,8 @@ fn parse_axis_hint(node_id: Uuid, hint: &str) -> Option<RawSignal> {
     })
 }
 
-fn semantic_recurrence(sem: &SemanticNode) -> u32 {
-    if sem.recurrence_count > 0 {
-        sem.recurrence_count
-    } else {
-        sem.reference_count
-    }
-}
-
 pub fn semantic_should_process(sem: &SemanticNode) -> bool {
-    semantic_recurrence(sem) >= 2
+    sem.recurrence_count >= 2
 }
 
 fn semantic_tag_strings(sem: &SemanticNode) -> Vec<String> {
@@ -243,7 +235,7 @@ pub fn extract_semantic_signals(node_id: Uuid, sem: &SemanticNode) -> Vec<RawSig
         }
     }
 
-    if semantic_recurrence(sem) >= 3 {
+    if sem.recurrence_count >= 3 {
         out.push(RawSignal {
             axis: PersonaAxis::Persistence,
             reward: 0.7,

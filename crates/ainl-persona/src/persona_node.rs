@@ -5,8 +5,6 @@ use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, PersonaSource, Sqlit
 use chrono::Utc;
 use std::collections::HashMap;
 
-pub const EVOLUTION_TRAIT_NAME: &str = "axis_evolution_snapshot";
-
 fn find_evolution_node(
     store: &SqliteGraphStore,
     agent_id: &str,
@@ -17,7 +15,7 @@ fn find_evolution_node(
             continue;
         }
         if let AinlNodeType::Persona { persona } = &n.node_type {
-            if persona.trait_name != EVOLUTION_TRAIT_NAME {
+            if persona.trait_name != crate::EVOLUTION_TRAIT_NAME {
                 continue;
             }
             best = match best {
@@ -48,7 +46,11 @@ pub fn write_evolved_persona_snapshot(
     let mut node = match find_evolution_node(store, agent_id)? {
         Some(n) => n,
         None => {
-            let mut n = AinlMemoryNode::new_persona(EVOLUTION_TRAIT_NAME.to_string(), 0.5, vec![]);
+            let mut n = AinlMemoryNode::new_persona(
+                crate::EVOLUTION_TRAIT_NAME.to_string(),
+                0.5,
+                vec![],
+            );
             n.agent_id = agent_id.to_string();
             n
         }
