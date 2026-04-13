@@ -11,10 +11,12 @@ description = "Periodic graph extraction: semantic recurrence_count + persona ev
 ainl-memory = { path = "../ainl-memory" }
 ainl-persona = { path = "../ainl-persona" }
 chrono = { workspace = true }
+regex-lite = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-uuid = { workspace = true }
 
 [[test]]
 name = "test_graph_extractor"

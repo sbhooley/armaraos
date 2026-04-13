@@ -89,6 +89,8 @@ dependencies = [
  "ainl-memory",
  "ainl-persona",
  "chrono",
+ "regex-lite",
+ "serde_json",
  "tempfile",
  "uuid",
 ]

@@ -223,6 +223,12 @@ pub struct EpisodicNode {
     pub conversation_id: String,
     #[serde(default)]
     pub follows_episode_id: Option<String>,
+    /// Optional raw user message for offline extractors (`ainl-graph-extractor`); omitted unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<String>,
+    /// Optional assistant reply text for offline extractors; omitted unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_response: Option<String>,
 }
 
 impl EpisodicNode {
@@ -416,6 +422,8 @@ impl AinlMemoryNode {
             flagged: false,
             conversation_id: String::new(),
             follows_episode_id: None,
+            user_message: None,
+            assistant_response: None,
         };
         Self::base(
             MemoryCategory::Episodic,
