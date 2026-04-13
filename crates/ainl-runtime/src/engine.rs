@@ -22,6 +22,10 @@ pub struct PatchDispatchResult {
     pub fitness_after: f32,
     pub dispatched: bool,
     pub skip_reason: Option<PatchSkipReason>,
+    /// Output from a registered [`crate::PatchAdapter`], if any ran successfully.
+    pub adapter_output: Option<serde_json::Value>,
+    /// Name of the adapter that was invoked (including on execution failure).
+    pub adapter_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

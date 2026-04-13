@@ -12,9 +12,12 @@
 //!
 //! For a minimal “record episodes + run extractor” path without the full engine, see [`RuntimeContext`].
 
+mod adapters;
 mod engine;
 mod hooks;
 mod runtime;
+
+pub use adapters::{AdapterRegistry, PatchAdapter};
 
 pub use ainl_graph_extractor::{run_extraction_pass, ExtractionReport, GraphExtractorTask};
 pub use ainl_persona::axes::default_axis_map;

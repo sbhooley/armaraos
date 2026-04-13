@@ -15,6 +15,7 @@ use ainl_semantic_tagger::tag_tool_names;
 use ainl_semantic_tagger::TagNamespace;
 use uuid::Uuid;
 
+use crate::adapters::AdapterRegistry;
 use crate::engine::{
     AinlGraphArtifact, MemoryContext, PatchDispatchResult, PatchSkipReason, TurnInput, TurnOutcome,
     TurnOutput, EMIT_TO_EDGE,
@@ -35,6 +36,7 @@ pub struct AinlRuntime {
     /// Test hook: when set, the next scheduled extraction pass is treated as failed (`PartialSuccess`).
     #[doc(hidden)]
     test_force_extraction_failure: bool,
+    adapter_registry: AdapterRegistry,
 }
 
 impl AinlRuntime {
@@ -75,7 +77,18 @@ impl AinlRuntime {
             hooks: Box::new(NoOpHooks),
             persona_cache: init_persona_cache,
             test_force_extraction_failure: false,
+            adapter_registry: AdapterRegistry::new(),
         }
+    }
+
+    /// Register a [`crate::PatchAdapter`] keyed by [`PatchAdapter::name`] (e.g. procedural patch label).
+    pub fn register_adapter(&mut self, adapter: impl crate::PatchAdapter + 'static) {
+        self.adapter_registry.register(adapter);
+    }
+
+    /// Names of currently registered patch adapters.
+    pub fn registered_adapters(&self) -> Vec<&str> {
+        self.adapter_registry.registered_names()
     }
 
     #[doc(hidden)]
@@ -618,6 +631,8 @@ impl AinlRuntime {
                     fitness_after: 0.0,
                     dispatched: false,
                     skip_reason: Some(PatchSkipReason::NotProcedural),
+                    adapter_output: None,
+                    adapter_name: None,
                 };
             }
         };
@@ -630,6 +645,8 @@ impl AinlRuntime {
                 fitness_after: fitness_opt.unwrap_or(0.5),
                 dispatched: false,
                 skip_reason: Some(PatchSkipReason::ZeroVersion),
+                adapter_output: None,
+                adapter_name: None,
             };
         }
         if retired {
@@ -640,6 +657,8 @@ impl AinlRuntime {
                 fitness_after: fitness_opt.unwrap_or(0.5),
                 dispatched: false,
                 skip_reason: Some(PatchSkipReason::Retired),
+                adapter_output: None,
+                adapter_name: None,
             };
         }
         for key in &reads {
@@ -651,9 +670,37 @@ impl AinlRuntime {
                     fitness_after: fitness_opt.unwrap_or(0.5),
                     dispatched: false,
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead(key.clone())),
+                    adapter_output: None,
+                    adapter_name: None,
                 };
             }
         }
+
+        let patch_label = label_src.clone();
+        let adapter_key = patch_label.as_str();
+        let (adapter_output, adapter_name) =
+            if let Some(adapter) = self.adapter_registry.get(adapter_key) {
+                match adapter.execute(adapter_key, frame) {
+                    Ok(output) => {
+                        tracing::debug!(
+                            label = %patch_label,
+                            adapter = %adapter_key,
+                            "adapter executed patch"
+                        );
+                        (Some(output), Some(adapter_key.to_string()))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            label = %patch_label,
+                            error = %e,
+                            "adapter execution failed — continuing as metadata dispatch"
+                        );
+                        (None, Some(adapter_key.to_string()))
+                    }
+                }
+            } else {
+                (None, None)
+            };
 
         let fitness_before = fitness_opt.unwrap_or(0.5);
         let fitness_after = 0.2_f32 * 1.0 + 0.8 * fitness_before;
@@ -676,6 +723,8 @@ impl AinlRuntime {
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead(
                         "node_row".into(),
                     )),
+                    adapter_output,
+                    adapter_name,
                 };
             }
             Err(e) => {
@@ -686,6 +735,8 @@ impl AinlRuntime {
                     fitness_after: fitness_before,
                     dispatched: false,
                     skip_reason: Some(PatchSkipReason::PersistFailed(e)),
+                    adapter_output,
+                    adapter_name,
                 };
             }
         };
@@ -698,6 +749,8 @@ impl AinlRuntime {
                 fitness_after: fitness_before,
                 dispatched: false,
                 skip_reason: Some(PatchSkipReason::PersistFailed(e)),
+                adapter_output,
+                adapter_name,
             };
         }
 
@@ -711,6 +764,8 @@ impl AinlRuntime {
             fitness_after,
             dispatched: true,
             skip_reason: None,
+            adapter_output,
+            adapter_name,
         }
     }
 }

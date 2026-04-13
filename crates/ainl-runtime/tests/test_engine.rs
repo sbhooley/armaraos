@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
-    AinlRuntime, MemoryNodeType, PatchSkipReason, PersonaAxis, RawSignal, RuntimeConfig, TurnHooks,
-    TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
+    AinlRuntime, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis, RawSignal, RuntimeConfig,
+    TurnHooks, TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -195,6 +195,168 @@ fn test_patch_dispatch_skips_zero_version() {
     let r = &out.patch_dispatch_results[0];
     assert!(!r.dispatched);
     assert_eq!(r.skip_reason, Some(PatchSkipReason::ZeroVersion));
+}
+
+struct EchoAdapter;
+
+impl PatchAdapter for EchoAdapter {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn execute(
+        &self,
+        label: &str,
+        frame: &HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({
+            "echoed_label": label,
+            "frame_keys": frame.keys().cloned().collect::<Vec<String>>(),
+        }))
+    }
+}
+
+struct FailAdapter;
+
+impl PatchAdapter for FailAdapter {
+    fn name(&self) -> &str {
+        "fail"
+    }
+
+    fn execute(
+        &self,
+        _: &str,
+        _: &HashMap<String, serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        Err("intentional failure".to_string())
+    }
+}
+
+#[test]
+fn test_adapter_registry_registers_and_executes() {
+    let (_d, store) = open_store();
+    let ag = "adapter-echo-agent";
+    let mut proc = AinlMemoryNode::new_pattern("echo-pat".into(), vec![]);
+    proc.agent_id = ag.into();
+    if let AinlNodeType::Procedural { ref mut procedural } = proc.node_type {
+        procedural.label = "echo".into();
+        procedural.patch_version = 1;
+        procedural.declared_reads = vec!["msg".into()];
+        procedural.fitness = Some(0.5);
+    }
+    store.write_node(&proc).unwrap();
+
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.register_adapter(EchoAdapter);
+    let names = rt.registered_adapters();
+    assert_eq!(names.len(), 1);
+    assert!(names.contains(&"echo"));
+
+    let mut frame = HashMap::new();
+    frame.insert("msg".into(), serde_json::json!("hello"));
+
+    let out = rt
+        .run_turn(TurnInput {
+            user_message: "hi".into(),
+            tools_invoked: vec![],
+            frame,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(matches!(out.outcome, TurnOutcome::Success));
+    let r = out
+        .patch_dispatch_results
+        .iter()
+        .find(|x| x.label == "echo")
+        .expect("echo patch");
+    assert!(r.dispatched);
+    assert_eq!(r.adapter_name.as_deref(), Some("echo"));
+    let outv = r.adapter_output.as_ref().expect("adapter output");
+    assert_eq!(outv.get("echoed_label").and_then(|v| v.as_str()), Some("echo"));
+    let keys = outv
+        .get("frame_keys")
+        .and_then(|v| v.as_array())
+        .expect("frame_keys");
+    assert!(keys.iter().any(|k| k.as_str() == Some("msg")));
+}
+
+#[test]
+fn test_no_adapter_metadata_only() {
+    let (_d, store) = open_store();
+    let ag = "adapter-none-agent";
+    let mut proc = AinlMemoryNode::new_pattern("echo-pat2".into(), vec![]);
+    proc.agent_id = ag.into();
+    if let AinlNodeType::Procedural { ref mut procedural } = proc.node_type {
+        procedural.label = "echo".into();
+        procedural.patch_version = 1;
+        procedural.declared_reads = vec!["msg".into()];
+        procedural.fitness = Some(0.5);
+    }
+    store.write_node(&proc).unwrap();
+
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    let mut frame = HashMap::new();
+    frame.insert("msg".into(), serde_json::json!("hello"));
+
+    let out = rt
+        .run_turn(TurnInput {
+            user_message: "hi".into(),
+            tools_invoked: vec![],
+            frame,
+            ..Default::default()
+        })
+        .unwrap();
+    let r = out
+        .patch_dispatch_results
+        .iter()
+        .find(|x| x.label == "echo")
+        .expect("echo patch");
+    assert!(r.dispatched);
+    assert!(r.adapter_output.is_none());
+    assert!(r.adapter_name.is_none());
+}
+
+#[test]
+fn test_adapter_failure_graceful() {
+    let (_d, store) = open_store();
+    let ag = "adapter-fail-agent";
+    let mut proc = AinlMemoryNode::new_pattern("fail-pat".into(), vec![]);
+    proc.agent_id = ag.into();
+    if let AinlNodeType::Procedural { ref mut procedural } = proc.node_type {
+        procedural.label = "fail".into();
+        procedural.patch_version = 1;
+        procedural.declared_reads = vec!["msg".into()];
+        procedural.fitness = Some(0.5);
+    }
+    store.write_node(&proc).unwrap();
+
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.register_adapter(FailAdapter);
+
+    let mut frame = HashMap::new();
+    frame.insert("msg".into(), serde_json::json!("hello"));
+
+    let out = rt
+        .run_turn(TurnInput {
+            user_message: "hi".into(),
+            tools_invoked: vec![],
+            frame,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        matches!(out.outcome, TurnOutcome::Success)
+            || matches!(out.outcome, TurnOutcome::PartialSuccess { .. })
+    );
+    let r = out
+        .patch_dispatch_results
+        .iter()
+        .find(|x| x.label == "fail")
+        .expect("fail patch");
+    assert!(r.dispatched);
+    assert!(r.adapter_output.is_none());
+    assert_eq!(r.adapter_name.as_deref(), Some("fail"));
+    assert!(r.fitness_after > r.fitness_before);
 }
 
 #[test]
