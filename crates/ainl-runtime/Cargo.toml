@@ -20,7 +20,7 @@ scopeguard = "1"
 chrono = { workspace = true }
 ainl-memory = { path = "../ainl-memory", version = "0.1.5-alpha" }
 ainl-persona = { path = "../ainl-persona", version = "0.1.0" }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.1" }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.2" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.0-alpha" }
 
 [dev-dependencies]
