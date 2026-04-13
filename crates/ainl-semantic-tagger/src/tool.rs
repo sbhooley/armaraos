@@ -27,7 +27,7 @@ fn map_tool_name(raw: &str) -> SemanticTag {
 
     let (value, confidence) = if l == "python_repl" || l == "python" || l.contains("python_repl") {
         ("python_repl", 0.85_f32)
-    } else if l == "bash" || l == "shell" || l.contains("shell") {
+    } else if l == "bash" || l == "shell" || l == "sh" || l.contains("shell") {
         ("bash", 0.85_f32)
     } else if l == "search_web" || l == "web_search" || l.contains("web_search") {
         ("search_web", 0.85_f32)
@@ -79,6 +79,12 @@ mod tests {
     #[test]
     fn maps_shell_exec_to_bash() {
         let v = tag_tool_names(&["shell_exec".into()]);
+        assert_eq!(v[0].value, "bash");
+    }
+
+    #[test]
+    fn maps_sh_to_bash() {
+        let v = tag_tool_names(&["sh".into()]);
         assert_eq!(v[0].value, "bash");
     }
 

@@ -335,3 +335,135 @@ fn test_emit_noop_when_no_edges() {
     .unwrap();
     assert!(rec.emits.lock().unwrap().is_empty());
 }
+
+#[test]
+fn test_episode_tools_synonyms_normalize_to_single_bash() {
+    let (_d, store) = open_store();
+    let ag = "tool-norm-1";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.run_turn(TurnInput {
+        user_message: "a".into(),
+        tools_invoked: vec!["bash".into(), "shell".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    rt.run_turn(TurnInput {
+        user_message: "b".into(),
+        tools_invoked: vec!["Bash".into(), "sh".into()],
+        ..Default::default()
+    })
+    .unwrap();
+
+    let eps = rt
+        .sqlite_store()
+        .query(ag)
+        .episodes_with_tool("bash", 10)
+        .unwrap();
+    assert_eq!(eps.len(), 2);
+    for n in &eps {
+        let ep = match &n.node_type {
+            AinlNodeType::Episode { episodic } => episodic,
+            _ => panic!("expected episode"),
+        };
+        assert_eq!(ep.tools_invoked, vec!["bash".to_string()]);
+    }
+    assert!(rt
+        .sqlite_store()
+        .query(ag)
+        .episodes_with_tool("shell", 10)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn test_episode_tools_dedup_many_variants_one_bash() {
+    let (_d, store) = open_store();
+    let ag = "tool-norm-2";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.run_turn(TurnInput {
+        user_message: "c".into(),
+        tools_invoked: vec![
+            "Bash".into(),
+            "bash".into(),
+            "sh".into(),
+            "shell".into(),
+        ],
+        ..Default::default()
+    })
+    .unwrap();
+
+    let ep = rt
+        .sqlite_store()
+        .query(ag)
+        .episodes_with_tool("bash", 5)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let tools = match &ep.node_type {
+        AinlNodeType::Episode { episodic } => &episodic.tools_invoked,
+        _ => panic!("expected episode"),
+    };
+    assert_eq!(tools, &vec!["bash".to_string()]);
+}
+
+#[test]
+fn test_episode_tools_unrelated_tools_distinct() {
+    let (_d, store) = open_store();
+    let ag = "tool-norm-3";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.run_turn(TurnInput {
+        user_message: "d".into(),
+        tools_invoked: vec!["bash".into(), "search_web".into()],
+        ..Default::default()
+    })
+    .unwrap();
+
+    let ep = rt
+        .sqlite_store()
+        .query(ag)
+        .episodes_with_tool("bash", 5)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let tools = match &ep.node_type {
+        AinlNodeType::Episode { episodic } => episodic.tools_invoked.clone(),
+        _ => panic!("expected episode"),
+    };
+    assert_eq!(tools, vec!["bash".to_string(), "search_web".to_string()]);
+
+    assert_eq!(
+        rt.sqlite_store()
+            .query(ag)
+            .episodes_with_tool("search_web", 5)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn test_episode_tools_empty_uses_turn_sentinel() {
+    let (_d, store) = open_store();
+    let ag = "tool-norm-4";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    rt.run_turn(TurnInput {
+        user_message: "e".into(),
+        tools_invoked: vec![],
+        ..Default::default()
+    })
+    .unwrap();
+
+    let ep = rt
+        .sqlite_store()
+        .query(ag)
+        .episodes_with_tool("turn", 5)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let tools = match &ep.node_type {
+        AinlNodeType::Episode { episodic } => &episodic.tools_invoked,
+        _ => panic!("expected episode"),
+    };
+    assert_eq!(tools, &vec!["turn".to_string()]);
+}

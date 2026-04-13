@@ -1,6 +1,6 @@
 //! Unified-graph orchestration runtime (v0.2): load, compile context, patch dispatch, record, emit, extract.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{
@@ -9,8 +9,9 @@ use ainl_memory::{
 };
 use ainl_persona::axes::default_axis_map;
 use ainl_persona::{PersonaAxis, INGEST_SCORE_EPSILON};
-use ainl_semantic_tagger::TagNamespace;
 use ainl_semantic_tagger::infer_topic_tags;
+use ainl_semantic_tagger::tag_tool_names;
+use ainl_semantic_tagger::TagNamespace;
 use uuid::Uuid;
 
 use crate::engine::{
@@ -206,10 +207,12 @@ impl AinlRuntime {
             return Ok(out);
         }
 
+        let tools_canonical = normalize_tools_for_episode(&input.tools_invoked);
         let episode_id = record_turn_episode(
             &self.memory,
             &self.config.agent_id,
             &input,
+            &tools_canonical,
         )?;
         self.hooks.on_episode_recorded(episode_id);
 
@@ -222,7 +225,7 @@ impl AinlRuntime {
         let emit_payload = serde_json::json!({
             "episode_id": episode_id.to_string(),
             "user_message": input.user_message,
-            "tools_invoked": input.tools_invoked,
+            "tools_invoked": tools_canonical,
             "persona_contribution": persona_prompt_contribution,
             "turn_count": self.turn_count.wrapping_add(1),
         });
@@ -529,18 +532,35 @@ fn format_persona_line(p: &PersonaNode) -> String {
     )
 }
 
+/// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
+/// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
+fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
+    if tools_invoked.is_empty() {
+        return vec!["turn".to_string()];
+    }
+    let tags = tag_tool_names(tools_invoked);
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for t in tags {
+        if t.namespace == TagNamespace::Tool {
+            seen.insert(t.value);
+        }
+    }
+    if seen.is_empty() {
+        vec!["turn".to_string()]
+    } else {
+        seen.into_iter().collect()
+    }
+}
+
 fn record_turn_episode(
     memory: &ainl_memory::GraphMemory,
     agent_id: &str,
     input: &TurnInput,
+    tools_invoked_canonical: &[String],
 ) -> Result<Uuid, String> {
     let turn_id = Uuid::new_v4();
     let timestamp = chrono::Utc::now().timestamp();
-    let tools = if input.tools_invoked.is_empty() {
-        vec!["turn".to_string()]
-    } else {
-        input.tools_invoked.clone()
-    };
+    let tools = tools_invoked_canonical.to_vec();
     let mut node = AinlMemoryNode::new_episode(
         turn_id,
         timestamp,
