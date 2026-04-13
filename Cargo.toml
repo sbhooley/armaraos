@@ -15,6 +15,7 @@ members = [
     "crates/openfang-hands",
     "crates/openfang-extensions",
     "crates/ainl-memory",
+    "crates/ainl-persona",
     "crates/ainl-runtime",
     "xtask",
 ]

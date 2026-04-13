@@ -5,6 +5,7 @@
 //! OrchestrationTraceEvent serialization.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Coarse node kind for store queries (matches `node_type` column values).
@@ -137,6 +138,20 @@ pub struct PersonaNode {
     pub provenance_episode_ids: Vec<String>,
     #[serde(default)]
     pub evolution_log: Vec<StrengthEvent>,
+    /// Optional axis-evolution bundle (`ainl-persona`); omitted in JSON → empty map.
+    #[serde(default)]
+    pub axis_scores: HashMap<String, f32>,
+    #[serde(default)]
+    pub evolution_cycle: u32,
+    /// ISO-8601 timestamp of last persona evolution pass.
+    #[serde(default)]
+    pub last_evolved: String,
+    /// Redundant copy of owning agent id (mirrors `AinlMemoryNode.agent_id` for payload consumers).
+    #[serde(default)]
+    pub agent_id: String,
+    /// Soft labels: axes above the high-spectrum threshold, not discrete classes.
+    #[serde(default)]
+    pub dominant_axes: Vec<String>,
 }
 
 /// Semantic / factual memory payload.
@@ -158,6 +173,12 @@ pub struct SemanticNode {
     pub reference_count: u32,
     #[serde(default = "default_decay_eligible")]
     pub decay_eligible: bool,
+    /// Optional tag hints for analytics / persona (`ainl-persona`); omitted → empty.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional recurrence counter; when zero, callers may treat `reference_count` as the signal.
+    #[serde(default)]
+    pub recurrence_count: u32,
 }
 
 /// Episodic memory payload (one turn / moment).
@@ -231,6 +252,15 @@ pub struct ProceduralNode {
     pub reinforcement_episode_ids: Vec<String>,
     #[serde(default)]
     pub suppression_episode_ids: Vec<String>,
+    /// Graph-patch / refinement generation (`ainl-persona`); omitted JSON → 0 (skip persona extract until bumped).
+    #[serde(default)]
+    pub patch_version: u32,
+    /// Optional fitness score in \[0,1\]; when absent, consumers may fall back to `success_rate`.
+    #[serde(default)]
+    pub fitness: Option<f32>,
+    /// Declared read dependencies for the procedure (metadata-only hints).
+    #[serde(default)]
+    pub declared_reads: Vec<String>,
 }
 
 impl ProceduralNode {
@@ -397,6 +427,8 @@ impl AinlMemoryNode {
             last_referenced_at: 0,
             reference_count: 0,
             decay_eligible: true,
+            tags: Vec::new(),
+            recurrence_count: 0,
         };
         Self::base(
             MemoryCategory::Semantic,
@@ -421,6 +453,9 @@ impl AinlMemoryNode {
             last_invoked_at: 0,
             reinforcement_episode_ids: Vec::new(),
             suppression_episode_ids: Vec::new(),
+            patch_version: 1,
+            fitness: None,
+            declared_reads: Vec::new(),
         };
         procedural.recompute_success_rate();
         Self::base(
@@ -450,6 +485,9 @@ impl AinlMemoryNode {
             last_invoked_at: 0,
             reinforcement_episode_ids: Vec::new(),
             suppression_episode_ids: Vec::new(),
+            patch_version: 1,
+            fitness: None,
+            declared_reads: Vec::new(),
         };
         procedural.recompute_success_rate();
         Self::base(
@@ -473,6 +511,11 @@ impl AinlMemoryNode {
             relevance_score: 0.0,
             provenance_episode_ids: Vec::new(),
             evolution_log: Vec::new(),
+            axis_scores: HashMap::new(),
+            evolution_cycle: 0,
+            last_evolved: String::new(),
+            agent_id: String::new(),
+            dominant_axes: Vec::new(),
         };
         Self::base(
             MemoryCategory::Persona,

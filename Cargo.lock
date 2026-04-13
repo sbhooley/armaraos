@@ -94,6 +94,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-persona"
+version = "0.1.0"
+dependencies = [
+ "ainl-memory",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "ainl-runtime"
 version = "0.1.1-alpha"
 dependencies = [
