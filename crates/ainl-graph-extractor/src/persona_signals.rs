@@ -7,37 +7,13 @@ use ainl_memory::{
     AinlMemoryNode, AinlNodeType, EpisodicNode, GraphStore, SemanticNode, SqliteGraphStore,
 };
 use ainl_persona::{signals::episodic_should_process, MemoryNodeType, PersonaAxis, RawSignal};
-use regex_lite::Regex;
+use ainl_semantic_tagger::{
+    extract_correction_behavior, infer_brevity_preference, infer_formality, tag_tool_names,
+    SemanticTag, TagNamespace,
+};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use uuid::Uuid;
-
-struct CorrectionRegexes {
-    stop_ing: Regex,
-    dont_verb: Regex,
-    you_keep_ing: Regex,
-    told_not_to: Regex,
-    asked_not_to: Regex,
-    dont_want: Regex,
-}
-
-fn correction_regexes() -> &'static CorrectionRegexes {
-    static RES: OnceLock<CorrectionRegexes> = OnceLock::new();
-    RES.get_or_init(|| CorrectionRegexes {
-        stop_ing: Regex::new(r"(?i)\bstop\s+([a-z][a-z]+ing)\b").expect("regex"),
-        dont_verb: Regex::new(r"(?i)\bdon['’]?t\s+([a-z][a-z0-9]*(?:\s+[a-z][a-z0-9]*){0,8})\b")
-            .expect("regex"),
-        you_keep_ing: Regex::new(r"(?i)\byou\s+keep\s+([a-z][a-z]+ing(?:\s+[a-z][a-z]+){0,4})\b")
-            .expect("regex"),
-        told_not_to: Regex::new(r"(?i)\bi\s+told\s+you\s+not\s+to\s+([a-z][^\n.!?]{1,48})")
-            .expect("regex"),
-        asked_not_to: Regex::new(r"(?i)\bi\s+asked\s+you\s+not\s+to\s+([a-z][^\n.!?]{1,48})")
-            .expect("regex"),
-        dont_want: Regex::new(r"(?i)\bi\s+don['’]?t\s+want\s+you\s+to\s+([a-z][^\n.!?]{1,48})")
-            .expect("regex"),
-    })
-}
 
 /// Rolling state for debounce / streak detectors (in-memory, per [`GraphExtractorTask`](crate::GraphExtractorTask)).
 #[derive(Debug, Default, Clone)]
@@ -72,34 +48,6 @@ const DOMAIN_COOLDOWN_PASSES: u64 = 2;
 const DOMAIN_MIN_RECURRENCE_NODE: u32 = 3;
 const DOMAIN_EMIT_AT_LEAST_NODES: usize = 2;
 const DOMAIN_SINGLE_NODE_RECURRENCE: u32 = 6;
-
-const EXPLICIT_BREVITY: &[&str] = &[
-    "shorter",
-    "brief",
-    "concise",
-    "too long",
-    "tldr",
-    "tl;dr",
-    "summarize",
-    "less detail",
-    "get to the point",
-    "keep it short",
-];
-
-const CORRECTION_TRIGGERS: &[&str] = &[
-    "don't do that",
-    "don't use",
-    "stop doing",
-    "you keep",
-    "i told you",
-    "i said",
-    "please stop",
-    "i asked you not to",
-    "why do you keep",
-    "stop saying",
-    "quit doing",
-    "i don't want you to",
-];
 
 fn trace_obj(ep: &EpisodicNode) -> Option<&serde_json::Map<String, Value>> {
     ep.trace_event.as_ref()?.as_object()
@@ -145,129 +93,12 @@ fn implicit_brevity_shape(ep: &EpisodicNode) -> bool {
     ut < 12 && atok > 300
 }
 
-fn explicit_brevity_cues(text: &str) -> bool {
-    let l = text.to_lowercase();
-    EXPLICIT_BREVITY.iter().any(|k| l.contains(*k))
-}
-
-fn formality_score(user: &str) -> f32 {
-    let words: Vec<&str> = user
-        .split_whitespace()
-        .filter(|w| w.chars().any(|c| c.is_alphanumeric()))
-        .collect();
-    if words.is_empty() {
-        return 0.5;
-    }
-    let n = words.len() as f32;
-    let avg_word_len = words.iter().map(|w| w.len()).sum::<usize>() as f32 / n;
-    let lower = user.to_lowercase();
-    let slang_hits = ["gonna", "wanna", "gotta", "lol", "cool", "yeah", "yo "]
-        .iter()
-        .filter(|c| lower.contains(*c))
-        .count() as f32;
-    let slang_density = (slang_hits / n.max(1.0)).min(1.0);
-    let contraction_hits = [
-        "n't ", "'nt ", "'re ", "'ve ", "'ll ", " i'm", "i'm ", "i’m ",
-    ]
-    .iter()
-    .filter(|c| lower.contains(*c))
-    .count() as f32;
-    let contraction_density = (contraction_hits / n.max(1.0)).min(1.0);
-    let punct =
-        user.matches(|c: char| c.is_ascii_punctuation()).count() as f32 / user.len().max(1) as f32;
-    let formal = (avg_word_len / 11.0).min(1.0) * 0.38
-        + (punct * 10.0).min(1.0) * 0.22
-        + (1.0 - (contraction_density * 5.0).min(1.0)) * 0.22
-        + (1.0 - (slang_density * 4.0).min(1.0)) * 0.18;
-    formal.clamp(0.0, 1.0)
-}
-
-fn formality_direction(score: f32) -> Option<FormalityDir> {
-    if score <= 0.38 {
-        Some(FormalityDir::Informal)
-    } else if score >= 0.62 {
-        Some(FormalityDir::Formal)
-    } else {
-        None
-    }
-}
-
-fn normalize_behavior_phrase(s: &str) -> Option<String> {
-    let t = s
-        .trim()
-        .trim_matches(|c: char| c == '.' || c == '!' || c == '?');
-    if t.len() < 4 {
-        return None;
-    }
-    let tl = t.to_lowercase();
-    if tl == "do that" || tl == "that" || tl == "it" || tl == "so" {
-        return None;
-    }
-    if !t.chars().any(|c| c.is_alphabetic()) {
-        return None;
-    }
-    Some(t.to_string())
-}
-
-fn correction_behavior(user: &str) -> Option<String> {
-    let lower = user.to_lowercase();
-    let triggered = CORRECTION_TRIGGERS.iter().any(|t| lower.contains(*t));
-    if !triggered {
-        return None;
-    }
-    let trimmed = lower.trim();
-    if trimmed == "stop" || trimmed == "don't" {
-        return None;
-    }
-
-    let re = correction_regexes();
-    if let Some(c) = re.stop_ing.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                return Some(b);
-            }
-        }
-    }
-    if let Some(c) = re.you_keep_ing.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                return Some(b);
-            }
-        }
-    }
-    if let Some(c) = re.told_not_to.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                return Some(b);
-            }
-        }
-    }
-    if let Some(c) = re.asked_not_to.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                return Some(b);
-            }
-        }
-    }
-    if let Some(c) = re.dont_want.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                return Some(b);
-            }
-        }
-    }
-    if let Some(c) = re.dont_verb.captures(user) {
-        if let Some(m) = c.get(1) {
-            if let Some(b) = normalize_behavior_phrase(m.as_str()) {
-                let bl = b.to_lowercase();
-                if bl == "do that" || bl == "that" {
-                    return None;
-                }
-                return Some(b);
-            }
-        }
-    }
-    None
+fn formality_direction_from_tag(user: &str) -> Option<FormalityDir> {
+    infer_formality(user).and_then(|tag| match tag.value.as_str() {
+        "informal" => Some(FormalityDir::Informal),
+        "formal" => Some(FormalityDir::Formal),
+        _ => None,
+    })
 }
 
 fn brevity_debounce_allows(state: &PersonaSignalExtractorState, turn: u32) -> bool {
@@ -312,12 +143,10 @@ fn append_episode_tags(
 }
 
 fn tool_affinity_signals(episode_id: Uuid, ep: &EpisodicNode) -> Vec<RawSignal> {
+    let tools: Vec<String> = ep.effective_tools().to_vec();
+    let tagged = tag_tool_names(&tools);
     let mut out = Vec::new();
-    for tool in ep.effective_tools() {
-        let t = tool.trim();
-        if t.is_empty() {
-            continue;
-        }
+    for _ in tagged {
         out.push(RawSignal {
             axis: PersonaAxis::Instrumentality,
             reward: 0.68,
@@ -390,6 +219,14 @@ fn domain_emergence_signals(
     Ok(out)
 }
 
+fn correction_emit_tag(tag: &SemanticTag) -> String {
+    match tag.namespace {
+        TagNamespace::Behavior => format!("det:behavior:{}", tag.value),
+        TagNamespace::Correction => format!("det:correction:{}", tag.value),
+        _ => format!("det:{}", tag.to_canonical_string().replace(':', "_")),
+    }
+}
+
 /// Episode-ordered heuristics plus semantic domain pass; updates `state` and may patch episode rows.
 pub fn extract_pass(
     store: &SqliteGraphStore,
@@ -427,9 +264,8 @@ pub fn extract_pass(
         }
 
         let user = user_text(episodic);
-        let user_l = user.to_lowercase();
 
-        if let Some(beh) = correction_behavior(&user) {
+        if let Some(tag) = extract_correction_behavior(&user) {
             out.push(RawSignal {
                 axis: PersonaAxis::Systematicity,
                 reward: 0.84,
@@ -437,11 +273,11 @@ pub fn extract_pass(
                 source_node_id: episode_id,
                 source_node_type: MemoryNodeType::Episodic,
             });
-            tags.push(format!("det:correction:{beh}"));
+            tags.push(correction_emit_tag(&tag));
         }
 
         if !user.is_empty()
-            && explicit_brevity_cues(&user_l)
+            && infer_brevity_preference(&user).is_some()
             && brevity_debounce_allows(state, turn)
         {
             out.push(RawSignal {
@@ -473,8 +309,7 @@ pub fn extract_pass(
         }
 
         if !user.is_empty() {
-            let s = formality_score(&user);
-            match formality_direction(s) {
+            match formality_direction_from_tag(&user) {
                 Some(dir) => {
                     let bump = match &mut state.formality_run {
                         Some((cur, n)) if *cur == dir => {
@@ -519,6 +354,9 @@ pub fn extract_pass(
 mod tests {
     use super::*;
     use ainl_memory::{AinlMemoryNode, AinlNodeType, SqliteGraphStore};
+    use ainl_semantic_tagger::{
+        extract_correction_behavior, infer_brevity_preference, infer_formality, TagNamespace,
+    };
     use uuid::Uuid;
 
     fn ep_with_tokens(user_t: u32, asst_t: u32) -> EpisodicNode {
@@ -553,8 +391,9 @@ mod tests {
         let mut tags: Vec<String> = Vec::new();
         let turn = 0;
         let user = user_text(&ep);
-        let user_l = user.to_lowercase();
-        if !user.is_empty() && explicit_brevity_cues(&user_l) && brevity_debounce_allows(&st, turn)
+        if !user.is_empty()
+            && infer_brevity_preference(&user).is_some()
+            && brevity_debounce_allows(&st, turn)
         {
             out.push(RawSignal {
                 axis: PersonaAxis::Verbosity,
@@ -660,9 +499,8 @@ mod tests {
 
     #[test]
     fn formality_single_informal_no_emit_until_three() {
-        let s = formality_score("yo gonna grab some food lol yeah");
-        assert!(s < 0.38, "score={s}");
-        assert_eq!(formality_direction(s), Some(FormalityDir::Informal));
+        let t = infer_formality("yo gonna grab some food lol yeah").expect("tag");
+        assert_eq!(t.value, "informal");
     }
 
     #[test]
@@ -671,12 +509,8 @@ mod tests {
         let informal_line = "yeah gonna wanna grab some cool stuff lol";
         let mut emitted = false;
         for _ in 0..3 {
-            let sc = formality_score(informal_line);
-            assert_eq!(
-                formality_direction(sc),
-                Some(FormalityDir::Informal),
-                "fixture should read as informal (score={sc})"
-            );
+            let dir = formality_direction_from_tag(informal_line).expect("dir");
+            assert_eq!(dir, FormalityDir::Informal);
             let bump = match &mut run {
                 Some((FormalityDir::Informal, n)) => {
                     *n += 1;
@@ -704,8 +538,7 @@ mod tests {
         ];
         let mut max_run = 0u8;
         for m in msgs {
-            let sc = formality_score(m);
-            match formality_direction(sc) {
+            match formality_direction_from_tag(m) {
                 Some(dir) => {
                     let bump = match &mut run {
                         Some((cur, n)) if *cur == dir => {
@@ -811,34 +644,37 @@ mod tests {
 
     #[test]
     fn correction_dont_use_bullets() {
-        let b = correction_behavior("don't use bullet points");
-        assert_eq!(b.as_deref(), Some("use bullet points"));
+        let t = extract_correction_behavior("don't use bullet points").expect("tag");
+        assert_eq!(t.namespace, TagNamespace::Correction);
+        assert_eq!(t.value, "avoid_bullets");
     }
 
     #[test]
     fn correction_you_keep_caveats() {
-        let b = correction_behavior("you keep adding caveats");
-        assert_eq!(b.as_deref(), Some("adding caveats"));
+        let t = extract_correction_behavior("you keep adding caveats").expect("tag");
+        assert_eq!(t.namespace, TagNamespace::Behavior);
+        assert_eq!(t.value, "adding_caveats");
     }
 
     #[test]
     fn correction_told_emojis() {
-        let b = correction_behavior("I told you not to use emojis");
-        assert_eq!(b.as_deref(), Some("use emojis"));
+        let t = extract_correction_behavior("I told you not to use emojis").expect("tag");
+        assert_eq!(t.namespace, TagNamespace::Correction);
+        assert_eq!(t.value, "avoid_emojis");
     }
 
     #[test]
     fn correction_stop_alone() {
-        assert!(correction_behavior("stop").is_none());
+        assert!(extract_correction_behavior("stop").is_none());
     }
 
     #[test]
     fn correction_i_said_so() {
-        assert!(correction_behavior("I said so").is_none());
+        assert!(extract_correction_behavior("I said so").is_none());
     }
 
     #[test]
     fn correction_dont_do_that_no_behavior() {
-        assert!(correction_behavior("don't do that").is_none());
+        assert!(extract_correction_behavior("don't do that").is_none());
     }
 }

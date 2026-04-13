@@ -88,8 +88,8 @@ version = "0.1.0"
 dependencies = [
  "ainl-memory",
  "ainl-persona",
+ "ainl-semantic-tagger",
  "chrono",
- "regex-lite",
  "serde_json",
  "tempfile",
  "uuid",
@@ -125,6 +125,14 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "ainl-semantic-tagger"
+version = "0.1.0-alpha"
+dependencies = [
+ "regex-lite",
+ "serde",
 ]
 
 [[package]]

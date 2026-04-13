@@ -1,0 +1,19 @@
+[package]
+name = "ainl-semantic-tagger"
+version = "0.1.0-alpha"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Deterministic semantic tagging and normalization for AINL / ArmaraOS agents"
+readme = "README.md"
+keywords = ["ai", "ainl", "nlp", "tagging", "agent"]
+categories = ["text-processing", "development-tools"]
+
+[dependencies]
+regex-lite = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]

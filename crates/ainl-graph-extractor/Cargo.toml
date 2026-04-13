@@ -10,8 +10,8 @@ description = "Periodic graph extraction: semantic recurrence_count + persona ev
 [dependencies]
 ainl-memory = { path = "../ainl-memory", version = "0.1.3-alpha" }
 ainl-persona = { path = "../ainl-persona", version = "0.1.0" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.0-alpha" }
 chrono = { workspace = true }
-regex-lite = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 

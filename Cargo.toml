@@ -17,6 +17,7 @@ members = [
     "crates/ainl-memory",
     "crates/ainl-persona",
     "crates/ainl-graph-extractor",
+    "crates/ainl-semantic-tagger",
     "crates/ainl-runtime",
     "xtask",
 ]
