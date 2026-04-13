@@ -6,7 +6,7 @@ use std::time::Instant;
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{
     AinlMemoryNode, AinlNodeType, GraphStore, GraphValidationReport, PersonaNode, ProceduralNode,
-    SqliteGraphStore,
+    RuntimeStateNode, SqliteGraphStore,
 };
 use ainl_persona::axes::default_axis_map;
 use ainl_persona::{EvolutionEngine, PersonaAxis, PersonaSnapshot, RawSignal, INGEST_SCORE_EPSILON};
@@ -28,6 +28,7 @@ pub struct AinlRuntime {
     memory: ainl_memory::GraphMemory,
     extractor: GraphExtractorTask,
     turn_count: u32,
+    last_extraction_turn: u32,
     delegation_depth: u32,
     hooks: Box<dyn TurnHooks>,
     persona_cache: Option<String>,
@@ -39,16 +40,47 @@ pub struct AinlRuntime {
 impl AinlRuntime {
     pub fn new(config: RuntimeConfig, store: SqliteGraphStore) -> Self {
         let agent_id = config.agent_id.clone();
+        let memory = ainl_memory::GraphMemory::from_sqlite_store(store);
+        let (init_turn_count, init_persona_cache, init_last_extraction_turn) = if agent_id.is_empty()
+        {
+            (0, None, 0)
+        } else {
+            match memory.sqlite_store().load_runtime_state(&agent_id) {
+                Ok(Some(state)) => {
+                    tracing::info!(
+                        agent_id = %agent_id,
+                        turn_count = state.turn_count,
+                        "restored runtime state"
+                    );
+                    (
+                        state.turn_count,
+                        state.last_persona_prompt,
+                        state.last_extraction_turn,
+                    )
+                }
+                Ok(None) => (0, None, 0),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load runtime state — starting fresh");
+                    (0, None, 0)
+                }
+            }
+        };
         Self {
             extractor: GraphExtractorTask::new(&agent_id),
-            memory: ainl_memory::GraphMemory::from_sqlite_store(store),
+            memory,
             config,
-            turn_count: 0,
+            turn_count: init_turn_count,
+            last_extraction_turn: init_last_extraction_turn,
             delegation_depth: 0,
             hooks: Box::new(NoOpHooks),
-            persona_cache: None,
+            persona_cache: init_persona_cache,
             test_force_extraction_failure: false,
         }
+    }
+
+    #[doc(hidden)]
+    pub fn test_turn_count(&self) -> u32 {
+        self.turn_count
     }
 
     #[doc(hidden)]
@@ -366,13 +398,17 @@ impl AinlRuntime {
 
         self.turn_count = self.turn_count.wrapping_add(1);
 
+        let should_extract = self.config.extraction_interval > 0
+            && self
+                .turn_count
+                .saturating_sub(self.last_extraction_turn)
+                >= self.config.extraction_interval;
+
         let t_extract = Instant::now();
-        let (extraction_report, extraction_failed) = if self.config.extraction_interval > 0
-            && self.turn_count % self.config.extraction_interval == 0
-        {
+        let (extraction_report, extraction_failed) = if should_extract {
             let force_fail = std::mem::take(&mut self.test_force_extraction_failure);
 
-            if force_fail {
+            let res = if force_fail {
                 tracing::warn!(error = "test_forced", "extraction pass failed — continuing");
                 tracing::debug!(
                     target: "ainl_runtime",
@@ -415,7 +451,9 @@ impl AinlRuntime {
                         (None, true)
                     }
                 }
-            }
+            };
+            self.last_extraction_turn = self.turn_count;
+            res
         } else {
             tracing::debug!(
                 target: "ainl_runtime",
@@ -450,6 +488,20 @@ impl AinlRuntime {
             outcome,
             patch_dispatch_results,
         };
+
+        if !self.config.agent_id.is_empty() {
+            let persist_state = RuntimeStateNode {
+                agent_id: self.config.agent_id.clone(),
+                turn_count: self.turn_count,
+                last_extraction_turn: self.last_extraction_turn,
+                last_persona_prompt: self.persona_cache.clone(),
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            if let Err(e) = self.memory.sqlite_store().save_runtime_state(&persist_state) {
+                tracing::warn!(error = %e, "failed to persist runtime state — non-fatal");
+            }
+        }
+
         self.hooks.on_turn_complete(&out);
         Ok(out)
     }
@@ -669,6 +721,9 @@ fn emit_target_name(n: &AinlMemoryNode) -> String {
         AinlNodeType::Procedural { procedural } => procedural_label(procedural),
         AinlNodeType::Semantic { semantic } => semantic.fact.chars().take(64).collect(),
         AinlNodeType::Episode { episodic } => episodic.turn_id.to_string(),
+        AinlNodeType::RuntimeState { runtime_state } => {
+            format!("runtime_state:{}", runtime_state.agent_id)
+        }
     }
 }
 

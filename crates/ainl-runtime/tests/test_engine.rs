@@ -637,6 +637,72 @@ fn test_partial_success_extraction_failure() {
 }
 
 #[test]
+fn test_runtime_state_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("runtime_restart.db");
+    let _ = std::fs::remove_file(&db);
+    let ag = "restart-agent";
+    let mut ep = AinlMemoryNode::new_episode(Uuid::new_v4(), 3_000_000_000, vec![], None, None);
+    ep.agent_id = ag.into();
+    {
+        let store = SqliteGraphStore::open(&db).unwrap();
+        store.write_node(&ep).unwrap();
+    }
+
+    let cfg = RuntimeConfig {
+        agent_id: ag.into(),
+        extraction_interval: 10,
+        max_steps: 50,
+        ..RuntimeConfig::default()
+    };
+
+    {
+        let store = SqliteGraphStore::open(&db).unwrap();
+        let mut rt = AinlRuntime::new(cfg.clone(), store);
+        assert!(rt.load_artifact().unwrap().validation.is_valid);
+        for i in 0..5 {
+            rt.run_turn(TurnInput {
+                user_message: format!("a{i}"),
+                tools_invoked: vec![],
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert_eq!(rt.test_turn_count(), 5);
+    }
+
+    let store_b = SqliteGraphStore::open(&db).unwrap();
+    let mut rt_b = AinlRuntime::new(cfg, store_b);
+    assert_eq!(rt_b.test_turn_count(), 5);
+
+    for i in 0..4 {
+        let out = rt_b
+            .run_turn(TurnInput {
+                user_message: format!("b{i}"),
+                tools_invoked: vec![],
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            out.extraction_report.is_none(),
+            "extraction should not run before combined turn 10"
+        );
+    }
+
+    let out = rt_b
+        .run_turn(TurnInput {
+            user_message: "b4".into(),
+            tools_invoked: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(
+        out.extraction_report.is_some(),
+        "extraction should run at combined turn 10"
+    );
+}
+
+#[test]
 fn test_scheduled_extractor_pass_still_runs_after_turn() {
     let (_d, store) = open_store();
     let ag = "evo-sched";

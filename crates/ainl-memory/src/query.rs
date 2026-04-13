@@ -6,8 +6,11 @@ use crate::node::{
     AinlMemoryNode, AinlNodeType, EpisodicNode, PersonaLayer, PersonaNode, ProcedureType,
     ProceduralNode, SemanticNode, StrengthEvent,
 };
-use crate::store::GraphStore;
-use std::collections::HashMap;
+use crate::snapshot::SnapshotEdge;
+use crate::store::{GraphStore, SqliteGraphStore};
+use chrono::{DateTime, Utc};
+use rusqlite::{params, OptionalExtension};
+use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 fn node_matches_agent(node: &AinlMemoryNode, agent_id: &str) -> bool {
@@ -333,6 +336,368 @@ pub fn recall_delta_by_relevance(
     Ok(out)
 }
 
+// --- GraphQuery (builder over SqliteGraphStore, v0.1.4+) ---
+
+/// Builder-style queries scoped to one `agent_id` (matches `json_extract(payload, '$.agent_id')`).
+pub struct GraphQuery<'a> {
+    store: &'a SqliteGraphStore,
+    agent_id: String,
+}
+
+impl SqliteGraphStore {
+    pub fn query<'a>(&'a self, agent_id: &str) -> GraphQuery<'a> {
+        GraphQuery {
+            store: self,
+            agent_id: agent_id.to_string(),
+        }
+    }
+}
+
+fn load_nodes_from_payload_rows(
+    rows: impl Iterator<Item = Result<String, rusqlite::Error>>,
+) -> Result<Vec<AinlMemoryNode>, String> {
+    let mut out = Vec::new();
+    for row in rows {
+        let payload = row.map_err(|e| e.to_string())?;
+        let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+        out.push(node);
+    }
+    Ok(out)
+}
+
+impl<'a> GraphQuery<'a> {
+    fn conn(&self) -> &rusqlite::Connection {
+        self.store.conn()
+    }
+
+    pub fn episodes(&self) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'episode'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn semantic_nodes(&self) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'semantic'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn procedural_nodes(&self) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'procedural'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn persona_nodes(&self) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'persona'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn recent_episodes(&self, limit: usize) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'episode'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                 ORDER BY timestamp DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id, limit as i64], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn since(&self, ts: DateTime<Utc>, node_type: &str) -> Result<Vec<AinlMemoryNode>, String> {
+        let col = node_type.to_ascii_lowercase();
+        let since_ts = ts.timestamp();
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = ?1
+                   AND timestamp >= ?2
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?3
+                 ORDER BY timestamp ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&col, since_ts, &self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    /// All directed edges whose **both** endpoints are nodes for this `agent_id` (same rule as [`SqliteGraphStore::export_graph`]).
+    pub fn subgraph_edges(&self) -> Result<Vec<SnapshotEdge>, String> {
+        self.store.agent_subgraph_edges(&self.agent_id)
+    }
+
+    pub fn neighbors(&self, node_id: Uuid, edge_type: &str) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT to_id FROM ainl_graph_edges
+                 WHERE from_id = ?1 AND label = ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let ids: Vec<String> = stmt
+            .query_map(params![node_id.to_string(), edge_type], |row| row.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for sid in ids {
+            let id = Uuid::parse_str(&sid).map_err(|e| e.to_string())?;
+            if let Some(n) = self.store.read_node(id)? {
+                out.push(n);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn lineage(&self, node_id: Uuid) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut visited: HashSet<Uuid> = HashSet::new();
+        let mut out = Vec::new();
+        let mut queue: VecDeque<(Uuid, u32)> = VecDeque::new();
+        visited.insert(node_id);
+        queue.push_back((node_id, 0));
+
+        while let Some((nid, depth)) = queue.pop_front() {
+            if depth >= 20 {
+                continue;
+            }
+            let mut stmt = self
+                .conn()
+                .prepare(
+                    "SELECT to_id FROM ainl_graph_edges
+                     WHERE from_id = ?1 AND label IN ('DERIVED_FROM', 'CAUSED_PATCH')",
+                )
+                .map_err(|e| e.to_string())?;
+            let targets: Vec<String> = stmt
+                .query_map(params![nid.to_string()], |row| row.get(0))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            for sid in targets {
+                let tid = Uuid::parse_str(&sid).map_err(|e| e.to_string())?;
+                if visited.insert(tid) {
+                    if let Some(n) = self.store.read_node(tid)? {
+                        out.push(n.clone());
+                        queue.push_back((tid, depth + 1));
+                    }
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub fn by_tag(&self, tag: &str) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT DISTINCT n.payload FROM ainl_graph_nodes n
+                 WHERE COALESCE(json_extract(n.payload, '$.agent_id'), '') = ?1
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM json_each(n.payload, '$.node_type.persona_signals_emitted') j
+                       WHERE j.value = ?2
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM json_each(n.payload, '$.node_type.tags') j
+                       WHERE j.value = ?2
+                     )
+                   )",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id, tag], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn by_topic_cluster(&self, cluster: &str) -> Result<Vec<AinlMemoryNode>, String> {
+        let like = format!("%{cluster}%");
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'semantic'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND json_extract(payload, '$.node_type.topic_cluster') LIKE ?2 ESCAPE '\\'",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id, like], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn pattern_by_name(&self, name: &str) -> Result<Option<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'procedural'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND (
+                     json_extract(payload, '$.node_type.pattern_name') = ?2
+                     OR json_extract(payload, '$.node_type.label') = ?2
+                   )
+                 ORDER BY timestamp DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let row = stmt
+            .query_row(params![&self.agent_id, name], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match row {
+            Some(payload) => {
+                let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+                Ok(Some(node))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn active_patches(&self) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'procedural'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND (
+                     json_extract(payload, '$.node_type.retired') IS NULL
+                     OR json_extract(payload, '$.node_type.retired') = 0
+                     OR CAST(json_extract(payload, '$.node_type.retired') AS TEXT) = 'false'
+                   )",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn successful_episodes(&self, limit: usize) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'episode'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND json_extract(payload, '$.node_type.outcome') = 'success'
+                 ORDER BY timestamp DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![&self.agent_id, limit as i64], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn episodes_with_tool(
+        &self,
+        tool_name: &str,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'episode'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND (
+                     EXISTS (
+                       SELECT 1 FROM json_each(json_extract(payload, '$.node_type.tools_invoked')) e
+                       WHERE e.value = ?2
+                     )
+                     OR EXISTS (
+                       SELECT 1 FROM json_each(json_extract(payload, '$.node_type.tool_calls')) e
+                       WHERE e.value = ?2
+                     )
+                   )
+                 ORDER BY timestamp DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                params![&self.agent_id, tool_name, limit as i64],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|e| e.to_string())?;
+        load_nodes_from_payload_rows(rows)
+    }
+
+    pub fn evolved_persona(&self) -> Result<Option<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'persona'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND json_extract(payload, '$.node_type.trait_name') = 'axis_evolution_snapshot'
+                 ORDER BY timestamp DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let row = stmt
+            .query_row(params![&self.agent_id], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match row {
+            Some(payload) => {
+                let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+                Ok(Some(node))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +758,39 @@ mod tests {
         let high_conf = find_high_confidence_facts(&store, 0.7).expect("Query failed");
 
         assert_eq!(high_conf.len(), 1);
+    }
+
+    #[test]
+    fn test_query_active_patches() {
+        let path = std::env::temp_dir().join(format!("ainl_query_active_patch_{}.db", uuid::Uuid::new_v4()));
+        let _ = std::fs::remove_file(&path);
+        let store = SqliteGraphStore::open(&path).expect("open");
+        let ag = "agent-active-patch";
+        let mut p1 = AinlMemoryNode::new_pattern("pat_one".into(), vec![1, 2]);
+        p1.agent_id = ag.into();
+        let mut p2 = AinlMemoryNode::new_pattern("pat_two".into(), vec![3, 4]);
+        p2.agent_id = ag.into();
+        store.write_node(&p1).expect("w1");
+        store.write_node(&p2).expect("w2");
+
+        let conn = store.conn();
+        let payload2: String = conn
+            .query_row(
+                "SELECT payload FROM ainl_graph_nodes WHERE id = ?1",
+                [p2.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&payload2).unwrap();
+        v["node_type"]["retired"] = serde_json::json!(true);
+        conn.execute(
+            "UPDATE ainl_graph_nodes SET payload = ?1 WHERE id = ?2",
+            rusqlite::params![v.to_string(), p2.id.to_string()],
+        )
+        .unwrap();
+
+        let active = store.query(ag).active_patches().expect("q");
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, p1.id);
     }
 }

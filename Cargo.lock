@@ -97,12 +97,13 @@ dependencies = [
 
 [[package]]
 name = "ainl-memory"
-version = "0.1.4-alpha"
+version = "0.1.5-alpha"
 dependencies = [
  "chrono",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "uuid",
 ]
 

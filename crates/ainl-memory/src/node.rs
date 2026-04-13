@@ -36,6 +36,8 @@ pub enum MemoryCategory {
     Semantic,
     Episodic,
     Procedural,
+    /// Agent-scoped runtime session counters / cache hints (persisted by `ainl-runtime`).
+    RuntimeState,
 }
 
 impl MemoryCategory {
@@ -45,6 +47,7 @@ impl MemoryCategory {
             AinlNodeType::Semantic { .. } => MemoryCategory::Semantic,
             AinlNodeType::Procedural { .. } => MemoryCategory::Procedural,
             AinlNodeType::Persona { .. } => MemoryCategory::Persona,
+            AinlNodeType::RuntimeState { .. } => MemoryCategory::RuntimeState,
         }
     }
 }
@@ -277,6 +280,12 @@ pub struct ProceduralNode {
     /// Declared read dependencies for the procedure (metadata-only hints).
     #[serde(default)]
     pub declared_reads: Vec<String>,
+    /// When true, excluded from [`crate::GraphQuery::active_patches`] and skipped by patch dispatch.
+    #[serde(default)]
+    pub retired: bool,
+    /// IR label for graph-patch identity (empty → runtimes may fall back to [`Self::pattern_name`]).
+    #[serde(default)]
+    pub label: String,
 }
 
 impl ProceduralNode {
@@ -288,6 +297,16 @@ impl ProceduralNode {
             self.success_count as f32 / total as f32
         };
     }
+}
+
+/// Persisted session counters and persona prompt cache for one agent (`ainl-runtime` ↔ SQLite).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct RuntimeStateNode {
+    pub agent_id: String,
+    pub turn_count: u32,
+    pub last_extraction_turn: u32,
+    pub last_persona_prompt: Option<String>,
+    pub updated_at: String,
 }
 
 /// Core AINL node types - the vocabulary of agent memory.
@@ -316,6 +335,11 @@ pub enum AinlNodeType {
     Persona {
         #[serde(flatten)]
         persona: PersonaNode,
+    },
+
+    /// Runtime session state (turn counters, extraction cadence, persona cache snapshot).
+    RuntimeState {
+        runtime_state: RuntimeStateNode,
     },
 }
 
@@ -475,6 +499,8 @@ impl AinlMemoryNode {
             patch_version: 1,
             fitness: None,
             declared_reads: Vec::new(),
+            retired: false,
+            label: String::new(),
         };
         procedural.recompute_success_rate();
         Self::base(
@@ -507,6 +533,8 @@ impl AinlMemoryNode {
             patch_version: 1,
             fitness: None,
             declared_reads: Vec::new(),
+            retired: false,
+            label: String::new(),
         };
         procedural.recompute_success_rate();
         Self::base(

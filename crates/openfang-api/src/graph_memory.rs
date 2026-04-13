@@ -47,6 +47,7 @@ fn node_kind(row_type: &str) -> &'static str {
         "semantic" => "semantic",
         "procedural" => "procedural",
         "persona" => "persona",
+        "runtime_state" => "runtime_state",
         _ => "semantic",
     }
 }
@@ -97,6 +98,13 @@ fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
         AinlNodeType::Persona { persona } => (
             format!("{} ({:.2})", persona.trait_name, persona.strength),
             Some(persona.strength),
+        ),
+        AinlNodeType::RuntimeState { runtime_state } => (
+            format!(
+                "Runtime state · turns {} · last extract {}",
+                runtime_state.turn_count, runtime_state.last_extraction_turn
+            ),
+            None,
         ),
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ainl-memory"
-version = "0.1.3-alpha"
+version = "0.1.5-alpha"
 description = "AINL graph-memory substrate - agent memory as execution graph"
 authors = ["Steven Hooley"]
 readme = "README.md"
@@ -19,7 +19,9 @@ chrono = { workspace = true }
 rusqlite = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -41,19 +41,24 @@
 
 pub mod node;
 pub mod query;
+pub mod snapshot;
 pub mod store;
 
 pub use node::{
     AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, MemoryCategory,
-    PersonaLayer, PersonaNode, PersonaSource, ProcedureType, ProceduralNode, SemanticNode,
-    Sentiment, StrengthEvent,
+    PersonaLayer, PersonaNode, PersonaSource, ProcedureType, ProceduralNode, RuntimeStateNode,
+    SemanticNode, Sentiment, StrengthEvent,
 };
 pub use query::{
     count_by_topic_cluster, find_high_confidence_facts, find_patterns, find_strong_traits,
     recall_by_procedure_type, recall_by_topic_cluster, recall_contradictions,
     recall_delta_by_relevance, recall_episodes_by_conversation, recall_episodes_with_signal,
     recall_flagged_episodes, recall_low_success_procedures, recall_recent, recall_strength_history,
-    walk_from,
+    walk_from, GraphQuery,
+};
+pub use snapshot::{
+    AgentGraphSnapshot, DanglingEdgeDetail, GraphValidationReport, SnapshotEdge,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 pub use store::{GraphStore, SqliteGraphStore};
 
@@ -80,6 +85,11 @@ impl GraphMemory {
     pub fn from_connection(conn: rusqlite::Connection) -> Result<Self, String> {
         let store = SqliteGraphStore::from_connection(conn)?;
         Ok(Self { store })
+    }
+
+    /// Wrap an already-open [`SqliteGraphStore`] (for hosts that manage connections externally).
+    pub fn from_sqlite_store(store: SqliteGraphStore) -> Self {
+        Self { store }
     }
 
     /// Write an episode node (what happened during an agent turn).
@@ -209,6 +219,50 @@ impl GraphMemory {
     /// Get direct access to the underlying store for advanced queries
     pub fn store(&self) -> &dyn GraphStore {
         &self.store
+    }
+
+    /// SQLite backing store (for components such as `ainl-graph-extractor` that require concrete SQL access).
+    pub fn sqlite_store(&self) -> &SqliteGraphStore {
+        &self.store
+    }
+
+    /// [`SqliteGraphStore::validate_graph`] for the same backing database (checkpoint / boot gate).
+    pub fn validate_graph(&self, agent_id: &str) -> Result<GraphValidationReport, String> {
+        self.store.validate_graph(agent_id)
+    }
+
+    /// [`SqliteGraphStore::export_graph`].
+    pub fn export_graph(&self, agent_id: &str) -> Result<AgentGraphSnapshot, String> {
+        self.store.export_graph(agent_id)
+    }
+
+    /// [`SqliteGraphStore::import_graph`] — use `allow_dangling_edges: false` for normal loads; `true` only for repair.
+    pub fn import_graph(
+        &mut self,
+        snapshot: &AgentGraphSnapshot,
+        allow_dangling_edges: bool,
+    ) -> Result<(), String> {
+        self.store.import_graph(snapshot, allow_dangling_edges)
+    }
+
+    /// [`SqliteGraphStore::agent_subgraph_edges`].
+    pub fn agent_subgraph_edges(&self, agent_id: &str) -> Result<Vec<SnapshotEdge>, String> {
+        self.store.agent_subgraph_edges(agent_id)
+    }
+
+    /// [`SqliteGraphStore::write_node_with_edges`] (transactional; fails if embedded edge targets are missing).
+    pub fn write_node_with_edges(&mut self, node: &AinlMemoryNode) -> Result<(), String> {
+        self.store.write_node_with_edges(node)
+    }
+
+    /// [`SqliteGraphStore::insert_graph_edge_checked`].
+    pub fn insert_graph_edge_checked(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        label: &str,
+    ) -> Result<(), String> {
+        self.store.insert_graph_edge_checked(from_id, to_id, label)
     }
 
     /// Write a fully constructed node (additive API for callers that set extended metadata).
