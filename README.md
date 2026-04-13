@@ -22,7 +22,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.7.2-green?style=flat-square" alt="v0.7.2" />
+  <img src="https://img.shields.io/badge/version-0.7.3-green?style=flat-square" alt="v0.7.3" />
   <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
 </p>
 

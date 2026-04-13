@@ -45,7 +45,7 @@ Edit root **`CHANGELOG.md`**:
 
 ## 3. Marketing site (GitHub fallback)
 
-The Next.js site (**ainativelangweb**) uses **`config/site.ts`** → **`latestArmaraosReleaseTag`** when **`public/downloads/armaraos/latest.json`** is missing. Set it to the **tag you are about to publish** (e.g. **`v0.7.2`**) so homepage/`/download` GitHub fallbacks stay consistent. The **`sync-desktop-updates-to-website`** job in **armaraos** `release.yml` pushes installer manifests into that repo after the release workflow runs.
+The Next.js site (**ainativelangweb**) uses **`config/site.ts`** → **`latestArmaraosReleaseTag`** when **`public/downloads/armaraos/latest.json`** is missing. Set it to the **tag you are about to publish** (e.g. **`v0.7.3`**) so homepage/`/download` GitHub fallbacks stay consistent. The **`sync-desktop-updates-to-website`** job in **armaraos** `release.yml` pushes installer manifests into that repo after the release workflow runs.
 
 ---
 
@@ -80,7 +80,7 @@ See **[release-desktop.md](release-desktop.md)** (post-release verification + sm
 
 ---
 
-## Audit / API reminders (0.7.2+)
+## Audit / API reminders (0.7.3+)
 
 - Successful **`PUT /api/agents/{id}/update`** records **`AgentManifestUpdate`** in the audit log (older rows may still say **`ConfigChange`**).
 - **`GET /api/agents/{id}?omit=manifest_toml`** avoids returning the large TOML blob.

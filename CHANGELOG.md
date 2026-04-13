@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- Next release changes go here -->
+
+## [0.7.3] - 2026-04-12
+
 ### Added
 
 - **Orchestration observability:** Bounded in-memory **orchestration trace** ring, **`GET /api/orchestration/traces`** (+ per-trace events, tree, cost), kernel **`OrchestrationTrace`** events on **`GET /api/events/stream`**, dashboard **`#orchestration-traces`** (Monitor), and **`openfang orchestration`** CLI (`list`, `trace`, `cost`, `tree`, `live`, `quota`, `export`, `watch`). See **`docs/orchestration-guide.md`**, **`docs/api-reference.md`** (*Orchestration traces & quota*), **`docs/workflows.md`** (*Orchestration and traces*).
 - **Task queue + traces:** Pending tasks can prefer **`orchestration.trace_id`** in JSON payloads; **`task_claim`** rehydrates **`OrchestrationContext`** for the agent’s next turn (**`docs/task-queue-orchestration.md`**).
 - **Graph memory (`ainl-memory`):** Workspace crates **`ainl-memory`** and **`ainl-runtime`** (standalone / future host). **`openfang-runtime`** records graph nodes via **`GraphMemoryWriter`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** (per agent; separate from **`data/openfang.db`**): **EndTurn** episodes, **semantic** rows after successful tool execution, **`agent_delegate`** episodes (optional orchestration trace JSON), **`a2a_send`** episodes after **`A2aClient::send_task`**, plus **persona** recall into the chat **system prompt**. Scheduled **`ainl_run`** jobs use **`bundle.ainlbundle`** + **`AINL_BUNDLE_PATH`** for Python **`ainl_graph_memory`** round-trip (**`crates/openfang-runtime/src/ainl_bundle_cron.rs`**). Operator doc: **`docs/graph-memory.md`**. Crate READMEs: **`crates/ainl-memory/README.md`**, **`crates/ainl-runtime/README.md`**. Layering: repo-root **`ARCHITECTURE.md`**, **`docs/scheduled-ainl.md`**, timeline **`PRIOR_ART.md`**.
+- **Graph memory (heuristic extraction):** Post-turn **`graph_extractor`** (regex, no extra LLM) derives **semantic** facts and **procedural** workflow nodes from completed chat turns; **`record_turn`** links successive episodes with **`follows`** edges; dashboard **`GET /api/graph-memory`** preserves **`follows`** rel. See **`crates/openfang-runtime/src/graph_extractor.rs`**, **`graph_memory_writer.rs`**, **`agent_loop.rs`**.
 - **HTTP API:** `POST /api/agents/{id}/message` may include a top-level **`tools`** array — one **`ToolTurnRecord`** per tool execution in that blocking turn (`name`, **`input`** as a JSON string, **`result`**, **`is_error`**). Omitted when empty. Populated from **`AgentLoopResult.tool_turns`** in **`openfang-runtime`** (non-streaming and streaming agent loops accumulate the same list for parity).
 - **Types:** **`ToolTurnRecord`** in **`openfang_types::message`** (shared by API JSON and runtime).
 
@@ -22,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Dashboard:** Tool cards no longer disappeared when chat fell back to HTTP because the client always pushed **`tools: []`** after **`POST …/message`**.
+- **Dashboard → Graph memory:** Agent picker and WebKit-safe loading so the graph panel can show data for the selected agent.
 
 ### Documentation
 
@@ -459,6 +465,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.3]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.3
 [0.7.2]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.2
 [0.7.1]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.1
 [0.7.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.0
