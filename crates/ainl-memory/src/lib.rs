@@ -43,9 +43,17 @@ pub mod node;
 pub mod query;
 pub mod store;
 
-pub use node::{AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType};
+pub use node::{
+    AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, MemoryCategory,
+    PersonaLayer, PersonaNode, PersonaSource, ProcedureType, ProceduralNode, SemanticNode,
+    Sentiment, StrengthEvent,
+};
 pub use query::{
-    find_high_confidence_facts, find_patterns, find_strong_traits, recall_recent, walk_from,
+    count_by_topic_cluster, find_high_confidence_facts, find_patterns, find_strong_traits,
+    recall_by_procedure_type, recall_by_topic_cluster, recall_contradictions,
+    recall_delta_by_relevance, recall_episodes_by_conversation, recall_episodes_with_signal,
+    recall_flagged_episodes, recall_low_success_procedures, recall_recent, recall_strength_history,
+    walk_from,
 };
 pub use store::{GraphStore, SqliteGraphStore};
 
@@ -202,6 +210,11 @@ impl GraphMemory {
     pub fn store(&self) -> &dyn GraphStore {
         &self.store
     }
+
+    /// Write a fully constructed node (additive API for callers that set extended metadata).
+    pub fn write_node(&self, node: &AinlMemoryNode) -> Result<(), String> {
+        self.store.write_node(node)
+    }
 }
 
 #[cfg(test)]
@@ -243,14 +256,9 @@ mod tests {
         assert_eq!(recent.len(), 1);
 
         // Verify the episode content
-        if let AinlNodeType::Episode {
-            delegation_to,
-            tool_calls,
-            ..
-        } = &recent[0].node_type
-        {
-            assert_eq!(delegation_to, &Some("agent-B".to_string()));
-            assert_eq!(tool_calls.len(), 2);
+        if let AinlNodeType::Episode { episodic } = &recent[0].node_type {
+            assert_eq!(episodic.delegation_to, Some("agent-B".to_string()));
+            assert_eq!(episodic.tool_calls.len(), 2);
         } else {
             panic!("Wrong node type");
         }

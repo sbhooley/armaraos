@@ -62,20 +62,16 @@ fn id_prefix(id: impl std::fmt::Display) -> String {
 fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
     let id_short = id_prefix(node.id);
     match &node.node_type {
-        AinlNodeType::Episode {
-            tool_calls,
-            delegation_to,
-            ..
-        } => {
-            let mut s = if let Some(to) = delegation_to {
+        AinlNodeType::Episode { episodic } => {
+            let mut s = if let Some(to) = &episodic.delegation_to {
                 format!("Delegated to {to} · ")
             } else {
                 String::new()
             };
-            if tool_calls.is_empty() {
+            if episodic.tool_calls.is_empty() {
                 s.push_str(&format!("Episode {id_short}"));
             } else {
-                s.push_str(&tool_calls.join(", "));
+                s.push_str(&episodic.tool_calls.join(", "));
             }
             let s = if s.chars().count() > 60 {
                 format!("{}…", s.chars().take(60).collect::<String>())
@@ -84,25 +80,24 @@ fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
             };
             (s, None)
         }
-        AinlNodeType::Semantic { fact, .. } => {
-            if fact.is_empty() {
+        AinlNodeType::Semantic { semantic } => {
+            if semantic.fact.is_empty() {
                 (format!("Fact {id_short}"), None)
             } else {
-                (fact.clone(), None)
+                (semantic.fact.clone(), None)
             }
         }
-        AinlNodeType::Procedural { pattern_name, .. } => {
-            if pattern_name.is_empty() {
+        AinlNodeType::Procedural { procedural } => {
+            if procedural.pattern_name.is_empty() {
                 (format!("Pattern {id_short}"), None)
             } else {
-                (pattern_name.clone(), None)
+                (procedural.pattern_name.clone(), None)
             }
         }
-        AinlNodeType::Persona {
-            trait_name,
-            strength,
-            ..
-        } => (format!("{trait_name} ({strength:.2})"), Some(*strength)),
+        AinlNodeType::Persona { persona } => (
+            format!("{} ({:.2})", persona.trait_name, persona.strength),
+            Some(persona.strength),
+        ),
     }
 }
 

@@ -146,6 +146,8 @@ impl SqliteGraphStore {
 }
 
 impl GraphStore for SqliteGraphStore {
+    /// Persists the full node JSON under `id` via `INSERT OR REPLACE` (upsert).
+    /// Backfill pattern: `read_node` → patch fields (e.g. episodic signals) → `write_node`, preserving loaded `edges`.
     fn write_node(&self, node: &AinlMemoryNode) -> Result<(), String> {
         let payload = serde_json::to_string(node).map_err(|e| e.to_string())?;
         let type_name = match &node.node_type {
@@ -157,7 +159,7 @@ impl GraphStore for SqliteGraphStore {
 
         // Extract timestamp from the node
         let timestamp = match &node.node_type {
-            AinlNodeType::Episode { timestamp, .. } => *timestamp,
+            AinlNodeType::Episode { episodic } => episodic.timestamp,
             _ => chrono::Utc::now().timestamp(),
         };
 

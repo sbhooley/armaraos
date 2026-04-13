@@ -628,14 +628,12 @@ pub async fn run_agent_loop(
             let traits: Vec<String> = persona_nodes
                 .iter()
                 .filter_map(|n| {
-                    if let ainl_memory::AinlNodeType::Persona {
-                        trait_name,
-                        strength,
-                        ..
-                    } = &n.node_type
-                    {
-                        if *strength >= 0.1 {
-                            Some(format!("{trait_name} (strength={strength:.2})"))
+                    if let ainl_memory::AinlNodeType::Persona { persona } = &n.node_type {
+                        if persona.strength >= 0.1 {
+                            Some(format!(
+                                "{} (strength={:.2})",
+                                persona.trait_name, persona.strength
+                            ))
                         } else {
                             None
                         }
@@ -2364,14 +2362,12 @@ pub async fn run_agent_loop_streaming(
             let traits: Vec<String> = persona_nodes
                 .iter()
                 .filter_map(|n| {
-                    if let ainl_memory::AinlNodeType::Persona {
-                        trait_name,
-                        strength,
-                        ..
-                    } = &n.node_type
-                    {
-                        if *strength >= 0.1 {
-                            Some(format!("{trait_name} (strength={strength:.2})"))
+                    if let ainl_memory::AinlNodeType::Persona { persona } = &n.node_type {
+                        if persona.strength >= 0.1 {
+                            Some(format!(
+                                "{} (strength={:.2})",
+                                persona.trait_name, persona.strength
+                            ))
                         } else {
                             None
                         }

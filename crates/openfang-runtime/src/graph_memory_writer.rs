@@ -7,7 +7,7 @@
 //! This is the wire that makes ainl-memory non-dead-code in the binary and
 //! fulfills the architectural claim: execution IS the memory.
 
-use ainl_memory::GraphMemory;
+use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -82,12 +82,24 @@ impl GraphMemoryWriter {
                 .ok()
                 .and_then(|nodes| nodes.into_iter().next())
                 .map(|n| n.id);
-            match inner.write_episode(
+            let turn_id = Uuid::new_v4();
+            let timestamp = chrono::Utc::now().timestamp();
+            let mut node = AinlMemoryNode::new_episode(
+                turn_id,
+                timestamp,
                 tool_calls.clone(),
                 delegation_to.clone(),
                 trace_json,
-            ) {
-                Ok(new_id) => {
+            );
+            node.agent_id = self.agent_id.clone();
+            if let Some(prev) = prev_id {
+                if let AinlNodeType::Episode { ref mut episodic } = node.node_type {
+                    episodic.follows_episode_id = Some(prev.to_string());
+                }
+            }
+            let new_id = node.id;
+            match inner.write_node(&node) {
+                Ok(()) => {
                     if let Some(prev) = prev_id {
                         let _ = inner.write_edge(new_id, prev, "follows");
                     }
@@ -123,7 +135,14 @@ impl GraphMemoryWriter {
     pub async fn record_pattern(&self, name: &str, tool_sequence: Vec<String>, confidence: f32) {
         let res = {
             let inner = self.inner.lock().await;
-            inner.write_procedural(name, tool_sequence, confidence)
+            let mut node = AinlMemoryNode::new_procedural_tools(
+                name.to_string(),
+                tool_sequence,
+                confidence,
+            );
+            node.agent_id = self.agent_id.clone();
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
         };
         match res {
             Ok(id) => {
@@ -147,7 +166,13 @@ impl GraphMemoryWriter {
     pub async fn record_fact(&self, fact: String, confidence: f32, source_turn_id: Uuid) {
         let res = {
             let inner = self.inner.lock().await;
-            inner.write_fact(fact.clone(), confidence, source_turn_id)
+            let mut node = AinlMemoryNode::new_fact(fact.clone(), confidence, source_turn_id);
+            node.agent_id = self.agent_id.clone();
+            if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
+                semantic.source_episode_id = source_turn_id.to_string();
+            }
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
         };
         match res {
             Ok(id) => {
@@ -220,9 +245,9 @@ mod tests {
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
 
-        if let ainl_memory::AinlNodeType::Episode { tool_calls, .. } = &recent[0].node_type {
-            assert_eq!(tool_calls.len(), 2);
-            assert!(tool_calls.contains(&"web_search".to_string()));
+        if let ainl_memory::AinlNodeType::Episode { episodic } = &recent[0].node_type {
+            assert_eq!(episodic.tool_calls.len(), 2);
+            assert!(episodic.tool_calls.contains(&"web_search".to_string()));
         } else {
             panic!("wrong node type");
         }
@@ -245,8 +270,8 @@ mod tests {
 
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
-        if let ainl_memory::AinlNodeType::Episode { delegation_to, .. } = &recent[0].node_type {
-            assert_eq!(delegation_to, &Some("agent-B".to_string()));
+        if let ainl_memory::AinlNodeType::Episode { episodic } = &recent[0].node_type {
+            assert_eq!(episodic.delegation_to, Some("agent-B".to_string()));
         } else {
             panic!("wrong node type");
         }
@@ -298,14 +323,9 @@ mod tests {
 
         let nodes = writer.recall_persona(3600).await;
         assert_eq!(nodes.len(), 1);
-        if let ainl_memory::AinlNodeType::Persona {
-            trait_name,
-            strength,
-            ..
-        } = &nodes[0].node_type
-        {
-            assert_eq!(trait_name, "prefers_brevity");
-            assert!((strength - 0.9).abs() < 0.01);
+        if let ainl_memory::AinlNodeType::Persona { persona } = &nodes[0].node_type {
+            assert_eq!(persona.trait_name, "prefers_brevity");
+            assert!((persona.strength - 0.9).abs() < 0.01);
         } else {
             panic!("wrong node type");
         }

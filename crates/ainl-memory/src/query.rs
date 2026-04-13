@@ -2,20 +2,19 @@
 //!
 //! Higher-level query functions built on top of GraphStore.
 
-use crate::node::{AinlMemoryNode, AinlNodeType};
+use crate::node::{
+    AinlMemoryNode, AinlNodeType, EpisodicNode, PersonaLayer, PersonaNode, ProcedureType,
+    ProceduralNode, SemanticNode, StrengthEvent,
+};
 use crate::store::GraphStore;
+use std::collections::HashMap;
 use uuid::Uuid;
 
+fn node_matches_agent(node: &AinlMemoryNode, agent_id: &str) -> bool {
+    node.agent_id.is_empty() || node.agent_id == agent_id
+}
+
 /// Walk the graph from a starting node, following edges with a specific label
-///
-/// # Arguments
-/// * `store` - The graph store to query
-/// * `start_id` - Node ID to start from
-/// * `edge_label` - Label of edges to follow
-/// * `max_depth` - Maximum depth to traverse (prevents infinite loops)
-///
-/// # Returns
-/// Vector of nodes encountered during the walk, in breadth-first order
 pub fn walk_from(
     store: &dyn GraphStore,
     start_id: Uuid,
@@ -42,7 +41,6 @@ pub fn walk_from(
             if let Some(node) = store.read_node(node_id)? {
                 result.push(node.clone());
 
-                // Follow edges with the specified label
                 for next_node in store.walk_edges(node_id, edge_label)? {
                     if !visited.contains(&next_node.id) {
                         next_level.push(next_node.id);
@@ -58,12 +56,6 @@ pub fn walk_from(
 }
 
 /// Recall recent episodes, optionally filtered by tool usage
-///
-/// # Arguments
-/// * `store` - The graph store to query
-/// * `since_timestamp` - Only return episodes after this timestamp (Unix seconds)
-/// * `limit` - Maximum number of episodes to return
-/// * `tool_filter` - If Some, only return episodes that used this tool
 pub fn recall_recent(
     store: &dyn GraphStore,
     since_timestamp: i64,
@@ -76,7 +68,9 @@ pub fn recall_recent(
         Ok(episodes
             .into_iter()
             .filter(|node| match &node.node_type {
-                AinlNodeType::Episode { tool_calls, .. } => tool_calls.contains(&tool_name.to_string()),
+                AinlNodeType::Episode { episodic } => {
+                    episodic.effective_tools().contains(&tool_name.to_string())
+                }
                 _ => false,
             })
             .collect())
@@ -86,13 +80,6 @@ pub fn recall_recent(
 }
 
 /// Find procedural patterns by name prefix
-///
-/// # Arguments
-/// * `store` - The graph store to query
-/// * `name_prefix` - Pattern name prefix to match
-///
-/// # Returns
-/// Vector of procedural nodes whose pattern_name starts with the prefix
 pub fn find_patterns(
     store: &dyn GraphStore,
     name_prefix: &str,
@@ -102,8 +89,8 @@ pub fn find_patterns(
     Ok(all_procedural
         .into_iter()
         .filter(|node| match &node.node_type {
-            AinlNodeType::Procedural { pattern_name, .. } => {
-                pattern_name.starts_with(name_prefix)
+            AinlNodeType::Procedural { procedural } => {
+                procedural.pattern_name.starts_with(name_prefix)
             }
             _ => false,
         })
@@ -111,13 +98,6 @@ pub fn find_patterns(
 }
 
 /// Find semantic facts with confidence above a threshold
-///
-/// # Arguments
-/// * `store` - The graph store to query
-/// * `min_confidence` - Minimum confidence score (0.0-1.0)
-///
-/// # Returns
-/// Vector of semantic nodes with confidence >= min_confidence
 pub fn find_high_confidence_facts(
     store: &dyn GraphStore,
     min_confidence: f32,
@@ -127,35 +107,230 @@ pub fn find_high_confidence_facts(
     Ok(all_semantic
         .into_iter()
         .filter(|node| match &node.node_type {
-            AinlNodeType::Semantic { confidence, .. } => *confidence >= min_confidence,
+            AinlNodeType::Semantic { semantic } => semantic.confidence >= min_confidence,
             _ => false,
         })
         .collect())
 }
 
 /// Find persona traits sorted by strength
-///
-/// # Arguments
-/// * `store` - The graph store to query
-///
-/// # Returns
-/// Vector of persona nodes sorted by strength (descending)
 pub fn find_strong_traits(store: &dyn GraphStore) -> Result<Vec<AinlMemoryNode>, String> {
     let mut all_persona = store.find_by_type("persona")?;
 
     all_persona.sort_by(|a, b| {
         let strength_a = match &a.node_type {
-            AinlNodeType::Persona { strength, .. } => *strength,
+            AinlNodeType::Persona { persona } => persona.strength,
             _ => 0.0,
         };
         let strength_b = match &b.node_type {
-            AinlNodeType::Persona { strength, .. } => *strength,
+            AinlNodeType::Persona { persona } => persona.strength,
             _ => 0.0,
         };
-        strength_b.partial_cmp(&strength_a).unwrap_or(std::cmp::Ordering::Equal)
+        strength_b
+            .partial_cmp(&strength_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     Ok(all_persona)
+}
+
+// --- Semantic helpers ---
+
+pub fn recall_by_topic_cluster(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    cluster: &str,
+) -> Result<Vec<SemanticNode>, String> {
+    let mut out = Vec::new();
+    for node in store.find_by_type("semantic")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Semantic { semantic } = &node.node_type {
+            if semantic.topic_cluster.as_deref() == Some(cluster) {
+                out.push(semantic.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn recall_contradictions(store: &dyn GraphStore, node_id: Uuid) -> Result<Vec<SemanticNode>, String> {
+    let Some(node) = store.read_node(node_id)? else {
+        return Ok(Vec::new());
+    };
+    let contradiction_ids: Vec<String> = match &node.node_type {
+        AinlNodeType::Semantic { semantic } => semantic.contradiction_ids.clone(),
+        _ => return Ok(Vec::new()),
+    };
+    let mut out = Vec::new();
+    for cid in contradiction_ids {
+        if let Ok(uuid) = Uuid::parse_str(&cid) {
+            if let Some(n) = store.read_node(uuid)? {
+                if let AinlNodeType::Semantic { semantic } = &n.node_type {
+                    out.push(semantic.clone());
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn count_by_topic_cluster(
+    store: &dyn GraphStore,
+    agent_id: &str,
+) -> Result<HashMap<String, usize>, String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for node in store.find_by_type("semantic")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Semantic { semantic } = &node.node_type {
+            if let Some(cluster) = semantic.topic_cluster.as_deref() {
+                if cluster.is_empty() {
+                    continue;
+                }
+                *counts.entry(cluster.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+// --- Episodic helpers ---
+
+pub fn recall_flagged_episodes(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    limit: usize,
+) -> Result<Vec<EpisodicNode>, String> {
+    let mut out: Vec<(i64, EpisodicNode)> = Vec::new();
+    for node in store.find_by_type("episode")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Episode { episodic } = &node.node_type {
+            if episodic.flagged {
+                out.push((episodic.timestamp, episodic.clone()));
+            }
+        }
+    }
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.truncate(limit);
+    Ok(out.into_iter().map(|(_, e)| e).collect())
+}
+
+pub fn recall_episodes_by_conversation(
+    store: &dyn GraphStore,
+    conversation_id: &str,
+) -> Result<Vec<EpisodicNode>, String> {
+    let mut out: Vec<(u32, EpisodicNode)> = Vec::new();
+    for node in store.find_by_type("episode")? {
+        if let AinlNodeType::Episode { episodic } = &node.node_type {
+            if episodic.conversation_id == conversation_id {
+                out.push((episodic.turn_index, episodic.clone()));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out.into_iter().map(|(_, e)| e).collect())
+}
+
+pub fn recall_episodes_with_signal(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    signal_type: &str,
+) -> Result<Vec<EpisodicNode>, String> {
+    let mut out = Vec::new();
+    for node in store.find_by_type("episode")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Episode { episodic } = &node.node_type {
+            if episodic
+                .persona_signals_emitted
+                .iter()
+                .any(|s| s == signal_type)
+            {
+                out.push(episodic.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+// --- Procedural helpers ---
+
+pub fn recall_by_procedure_type(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    procedure_type: ProcedureType,
+) -> Result<Vec<ProceduralNode>, String> {
+    let mut out = Vec::new();
+    for node in store.find_by_type("procedural")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Procedural { procedural } = &node.node_type {
+            if procedural.procedure_type == procedure_type {
+                out.push(procedural.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn recall_low_success_procedures(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    threshold: f32,
+) -> Result<Vec<ProceduralNode>, String> {
+    let mut out = Vec::new();
+    for node in store.find_by_type("procedural")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Procedural { procedural } = &node.node_type {
+            let total = procedural.success_count.saturating_add(procedural.failure_count);
+            if total > 0 && procedural.success_rate < threshold {
+                out.push(procedural.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+// --- Persona helpers ---
+
+pub fn recall_strength_history(store: &dyn GraphStore, node_id: Uuid) -> Result<Vec<StrengthEvent>, String> {
+    let Some(node) = store.read_node(node_id)? else {
+        return Ok(Vec::new());
+    };
+    let mut events = match &node.node_type {
+        AinlNodeType::Persona { persona } => persona.evolution_log.clone(),
+        _ => return Ok(Vec::new()),
+    };
+    events.sort_by_key(|e| e.timestamp);
+    Ok(events)
+}
+
+pub fn recall_delta_by_relevance(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    min_relevance: f32,
+) -> Result<Vec<PersonaNode>, String> {
+    let mut out = Vec::new();
+    for node in store.find_by_type("persona")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        if let AinlNodeType::Persona { persona } = &node.node_type {
+            if persona.layer == PersonaLayer::Delta && persona.relevance_score >= min_relevance {
+                out.push(persona.clone());
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -174,7 +349,6 @@ mod tests {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Create episodes with different tools
         let node1 = AinlMemoryNode::new_episode(
             uuid::Uuid::new_v4(),
             now,
@@ -194,7 +368,6 @@ mod tests {
         store.write_node(&node1).expect("Write failed");
         store.write_node(&node2).expect("Write failed");
 
-        // Query with tool filter
         let delegations = recall_recent(&store, now - 100, 10, Some("agent_delegate"))
             .expect("Query failed");
 
