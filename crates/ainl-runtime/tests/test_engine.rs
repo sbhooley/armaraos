@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
-    AinlRuntime, PatchSkipReason, RuntimeConfig, TurnHooks, TurnInput, TurnOutcome,
+    AinlRuntime, MemoryNodeType, PatchSkipReason, PersonaAxis, RawSignal, RuntimeConfig, TurnHooks,
+    TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -24,6 +25,34 @@ fn default_rt_cfg(agent_id: &str) -> RuntimeConfig {
         max_steps: 100,
         ..Default::default()
     }
+}
+
+fn evolution_axis_score(
+    store: &SqliteGraphStore,
+    agent_id: &str,
+    axis: PersonaAxis,
+) -> Option<f32> {
+    let key = axis.name();
+    let mut best: Option<(u32, f32)> = None;
+    let nodes = store.find_by_type("persona").ok()?;
+    for n in nodes {
+        if n.agent_id != agent_id {
+            continue;
+        }
+        if let AinlNodeType::Persona { persona } = &n.node_type {
+            if persona.trait_name != EVOLUTION_TRAIT_NAME {
+                continue;
+            }
+            let sc = *persona.axis_scores.get(key)?;
+            let cyc = persona.evolution_cycle;
+            best = match best {
+                None => Some((cyc, sc)),
+                Some((c0, _)) if cyc >= c0 => Some((cyc, sc)),
+                Some(b) => Some(b),
+            };
+        }
+    }
+    best.map(|(_, s)| s)
 }
 
 #[derive(Clone)]
@@ -466,4 +495,94 @@ fn test_episode_tools_empty_uses_turn_sentinel() {
         _ => panic!("expected episode"),
     };
     assert_eq!(tools, &vec!["turn".to_string()]);
+}
+
+#[test]
+fn test_manual_evolution_signals_without_extractor_pass() {
+    let (_d, store) = open_store();
+    let ag = "evo-manual";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    let nid = Uuid::new_v4();
+    let applied = rt.apply_evolution_signals(vec![RawSignal {
+        axis: PersonaAxis::Verbosity,
+        reward: 0.95,
+        weight: 1.0,
+        source_node_id: nid,
+        source_node_type: MemoryNodeType::Episodic,
+    }]);
+    assert!(applied >= 1);
+    let snap = rt.persist_evolution_snapshot().unwrap();
+    assert!(snap.score(PersonaAxis::Verbosity) > 0.5);
+    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Verbosity).unwrap();
+    assert!((stored - snap.score(PersonaAxis::Verbosity)).abs() < 0.001);
+}
+
+#[test]
+fn test_evolution_correction_tick_persisted() {
+    let (_d, store) = open_store();
+    let ag = "evo-corr";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    let before = rt.evolution_engine().snapshot().score(PersonaAxis::Curiosity);
+    rt.evolution_correction_tick(PersonaAxis::Curiosity, 0.15);
+    let mid = rt.evolution_engine().snapshot().score(PersonaAxis::Curiosity);
+    assert!((mid - before).abs() > 0.0001);
+    let snap = rt.persist_evolution_snapshot().unwrap();
+    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Curiosity).unwrap();
+    assert!((stored - snap.score(PersonaAxis::Curiosity)).abs() < 0.001);
+}
+
+#[test]
+fn test_evolve_persona_from_graph_signals_without_scheduled_extractor() {
+    let (_d, store) = open_store();
+    let ag = "evo-graph";
+    let tid = Uuid::new_v4();
+    let mut ep = AinlMemoryNode::new_episode(
+        tid,
+        chrono::Utc::now().timestamp(),
+        vec![],
+        None,
+        None,
+    );
+    ep.agent_id = ag.into();
+    if let AinlNodeType::Episode { ref mut episodic } = ep.node_type {
+        episodic.persona_signals_emitted = vec!["Instrumentality:0.9".to_string()];
+    }
+    store.write_node(&ep).unwrap();
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
+    let snap = rt.evolve_persona_from_graph_signals().unwrap();
+    assert!(snap.score(PersonaAxis::Instrumentality) > 0.5);
+    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Instrumentality).unwrap();
+    assert!((stored - snap.score(PersonaAxis::Instrumentality)).abs() < 0.001);
+}
+
+#[test]
+fn test_scheduled_extractor_pass_still_runs_after_turn() {
+    let (_d, store) = open_store();
+    let ag = "evo-sched";
+    let mut ep = AinlMemoryNode::new_episode(
+        Uuid::new_v4(),
+        3_000_000_000,
+        vec![],
+        None,
+        None,
+    );
+    ep.agent_id = ag.into();
+    store.write_node(&ep).unwrap();
+    let cfg = RuntimeConfig {
+        agent_id: ag.into(),
+        extraction_interval: 1,
+        max_steps: 50,
+        ..Default::default()
+    };
+    let mut rt = AinlRuntime::new(cfg, store);
+    assert!(rt.load_artifact().unwrap().validation.is_valid);
+    let out = rt
+        .run_turn(TurnInput {
+            user_message: "hello".into(),
+            tools_invoked: vec!["noop".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(matches!(out.outcome, TurnOutcome::Success));
+    assert!(out.extraction_report.is_some());
 }

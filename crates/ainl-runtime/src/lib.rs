@@ -1,8 +1,14 @@
 //! **ainl-runtime** v0.2 — orchestration layer for the unified AINL graph (memory substrate + extraction).
 //!
 //! This crate **does not** call LLMs, parse AINL IR, or implement tool adapters. It coordinates
-//! [`ainl_memory`], [`ainl_persona`] axis state held inside [`ainl_graph_extractor::GraphExtractorTask`],
-//! and scheduled graph extraction — with [`TurnHooks`] for host integration (e.g. OpenFang).
+//! [`ainl_memory`], persona axis state via [`ainl_persona::EvolutionEngine`] (shared with
+//! [`ainl_graph_extractor::GraphExtractorTask`]), and scheduled graph extraction — with [`TurnHooks`] for host
+//! integration (e.g. OpenFang).
+//!
+//! **Evolution:** [`EvolutionEngine`] lives in **ainl-persona**. [`AinlRuntime::evolution_engine_mut`] and
+//! helpers ([`AinlRuntime::apply_evolution_signals`], [`AinlRuntime::persist_evolution_snapshot`], …) drive it
+//! without going through the extractor. [`GraphExtractorTask::run_pass`] remains one signal producer (graph
+//! extract + recurrence + pattern heuristics), not the only way to evolve persona axes.
 //!
 //! For a minimal “record episodes + run extractor” path without the full engine, see [`RuntimeContext`].
 
@@ -13,7 +19,8 @@ mod runtime;
 pub use ainl_graph_extractor::{run_extraction_pass, ExtractionReport, GraphExtractorTask};
 pub use ainl_persona::axes::default_axis_map;
 pub use ainl_persona::{
-    EvolutionEngine, PersonaAxis, PersonaSnapshot, EVOLUTION_TRAIT_NAME, INGEST_SCORE_EPSILON,
+    EvolutionEngine, MemoryNodeType, PersonaAxis, PersonaSnapshot, RawSignal, EVOLUTION_TRAIT_NAME,
+    INGEST_SCORE_EPSILON,
 };
 
 pub use engine::{

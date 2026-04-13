@@ -13,6 +13,8 @@
 
 Used together with **ainl-memory** (SQLite graph) and **ainl-graph-extractor** in the ArmaraOS / OpenFang stack. It does not talk to the network; it only interprets graph state.
 
+**ainl-graph-extractor** is one producer of signals (graph-backed `extract_signals` plus pattern heuristics); **ainl-runtime** can also call [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) directly (`ingest_signals`, `correction_tick`, `evolve`, …) on the same engine instance so evolution is not extractor-gated.
+
 ## Usage sketch
 
 ```rust

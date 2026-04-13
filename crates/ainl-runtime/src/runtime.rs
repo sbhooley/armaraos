@@ -8,7 +8,7 @@ use ainl_memory::{
     SqliteGraphStore,
 };
 use ainl_persona::axes::default_axis_map;
-use ainl_persona::{PersonaAxis, INGEST_SCORE_EPSILON};
+use ainl_persona::{EvolutionEngine, PersonaAxis, PersonaSnapshot, RawSignal, INGEST_SCORE_EPSILON};
 use ainl_semantic_tagger::infer_topic_tags;
 use ainl_semantic_tagger::tag_tool_names;
 use ainl_semantic_tagger::TagNamespace;
@@ -52,6 +52,51 @@ impl AinlRuntime {
     /// Borrow the backing SQLite store (same connection as graph memory).
     pub fn sqlite_store(&self) -> &SqliteGraphStore {
         self.memory.sqlite_store()
+    }
+
+    /// Borrow the persona [`EvolutionEngine`] for this runtime’s agent.
+    ///
+    /// This is the **same** `EvolutionEngine` instance held by [`GraphExtractorTask::evolution_engine`].
+    /// Scheduled [`GraphExtractorTask::run_pass`] continues to feed graph + pattern signals into it;
+    /// hosts may also call [`EvolutionEngine::ingest_signals`], [`EvolutionEngine::correction_tick`],
+    /// [`EvolutionEngine::extract_signals`], or [`EvolutionEngine::evolve`] directly, then
+    /// [`Self::persist_evolution_snapshot`] to write the [`PersonaSnapshot`] row ([`crate::EVOLUTION_TRAIT_NAME`]).
+    pub fn evolution_engine(&self) -> &EvolutionEngine {
+        &self.extractor.evolution_engine
+    }
+
+    /// Mutable access to the persona [`EvolutionEngine`] (see [`Self::evolution_engine`]).
+    pub fn evolution_engine_mut(&mut self) -> &mut EvolutionEngine {
+        &mut self.extractor.evolution_engine
+    }
+
+    /// Ingest explicit [`RawSignal`]s without reading the graph (wrapper for [`EvolutionEngine::ingest_signals`]).
+    pub fn apply_evolution_signals(&mut self, signals: Vec<RawSignal>) -> usize {
+        self.extractor.evolution_engine.ingest_signals(signals)
+    }
+
+    /// Apply a host correction nudge on one axis ([`EvolutionEngine::correction_tick`]).
+    pub fn evolution_correction_tick(&mut self, axis: PersonaAxis, correction: f32) {
+        self.extractor.evolution_engine.correction_tick(axis, correction);
+    }
+
+    /// Snapshot current axis EMA state and persist the evolution persona bundle to the store.
+    pub fn persist_evolution_snapshot(&mut self) -> Result<PersonaSnapshot, String> {
+        let store = self.memory.sqlite_store();
+        let snap = self.extractor.evolution_engine.snapshot();
+        self.extractor
+            .evolution_engine
+            .write_persona_node(store, &snap)?;
+        Ok(snap)
+    }
+
+    /// Graph-backed evolution only: extract signals from the store, ingest, write ([`EvolutionEngine::evolve`]).
+    ///
+    /// This does **not** run semantic `recurrence_count` bumps or the extractor’s `extract_pass`
+    /// heuristics — use [`GraphExtractorTask::run_pass`] for the full scheduled pipeline.
+    pub fn evolve_persona_from_graph_signals(&mut self) -> Result<PersonaSnapshot, String> {
+        let store = self.memory.sqlite_store();
+        self.extractor.evolution_engine.evolve(store)
     }
 
     /// Boot: export + validate the agent subgraph.

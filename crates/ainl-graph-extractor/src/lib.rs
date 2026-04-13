@@ -4,6 +4,10 @@
 //!
 //! Persona evolution rows use [`ainl_persona::EVOLUTION_TRAIT_NAME`] — import that constant from `ainl-persona`
 //! when matching evolution bundles; do not duplicate the string.
+//!
+//! **Note:** [`GraphExtractorTask::evolution_engine`] is the canonical in-process handle to
+//! [`ainl_persona::EvolutionEngine`]. **ainl-runtime** exposes the same engine for direct
+//! `ingest_signals` / `correction_tick` / `evolve` calls; this crate’s `run_pass` is one signal path, not the only one.
 
 mod extractor;
 mod persona_signals;
