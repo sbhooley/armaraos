@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 pub struct RuntimeConfig {
     /// Owning agent id (required for extraction, graph queries, and [`AinlRuntime`]).
     pub agent_id: String,
-    /// Maximum depth for delegation-style limits in [`TurnInput::depth`].
+    /// Maximum nested [`AinlRuntime::run_turn`] depth (internal `delegation_depth`); see [`TurnInput::depth`].
     pub max_delegation_depth: u32,
     pub enable_graph_memory: bool,
     /// Cap for the minimal BFS graph walk in [`AinlRuntime::run_turn`].

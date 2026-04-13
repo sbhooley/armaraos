@@ -556,6 +556,87 @@ fn test_evolve_persona_from_graph_signals_without_scheduled_extractor() {
 }
 
 #[test]
+fn test_internal_depth_enforced() {
+    let (_d, store) = open_store();
+    let ag = "depth-agent";
+    let mut ep = AinlMemoryNode::new_episode(Uuid::new_v4(), 3_000_000_000, vec![], None, None);
+    ep.agent_id = ag.into();
+    store.write_node(&ep).unwrap();
+
+    let cfg = RuntimeConfig {
+        agent_id: ag.into(),
+        max_delegation_depth: 1,
+        extraction_interval: 0,
+        max_steps: 50,
+        ..RuntimeConfig::default()
+    };
+    let mut rt = AinlRuntime::new(cfg, store);
+    assert!(rt.load_artifact().unwrap().validation.is_valid);
+
+    let out1 = rt
+        .run_turn(TurnInput {
+            user_message: "first".into(),
+            tools_invoked: vec![],
+            depth: 99,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(matches!(out1.outcome, TurnOutcome::Success));
+    assert_eq!(rt.test_delegation_depth(), 0);
+
+    // Prime internal nesting to the configured ceiling before re-entry: next `run_turn` increments
+    // to 2, which exceeds `max_delegation_depth` of 1.
+    rt.test_set_delegation_depth(1);
+    let out2 = rt
+        .run_turn(TurnInput {
+            user_message: "second".into(),
+            tools_invoked: vec![],
+            depth: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(matches!(out2.outcome, TurnOutcome::DepthLimitExceeded));
+    assert_eq!(rt.test_delegation_depth(), 1);
+}
+
+#[test]
+fn test_partial_success_extraction_failure() {
+    let (_d, store) = open_store();
+    let ag = "partial-extract-agent";
+    let mut ep = AinlMemoryNode::new_episode(Uuid::new_v4(), 3_000_000_000, vec![], None, None);
+    ep.agent_id = ag.into();
+    store.write_node(&ep).unwrap();
+
+    let cfg = RuntimeConfig {
+        agent_id: ag.into(),
+        extraction_interval: 1,
+        max_steps: 50,
+        ..RuntimeConfig::default()
+    };
+    let mut rt = AinlRuntime::new(cfg, store);
+    assert!(rt.load_artifact().unwrap().validation.is_valid);
+    rt.test_set_force_extraction_failure(true);
+
+    let out = rt
+        .run_turn(TurnInput {
+            user_message: "hello".into(),
+            tools_invoked: vec!["noop".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert!(matches!(
+        out.outcome,
+        TurnOutcome::PartialSuccess {
+            extraction_failed: true,
+            ..
+        }
+    ));
+    assert_ne!(out.episode_id, Uuid::nil());
+    assert!(out.extraction_report.is_none());
+}
+
+#[test]
 fn test_scheduled_extractor_pass_still_runs_after_turn() {
     let (_d, store) = open_store();
     let ag = "evo-sched";

@@ -126,6 +126,7 @@ dependencies = [
  "ainl-persona",
  "ainl-semantic-tagger",
  "chrono",
+ "scopeguard",
  "serde",
  "serde_json",
  "tempfile",

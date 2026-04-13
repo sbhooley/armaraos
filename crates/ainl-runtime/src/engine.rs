@@ -107,6 +107,7 @@ pub struct TurnInput {
     pub user_message: String,
     pub tools_invoked: Vec<String>,
     pub trace_event: Option<serde_json::Value>,
+    /// Caller-supplied depth hint. Not used for enforcement — internal `delegation_depth` is authoritative.
     pub depth: u32,
     /// Frame variables required by procedural `declared_reads` during patch dispatch.
     pub frame: HashMap<String, serde_json::Value>,
@@ -170,5 +171,11 @@ pub enum TurnOutcome {
     DepthLimitExceeded,
     StepLimitExceeded { steps_executed: u32 },
     GraphMemoryDisabled,
+    PartialSuccess {
+        episode_recorded: bool,
+        extraction_failed: bool,
+        patches_failed: Vec<String>,
+        warnings: Vec<String>,
+    },
     Error(String),
 }

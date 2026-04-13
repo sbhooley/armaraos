@@ -1,6 +1,7 @@
 //! Unified-graph orchestration runtime (v0.2): load, compile context, patch dispatch, record, emit, extract.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{
@@ -27,8 +28,12 @@ pub struct AinlRuntime {
     memory: ainl_memory::GraphMemory,
     extractor: GraphExtractorTask,
     turn_count: u32,
+    delegation_depth: u32,
     hooks: Box<dyn TurnHooks>,
     persona_cache: Option<String>,
+    /// Test hook: when set, the next scheduled extraction pass is treated as failed (`PartialSuccess`).
+    #[doc(hidden)]
+    test_force_extraction_failure: bool,
 }
 
 impl AinlRuntime {
@@ -39,9 +44,26 @@ impl AinlRuntime {
             memory: ainl_memory::GraphMemory::from_sqlite_store(store),
             config,
             turn_count: 0,
+            delegation_depth: 0,
             hooks: Box::new(NoOpHooks),
             persona_cache: None,
+            test_force_extraction_failure: false,
         }
+    }
+
+    #[doc(hidden)]
+    pub fn test_delegation_depth(&self) -> u32 {
+        self.delegation_depth
+    }
+
+    #[doc(hidden)]
+    pub fn test_set_delegation_depth(&mut self, depth: u32) {
+        self.delegation_depth = depth;
+    }
+
+    #[doc(hidden)]
+    pub fn test_set_force_extraction_failure(&mut self, fail: bool) {
+        self.test_force_extraction_failure = fail;
     }
 
     pub fn with_hooks(mut self, hooks: impl TurnHooks + 'static) -> Self {
@@ -165,6 +187,26 @@ impl AinlRuntime {
 
     /// Full single-turn orchestration (no LLM / no IR parse).
     pub fn run_turn(&mut self, input: TurnInput) -> Result<TurnOutput, String> {
+        self.delegation_depth += 1;
+        let rt_ptr = self as *mut Self;
+        // Safety: `rt_ptr` aliases `self` for the synchronous body of `run_turn` only; the defer runs on
+        // return before `self` is invalidated.
+        // `scopeguard::defer!` only supports expression statements; use `guard` for the same drop semantics.
+        let _depth_guard = scopeguard::guard((), |()| unsafe {
+            if (*rt_ptr).delegation_depth > 0 {
+                (*rt_ptr).delegation_depth -= 1;
+            }
+        });
+
+        if self.delegation_depth > self.config.max_delegation_depth {
+            let out = TurnOutput {
+                outcome: TurnOutcome::DepthLimitExceeded,
+                ..Default::default()
+            };
+            self.hooks.on_turn_complete(&out);
+            return Ok(out);
+        }
+
         if !self.config.enable_graph_memory {
             let memory_context = MemoryContext::default();
             let out = TurnOutput {
@@ -180,16 +222,13 @@ impl AinlRuntime {
             return Err("RuntimeConfig.agent_id must be set for run_turn".to_string());
         }
 
-        if input.depth > self.config.max_delegation_depth {
-            let memory_context = self.compile_memory_context()?;
-            let out = TurnOutput {
-                memory_context,
-                outcome: TurnOutcome::DepthLimitExceeded,
-                ..Default::default()
-            };
-            self.hooks.on_turn_complete(&out);
-            return Ok(out);
-        }
+        let span = tracing::info_span!(
+            "ainl_runtime.run_turn",
+            agent_id = %self.config.agent_id,
+            turn = self.turn_count,
+            depth = input.depth,
+        );
+        let _span_enter = span.enter();
 
         let validation: GraphValidationReport = self
             .memory
@@ -209,6 +248,10 @@ impl AinlRuntime {
         self.hooks
             .on_artifact_loaded(&self.config.agent_id, validation.node_count);
 
+        let mut patches_failed: Vec<String> = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
+
+        let t_persona = Instant::now();
         let persona_prompt_contribution = if let Some(cached) = &self.persona_cache {
             Some(cached.clone())
         } else {
@@ -223,15 +266,50 @@ impl AinlRuntime {
         };
         self.hooks
             .on_persona_compiled(persona_prompt_contribution.as_deref());
+        tracing::debug!(
+            target: "ainl_runtime",
+            duration_ms = t_persona.elapsed().as_millis() as u64,
+            has_contribution = persona_prompt_contribution.is_some(),
+            "persona_phase"
+        );
 
+        let t_memory = Instant::now();
         let memory_context = self.compile_memory_context_for(Some(&input.user_message))?;
         self.hooks.on_memory_context_ready(&memory_context);
+        tracing::debug!(
+            target: "ainl_runtime",
+            duration_ms = t_memory.elapsed().as_millis() as u64,
+            episode_count = memory_context.recent_episodes.len(),
+            semantic_count = memory_context.relevant_semantic.len(),
+            patch_count = memory_context.active_patches.len(),
+            "memory_context"
+        );
 
+        let t_patches = Instant::now();
         let patch_dispatch_results = if self.config.enable_graph_memory {
-            self.dispatch_patches(&memory_context.active_patches, &input.frame)
+            self.dispatch_patches_collect(
+                &memory_context.active_patches,
+                &input.frame,
+                &mut patches_failed,
+            )
         } else {
             Vec::new()
         };
+        for r in &patch_dispatch_results {
+            tracing::debug!(
+                target: "ainl_runtime",
+                label = %r.label,
+                dispatched = r.dispatched,
+                fitness_before = r.fitness_before,
+                fitness_after = r.fitness_after,
+                "patch_dispatch"
+            );
+        }
+        tracing::debug!(
+            target: "ainl_runtime",
+            duration_ms = t_patches.elapsed().as_millis() as u64,
+            "patch_dispatch_phase"
+        );
 
         let dispatched_count = patch_dispatch_results
             .iter()
@@ -252,6 +330,7 @@ impl AinlRuntime {
             return Ok(out);
         }
 
+        let t_episode = Instant::now();
         let tools_canonical = normalize_tools_for_episode(&input.tools_invoked);
         let episode_id = record_turn_episode(
             &self.memory,
@@ -260,6 +339,12 @@ impl AinlRuntime {
             &tools_canonical,
         )?;
         self.hooks.on_episode_recorded(episode_id);
+        tracing::debug!(
+            target: "ainl_runtime",
+            duration_ms = t_episode.elapsed().as_millis() as u64,
+            episode_id = %episode_id,
+            "episode_record"
+        );
 
         for &tid in &input.emit_targets {
             self.memory
@@ -274,25 +359,87 @@ impl AinlRuntime {
             "persona_contribution": persona_prompt_contribution,
             "turn_count": self.turn_count.wrapping_add(1),
         });
-        self.route_emit_edges(episode_id, &emit_payload)?;
+        if let Err(e) = self.route_emit_edges(episode_id, &emit_payload) {
+            tracing::warn!(error = %e, "emit routing failed — continuing");
+            warnings.push(format!("emit_routing: {e}"));
+        }
 
-        let mut extraction_report = None;
         self.turn_count = self.turn_count.wrapping_add(1);
-        if self.config.extraction_interval > 0
+
+        let t_extract = Instant::now();
+        let (extraction_report, extraction_failed) = if self.config.extraction_interval > 0
             && self.turn_count % self.config.extraction_interval == 0
         {
-            let report = self.extractor.run_pass(self.memory.sqlite_store())?;
-            tracing::info!(
-                agent_id = %report.agent_id,
-                signals_extracted = report.signals_extracted,
-                signals_applied = report.signals_applied,
-                semantic_nodes_updated = report.semantic_nodes_updated,
-                "ainl-graph-extractor pass completed (scheduled)"
+            let force_fail = std::mem::take(&mut self.test_force_extraction_failure);
+
+            if force_fail {
+                tracing::warn!(error = "test_forced", "extraction pass failed — continuing");
+                tracing::debug!(
+                    target: "ainl_runtime",
+                    duration_ms = t_extract.elapsed().as_millis() as u64,
+                    signals_ingested = 0u64,
+                    skipped = false,
+                    "extraction_pass"
+                );
+                (None, true)
+            } else {
+                match self.extractor.run_pass(self.memory.sqlite_store()) {
+                    Ok(report) => {
+                        tracing::info!(
+                            agent_id = %report.agent_id,
+                            signals_extracted = report.signals_extracted,
+                            signals_applied = report.signals_applied,
+                            semantic_nodes_updated = report.semantic_nodes_updated,
+                            "ainl-graph-extractor pass completed (scheduled)"
+                        );
+                        self.hooks.on_extraction_complete(&report);
+                        self.persona_cache = None;
+                        tracing::debug!(
+                            target: "ainl_runtime",
+                            duration_ms = t_extract.elapsed().as_millis() as u64,
+                            signals_ingested = report.signals_extracted as u64,
+                            skipped = false,
+                            "extraction_pass"
+                        );
+                        (Some(report), false)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "extraction pass failed — continuing");
+                        tracing::debug!(
+                            target: "ainl_runtime",
+                            duration_ms = t_extract.elapsed().as_millis() as u64,
+                            signals_ingested = 0u64,
+                            skipped = false,
+                            "extraction_pass"
+                        );
+                        (None, true)
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                target: "ainl_runtime",
+                duration_ms = t_extract.elapsed().as_millis() as u64,
+                signals_ingested = 0u64,
+                skipped = true,
+                "extraction_pass"
             );
-            self.hooks.on_extraction_complete(&report);
-            extraction_report = Some(report);
-            self.persona_cache = None;
-        }
+            (None, false)
+        };
+
+        let outcome = if extraction_failed
+            || !patches_failed.is_empty()
+            || !warnings.is_empty()
+        {
+            TurnOutcome::PartialSuccess {
+                episode_recorded: true,
+                extraction_failed,
+                patches_failed,
+                warnings,
+            }
+        } else {
+            TurnOutcome::Success
+        };
 
         let out = TurnOutput {
             episode_id,
@@ -300,7 +447,7 @@ impl AinlRuntime {
             memory_context,
             extraction_report,
             steps_executed: dispatched_count,
-            outcome: TurnOutcome::Success,
+            outcome,
             patch_dispatch_results,
         };
         self.hooks.on_turn_complete(&out);
@@ -375,9 +522,23 @@ impl AinlRuntime {
         patches: &[AinlMemoryNode],
         frame: &HashMap<String, serde_json::Value>,
     ) -> Vec<PatchDispatchResult> {
+        let mut discarded = Vec::new();
+        self.dispatch_patches_collect(patches, frame, &mut discarded)
+    }
+
+    fn dispatch_patches_collect(
+        &mut self,
+        patches: &[AinlMemoryNode],
+        frame: &HashMap<String, serde_json::Value>,
+        patches_failed: &mut Vec<String>,
+    ) -> Vec<PatchDispatchResult> {
         let mut out = Vec::new();
         for node in patches {
             let res = self.dispatch_one_patch(node, frame);
+            if let Some(PatchSkipReason::PersistFailed(ref e)) = res.skip_reason {
+                tracing::warn!(label = %res.label, error = %e, "patch fitness write failed — continuing");
+                patches_failed.push(res.label.clone());
+            }
             out.push(res);
         }
         out
