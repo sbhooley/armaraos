@@ -227,6 +227,19 @@ fn convert_one_inbox_node(
                 if !invoked.is_empty() {
                     episodic.tools_invoked = invoked;
                 }
+                // Cognitive vitals (Gap K) — optional; absent on non-OpenAI and pre-Styxx episodes.
+                episodic.vitals_gate = map
+                    .get("vitals_gate")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                episodic.vitals_phase = map
+                    .get("vitals_phase")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                episodic.vitals_trust = map
+                    .get("vitals_trust")
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as f32);
             }
             n
         }
@@ -435,4 +448,144 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
         "AINL graph memory inbox drained"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ainl_memory::GraphMemory;
+    use serde_json::json;
+
+    const AGENT: &str = "inbox-vitals-test";
+
+    fn open_writer_in_mem() -> (crate::graph_memory_writer::GraphMemoryWriter, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("ainl_memory.db");
+        let memory = GraphMemory::new(&db).expect("GraphMemory");
+        let writer =
+            crate::graph_memory_writer::GraphMemoryWriter::from_memory_for_tests(memory, AGENT, None);
+        (writer, dir)
+    }
+
+    fn inbox_episode_node(
+        vitals_gate: Option<&str>,
+        vitals_phase: Option<&str>,
+        vitals_trust: Option<f64>,
+    ) -> Value {
+        let now = chrono::Utc::now().timestamp();
+        let mut payload = serde_json::Map::new();
+        payload.insert("tool_calls".into(), json!(["shell_exec"]));
+        payload.insert("turn_id".into(), json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+        payload.insert("timestamp".into(), json!(now));
+        if let Some(g) = vitals_gate {
+            payload.insert("vitals_gate".into(), json!(g));
+        }
+        if let Some(p) = vitals_phase {
+            payload.insert("vitals_phase".into(), json!(p));
+        }
+        if let Some(t) = vitals_trust {
+            payload.insert("vitals_trust".into(), json!(t));
+        }
+        json!({
+            "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "node_type": "episodic",
+            "agent_id": AGENT,
+            "label": "test_episode",
+            "payload": Value::Object(payload),
+            "tags": [],
+            "created_at": now as f64,
+        })
+    }
+
+    async fn drain_raw_into_writer(
+        writer: &crate::graph_memory_writer::GraphMemoryWriter,
+        raw_inbox: &Value,
+    ) {
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let inbox_dir = tmpdir
+            .path()
+            .join("agents")
+            .join(writer.agent_id());
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let path = inbox_dir.join(INBOX_FILENAME);
+        let body = serde_json::to_vec_pretty(raw_inbox).unwrap();
+        tokio::fs::write(&path, &body).await.unwrap();
+
+        let source_features = parse_source_features(raw_inbox);
+        let nodes_raw = raw_inbox
+            .get("nodes")
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut nodes: Vec<AinlMemoryNode> = Vec::new();
+        for n in &nodes_raw {
+            if let Some(conv) = convert_one_inbox_node(n, writer.agent_id(), &source_features) {
+                nodes.push(conv);
+            }
+        }
+
+        if nodes.is_empty() {
+            return;
+        }
+
+        let snapshot = AgentGraphSnapshot {
+            agent_id: writer.agent_id().to_string(),
+            exported_at: chrono::Utc::now(),
+            schema_version: Cow::Borrowed(SNAPSHOT_SCHEMA_VERSION),
+            nodes,
+            edges: vec![],
+        };
+        let mut gm = writer.inner.lock().await;
+        gm.import_graph(&snapshot, true).expect("import_graph");
+    }
+
+    /// Gap K — episode with vitals in inbox JSON maps to episodic node vitals fields.
+    #[tokio::test]
+    async fn test_inbox_drain_maps_vitals_on_episodic_node() {
+        let (writer, _dir) = open_writer_in_mem();
+        let inbox = json!({
+            "schema_version": "1",
+            "nodes": [inbox_episode_node(Some("pass"), Some("reasoning:0.69"), Some(0.69))],
+            "edges": [],
+            "source_features": [],
+        });
+        drain_raw_into_writer(&writer, &inbox).await;
+
+        let nodes = writer.recall_recent(60 * 60 * 24 * 365).await;
+        let ep = nodes.iter().find(|n| {
+            matches!(&n.node_type, AinlNodeType::Episode { .. })
+        });
+        assert!(ep.is_some(), "no episodic node after drain");
+        if let AinlNodeType::Episode { episodic } = &ep.unwrap().node_type {
+            assert_eq!(episodic.vitals_gate.as_deref(), Some("pass"));
+            assert_eq!(episodic.vitals_phase.as_deref(), Some("reasoning:0.69"));
+            let trust = episodic.vitals_trust.expect("vitals_trust must be Some");
+            assert!((trust - 0.69_f32).abs() < 1e-4, "trust={trust}");
+        }
+    }
+
+    /// Gap K regression — episode without vitals drains without panic; fields remain None.
+    #[tokio::test]
+    async fn test_inbox_drain_episode_without_vitals_still_imports() {
+        let (writer, _dir) = open_writer_in_mem();
+        let inbox = json!({
+            "schema_version": "1",
+            "nodes": [inbox_episode_node(None, None, None)],
+            "edges": [],
+            "source_features": [],
+        });
+        drain_raw_into_writer(&writer, &inbox).await;
+
+        let nodes = writer.recall_recent(60 * 60 * 24 * 365).await;
+        let ep = nodes.iter().find(|n| {
+            matches!(&n.node_type, AinlNodeType::Episode { .. })
+        });
+        assert!(ep.is_some(), "episode without vitals failed to drain");
+        if let AinlNodeType::Episode { episodic } = &ep.unwrap().node_type {
+            assert!(episodic.vitals_gate.is_none());
+            assert!(episodic.vitals_phase.is_none());
+            assert!(episodic.vitals_trust.is_none());
+        }
+    }
 }
