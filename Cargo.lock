@@ -126,11 +126,13 @@ dependencies = [
  "ainl-memory",
  "ainl-persona",
  "ainl-semantic-tagger",
+ "async-trait",
  "chrono",
  "scopeguard",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
  "uuid",
 ]

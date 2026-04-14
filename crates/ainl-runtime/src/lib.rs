@@ -11,9 +11,16 @@
 //! extract + recurrence + pattern heuristics), not the only way to evolve persona axes.
 //!
 //! For a minimal “record episodes + run extractor” path without the full engine, see [`RuntimeContext`].
+//!
+//! **Async / Tokio:** enable the optional **`async`** crate feature for `AinlRuntime::run_turn_async`.
+//! Graph memory is then `Arc<std::sync::Mutex<GraphMemory>>` (not `tokio::sync::Mutex`) so
+//! [`AinlRuntime::new`] and [`AinlRuntime::sqlite_store`] can take short locks on any thread; SQLite
+//! work for async turns is still offloaded with `tokio::task::spawn_blocking`. See the crate
+//! `README.md` for rationale.
 
 mod adapters;
 mod engine;
+mod graph_cell;
 mod hooks;
 mod runtime;
 
@@ -31,7 +38,10 @@ pub use engine::{
     PatchSkipReason, TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning,
     EMIT_TO_EDGE,
 };
+pub use graph_cell::SqliteStoreRef;
 pub use hooks::{NoOpHooks, TurnHooks};
+#[cfg(feature = "async")]
+pub use hooks::{NoOpAsyncHooks, TurnHooksAsync};
 pub use runtime::AinlRuntime;
 
 use ainl_memory::{GraphMemory, GraphStore};

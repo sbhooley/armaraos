@@ -102,7 +102,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 **Date**: April 12, 2026  
 **Integration**: `openfang-runtime` agent loop + `tool_runner` (delegation, A2A, tools, persona)
 
-**Execution engine (Rust):** `openfang-runtime` is the daemon's **current** Rust execution engine—agent loop, tool runner, loop guard, and graph-memory wiring all live here. The separately published **`ainl-runtime`** crate (also in this workspace) is **not** wired into the ArmaraOS daemon today; treating **`openfang-runtime` ↔ `ainl-runtime`** convergence as a single execution stack is a **roadmap** item, not current architecture.
+**Execution engine (Rust):** `openfang-runtime` is the daemon's **current** Rust execution engine—agent loop, tool runner, loop guard, and graph-memory wiring all live here. The separately published **`ainl-runtime`** crate (also in this workspace) is **not** wired into the ArmaraOS daemon today; treating **`openfang-runtime` ↔ `ainl-runtime`** convergence as a single execution stack is a **roadmap** item, not current architecture. **`ainl-runtime`**’s optional **`async`** path (`run_turn_async`) uses **`tokio::task::spawn_blocking`** for SQLite while keeping graph memory under **`Arc<std::sync::Mutex<_>>`** (not **`tokio::sync::Mutex`**) so embedders can construct the runtime and take short store borrows from any thread without Tokio async-mutex **`blocking_lock`** pitfalls—see **`crates/ainl-runtime/README.md`**.
 
 ### Vision
 

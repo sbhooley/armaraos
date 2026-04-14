@@ -26,6 +26,11 @@ pub enum AinlRuntimeError {
         max: u32,
     },
     Message(String),
+    /// `tokio::task::spawn_blocking` failed while running graph I/O off the async executor.
+    AsyncJoinError(String),
+    /// SQLite / graph store error surfaced from a blocking task in the async turn path (the graph
+    /// mutex there is `std::sync::Mutex`, not `tokio::sync::Mutex`; see crate `README.md`).
+    AsyncStoreError(String),
 }
 
 impl fmt::Display for AinlRuntimeError {
@@ -35,6 +40,8 @@ impl fmt::Display for AinlRuntimeError {
                 write!(f, "delegation depth exceeded (depth={depth}, max={max})")
             }
             AinlRuntimeError::Message(s) => f.write_str(s),
+            AinlRuntimeError::AsyncJoinError(s) => write!(f, "async join error: {s}"),
+            AinlRuntimeError::AsyncStoreError(s) => write!(f, "async store error: {s}"),
         }
     }
 }
@@ -54,6 +61,8 @@ impl AinlRuntimeError {
         match self {
             Self::Message(s) => Some(s.as_str()),
             Self::DelegationDepthExceeded { .. } => None,
+            Self::AsyncJoinError(s) => Some(s.as_str()),
+            Self::AsyncStoreError(s) => Some(s.as_str()),
         }
     }
 
@@ -62,12 +71,22 @@ impl AinlRuntimeError {
         matches!(self, Self::DelegationDepthExceeded { .. })
     }
 
+    #[must_use]
+    pub fn is_async_join_error(&self) -> bool {
+        matches!(self, Self::AsyncJoinError(_))
+    }
+
+    #[must_use]
+    pub fn is_async_store_error(&self) -> bool {
+        matches!(self, Self::AsyncStoreError(_))
+    }
+
     /// If this is [`Self::DelegationDepthExceeded`], returns `(depth, max)`.
     #[must_use]
     pub fn delegation_depth_exceeded(&self) -> Option<(u32, u32)> {
         match self {
             Self::DelegationDepthExceeded { depth, max } => Some((*depth, *max)),
-            Self::Message(_) => None,
+            Self::Message(_) | Self::AsyncJoinError(_) | Self::AsyncStoreError(_) => None,
         }
     }
 }

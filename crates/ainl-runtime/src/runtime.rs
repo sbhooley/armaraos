@@ -26,7 +26,10 @@ use crate::engine::{
     PatchSkipReason, TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning,
     EMIT_TO_EDGE,
 };
+use crate::graph_cell::{GraphCell, SqliteStoreRef};
 use crate::hooks::{NoOpHooks, TurnHooks};
+#[cfg(feature = "async")]
+use crate::hooks::TurnHooksAsync;
 use crate::RuntimeConfig;
 
 /// Orchestrates ainl-memory, persona snapshot state, and graph extraction for one agent.
@@ -46,7 +49,7 @@ use crate::RuntimeConfig;
 /// bypasses this guard and must be avoided in that configuration.
 pub struct AinlRuntime {
     config: RuntimeConfig,
-    memory: ainl_memory::GraphMemory,
+    memory: GraphCell,
     extractor: GraphExtractorTask,
     turn_count: u64,
     last_extraction_at_turn: u64,
@@ -68,12 +71,15 @@ pub struct AinlRuntime {
     #[doc(hidden)]
     test_force_runtime_state_write_failure: bool,
     adapter_registry: AdapterRegistry,
+    /// Optional async hooks for [`Self::run_turn_async`] (see `async` feature).
+    #[cfg(feature = "async")]
+    hooks_async: Option<std::sync::Arc<dyn TurnHooksAsync>>,
 }
 
 impl AinlRuntime {
     pub fn new(config: RuntimeConfig, store: SqliteGraphStore) -> Self {
         let agent_id = config.agent_id.clone();
-        let memory = ainl_memory::GraphMemory::from_sqlite_store(store);
+        let memory = GraphCell::new(store);
         let (init_turn_count, init_persona_cache, init_last_extraction_at_turn) =
             if agent_id.is_empty() {
                 (0, None, 0)
@@ -116,6 +122,8 @@ impl AinlRuntime {
             test_force_fitness_write_failure: false,
             test_force_runtime_state_write_failure: false,
             adapter_registry: AdapterRegistry::new(),
+            #[cfg(feature = "async")]
+            hooks_async: None,
         }
     }
 
@@ -181,6 +189,13 @@ impl AinlRuntime {
         self
     }
 
+    /// Install async turn hooks ([`TurnHooksAsync`]) for [`Self::run_turn_async`].
+    #[cfg(feature = "async")]
+    pub fn with_hooks_async(mut self, hooks: std::sync::Arc<dyn TurnHooksAsync>) -> Self {
+        self.hooks_async = Some(hooks);
+        self
+    }
+
     /// Set whether [`Self::persist_evolution_snapshot`] and [`Self::evolve_persona_from_graph_signals`]
     /// may write the evolution persona row. When `false`, those methods return [`Err`]. Chaining
     /// after [`Self::new`] is the supported way to disable writes for hosts that delegate evolution
@@ -205,8 +220,13 @@ impl AinlRuntime {
     }
 
     /// Borrow the backing SQLite store (same connection as graph memory).
-    pub fn sqlite_store(&self) -> &SqliteGraphStore {
-        self.memory.sqlite_store()
+    ///
+    /// When built with the `async` feature, this locks the in-runtime graph mutex for the lifetime
+    /// of the returned guard (see [`SqliteStoreRef`]). That mutex is [`std::sync::Mutex`] (shared
+    /// via [`std::sync::Arc`]), not `tokio::sync::Mutex`, so this helper remains usable from Tokio
+    /// worker threads for quick reads without forcing an async lock API.
+    pub fn sqlite_store(&self) -> SqliteStoreRef<'_> {
+        self.memory.sqlite_ref()
     }
 
     /// Borrow the persona [`EvolutionEngine`] for this runtime’s agent.
@@ -244,11 +264,12 @@ impl AinlRuntime {
     /// Returns [`Err`] when [`Self::evolution_writes_enabled`] is `false` (see [`Self::with_evolution_writes_enabled`]).
     pub fn persist_evolution_snapshot(&mut self) -> Result<PersonaSnapshot, String> {
         self.require_evolution_writes_enabled()?;
-        let store = self.memory.sqlite_store();
         let snap = self.extractor.evolution_engine.snapshot();
-        self.extractor
-            .evolution_engine
-            .write_persona_node(store, &snap)?;
+        self.memory.with(|m| {
+            self.extractor
+                .evolution_engine
+                .write_persona_node(m.sqlite_store(), &snap)
+        })?;
         Ok(snap)
     }
 
@@ -260,13 +281,14 @@ impl AinlRuntime {
     /// Returns [`Err`] when [`Self::evolution_writes_enabled`] is `false` (see [`Self::with_evolution_writes_enabled`]).
     pub fn evolve_persona_from_graph_signals(&mut self) -> Result<PersonaSnapshot, String> {
         self.require_evolution_writes_enabled()?;
-        let store = self.memory.sqlite_store();
-        self.extractor.evolution_engine.evolve(store)
+        self.memory
+            .with(|m| self.extractor.evolution_engine.evolve(m.sqlite_store()))
     }
 
     /// Boot: export + validate the agent subgraph.
     pub fn load_artifact(&self) -> Result<AinlGraphArtifact, String> {
-        AinlGraphArtifact::load(self.memory.sqlite_store(), &self.config.agent_id)
+        self.memory
+            .with(|m| AinlGraphArtifact::load(m.sqlite_store(), &self.config.agent_id))
     }
 
     /// Same as [`Self::compile_memory_context_for`] with `user_message: None` (semantic relevance falls back
@@ -283,7 +305,8 @@ impl AinlRuntime {
         if self.config.agent_id.is_empty() {
             return Err("RuntimeConfig.agent_id must be set".to_string());
         }
-        let store = self.memory.sqlite_store();
+        self.memory.with(|m| {
+        let store = m.sqlite_store();
         let q = store.query(&self.config.agent_id);
         let recent_episodes = q.recent_episodes(5)?;
         let effective_user = user_message
@@ -312,6 +335,7 @@ impl AinlRuntime {
             persona_snapshot,
             compiled_at: chrono::Utc::now(),
         })
+        })
     }
 
     /// Route `EMIT_TO` edges from an episode to hook targets (host implements [`TurnHooks::on_emit`]).
@@ -320,15 +344,17 @@ impl AinlRuntime {
         episode_id: Uuid,
         turn_output_payload: &serde_json::Value,
     ) -> Result<(), String> {
-        let store = self.memory.sqlite_store();
-        let neighbors = store
-            .query(&self.config.agent_id)
-            .neighbors(episode_id, EMIT_TO_EDGE)?;
-        for n in neighbors {
-            let target = emit_target_name(&n);
-            self.hooks.on_emit(&target, turn_output_payload);
-        }
-        Ok(())
+        self.memory.with(|m| {
+            let store = m.sqlite_store();
+            let neighbors = store
+                .query(&self.config.agent_id)
+                .neighbors(episode_id, EMIT_TO_EDGE)?;
+            for n in neighbors {
+                let target = emit_target_name(&n);
+                self.hooks.on_emit(&target, turn_output_payload);
+            }
+            Ok(())
+        })
     }
 
     /// Full single-turn orchestration (no LLM / no IR parse).
@@ -374,8 +400,7 @@ impl AinlRuntime {
 
         let validation: GraphValidationReport = self
             .memory
-            .sqlite_store()
-            .validate_graph(&self.config.agent_id)
+            .with(|m| m.sqlite_store().validate_graph(&self.config.agent_id))
             .map_err(AinlRuntimeError::from)?;
         if !validation.is_valid {
             let mut msg = String::from("graph validation failed before turn");
@@ -399,9 +424,11 @@ impl AinlRuntime {
         } else {
             let nodes = self
                 .memory
-                .sqlite_store()
-                .query(&self.config.agent_id)
-                .persona_nodes()
+                .with(|m| {
+                    m.sqlite_store()
+                        .query(&self.config.agent_id)
+                        .persona_nodes()
+                })
                 .map_err(AinlRuntimeError::from)?;
             let compiled = compile_persona_from_nodes(&nodes).map_err(AinlRuntimeError::from)?;
             self.persona_cache = compiled.clone();
@@ -478,12 +505,9 @@ impl AinlRuntime {
 
         let t_episode = Instant::now();
         let tools_canonical = normalize_tools_for_episode(&input.tools_invoked);
-        let episode_id = match record_turn_episode(
-            &self.memory,
-            &self.config.agent_id,
-            &input,
-            &tools_canonical,
-        ) {
+        let episode_id = match self.memory.with(|m| {
+            record_turn_episode(m, &self.config.agent_id, &input, &tools_canonical)
+        }) {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -508,11 +532,10 @@ impl AinlRuntime {
 
         if !episode_id.is_nil() {
             for &tid in &input.emit_targets {
-                if let Err(e) = self.memory.sqlite_store().insert_graph_edge_checked(
-                    episode_id,
-                    tid,
-                    EMIT_TO_EDGE,
-                ) {
+                if let Err(e) = self.memory.with(|m| {
+                    m.sqlite_store()
+                        .insert_graph_edge_checked(episode_id, tid, EMIT_TO_EDGE)
+                }) {
                     tracing::warn!(
                         phase = ?TurnPhase::EpisodeWrite,
                         error = %e,
@@ -575,7 +598,9 @@ impl AinlRuntime {
                 );
                 (None, true)
             } else {
-                let report = self.extractor.run_pass(self.memory.sqlite_store());
+                let report = self
+                    .memory
+                    .with(|m| self.extractor.run_pass(m.sqlite_store()));
                 if let Some(ref e) = report.extract_error {
                     tracing::warn!(
                         phase = ?TurnPhase::ExtractionPass,
@@ -643,9 +668,9 @@ impl AinlRuntime {
             (None, false)
         };
 
-        if let Err(e) =
-            try_export_graph_json_armaraos(self.memory.sqlite_store(), &self.config.agent_id)
-        {
+        if let Err(e) = self.memory.with(|m| {
+            try_export_graph_json_armaraos(m.sqlite_store(), &self.config.agent_id)
+        }) {
             tracing::warn!(
                 phase = ?TurnPhase::ExportRefresh,
                 error = %e,
@@ -671,7 +696,7 @@ impl AinlRuntime {
             let write_res = if std::mem::take(&mut self.test_force_runtime_state_write_failure) {
                 Err("injected runtime state write failure".to_string())
             } else {
-                self.memory.write_runtime_state(&state)
+                self.memory.with(|m| m.write_runtime_state(&state))
             };
             if let Err(e) = write_res {
                 tracing::warn!(
@@ -912,8 +937,10 @@ impl AinlRuntime {
         let fitness_before = fitness_opt.unwrap_or(0.5);
         let fitness_after = 0.2_f32 * 1.0 + 0.8 * fitness_before;
 
-        let store = self.memory.sqlite_store();
-        let updated = match store.read_node(node.id) {
+        let updated = match self.memory.with(|m| {
+            let store = m.sqlite_store();
+            store.read_node(node.id)
+        }) {
             Ok(Some(mut n)) => {
                 if let AinlNodeType::Procedural { ref mut procedural } = n.node_type {
                     procedural.fitness = Some(fitness_after);
@@ -961,7 +988,7 @@ impl AinlRuntime {
             };
         }
 
-        if let Err(e) = self.memory.write_node(&updated) {
+        if let Err(e) = self.memory.with(|m| m.write_node(&updated)) {
             return PatchDispatchResult {
                 label: label_src.clone(),
                 patch_version: pv,
@@ -990,7 +1017,7 @@ impl AinlRuntime {
     }
 }
 
-fn emit_target_name(n: &AinlMemoryNode) -> String {
+pub(crate) fn emit_target_name(n: &AinlMemoryNode) -> String {
     match &n.node_type {
         AinlNodeType::Persona { persona } => persona.trait_name.clone(),
         AinlNodeType::Procedural { procedural } => procedural_label(procedural),
@@ -1002,7 +1029,7 @@ fn emit_target_name(n: &AinlMemoryNode) -> String {
     }
 }
 
-fn procedural_label(p: &ProceduralNode) -> String {
+pub(crate) fn procedural_label(p: &ProceduralNode) -> String {
     if !p.label.is_empty() {
         p.label.clone()
     } else {
@@ -1010,7 +1037,7 @@ fn procedural_label(p: &ProceduralNode) -> String {
     }
 }
 
-fn fallback_high_recurrence_semantic(
+pub(crate) fn fallback_high_recurrence_semantic(
     all: Vec<AinlMemoryNode>,
     limit: usize,
 ) -> Vec<AinlMemoryNode> {
@@ -1034,7 +1061,7 @@ fn fallback_high_recurrence_semantic(
     v.into_iter().take(limit).collect()
 }
 
-fn persona_snapshot_if_evolved(
+pub(crate) fn persona_snapshot_if_evolved(
     extractor: &GraphExtractorTask,
 ) -> Option<ainl_persona::PersonaSnapshot> {
     let snap = extractor.evolution_engine.snapshot();
@@ -1049,7 +1076,9 @@ fn persona_snapshot_if_evolved(
     None
 }
 
-fn compile_persona_from_nodes(nodes: &[AinlMemoryNode]) -> Result<Option<String>, String> {
+pub(crate) fn compile_persona_from_nodes(
+    nodes: &[AinlMemoryNode],
+) -> Result<Option<String>, String> {
     if nodes.is_empty() {
         return Ok(None);
     }
@@ -1076,7 +1105,10 @@ fn format_persona_line(p: &PersonaNode) -> String {
 /// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
 /// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
 /// Refresh `{AINL_GRAPH_MEMORY_ARMARAOS_EXPORT}/{agent_id}_graph_export.json` when the env var is set.
-fn try_export_graph_json_armaraos(store: &SqliteGraphStore, agent_id: &str) -> Result<(), String> {
+pub(crate) fn try_export_graph_json_armaraos(
+    store: &SqliteGraphStore,
+    agent_id: &str,
+) -> Result<(), String> {
     let trimmed = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT").unwrap_or_default();
     let dir = trimmed.trim();
     if dir.is_empty() {
@@ -1095,7 +1127,7 @@ fn try_export_graph_json_armaraos(store: &SqliteGraphStore, agent_id: &str) -> R
     Ok(())
 }
 
-fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
+pub(crate) fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
     if tools_invoked.is_empty() {
         return vec!["turn".to_string()];
     }
@@ -1113,7 +1145,7 @@ fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
     }
 }
 
-fn record_turn_episode(
+pub(crate) fn record_turn_episode(
     memory: &ainl_memory::GraphMemory,
     agent_id: &str,
     input: &TurnInput,
@@ -1137,3 +1169,7 @@ fn record_turn_episode(
     memory.write_node(&node)?;
     Ok(node.id)
 }
+
+#[cfg(feature = "async")]
+#[path = "runtime_async.rs"]
+mod runtime_async_impl;

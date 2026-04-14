@@ -311,7 +311,8 @@ impl GraphMemoryWriter {
     /// same [`ainl_persona::EVOLUTION_TRAIT_NAME`] row for that DB (for example the `ainl-runtime`
     /// crate’s `AinlRuntime::persist_evolution_snapshot` / `evolve_persona_from_graph_signals`) must
     /// coordinate so those calls are not concurrent with this pass, or disable the other writer
-    /// (see the `ainl-runtime` README).
+    /// (see the `ainl-runtime` README, including optional `async` / `run_turn_async` and why the graph
+    /// uses `Arc<std::sync::Mutex<GraphMemory>>` instead of `tokio::sync::Mutex`).
     ///
     /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
     /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.

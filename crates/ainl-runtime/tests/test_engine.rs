@@ -472,12 +472,14 @@ fn test_persona_cache_invalidated_after_extraction() {
         .clone()
         .expect("p1");
 
-    let store = rt.sqlite_store();
-    let mut pn = store.read_node(persona_id).unwrap().expect("persona row");
-    if let AinlNodeType::Persona { ref mut persona } = pn.node_type {
-        persona.strength = 0.99;
+    {
+        let store = rt.sqlite_store();
+        let mut pn = store.read_node(persona_id).unwrap().expect("persona row");
+        if let AinlNodeType::Persona { ref mut persona } = pn.node_type {
+            persona.strength = 0.99;
+        }
+        store.write_node(&pn).unwrap();
     }
-    store.write_node(&pn).unwrap();
 
     let out2 = rt
         .run_turn(TurnInput {
@@ -683,7 +685,7 @@ fn test_manual_evolution_signals_without_extractor_pass() {
     assert!(applied >= 1);
     let snap = rt.persist_evolution_snapshot().unwrap();
     assert!(snap.score(PersonaAxis::Verbosity) > 0.5);
-    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Verbosity).unwrap();
+    let stored = evolution_axis_score(&rt.sqlite_store(), ag, PersonaAxis::Verbosity).unwrap();
     assert!((stored - snap.score(PersonaAxis::Verbosity)).abs() < 0.001);
 }
 
@@ -703,7 +705,7 @@ fn test_evolution_correction_tick_persisted() {
         .score(PersonaAxis::Curiosity);
     assert!((mid - before).abs() > 0.0001);
     let snap = rt.persist_evolution_snapshot().unwrap();
-    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Curiosity).unwrap();
+    let stored = evolution_axis_score(&rt.sqlite_store(), ag, PersonaAxis::Curiosity).unwrap();
     assert!((stored - snap.score(PersonaAxis::Curiosity)).abs() < 0.001);
 }
 
@@ -722,7 +724,8 @@ fn test_evolve_persona_from_graph_signals_without_scheduled_extractor() {
     let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
     let snap = rt.evolve_persona_from_graph_signals().unwrap();
     assert!(snap.score(PersonaAxis::Instrumentality) > 0.5);
-    let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Instrumentality).unwrap();
+    let stored =
+        evolution_axis_score(&rt.sqlite_store(), ag, PersonaAxis::Instrumentality).unwrap();
     assert!((stored - snap.score(PersonaAxis::Instrumentality)).abs() < 0.001);
 }
 

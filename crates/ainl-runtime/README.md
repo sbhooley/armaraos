@@ -27,6 +27,12 @@ ArmaraOS integration story (openfang vs ainl-runtime): see **[`docs/ainl-runtime
 
 It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`] / patch envelopes.
 
+## Optional Tokio API (`async` feature)
+
+Enable **`features = ["async"]`** for [`AinlRuntime::run_turn_async`], [`TurnHooksAsync`], and Tokio (`spawn_blocking` for SQLite / graph work).
+
+**Why `std::sync::Mutex`, not `tokio::sync::Mutex`, for graph memory?** With an async mutex, calling [`AinlRuntime::new`] or [`AinlRuntime::sqlite_store`] from a Tokio worker (including `#[tokio::test]`) would push you toward `blocking_lock` or cross-thread deadlocks when the “short lock” path blocks the executor. The async path instead keeps the graph in `Arc<std::sync::Mutex<GraphMemory>>` and confines **heavy** SQLite and graph mutation to `tokio::task::spawn_blocking`, which matches how `openfang-runtime` callers already isolate blocking work.
+
 ## Quick start (`AinlRuntime`)
 
 ```toml
@@ -65,6 +71,7 @@ let out = rt.run_turn(TurnInput {
 
 - **`Message(String)`** — store / validation / config failures; use **`message_str()`** for a borrowed view, or **`From<String>`** / **`?`** when chaining.
 - **`DelegationDepthExceeded { depth, max }`** — nested `run_turn` past **`max_delegation_depth`**; use **`is_delegation_depth_exceeded()`** or **`delegation_depth_exceeded()`** instead of matching on `TurnStatus` (there is no soft depth outcome).
+- **`AsyncJoinError` / `AsyncStoreError`** — only with the **`async`** feature, from **`run_turn_async`**: blocking-pool join failure or SQLite error inside **`spawn_blocking`** (graph mutex remains **`std::sync::Mutex`**; see above).
 
 ## Persona evolution and ArmaraOS (OpenFang)
 
