@@ -109,10 +109,9 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 
 ## See also
 
-- [ainl-runtime.md](ainl-runtime.md) — doc hub (links to crate README, GraphPatch, OpenFang integration, tests)
-- [ainl-runtime GraphPatch + patches](ainl-runtime-graph-patch.md) — **`PatchAdapter`** / **`GraphPatchAdapter`**, semantic ranking migration, crates.io version matrix
+- **`crates/ainl-runtime/README.md`** — crate hub (`run_turn` / **`run_turn_async`**, session **`runtime_state`**, **`async`** feature, `cargo test -p ainl-runtime`)
+- [ainl-runtime GraphPatch + patches](ainl-runtime-graph-patch.md) — **`PatchAdapter`** / **`GraphPatchAdapter`**, semantic ranking migration, **`RuntimeStateNode`** persistence, crates.io version matrix
 - [ainl-runtime in OpenFang (optional)](ainl-runtime-integration.md) — feature **`ainl-runtime-engine`**, **`AinlRuntimeBridge`**, **`TurnOutcome`** mapping
-- **`crates/ainl-runtime/README.md`** — crate hub (`run_turn` / **`run_turn_async`**, **`async`** feature, `cargo test -p ainl-runtime`)
 - **ainativelang:** [`AINL_GRAPH_MEMORY.md`](https://github.com/sbhooley/ainativelang/blob/main/docs/adapters/AINL_GRAPH_MEMORY.md) — Python **`GraphStore`**, export merge, **`AinlMemorySyncWriter`** / inbox envelope
 - [persona-evolution.md](persona-evolution.md) — axis snapshot hook (**`AINL_PERSONA_EVOLUTION`**), **`ainl-persona-evolution`** feature
 - **`crates/openfang-runtime/README.md`** — **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, default Cargo features

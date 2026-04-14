@@ -15,8 +15,8 @@ Unlike systems that treat memory as a separate retrieval layer (RAG, vector stor
 
 | Type | Node / category | What it stores |
 |------|-----------------|----------------|
-| Episodic | EpisodicNode | Agent turns, tool calls, outcomes |
-| Semantic | SemanticNode | Facts, beliefs, topic clusters |
+| Episodic | EpisodicNode | Agent turns, tool calls, outcomes; optional **`tags`** (e.g. ArmaraOS **`ainl-semantic-tagger`** strings on tool sequences) |
+| Semantic | SemanticNode | Facts, beliefs, topic clusters; optional **`tags`** (correlation + tagger hints) |
 | Procedural | ProceduralNode | Compiled patterns, GraphPatch labels |
 | Persona | PersonaNode | Identity, evolved axis scores, dominant traits |
 | Session (runtime) | `RuntimeStateNode` (`node_type = runtime_state`) | Per-agent **persisted counters**: `turn_count`, `last_extraction_at_turn`, optional **`persona_snapshot_json`** (JSON-encoded compiled persona string), `updated_at` (unix seconds). Upserted by **ainl-runtime** so daemon restarts do not reset extraction cadence or force a cold persona compile on the first post-restart turn. |

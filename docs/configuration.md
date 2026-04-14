@@ -1250,6 +1250,8 @@ url = "https://mcp.example.com/sse"
 
 **AINL MCP:** `ainl install-mcp --host armaraos` registers an `ainl` server whose `env` entry forwards `AINL_MCP_EXPOSURE_PROFILE`, `AINL_MCP_TOOLS`, `AINL_MCP_TOOLS_EXCLUDE`, `AINL_MCP_RESOURCES`, and `AINL_MCP_RESOURCES_EXCLUDE` from the parent process. Set values in `~/.armaraos/.env` (for example `AINL_MCP_EXPOSURE_PROFILE=inspect_only` for read-first tooling and the `ainl://authoring-cheatsheet` resource) without editing this file; leave `AINL_MCP_EXPOSURE_PROFILE` unset for the full MCP tool list.
 
+**AINL graph memory (process environment):** Optional **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, and **`AINL_PERSONA_EVOLUTION`** are **not** `config.toml` keys—they apply to the **`openfang-runtime`** / daemon process (set in `~/.armaraos/.env` or the service plist, same as other env vars). They control structured fact extraction, deterministic tag strings on episode/fact rows, and the incremental persona turn hook. Semantics differ per variable; see **[graph-memory.md](graph-memory.md)** (*Optional extraction and tagging*) and root **`.env.example`**.
+
 **Transport variants** (tagged union on `type`):
 
 | `type` | Fields | Description |

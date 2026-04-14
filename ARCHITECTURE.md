@@ -131,7 +131,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 
 - **`ainl-runtime` crate (workspace, optional host):** Turn orchestration over the same **`ainl-memory`** SQLite (`run_turn`, optional **`run_turn_async`** + feature **`async`**). Hub doc: **`docs/ainl-runtime.md`**. GraphPatch / patch adapters: **`docs/ainl-runtime-graph-patch.md`**.
 
-Operator reference: **`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**, **`docs/ainl-runtime.md`**.
+Operator reference: **`docs/graph-memory.md`**, **`docs/graph-memory-sync.md`** (Python inbox), **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**, **`docs/ainl-runtime.md`**.
 
 ### Node Types
 

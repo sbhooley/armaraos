@@ -49,6 +49,12 @@ Slim build without the crates.io dependency:
 cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution
 ```
 
+## See also (ArmaraOS operator docs)
+
+- **[`docs/graph-memory.md`](../../docs/graph-memory.md)** — SQLite paths, inbox drain, end-of-turn writes, orchestration vs graph stores.
+- **[`docs/persona-evolution.md`](../../docs/persona-evolution.md)** — **`AINL_PERSONA_EVOLUTION`** axis hook vs **`run_persona_evolution_pass`**.
+- **[`docs/graph-memory-sync.md`](../../docs/graph-memory-sync.md)** — short hub linking Python **`AinlMemorySyncWriter`** and this README.
+
 ## Optional ainl-runtime turn path (`ainl-runtime-engine`)
 
 Cargo feature **`ainl-runtime-engine`** links workspace **`ainl-runtime`** (with crate feature **`async`**) and installs **`AinlRuntimeBridge`**. When **compiled in**, a chat turn can be handled entirely by **`AinlRuntime::run_turn`** (graph memory + extraction orchestration) **instead of** the default LLM + tool loop, if **either**:
