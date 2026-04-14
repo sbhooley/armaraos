@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Documentation
+
+- **`crates/ainl-memory/README.md`** — fifth memory family (**`RuntimeStateNode`** / `runtime_state`), **`read_runtime_state` / `write_runtime_state`** on **`GraphMemory`** + **`GraphQuery`**, legacy JSON key compatibility.
+- **`crates/ainl-runtime/README.md`** — session persistence: DB location, **`persona_snapshot_json`**, **`TurnPhase::RuntimeStatePersist`**, test command for **`test_session_persistence`**.
+- **`docs/graph-memory.md`** — **`runtime_state`** row when **`AinlRuntime`** shares **`ainl_memory.db`**; **`run_persona_evolution_pass`** → **`ExtractionReport`**; developer map + fixed links to **`crates/ainl-runtime/README.md`** (replaces missing **`ainl-runtime.md`**).
+- **`docs/data-directory.md`** — **`ainl_memory.db`** row mentions optional **`runtime_state`**.
+- **`docs/ainl-runtime-integration.md`** — routed-turn table + limitations: WAL, **`runtime_state`** writes from the bridge path.
+- **`docs/README.md`** — graph-memory index blurb mentions **`ExtractionReport`** and **`runtime_state`**.
+- **`docs/persona-evolution.md`** — evolution pass return type and stub report wording.
+- **`crates/openfang-runtime/README.md`** — **`ExtractionReport`** from **`run_persona_evolution_pass`**, operator guidance.
+
 ### Changed (workspace crates)
 
 - **Published AINL crate chain (crates.io):** **`ainl-memory` 0.1.8-alpha**, **`ainl-persona` 0.1.4** (bumps `ainl-memory` lower bound for resolver compatibility), **`ainl-graph-extractor` 0.1.5**, then **`ainl-runtime` 0.3.5-alpha**. Workspace pins updated in **`openfang-runtime`**, **`ainl-runtime`**, **`ainl-graph-extractor`**.

@@ -62,7 +62,8 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | Guide | Description |
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
-| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, vs orchestration traces |
+| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, post-turn **`ExtractionReport`**, optional **`runtime_state`** when **`ainl-runtime`** shares the DB, extractor/tagger bridges + env toggles, vs orchestration traces |
+| [Persona evolution (axis hook)](persona-evolution.md) | **`AINL_PERSONA_EVOLUTION`**, `PersonaEvolutionHook`, vs `run_persona_evolution_pass` |
 | [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), Tokio `async` feature, verification vs daemon path |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
 | [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |

@@ -8,6 +8,7 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 | `~/.armaraos/data/openfang.db` | SQLite database (filename is historical) — kernel memory, sessions, task board, audit, etc. |
 | `~/.armaraos/agents/<agent_id>/ainl_memory.db` | Optional **per-agent graph memory** SQLite file (**`ainl-memory`** / **`GraphMemoryWriter`**). Created when the agent loop first opens graph memory (separate from **`data/openfang.db`**). Holds typed **episode**, **semantic**, **procedural**, and **persona** nodes, plus an optional **`runtime_state`** row when **`ainl-runtime`**’s **`AinlRuntime`** uses the same file (persisted **`turn_count`**, extraction cadence, persona snapshot JSON). Persona traits with strength ≥ **0.1** in the last **90** days are summarized into the chat **system prompt**. Safe to delete only if you accept losing that substrate; back up with the agent folder. See **[graph-memory.md](graph-memory.md)**. |
 | `~/.armaraos/agents/<agent_id>/ainl_graph_memory_inbox.json` | Optional **Python → Rust graph inbox** (JSON envelope: **`nodes`**, **`edges`**, **`source_features`**, **`schema_version`**). Written by **ainativelang** **`AinlMemorySyncWriter`** when **`ARMARAOS_AGENT_ID`** is set; drained at the start of each agent loop into **`ainl_memory.db`**, then reset to an empty file. Safe to delete (pending writes are lost). See **[graph-memory.md](graph-memory.md)** (*Python inbox*). |
+| `~/.armaraos/agents/<agent_id>/ainl_graph_memory_export.json` (default) **or** **`$AINL_GRAPH_MEMORY_ARMARAOS_EXPORT/<agent_id>_graph_export.json`** | JSON **export** of the agent subgraph after post-turn graph work so Python **`ainl_graph_memory`** can refresh. See **[graph-memory.md](graph-memory.md)** (*On-disk layout*) and **`GraphMemoryWriter::armaraos_graph_memory_export_json_path`**. |
 | `~/.armaraos/agents/<agent_id>/bundle.ainlbundle` | Optional **AINL bundle** JSON (workflow + memory + **persona** + tools). Used by scheduled **`ainl_run`**: the kernel sets **`AINL_BUNDLE_PATH`** before **`ainl run`**, and after a successful exit best-effort rewrites this file from the live **`ainl_graph_memory`** bridge. See **[scheduled-ainl.md](scheduled-ainl.md)** (*AINL bundle + graph memory*). |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/agents/` | Agent manifests and per-agent data |
@@ -24,6 +25,7 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 |----------|---------|
 | `ARMARAOS_HOME` | Preferred: absolute path to the data directory (replaces `~/.armaraos`). |
 | `OPENFANG_HOME` | Legacy alias; same effect as `ARMARAOS_HOME`. |
+| `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` | Optional **directory** for per-agent graph JSON exports (**`<agent_id>_graph_export.json`**) instead of the default file next to **`ainl_memory.db`**. See **[graph-memory.md](graph-memory.md)**. |
 
 When either is set, automatic migration (below) does not run for the default home path.
 

@@ -123,23 +123,26 @@ SQLite database schema (`~/.armaraos/memory.db`):
   - **AINL Python `ainl_graph_memory` adapter:** Persists to a **separate** JSON file (default `~/.armaraos/ainl_graph_memory.json`, override `AINL_GRAPH_MEMORY_PATH`). Scheduled **`ainl run`** may additionally use **`bundle.ainlbundle`** via **`AINL_BUNDLE_PATH`**. These files are **not** the same store as `ainl_memory.db`; nothing automatically merges them. Use each stack for its intended runner (Rust daemon vs. Python `ainl`).
 
 - **Integration (`openfang-runtime`)**
-  - `graph_memory_writer.rs` — `GraphMemoryWriter` (`Arc<Mutex<GraphMemory>>`); open is non-fatal.
-  - `agent_loop.rs` — `record_turn` on EndTurn, `record_fact` after successful tools, persona lines merged into system prompt.
+  - `graph_memory_writer.rs` — `GraphMemoryWriter` (`Arc<Mutex<GraphMemory>>`); open is non-fatal; `run_persona_evolution_pass`, export path for Python refresh.
+  - `agent_loop.rs` — `record_turn` on EndTurn (with optional semantic tags), fact/pattern extraction via **`ainl_graph_extractor_bridge`** when **`AINL_EXTRACTOR_ENABLED=1`** else **`graph_extractor.rs`**; spawned post-turn **`run_persona_evolution_pass`** + optional **`persona_evolution::PersonaEvolutionHook`** when **`AINL_PERSONA_EVOLUTION=1`**; persona lines merged into system prompt each LLM call.
+  - `ainl_semantic_tagger_bridge.rs` — optional episode/fact tags when **`ainl-tagger`** feature + **`AINL_TAGGER_ENABLED=1`**.
   - `tool_runner.rs` — `tool_agent_delegate`: after successful send, `record_turn` with optional serialized `OrchestrationTraceEvent` JSON; `tool_a2a_send`: `record_delegation` after `A2aClient::send_task` (stays in `tool_runner` so `caller_agent_id` exists).
-  - **`graph_extractor.rs` (local heuristic):** Post-turn **regex / structural** extraction of semantic facts and tool-sequence patterns into the **Rust** graph (`extract_facts`, `extract_pattern`). This module is **not** the published **`ainl-graph-extractor`** crate; the names are easy to confuse. **Roadmap:** replace the in-tree heuristic extractor with **`ainl-graph-extractor`** + **`ainl-semantic-tagger`** for structured extraction and tagging aligned with the AINL tool chain.
+  - **`graph_extractor.rs` (local heuristic):** Default post-turn **regex / structural** extraction when **`AINL_EXTRACTOR_ENABLED`** is unset or falsey. The published **`ainl-graph-extractor`** crate is linked behind the **`ainl-extractor`** Cargo feature and selected at runtime by **`AINL_EXTRACTOR_ENABLED=1`** (`ainl_graph_extractor_bridge.rs`).
 
 - **`ainl-runtime` crate (workspace, optional host):** Turn orchestration over the same **`ainl-memory`** SQLite (`run_turn`, optional **`run_turn_async`** + feature **`async`**). Hub doc: **`docs/ainl-runtime.md`**. GraphPatch / patch adapters: **`docs/ainl-runtime-graph-patch.md`**.
 
-Operator reference: **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**.
+Operator reference: **`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**, **`docs/ainl-runtime.md`**.
 
 ### Node Types
 
 1. **Episode**: What happened during an agent turn
    - `turn_id`, `timestamp`, `tool_calls`, `delegation_to`
    - Optional `trace_event` (OrchestrationTraceEvent as JSON)
+   - Optional `tags` (string list): e.g. deterministic **`ainl-semantic-tagger`** tool labels when **`AINL_TAGGER_ENABLED=1`** (see **`docs/graph-memory.md`**)
 
 2. **Semantic**: Facts learned with confidence scores
    - `fact`, `confidence` (0.0-1.0), `source_turn_id`
+   - Optional `tags` (string list): orchestration correlation strings plus optional tagger output when **`AINL_TAGGER_ENABLED=1`**
 
 3. **Procedural**: Reusable compiled workflow patterns
    - `pattern_name`, `compiled_graph` (binary format)
@@ -222,7 +225,7 @@ ArmaraOS maintains API compatibility with OpenFang:
 |-------|-------|---------|-------------------------|
 | openfang-types | 1 | Core type definitions | — |
 | openfang-memory | 1 | SQLite memory substrate | — |
-| openfang-runtime | 1+2 | **Current Rust execution engine** for the daemon: agent loop, tools, graph-memory writer, heuristic `graph_extractor` | **`ainl-memory`:** integrated (`GraphMemoryWriter`) |
+| openfang-runtime | 1+2 | **Current Rust execution engine** for the daemon: agent loop, tools, `GraphMemoryWriter`, Python inbox drain, `ainl_graph_extractor_bridge` + legacy `graph_extractor`, optional `ainl_semantic_tagger_bridge` / `PersonaEvolutionHook` | **`ainl-memory`:** integrated (`GraphMemoryWriter`) |
 | openfang-kernel | 2 | Agent lifecycle, orchestration tracing | — |
 | openfang-api | 2 | HTTP API with dashboard enhancements | — |
 | ainl-memory | 3 | Graph-memory substrate (standalone); SQLite `GraphMemory` | **Integrated** — primary graph store for `GraphMemoryWriter` |

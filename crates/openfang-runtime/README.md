@@ -2,22 +2,24 @@
 
 Agent loop, tool execution, graph memory (`GraphMemoryWriter`), and related runtime services for ArmaraOS / OpenFang.
 
-## Optional semantic tagging (`ainl-tagger`)
+**Default Cargo features (ArmaraOS daemon):** **`ainl-persona-evolution`**, **`ainl-extractor`**, **`ainl-tagger`**. Slim builds can use **`--no-default-features`** and opt back in per feature (see below).
 
-The crate can be built with Cargo feature **`ainl-tagger`**, which links **`ainl-semantic-tagger`** and wires [`ainl_semantic_tagger_bridge::SemanticTaggerBridge`] into graph-memory writes (episode + fact nodes).
+## Semantic tagging (`ainl-tagger`)
 
-At **runtime**, tagging is applied only when:
+Feature **`ainl-tagger`** links **`ainl-semantic-tagger`** and wires [`ainl_semantic_tagger_bridge::SemanticTaggerBridge`] into graph-memory writes (episode + fact nodes). It is **on by default** in this workspace; distributors may ship a binary without it.
+
+At **runtime**, tagger-derived strings are merged **only** when the variable is set to the literal **`1`** (after trim):
 
 ```bash
 export AINL_TAGGER_ENABLED=1
 ```
 
-Without this variable set to `1`, tag lists are left empty even if the binary was built with `ainl-tagger` (keeps default installs cheap and predictable).
+If unset, or set to any other value (including `true` / `yes` / `on`), tag lists from this bridge stay **empty**—even when the feature is compiled in—so operators opt in explicitly.
 
-Build example (adds `ainl-tagger` alongside the crate’s default features, e.g. `ainl-persona-evolution`):
+Re-enable the dependency after **`--no-default-features`**:
 
 ```bash
-cargo build -p openfang-runtime --features ainl-tagger
+cargo build -p openfang-runtime --features ainl-persona-evolution,ainl-extractor,ainl-tagger
 ```
 
 Tests for the bridge (with the env var set inside the tests) run when this feature is enabled:
@@ -38,6 +40,8 @@ export AINL_EXTRACTOR_ENABLED=1
 ```
 
 Accepted truthy values: `1`, `true`, `yes`, `on` (case-insensitive). When unset or falsey, the runtime keeps the legacy [`graph_extractor`](src/graph_extractor.rs) heuristics for facts and patterns while persona evolution still runs if the feature remains enabled.
+
+**Persona evolution pass return type:** when **`ainl-extractor`** is enabled, **`GraphMemoryWriter::run_persona_evolution_pass`** returns **`ainl_graph_extractor::ExtractionReport`** (type-alias **`PersonaEvolutionExtractionReport`**). Without **`ainl-extractor`**, the same method returns a small stub report (see **`graph_memory_writer.rs`**). Inspect **`has_errors()`** and the **`extract_error` / `pattern_error` / `persona_error`** fields when present; the implementation logs warnings for each populated slot so operators see partial extractor failures without failing the spawned task.
 
 Slim build without the crates.io dependency:
 

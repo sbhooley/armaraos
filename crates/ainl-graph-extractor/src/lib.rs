@@ -8,6 +8,14 @@
 //! **Note:** [`GraphExtractorTask::evolution_engine`] is the canonical in-process handle to
 //! [`ainl_persona::EvolutionEngine`]. **ainl-runtime** exposes the same engine for direct
 //! `ingest_signals` / `correction_tick` / `evolve` calls; this crate’s `run_pass` is one signal path, not the only one.
+//!
+//! ## `run_pass` and [`ExtractionReport`]
+//!
+//! [`GraphExtractorTask::run_pass`] returns an [`ExtractionReport`] (not `Result<_, _>`): semantic /
+//! pattern / persona phases record errors in **`extract_error`**, **`pattern_error`**, and
+//! **`persona_error`** respectively. Use [`ExtractionReport::has_errors`] before treating a pass as
+//! clean. ArmaraOS **`GraphMemoryWriter::run_persona_evolution_pass`** surfaces the same struct
+//! and logs warnings for populated error slots.
 
 mod extractor;
 mod persona_signals;

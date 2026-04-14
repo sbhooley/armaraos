@@ -23,7 +23,9 @@
 //! Graph memory is then `Arc<std::sync::Mutex<GraphMemory>>` (not `tokio::sync::Mutex`) so
 //! [`AinlRuntime::new`] and [`AinlRuntime::sqlite_store`] can take short locks on any thread; SQLite
 //! work for async turns is still offloaded with `tokio::task::spawn_blocking`. See the crate
-//! `README.md` for rationale.
+//! **`README.md`** for rationale; ArmaraOS hub **`docs/ainl-runtime.md`**, patch dispatch
+//! **`docs/ainl-runtime-graph-patch.md`**, and optional OpenFang embed **`docs/ainl-runtime-integration.md`**
+//! cover host integration and registry crates.io pins.
 
 mod adapters;
 mod engine;

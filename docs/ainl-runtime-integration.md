@@ -2,6 +2,7 @@
 
 This guide covers the **optional** path that routes a **chat turn** through the Rust **`ainl-runtime`** orchestration layer (`run_turn` / `run_turn_async`) instead of the default OpenFang LLM + tool loop. It complements:
 
+- **`docs/ainl-runtime.md`** — hub: what the crate does, **`async`** feature, **`std::sync::Mutex`** vs **`tokio::sync::Mutex`**, verification commands.
 - **`docs/ainl-runtime-graph-patch.md`** — procedural patch adapters, `MemoryContext`, and how **`GraphPatchAdapter`** fits the graph.
 - **`crates/ainl-runtime/README.md`** — crate-level behavior, delegation depth, async SQLite notes.
 
@@ -18,6 +19,7 @@ The built-in OpenFang agent loop remains the **default**. Unless the Cargo featu
 | **Manifest** | Top-level `ainl_runtime_engine = true` (TOML / JSON on `AgentManifest`) |
 | **Environment** | `AINL_RUNTIME_ENGINE=1` (process-wide; OR with manifest flag) |
 | **Graph DB** | Same per-agent `ainl_memory.db` as `GraphMemoryWriter` (second SQLite connection; WAL-safe). **`AinlRuntime`** may upsert a **`runtime_state`** node (session counters + optional persona snapshot JSON) on each completed turn — see **`crates/ainl-runtime/README.md`** (*Session persistence*). |
+| **Default agent loop graph toggles** | Unrelated to **`ainl-runtime-engine`** — the built-in loop uses **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, and export path **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** as documented in **[graph-memory.md](graph-memory.md)** and **`crates/openfang-runtime/README.md`**. |
 | **Evolution writes** | Bridge uses `AinlRuntime::with_evolution_writes_enabled(false)` so OpenFang keeps owning evolution row writes |
 | **Delegation cap** | `AinlRuntimeBridge::with_delegation_cap(..., runtime_limits.max_agent_call_depth)` |
 | **Tests** | `cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime test_agent_loop_uses_openfang_by_default` |

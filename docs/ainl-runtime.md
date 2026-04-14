@@ -13,6 +13,8 @@ This page is the **ArmaraOS documentation hub** for the workspace crate **`crate
 
 Both return **`Result<TurnOutcome, AinlRuntimeError>`** ( **`Complete`** vs **`PartialSuccess`** with **`TurnWarning`** + **`TurnPhase`** ). **`RuntimeConfig::max_delegation_depth`** applies to nested **`run_turn`** / **`run_turn_async`** the same way.
 
+**Semantic ranking:** **`compile_memory_context_for(None)`** does not inherit the latest episode body for **`MemoryContext::relevant_semantic`**; pass **`Some(user_message)`** for topic-aware ranking. **`run_turn`** / **`run_turn_async`** pass the current turn text. Details: **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** (section *Memory context / semantic ranking*).
+
 ---
 
 ## Cargo feature `async`
@@ -50,7 +52,8 @@ Full rationale and host guidance: **`crates/ainl-runtime/README.md`** (section *
 
 | Doc | Topic |
 |-----|--------|
-| **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** | Procedural **`GraphPatchAdapter`**, **`PatchDispatchContext`**, host dispatch envelopes; **`run_turn`** / **`run_turn_async`** both compile memory via **`compile_memory_context_for`**. |
+| **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** | **`PatchAdapter`** registry, **`GraphPatchAdapter`** fallback, **`PatchDispatchResult`** (**`adapter_name`**, **`adapter_output`**), host dispatch summaries; semantic ranking migration; **crates.io** version matrix (**0.3.5-alpha** and friends). |
+| **[ainl-runtime-integration.md](ainl-runtime-integration.md)** | Optional **`openfang-runtime`** embed: feature **`ainl-runtime-engine`**, **`AinlRuntimeBridge`**, **`TurnOutcome`** mapping, activation and roadmap. |
 | **[graph-memory.md](graph-memory.md)** | Live daemon path: **`GraphMemoryWriter`**, **`ainl_memory.db`**, Python inbox — vs this optional crate. |
 | **[architecture.md](architecture.md)** | Workspace crate table; **`ainl-runtime`** row mentions **`async`**. |
 | Repo root **[ARCHITECTURE.md](../ARCHITECTURE.md)** | Layer 3 graph substrate; execution engine vs **`ainl-runtime`** roadmap. |
@@ -74,6 +77,12 @@ cargo clippy -p ainl-runtime --all-targets --features async -- -D warnings
 ```
 
 The **`test_async_runtime`** target is declared in **`crates/ainl-runtime/Cargo.toml`** with **`required-features = ["async"]`** so **`cargo test --workspace`** skips it when the workspace does not enable **`ainl-runtime/async`**. CI that needs those tests should run the **`--features async`** command above for this crate.
+
+Optional OpenFang bridge:
+
+```bash
+cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime
+```
 
 ---
 

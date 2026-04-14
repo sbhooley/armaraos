@@ -38,6 +38,9 @@
 //! - **Semantic**: Facts learned with confidence scores
 //! - **Procedural**: Reusable compiled workflow patterns
 //! - **Persona**: Agent traits learned over time
+//! - **Runtime state** (`RuntimeStateNode`, `node_type = runtime_state`): Optional persisted session
+//!   counters and persona snapshot JSON for **ainl-runtime** (see [`GraphMemory::read_runtime_state`] /
+//!   [`GraphMemory::write_runtime_state`]).
 
 pub mod node;
 pub mod query;

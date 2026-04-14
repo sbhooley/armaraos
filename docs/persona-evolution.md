@@ -13,7 +13,7 @@ ArmaraOS stores per-agent graph memory in `~/.armaraos/agents/<agent_id>/ainl_me
 
 ## Two write paths
 
-1. **`GraphMemoryWriter::run_persona_evolution_pass`** (spawned after each turn) runs `ainl-graph-extractor`: semantic recurrence bumps, graph signal extraction, heuristic persona signals, then persists the evolution snapshot when appropriate.
+1. **`GraphMemoryWriter::run_persona_evolution_pass`** (spawned after each turn) runs **`ainl-graph-extractor`**: semantic recurrence bumps, graph signal extraction, heuristic persona signals, then persists the evolution snapshot when appropriate. It returns an **`ExtractionReport`** (`extract_error` / `pattern_error` / `persona_error` + **`has_errors()`**); partial failures are **`warn!`**’d, not thrown.
 2. **`PersonaEvolutionHook::evolve_from_turn`** (optional) runs **after** that pass. It re-reads the latest evolution snapshot, applies **explicit** signals derived from this turn’s tool list and optional `delegation_to`, then writes the snapshot again. This matters because dashboard episodes often omit `trace_event.outcome: "success"`, so `ainl-persona`’s episodic extractor skips tool-based hints unless this hook runs.
 
 ## Runtime toggle: `AINL_PERSONA_EVOLUTION`
@@ -36,7 +36,11 @@ Trait-level `strength` on non-evolution persona rows is not rewritten by this ho
 
 ## Crate feature: `ainl-persona-evolution`
 
-`openfang-runtime` gates direct `ainl-persona` usage behind the Cargo feature **`ainl-persona-evolution`** (enabled in default features). Minimal builds can disable it; the hook becomes a no-op and the cold-graph `correction_tick` branch in `run_persona_evolution_pass` is skipped.
+`openfang-runtime` gates direct `ainl-persona` usage behind the Cargo feature **`ainl-persona-evolution`** (enabled in default features). Minimal builds can disable it; **`PersonaEvolutionHook`** becomes a no-op and the **`EvolutionEngine::correction_tick`** cold-graph branch inside **`run_persona_evolution_pass`** is skipped.
+
+## Crate feature: `ainl-extractor`
+
+The full **`GraphMemoryWriter::run_persona_evolution_pass`** implementation (semantic recurrence, **`GraphExtractorTask`**, **`EvolutionEngine`** ingest) is compiled only when Cargo feature **`ainl-extractor`** is enabled (default **on**). Without it, the method returns a lightweight stub **`ExtractionReport`** so the daemon still links; persona **reading** from SQLite continues to work, but **no** extractor-driven evolution writes occur from that pass.
 
 ## Tests
 
@@ -45,5 +49,6 @@ Trait-level `strength` on non-evolution persona rows is not rewritten by this ho
 ## Related docs
 
 - `docs/graph-memory.md` — SQLite layout, export path, scheduled `ainl run` bundles.
+- `crates/openfang-runtime/README.md` — **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, default Cargo features.
 - `crates/ainl-persona/README.md` — axis model and evolution engine API.
 - `crates/ainl-runtime/README.md` — coordination note if another host writes the same DB.

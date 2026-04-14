@@ -1,8 +1,9 @@
 //! Bridge between openfang-runtime agent turns and ainl-memory graph store.
 //!
-//! Every agent turn that completes gets an EpisodeNode. Every tool call
-//! result gets a SemanticNode (fact). Every A2A delegation gets an EpisodeNode
-//! with delegation_to set.
+//! Every agent turn that completes gets an **Episode** node. **Semantic** facts
+//! and optional **procedural** patterns for that turn are written after the episode
+//! (see **`agent_loop`** + **`ainl_graph_extractor_bridge`**). Every A2A delegation
+//! gets an Episode with **`delegation_to`** set.
 //!
 //! This is the wire that makes ainl-memory non-dead-code in the binary and
 //! fulfills the architectural claim: execution IS the memory.

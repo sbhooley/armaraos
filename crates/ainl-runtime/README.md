@@ -2,6 +2,8 @@
 
 **Alpha (0.3.5-alpha) — API subject to change.**
 
+**Documentation map (ArmaraOS repo):** **[`docs/ainl-runtime.md`](../../docs/ainl-runtime.md)** (hub: features, testing, **`std::sync::Mutex`** rationale), **[`docs/ainl-runtime-graph-patch.md`](../../docs/ainl-runtime-graph-patch.md)** (GraphPatch / patch adapters), **[`docs/graph-memory.md`](../../docs/graph-memory.md)** (live daemon **`GraphMemoryWriter`** vs this crate), root **[`ARCHITECTURE.md`](../../ARCHITECTURE.md)** (layering).
+
 `ainl-runtime` is the **Rust orchestration layer** for the unified AINL **graph memory** stack: it coordinates [`ainl-memory`](https://crates.io/crates/ainl-memory), [`ainl-persona`](https://crates.io/crates/ainl-persona)’s [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) (shared with [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)’s [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html)), and optional **post-turn extraction**, with a [`TurnHooks`] seam for hosts (e.g. OpenFang).
 
 It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AINL CLI, and **not** an LLM or IR parser.
@@ -61,6 +63,23 @@ It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on
 Enable **`features = ["async"]`** for [`AinlRuntime::run_turn_async`], [`TurnHooksAsync`], and Tokio (`spawn_blocking` for SQLite / graph work).
 
 **Why `std::sync::Mutex`, not `tokio::sync::Mutex`, for graph memory?** With an async mutex, calling [`AinlRuntime::new`] or [`AinlRuntime::sqlite_store`] from a Tokio worker (including `#[tokio::test]`) would push you toward `blocking_lock` or cross-thread deadlocks when the “short lock” path blocks the executor. The async path instead keeps the graph in `Arc<std::sync::Mutex<GraphMemory>>` and confines **heavy** SQLite and graph mutation to `tokio::task::spawn_blocking`, which matches how `openfang-runtime` callers already isolate blocking work.
+
+**Minimal async example** (body of an `async fn`; Cargo: `ainl-runtime = { version = "…", features = ["async"] }`):
+
+```rust
+use std::sync::Arc;
+use ainl_memory::SqliteGraphStore;
+use ainl_runtime::{AinlRuntime, NoOpAsyncHooks, RuntimeConfig, TurnHooksAsync, TurnInput};
+
+let store = SqliteGraphStore::open(std::path::Path::new("memory.db"))?;
+let cfg = RuntimeConfig {
+    agent_id: "agent-1".into(),
+    ..Default::default()
+};
+let hooks: Arc<dyn TurnHooksAsync> = Arc::new(NoOpAsyncHooks);
+let mut rt = AinlRuntime::new(cfg, store).with_hooks_async(hooks);
+let _out = rt.run_turn_async(TurnInput::default()).await?;
+```
 
 ## Quick start (`AinlRuntime`)
 
