@@ -48,6 +48,7 @@ The full **`GraphMemoryWriter::run_persona_evolution_pass`** implementation (sem
 
 ## Related docs
 
+- `docs/graph-memory-sync.md` — Python **`AinlMemorySyncWriter`** → **`ainl_graph_memory_inbox.json`** when **`ARMARAOS_AGENT_ID`**
 - `docs/graph-memory.md` — SQLite layout, export path, **`AINL_EXTRACTOR_ENABLED`** vs **`AINL_TAGGER_ENABLED`** (tagger: **only** `1`), EndTurn write order, scheduled `ainl run` bundles.
 - `crates/openfang-runtime/README.md` — **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, default Cargo features.
 - `crates/ainl-persona/README.md` — axis model and evolution engine API.

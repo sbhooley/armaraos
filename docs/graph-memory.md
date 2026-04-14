@@ -4,7 +4,7 @@ ArmaraOS records **typed graph nodes** from live agent execution using the stand
 
 **Primary code:** `crates/openfang-runtime/src/graph_memory_writer.rs` (async-safe wrapper), `crates/ainl-memory/` (store + schema).
 
-**Operator quick links:** optional env toggles for richer graph writes are summarized in **[persona-evolution.md](persona-evolution.md)** (persona axis hook) and **`crates/openfang-runtime/README.md`** (extractor + tagger features and the same variables).
+**Operator quick links:** optional env toggles for richer graph writes are summarized in **[persona-evolution.md](persona-evolution.md)** (persona axis hook) and **`crates/openfang-runtime/README.md`** (extractor + tagger features and the same variables). Python inbox (**`ARMARAOS_AGENT_ID`**): **[graph-memory-sync.md](graph-memory-sync.md)**.
 
 **Optional orchestration crate:** **`ainl-runtime`** layers the same SQLite **`GraphMemory`** with a full turn pipeline (memory context, procedural **`PatchAdapter`** dispatch, optional **`ainl-graph-extractor`** scheduling). The live dashboard loop does **not** call it yet; use it for tooling, tests, or future **`openfang-runtime`** embedding. Tokio hosts can enable crate feature **`async`** and **`AinlRuntime::run_turn_async`** (SQLite on **`spawn_blocking`**, graph under **`Arc<std::sync::Mutex<_>>`**). Hub: **[ainl-runtime.md](ainl-runtime.md)** and **`crates/ainl-runtime/README.md`**.
 

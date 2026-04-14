@@ -10,6 +10,10 @@ This document is the **host-facing bridge** between ArmaraOS’s SQLite graph me
 - **`ainl-runtime`** is a **separate** orchestration crate: `run_turn` loads `MemoryContext`, dispatches **active procedural** rows from `GraphQuery::active_patches`, records episodes, optional extraction, etc.
 - **Full Python GraphPatch** (IR promotion, `memory.patch`, compile-time checks in AINL) is **not reimplemented** in Rust. The Rust path is **metadata + small JSON summaries from patch adapters** so a host can decide what to execute.
 
+### Session persistence (`RuntimeStateNode`)
+
+**`AinlRuntime`** reads and writes a single **`runtime_state`** graph row per agent (`ainl-memory` **`RuntimeStateNode`**) in the same SQLite file: **`turn_count`**, **`last_extraction_at_turn`**, optional **`persona_snapshot_json`**, **`updated_at`**. Restore happens in **`AinlRuntime::new`**; persist runs at the end of **`run_turn`** / **`run_turn_async`**. SQLite errors are non-fatal and surface as **`TurnOutcome::PartialSuccess`** with **`TurnPhase::RuntimeStatePersist`**. See **`crates/ainl-runtime/README.md`** (*Session persistence*), **[ainl-runtime.md](ainl-runtime.md)**, and **[graph-memory.md](graph-memory.md)**.
+
 ### Optional: `run_turn_async` (crate feature `async`)
 
 For Tokio embedders, **`ainl-runtime`** can offload SQLite-heavy work with **`AinlRuntime::run_turn_async`** (`features = ["async"]`). Graph memory is guarded by **`std::sync::Mutex`** inside **`Arc`**, not **`tokio::sync::Mutex`**, so **`AinlRuntime::new`** and short borrows like **`sqlite_store()`** remain safe on any thread (including Tokio workers used in **`#[tokio::test]`**); see **`crates/ainl-runtime/README.md`**.
