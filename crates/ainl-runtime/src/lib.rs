@@ -12,6 +12,13 @@
 //!
 //! For a minimal “record episodes + run extractor” path without the full engine, see [`RuntimeContext`].
 //!
+//! ## Semantic ranking / [`MemoryContext`]
+//!
+//! **`compile_memory_context_for(None)`** no longer inherits previous episode text for semantic
+//! ranking; pass **`Some(user_message)`** if you want topic-aware [`MemoryContext::relevant_semantic`].
+//! [`AinlRuntime::compile_memory_context`] still calls `compile_memory_context_for(None)` (empty
+//! message → high-recurrence fallback). [`AinlRuntime::run_turn`] always passes the current turn text.
+//!
 //! **Async / Tokio:** enable the optional **`async`** crate feature for `AinlRuntime::run_turn_async`.
 //! Graph memory is then `Arc<std::sync::Mutex<GraphMemory>>` (not `tokio::sync::Mutex`) so
 //! [`AinlRuntime::new`] and [`AinlRuntime::sqlite_store`] can take short locks on any thread; SQLite

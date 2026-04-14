@@ -6,7 +6,7 @@ This document is the **host-facing bridge** between ArmaraOS’s SQLite graph me
 
 - **Dashboard / daemon execution** still runs in **`openfang-runtime`**. It does **not** call `AinlRuntime::run_turn` yet.
 - **`ainl-runtime`** is a **separate** orchestration crate: `run_turn` loads `MemoryContext`, dispatches **active procedural** rows from `GraphQuery::active_patches`, records episodes, optional extraction, etc.
-- **Full Python GraphPatch** (IR promotion, `memory.patch`, compile-time checks in AINL) is **not reimplemented** in Rust. The Rust path is **metadata + structured envelopes** so a host can decide what to execute.
+- **Full Python GraphPatch** (IR promotion, `memory.patch`, compile-time checks in AINL) is **not reimplemented** in Rust. The Rust path is **metadata + small JSON summaries from patch adapters** so a host can decide what to execute.
 
 ### Optional: `run_turn_async` (crate feature `async`)
 
@@ -19,7 +19,18 @@ For Tokio embedders, **`ainl-runtime`** can offload SQLite-heavy work with **`Ai
 ## What to register
 
 1. **`AinlRuntime::register_default_patch_adapters()`** — installs [`GraphPatchAdapter`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-runtime/src/adapters/graph_patch.rs) under the name `graph_patch`. It is used as a **fallback** when no label-specific [`PatchAdapter`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-runtime/src/adapters/mod.rs) matches the procedural `label`.
-2. **Optional:** `GraphPatchAdapter::with_host(Arc<dyn GraphPatchHostDispatch>)` — your process receives a JSON **dispatch envelope** (`kind: graph_patch_dispatch`, label, node id, declared reads, compiled graph byte length, optional UTF-8 preview, frame keys) and can forward to Python `ainl run`, another worker, or a no-op logger.
+2. **Optional:** `GraphPatchAdapter::with_host(Arc<dyn GraphPatchHostDispatch>)` — your process receives the same JSON **summary** the adapter returns: `{ "label", "patch_version", "frame_keys" }` (after declared-read checks). Use it to forward to Python `ainl run`, another worker, or a no-op logger.
+
+## Memory context / semantic ranking (migration)
+
+`MemoryContext` is built inside `AinlRuntime::run_turn` / `run_turn_async` via `compile_memory_context_for`.
+
+**`compile_memory_context_for(None)` no longer inherits previous episode text for semantic ranking; pass `Some(user_message)` if you want topic-aware ranking.**
+
+- `compile_memory_context()` still calls `compile_memory_context_for(None)` — that path behaves like an **empty** user message: `relevant_semantic` uses the **high-recurrence** fallback, not the latest episode body.
+- `run_turn` / `run_turn_async` always pass the **current** turn’s `user_message` into memory compilation, so the default turn pipeline stays topic-aware without extra calls.
+
+See **`crates/ainl-runtime/README.md`** and the **`ainl-runtime`** crate rustdoc (`MemoryContext`) for the same note.
 
 ## Future: openfang-runtime
 

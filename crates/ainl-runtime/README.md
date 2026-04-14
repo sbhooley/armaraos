@@ -1,6 +1,6 @@
 # ainl-runtime
 
-**Alpha (0.3.2-alpha) — API subject to change.**
+**Alpha (0.3.5-alpha) — API subject to change.**
 
 `ainl-runtime` is the **Rust orchestration layer** for the unified AINL **graph memory** stack: it coordinates [`ainl-memory`](https://crates.io/crates/ainl-memory), [`ainl-persona`](https://crates.io/crates/ainl-persona)’s [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) (shared with [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)’s [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html)), and optional **post-turn extraction**, with a [`TurnHooks`] seam for hosts (e.g. OpenFang).
 
@@ -27,6 +27,12 @@ ArmaraOS integration story (openfang vs ainl-runtime): see **[`docs/ainl-runtime
 
 It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`] / patch envelopes.
 
+## Memory context / semantic ranking (migration)
+
+**`compile_memory_context_for(None)`** no longer inherits previous episode text for semantic ranking; pass **`Some(user_message)`** if you want topic-aware ranking.
+
+[`compile_memory_context`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.AinlRuntime.html#method.compile_memory_context) still calls `compile_memory_context_for(None)` — that path now behaves like an **empty** user message (high-recurrence fallback for [`MemoryContext::relevant_semantic`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.MemoryContext.html#structfield.relevant_semantic)), not “reuse the last episode body.” [`run_turn`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.AinlRuntime.html#method.run_turn) always passes the current turn’s `user_message` into memory compilation, so embedded turn pipelines keep topic-aware semantics without extra calls.
+
 ## Optional Tokio API (`async` feature)
 
 Enable **`features = ["async"]`** for [`AinlRuntime::run_turn_async`], [`TurnHooksAsync`], and Tokio (`spawn_blocking` for SQLite / graph work).
@@ -37,7 +43,7 @@ Enable **`features = ["async"]`** for [`AinlRuntime::run_turn_async`], [`TurnHoo
 
 ```toml
 [dependencies]
-ainl-runtime = "0.3.2-alpha"
+ainl-runtime = "0.3.5-alpha"
 ```
 
 ```rust
@@ -53,6 +59,8 @@ let cfg = RuntimeConfig {
 let mut rt = AinlRuntime::new(cfg, store);
 rt.register_default_patch_adapters(); // GraphPatch fallback for procedural patches
 let _artifact = rt.load_artifact()?;
+// Topic-aware semantic slice: pass Some(...). None = empty ranking input (not last episode).
+let _ctx = rt.compile_memory_context_for(Some("What did we decide about Rust?"))?;
 let out = rt.run_turn(TurnInput {
     user_message: "Hello".into(),
     tools_invoked: vec!["file_read".into()],

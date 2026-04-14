@@ -220,6 +220,11 @@ pub struct TurnInput {
 }
 
 /// Compiled memory context for a turn (prompt-side assembly in the host).
+///
+/// The **`relevant_semantic`** slice is ranked by [`crate::AinlRuntime::compile_memory_context_for`]
+/// from that method’s `user_message` only: **`None` does not inherit the previous episode’s text**
+/// for topic ranking (use `Some(user_message)` when you want topic-aware order, or call
+/// [`crate::AinlRuntime::run_turn`], which always passes the current turn text).
 #[derive(Debug, Clone)]
 pub struct MemoryContext {
     pub recent_episodes: Vec<AinlMemoryNode>,
