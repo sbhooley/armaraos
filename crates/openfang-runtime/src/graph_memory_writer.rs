@@ -123,6 +123,12 @@ impl GraphMemoryWriter {
             .join("ainl_memory.db"))
     }
 
+    /// Canonical `ainl_memory.db` path for an agent (same as [`Self::open`]). Used to open a
+    /// secondary SQLite handle (e.g. **ainl-runtime**) alongside this writer.
+    pub fn sqlite_database_path_for_agent(agent_id: &str) -> Result<PathBuf, String> {
+        Self::db_path(agent_id)
+    }
+
     fn fire_write_hook(&self, kind: &str) {
         if let Some(f) = &self.on_write {
             f(self.agent_id.clone(), kind.to_string());

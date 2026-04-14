@@ -99,6 +99,107 @@ fn graph_memory_pattern_trace_id(
         .map(|o| o.trace_id.clone())
 }
 
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_engine_switch_active(manifest: &AgentManifest) -> bool {
+    manifest.ainl_runtime_engine
+        || std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1")
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+#[allow(clippy::too_many_arguments)] // Thin early-exit shim: mirrors run_agent_loop pre-loop context.
+async fn try_consume_turn_via_ainl_runtime(
+    manifest: &AgentManifest,
+    graph_memory: &Option<crate::graph_memory_writer::GraphMemoryWriter>,
+    session: &mut Session,
+    memory: &MemorySubstrate,
+    session_user_message: &str,
+    hooks: Option<&crate::hooks::HookRegistry>,
+    agent_id_str: &str,
+    compression_savings_pct: u8,
+    compressed_input: Option<String>,
+    loop_t0: std::time::Instant,
+    runtime_limits: &EffectiveRuntimeLimits,
+    orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+) -> Option<OpenFangResult<AgentLoopResult>> {
+    if !ainl_runtime_engine_switch_active(manifest) {
+        return None;
+    }
+    let Some(gm) = graph_memory else {
+        warn!(
+            agent = %manifest.name,
+            "ainl-runtime-engine: graph memory unavailable; continuing with OpenFang loop"
+        );
+        return None;
+    };
+    let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
+    let bridge = match crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(
+        gw,
+        runtime_limits.max_agent_call_depth,
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(
+                agent = %manifest.name,
+                error = %e,
+                "ainl-runtime-engine: failed to construct bridge; continuing with OpenFang loop"
+            );
+            return None;
+        }
+    };
+    let trace = graph_memory_turn_trace_json(agent_id_str, orchestration_ctx);
+    let ctx = crate::ainl_runtime_bridge::TurnContext {
+        tools_invoked: vec![],
+        trace_event: trace,
+        depth: 0,
+        frame: HashMap::new(),
+        emit_targets: vec![],
+        delegation_to: None,
+    };
+    let mapped = match bridge.run_turn(agent_id_str, session_user_message, ctx) {
+        Ok(m) => m,
+        Err(e) => {
+            warn!(
+                agent = %manifest.name,
+                error = %e,
+                "ainl-runtime-engine: run_turn failed; continuing with OpenFang loop"
+            );
+            return None;
+        }
+    };
+    crate::ainl_runtime_bridge::log_mapped_end_turn_fields(&manifest.name, &mapped);
+    session
+        .messages
+        .push(Message::assistant(mapped.output.as_str()));
+    if let Err(e) = memory.save_session_async(session).await {
+        warn!("Failed to save session after ainl-runtime-engine turn: {e}");
+    }
+    if let Some(hook_reg) = hooks {
+        let ctx = crate::hooks::HookContext {
+            agent_name: &manifest.name,
+            agent_id: agent_id_str,
+            event: openfang_types::agent::HookEvent::AgentLoopEnd,
+            data: serde_json::json!({
+                "engine": "ainl-runtime",
+                "tool_calls": mapped.tool_calls,
+                "delegation_to": mapped.delegation_to,
+            }),
+        };
+        let _ = hook_reg.fire(&ctx);
+    }
+    Some(Ok(AgentLoopResult {
+        response: mapped.output,
+        total_usage: TokenUsage::default(),
+        iterations: 1,
+        cost_usd: mapped.cost_estimate,
+        silent: false,
+        directives: Default::default(),
+        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+        llm_fallback_note: None,
+        compression_savings_pct,
+        compressed_input,
+    }))
+}
+
 /// Expected per-agent SQLite path (must stay aligned with [`crate::graph_memory_writer::GraphMemoryWriter`]).
 fn graph_memory_expected_db_path(agent_id: &openfang_types::agent::AgentId) -> std::path::PathBuf {
     openfang_types::config::openfang_home_dir()
@@ -927,6 +1028,26 @@ pub async fn run_agent_loop(
     let mut any_tools_executed = false;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
+
+    #[cfg(feature = "ainl-runtime-engine")]
+    if let Some(res) = try_consume_turn_via_ainl_runtime(
+        manifest,
+        &graph_memory,
+        session,
+        memory,
+        session_user_message,
+        hooks,
+        agent_id_str.as_str(),
+        compression_savings_pct,
+        compressed_input.clone(),
+        loop_t0,
+        &runtime_limits,
+        &orchestration_ctx,
+    )
+    .await
+    {
+        return res;
+    }
 
     let mut btw_rx = btw_rx;
     let mut redirect_rx = redirect_rx;
@@ -2719,6 +2840,26 @@ pub async fn run_agent_loop_streaming(
     let mut any_tools_executed = false;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
+
+    #[cfg(feature = "ainl-runtime-engine")]
+    if let Some(res) = try_consume_turn_via_ainl_runtime(
+        manifest,
+        &graph_memory,
+        session,
+        memory,
+        session_user_message_s,
+        hooks,
+        agent_id_str.as_str(),
+        compression_savings_pct,
+        compressed_input.clone(),
+        loop_t0,
+        &runtime_limits,
+        &orchestration_ctx,
+    )
+    .await
+    {
+        return res;
+    }
 
     let mut btw_rx = btw_rx;
     let mut redirect_rx = redirect_rx;
@@ -4788,6 +4929,87 @@ mod tests {
             serde_json::Value::Bool(true),
         );
         m
+    }
+
+    #[cfg(feature = "ainl-runtime-engine")]
+    #[tokio::test]
+    async fn test_agent_loop_uses_openfang_by_default() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        crate::ainl_runtime_bridge::test_hooks::reset_bridge_new_count();
+        static DRIVER_USED: AtomicBool = AtomicBool::new(false);
+
+        #[derive(Clone)]
+        struct CountingDriver;
+
+        #[async_trait]
+        impl LlmDriver for CountingDriver {
+            async fn complete(
+                &self,
+                _request: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                DRIVER_USED.store(true, Ordering::SeqCst);
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "ok".to_string(),
+                        provider_metadata: None,
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    tool_calls: vec![],
+                    usage: TokenUsage::default(),
+                })
+            }
+        }
+
+        let memory = openfang_memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let agent_id = openfang_types::agent::AgentId::new();
+        let mut session = openfang_memory::session::Session {
+            id: openfang_types::agent::SessionId::new(),
+            agent_id,
+            messages: Vec::new(),
+            context_window_tokens: 0,
+            label: None,
+        };
+        let mut manifest = test_manifest();
+        manifest.ainl_runtime_engine = false;
+        std::env::remove_var("AINL_RUNTIME_ENGINE");
+        let driver: Arc<dyn LlmDriver> = Arc::new(CountingDriver);
+
+        run_agent_loop(
+            &manifest,
+            "ping",
+            &mut session,
+            &memory,
+            driver,
+            &[],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            EffectiveRuntimeLimits::legacy_defaults(),
+            None,
+            None,
+        )
+        .await
+        .expect("loop");
+
+        assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 0);
+        assert!(DRIVER_USED.load(Ordering::SeqCst));
     }
 
     /// Mock driver that simulates: first call returns ToolUse with no text,

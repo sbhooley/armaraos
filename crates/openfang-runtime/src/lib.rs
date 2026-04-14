@@ -9,6 +9,8 @@ pub const USER_AGENT: &str = "openfang/0.3.48";
 
 pub mod a2a;
 pub mod agent_loop;
+#[cfg(feature = "ainl-runtime-engine")]
+pub mod ainl_runtime_bridge;
 pub mod ainl_graph_extractor_bridge;
 pub mod ainl_semantic_tagger_bridge;
 

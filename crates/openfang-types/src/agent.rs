@@ -531,6 +531,11 @@ pub struct AgentManifest {
     /// Tool blocklist — these tools are excluded (applied after allowlist).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tool_blocklist: Vec<String>,
+    /// When true (or `AINL_RUNTIME_ENGINE=1` with `openfang-runtime` built using feature
+    /// `ainl-runtime-engine`), route the turn through the optional **ainl-runtime** shim instead of
+    /// the built-in OpenFang LLM loop. Requires working AINL graph memory (`ainl_memory.db`).
+    #[serde(default)]
+    pub ainl_runtime_engine: bool,
 }
 
 fn default_true() -> bool {
@@ -565,6 +570,7 @@ impl Default for AgentManifest {
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            ainl_runtime_engine: false,
         }
     }
 }
@@ -851,6 +857,7 @@ mod tests {
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
+            ainl_runtime_engine: false,
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();

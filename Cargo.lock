@@ -4537,6 +4537,7 @@ dependencies = [
  "ainl-graph-extractor",
  "ainl-memory",
  "ainl-persona",
+ "ainl-runtime",
  "ainl-semantic-tagger",
  "anyhow",
  "async-trait",

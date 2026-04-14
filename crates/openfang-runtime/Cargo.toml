@@ -10,6 +10,7 @@ default = ["ainl-persona-evolution", "ainl-extractor"]
 ainl-persona-evolution = ["dep:ainl-persona"]
 ainl-tagger = ["dep:ainl-semantic-tagger"]
 ainl-extractor = ["dep:ainl-graph-extractor"]
+ainl-runtime-engine = ["dep:ainl-runtime"]
 
 [dependencies]
 openfang-types = { path = "../openfang-types" }
@@ -19,6 +20,9 @@ ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.5", optional = true }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5", optional = true }
 ainl-persona = { path = "../ainl-persona", version = "0.1.4", optional = true }
+# Workspace path keeps `ainl-memory` / `ainl-persona` in sync with `openfang-runtime` (crates.io
+# `ainl-runtime` alone would pull registry copies and fail to type-check). Version aligns with crates.io.
+ainl-runtime = { path = "../ainl-runtime", version = "0.3.5-alpha", optional = true, features = ["async"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
