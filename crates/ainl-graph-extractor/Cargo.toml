@@ -1,6 +1,6 @@
 [package]
 name = "ainl-graph-extractor"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,9 +8,9 @@ rust-version.workspace = true
 description = "Periodic graph extraction: semantic recurrence_count + persona evolution"
 
 [dependencies]
-ainl-memory = { path = "../ainl-memory", version = "0.1.6-alpha" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.2" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.1-alpha" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.7-alpha" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.3" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.2-alpha" }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
