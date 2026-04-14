@@ -109,6 +109,8 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 
 ## See also
 
+- [graph-memory-sync.md](graph-memory-sync.md) — Python **`AinlMemorySyncWriter`** → **`ainl_graph_memory_inbox.json`** (when **`ARMARAOS_AGENT_ID`**), envelope + CI
+- [ainl-runtime.md](ainl-runtime.md) — doc hub (links crate README, GraphPatch, OpenFang integration, verification)
 - **`crates/ainl-runtime/README.md`** — crate hub (`run_turn` / **`run_turn_async`**, session **`runtime_state`**, **`async`** feature, `cargo test -p ainl-runtime`)
 - [ainl-runtime GraphPatch + patches](ainl-runtime-graph-patch.md) — **`PatchAdapter`** / **`GraphPatchAdapter`**, semantic ranking migration, **`RuntimeStateNode`** persistence, crates.io version matrix
 - [ainl-runtime in OpenFang (optional)](ainl-runtime-integration.md) — feature **`ainl-runtime-engine`**, **`AinlRuntimeBridge`**, **`TurnOutcome`** mapping
