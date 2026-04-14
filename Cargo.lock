@@ -4532,6 +4532,7 @@ name = "openfang-runtime"
 version = "0.7.3"
 dependencies = [
  "ainl-memory",
+ "ainl-semantic-tagger",
  "anyhow",
  "async-trait",
  "base64 0.22.1",

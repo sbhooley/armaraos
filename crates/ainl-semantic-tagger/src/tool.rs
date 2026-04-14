@@ -25,7 +25,11 @@ fn map_tool_name(raw: &str) -> SemanticTag {
     let t = raw.trim();
     let l = t.to_ascii_lowercase();
 
-    let (value, confidence) = if l == "python_repl" || l == "python" || l.contains("python_repl") {
+    let (value, confidence) = if l == "python_repl"
+        || l == "python"
+        || l == "python3"
+        || l.contains("python_repl")
+    {
         ("python_repl", 0.85_f32)
     } else if l == "bash" || l == "shell" || l == "sh" || l.contains("shell") {
         ("bash", 0.85_f32)

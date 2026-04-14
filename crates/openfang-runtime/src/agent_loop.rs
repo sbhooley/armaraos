@@ -26,7 +26,7 @@ use openfang_types::message::{
 };
 use openfang_types::runtime_limits::EffectiveRuntimeLimits;
 use openfang_types::tool::{ToolCall, ToolDefinition};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1099,8 +1099,10 @@ pub async fn run_agent_loop(
 
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if let Some(ref gm) = graph_memory {
+                    let tools_for_episode =
+                        canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                     let episode_id = gm
-                        .record_turn(turn_tool_names.clone(), None, None)
+                        .record_turn(tools_for_episode, None, None)
                         .await
                         .unwrap_or_else(Uuid::new_v4);
                     let facts = crate::graph_extractor::extract_facts(
@@ -2848,8 +2850,10 @@ pub async fn run_agent_loop_streaming(
 
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if let Some(ref gm) = graph_memory {
+                    let tools_for_episode =
+                        canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                     let episode_id = gm
-                        .record_turn(turn_tool_names.clone(), None, None)
+                        .record_turn(tools_for_episode, None, None)
                         .await
                         .unwrap_or_else(Uuid::new_v4);
                     let facts = crate::graph_extractor::extract_facts(
@@ -4336,6 +4340,25 @@ pub fn deduplicate_tool_calls(response: &crate::llm_driver::CompletionResponse) 
     deduplicated
 }
 
+/// Normalize per-turn tool names via [`ainl_semantic_tagger::tag_tool_names`] for stable graph
+/// episode storage: plain lowercase slugs (for example `bash`), deduped in first-seen order.
+/// Does not use namespaced debug strings such as `tool:bash` — only each tag's `value` string.
+fn canonicalize_turn_tool_names_for_graph_storage(raw: &[String]) -> Vec<String> {
+    use ainl_semantic_tagger::{tag_tool_names, TagNamespace};
+    let tags = tag_tool_names(raw);
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for t in tags {
+        if t.namespace != TagNamespace::Tool {
+            continue;
+        }
+        if seen.insert(t.value.clone()) {
+            out.push(t.value);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4344,6 +4367,49 @@ mod tests {
     use openfang_types::runtime_limits::EffectiveRuntimeLimits;
     use openfang_types::tool::ToolCall;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn canonicalize_turn_tool_names_shell_aliases_to_single_bash() {
+        let raw = vec![
+            "bash".into(),
+            "Bash".into(),
+            "shell".into(),
+            "sh".into(),
+        ];
+        assert_eq!(
+            canonicalize_turn_tool_names_for_graph_storage(&raw),
+            vec!["bash".to_string()]
+        );
+    }
+
+    #[test]
+    fn canonicalize_turn_tool_names_python_and_python3_same_key() {
+        assert_eq!(
+            canonicalize_turn_tool_names_for_graph_storage(&["python".into(), "python3".into()]),
+            vec!["python_repl".to_string()]
+        );
+        assert_eq!(
+            canonicalize_turn_tool_names_for_graph_storage(&["python3".into(), "python".into()]),
+            vec!["python_repl".to_string()]
+        );
+    }
+
+    #[test]
+    fn canonicalize_turn_tool_names_distinct_tools_preserved() {
+        let raw = vec!["file_read".into(), "search_web".into()];
+        assert_eq!(
+            canonicalize_turn_tool_names_for_graph_storage(&raw),
+            vec!["file_read".to_string(), "search_web".to_string()]
+        );
+    }
+
+    #[test]
+    fn canonicalize_turn_tool_names_empty_ok() {
+        assert!(canonicalize_turn_tool_names_for_graph_storage(&[]).is_empty());
+        assert!(
+            canonicalize_turn_tool_names_for_graph_storage(&["".into(), "  ".into()]).is_empty()
+        );
+    }
 
     #[test]
     fn test_max_iterations_default_limits() {
