@@ -2,6 +2,13 @@
 
 All notable changes to **ainl-memory** are documented here. This crate follows semantic intent for alphas: minor bumps signal schema or API additions consumers should pin.
 
+## 0.1.8-alpha
+
+### Documentation
+
+- **README**: documentation map; **referential integrity** (FK + migration + `import_graph` repair flag + `validate_graph`); full **GraphQuery** method table; SQL vs `SnapshotEdge` naming; integration test pointers (`test_edge_migration`, `test_validate`, …).
+- **`src/store.rs`**: module-level docs already describe SQLite FK layers vs application checks vs repair import (see source).
+
 ## 0.1.4-alpha
 
 ### Schema
@@ -25,6 +32,7 @@ All notable changes to **ainl-memory** are documented here. This crate follows s
 ### Notes for downstream
 
 - **Publish order unchanged:** **ainl-memory** → **ainl-persona** → **ainl-graph-extractor** → **ainl-runtime** (see `scripts/publish-prep-ainl-crates.sh`).
+- **Pre-release bumps:** if you raise **`ainl-memory`**’s pre-release version, older **`^0.1.x-alpha`** requirements on **already-published** persona/extractor crates may block **`cargo publish`** for **ainl-runtime** until you ship **new** persona/extractor versions with aligned pins — see **`docs/ainl-runtime-graph-patch.md`** (*Pre-release versions and `cargo publish`*).
 - Call sites must pass the new `allow_dangling_edges` argument (typically `false`).
 
 ## 0.1.3-alpha

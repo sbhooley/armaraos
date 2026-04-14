@@ -15,6 +15,7 @@ Unlike systems that treat memory as a separate retrieval layer (RAG, vector stor
 
 | Topic | Where |
 |-------|--------|
+| Ecosystem narrative (non-normative) | [Graph-as-memory blog](https://ainativelang.com/blog/graph-as-memory-architecture-ainl) · prior-art timeline [`PRIOR_ART.md`](../../PRIOR_ART.md) |
 | Schema, FK migration, `import_graph` flag | **[CHANGELOG.md](CHANGELOG.md)** (`0.1.4-alpha`+) |
 | SQL-level integrity layers (FK, repair import, `validate_graph` scope) | **`src/store.rs`** module docs |
 | `GraphQuery` + free helpers (`recall_*`, `walk_from`, …) | **`src/query.rs`** module docs |
@@ -118,11 +119,11 @@ let internal = store.query("my-agent").subgraph_edges()?;
 ### Export / import snapshots
 
 ```rust
-use ainl_memory::{SqliteGraphStore, SNAPSHOT_SCHEMA_VERSION};
+use ainl_memory::SqliteGraphStore;
 
 let store = SqliteGraphStore::open(std::path::Path::new("memory.db"))?;
 let snapshot = store.export_graph("my-agent")?;
-assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
+// snapshot.schema_version is typically "1.0" (see SNAPSHOT_SCHEMA_VERSION).
 
 let mut fresh = SqliteGraphStore::open(std::path::Path::new("copy.db"))?;
 fresh.import_graph(&snapshot, false)?; // strict: FK on
@@ -184,6 +185,7 @@ Legacy rows may still carry JSON keys `last_extraction_turn`, `last_persona_prom
 
 ## Crate ecosystem
 
+- **Publishing** — order, dry-runs, and pre-release resolver pitfalls: **`scripts/publish-prep-ainl-crates.sh`**, **`docs/ainl-runtime-graph-patch.md`** (*Pre-release versions and `cargo publish`*).
 - **ainl-memory** — this crate (storage + query); published version is **`0.1.8-alpha`** on the workspace (aligns with **ainl-runtime** / **ainl-graph-extractor** pins — see crates.io and sibling `Cargo.toml` files).
 - **ainl-runtime** — agent turn execution, depends on ainl-memory (+ persona, extractor, semantic-tagger)
 - **ainl-persona** — persona evolution engine, depends on ainl-memory

@@ -39,7 +39,7 @@ It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AI
 
 ### Procedural patches (`PatchAdapter` + `GraphPatchAdapter`)
 
-- **[`PatchAdapter`] + [`AdapterRegistry`]** — label-keyed **`execute_patch(&PatchDispatchContext)`**; register hosts with **`AinlRuntime::register_adapter`**. **`PatchDispatchResult`** includes **`adapter_name`** / **`adapter_output`** when an adapter succeeds.
+- **[`PatchAdapter`] + [`AdapterRegistry`]** — label-keyed **`execute_patch(&PatchDispatchContext)`**; register hosts with **`AinlRuntime::register_adapter`** / inspect names with **`registered_adapters`**. **`PatchDispatchResult`**: **`adapter_output`** is **`Some`** only on successful **`execute_patch`**; **`adapter_name`** is set whenever an adapter ran (including on **`Err`**, which is logged; dispatch continues and fitness may still update).
 - **Reference [`GraphPatchAdapter`]** (`"graph_patch"`) — built-in fallback; returns a small JSON summary **`{ "label", "patch_version", "frame_keys" }`** (with declared-read safety checks). Does **not** compile or run AINL IR in Rust.
 - **[`PatchDispatchContext`]** — node + frame passed into **`execute_patch`**.
 - **Fallback dispatch** — if no adapter matches the procedural **label**, `run_turn` uses the registered **`graph_patch`** adapter when present (install with [`AinlRuntime::register_default_patch_adapters`]).
@@ -64,6 +64,11 @@ It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on
 **`compile_memory_context_for(None)`** no longer inherits previous episode text for semantic ranking; pass **`Some(user_message)`** if you want topic-aware ranking.
 
 [`compile_memory_context`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.AinlRuntime.html#method.compile_memory_context) still calls `compile_memory_context_for(None)` — that path now behaves like an **empty** user message (high-recurrence fallback for [`MemoryContext::relevant_semantic`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.MemoryContext.html#structfield.relevant_semantic)), not “reuse the last episode body.” [`run_turn`](https://docs.rs/ainl-runtime/latest/ainl_runtime/struct.AinlRuntime.html#method.run_turn) always passes the current turn’s `user_message` into memory compilation, so embedded turn pipelines keep topic-aware semantics without extra calls.
+
+## Episodic tools and episode identity
+
+- **Canonical `tools_invoked`** — Before SQLite persist, the runtime runs **`ainl_semantic_tagger::tag_tool_names`** on the turn’s tool strings and stores deduplicated, sorted canonical tool **values** (e.g. `bash`, `search_web`). Synonyms collapse where the tagger maps them. **`GraphQuery::episodes_with_tool`** should query those canonical names. See **[`docs/ainl-runtime.md`](../../docs/ainl-runtime.md)** (*Episodic episodes: canonical tool names*).
+- **Episode id** — The id exposed on the turn result is the **graph node `id`** for the episode row, not always **`EpisodicNode::turn_id`**. Use it for **`EMIT_TO`** edges and **`neighbors(...)`**. Hub: **[`docs/ainl-runtime.md`](../../docs/ainl-runtime.md)** (*Episode identity*).
 
 ## Optional Tokio API (`async` feature)
 

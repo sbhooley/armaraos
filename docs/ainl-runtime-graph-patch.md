@@ -71,6 +71,18 @@ Operational checklist: **`scripts/publish-prep-ainl-crates.sh`** (ordered dry-ru
 
 See **`crates/ainl-runtime/README.md`** and the **`ainl-runtime`** crate rustdoc (`MemoryContext`) for the same note.
 
+## Episodic `tools_invoked` (canonical on write)
+
+When **`AinlRuntime::run_turn`** / **`run_turn_async`** records an episode, **`TurnInput::tools_invoked`** is **not** stored verbatim. The runtime normalizes through **`ainl_semantic_tagger::tag_tool_names`**, persists canonical tool tag **values** only (deduplicated, sorted), and aligns the emit payload with that list. Downstream SQL that filters on **`tools_invoked`** (e.g. **`GraphQuery::episodes_with_tool`**) should use the **same** canonical strings.
+
+Full narrative and tests: **[ainl-runtime.md](ainl-runtime.md)** (*Episodic episodes: canonical tool names*).
+
+## Episode graph id vs episodic `turn_id`
+
+The episode identifier returned to hosts is the **`ainl_graph_nodes.id`** for the episode row. It may differ from **`EpisodicNode::turn_id`** inside the JSON payload. Edge APIs (**`EMIT_TO`**, **`neighbors`**) use the **node id**.
+
+See **[ainl-runtime.md](ainl-runtime.md)** (*Episode identity*).
+
 ## openfang-runtime embed (shipped)
 
 **`AinlRuntimeBridge`** (feature **`ainl-runtime-engine`**) implements the first three bullets in a **thin** form:

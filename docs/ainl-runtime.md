@@ -7,7 +7,8 @@ The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over t
 | Topic | Doc |
 |--------|-----|
 | API, **`run_turn`** / **`run_turn_async`**, **`TurnOutcome`**, delegation depth / **`AinlRuntimeError`**, session **`runtime_state`**, mutex vs Tokio | **`crates/ainl-runtime/README.md`** |
-| **`PatchAdapter`**, procedural rows, GraphPatch summaries, semantic ranking, crates.io alignment | **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** |
+| Episodic **`tools_invoked`** canonicalization, episode **node id** vs **`turn_id`**, **`EMIT_TO`**, direct **`EvolutionEngine`** vs extractor | **This page** (*Episodic tools*, *Episode identity*, *Persona evolution*) |
+| **`PatchAdapter`**, procedural rows, GraphPatch summaries, semantic ranking, crates.io alignment, **`cargo publish`** pre-release pitfalls | **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** |
 | Optional **`AinlRuntimeBridge`** in **`openfang-runtime`**, manifest / env | **[ainl-runtime-integration.md](ainl-runtime-integration.md)** |
 | Live daemon **`GraphMemoryWriter`**, node kinds, on-disk layout | **[graph-memory.md](graph-memory.md)** |
 | Post-turn persona evolution / **`AINL_PERSONA_EVOLUTION`** | **[persona-evolution.md](persona-evolution.md)** |
@@ -24,6 +25,49 @@ The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over t
 Both return **`Result<TurnOutcome, AinlRuntimeError>`** (**`Complete`** vs **`PartialSuccess`** with **`TurnWarning`** + **`TurnPhase`**).
 
 **Semantic ranking:** **`compile_memory_context_for(None)`** does not inherit the latest episode body for **`MemoryContext::relevant_semantic`**; pass **`Some(user_message)`** for topic-aware ranking. **`run_turn`** / **`run_turn_async`** pass the current turn text. Details: **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** (*Memory context / semantic ranking*).
+
+---
+
+## Episodic episodes: canonical tool names
+
+**Write path:** Before an episode row is persisted, raw **`TurnInput::tools_invoked`** strings are normalized with **`ainl_semantic_tagger::tag_tool_names`**. The JSON stored on the episode uses the tagger’s canonical **`TagNamespace::Tool`** **values** only (e.g. `bash`, `search_web`, `file_read`), **deduplicated** and **sorted** (deterministic order). Synonyms such as `shell`, `sh`, `Bash` collapse to the same canonical id where the tagger defines a mapping.
+
+- **Empty tool list** — the runtime still persists the sentinel **`["turn"]`** (same as the historical “no tools” path).
+- **Emit payload** — the JSON field **`tools_invoked`** in the per-turn emit payload matches what was written to the episode (not the pre-normalization host strings).
+- **Queries** — helpers like **`GraphQuery::episodes_with_tool`** match **exact** JSON equality on the stored array. There is **no** query-time synonym expansion; reliability comes from **write-time** canonicalization.
+
+**Tests (crate):** **`cargo test -p ainl-runtime --test test_engine`** (includes **`test_episode_tools_*`**).
+
+---
+
+## Episode identity: graph node id vs `turn_id`
+
+The identifier returned for a successfully recorded episode (e.g. on **`TurnResult`** / host mapping) is the **SQLite graph node primary key** — **`AinlMemoryNode::id`** for that episode row.
+
+It is **not** always equal to **`EpisodicNode::turn_id`** inside the payload (that field remains a separate correlation id). Use the **node id** when:
+
+- inserting **`EMIT_TO`** (or other) **edges** from the episode row,
+- calling **`GraphQuery::neighbors(episode_id, …)`**,
+- or any API that keys graph rows by **`id`**.
+
+---
+
+## Persona evolution: extractor vs direct `EvolutionEngine`
+
+**`EvolutionEngine`** lives in **`ainl-persona`**. **`AinlRuntime`** owns a **`GraphExtractorTask`**, which holds **`pub evolution_engine: EvolutionEngine`** — **one shared engine instance** per runtime.
+
+| Path | What runs |
+|------|-----------|
+| **Scheduled extraction** (`extraction_interval` / end of turn) | **`GraphExtractorTask::run_pass`**: semantic **`recurrence_count`** maintenance, graph-backed **`extract_signals`**, heuristic **`extract_pass`**, **`ingest_signals`**, persona snapshot **write**. Still the primary **automated** consolidation path. |
+| **Direct (host / admin / tests)** | **`AinlRuntime::evolution_engine`** / **`evolution_engine_mut`**, **`apply_evolution_signals`**, **`evolution_correction_tick`**, **`persist_evolution_snapshot`**, **`evolve_persona_from_graph_signals`** — same engine; **no** requirement to call **`run_pass`** first. **`evolve_persona_from_graph_signals`** is **`EvolutionEngine::evolve(store)`** (graph extract → ingest → write) **without** recurrence bumps or **`extract_pass`**. |
+
+**Constants:** import **`EVOLUTION_TRAIT_NAME`** (and **`AXIS_EVOLUTION_SNAPSHOT`**) from **`ainl-persona`** or **`ainl-graph-extractor`** re-exports — do not hard-code the trait string.
+
+**ArmaraOS / OpenFang:** if **`openfang-runtime`** still owns **`GraphMemoryWriter::run_persona_evolution_pass`** on the **same** `ainl_memory.db`, avoid **double-writer** conflicts; see **`crates/ainl-runtime/README.md`** (*Persona evolution and ArmaraOS*) and **`with_evolution_writes_enabled(false)`** when embedding.
+
+**Tests (crate):** **`cargo test -p ainl-runtime --test test_engine`** (manual ingest, **`correction_tick`**, graph **`evolve`**, scheduled **`run_pass`** regression); **`cargo test -p ainl-persona`**, **`cargo test -p ainl-graph-extractor`**.
+
+---
 
 ### Delegation depth and `AinlRuntimeError`
 
@@ -122,6 +166,9 @@ cargo test -p ainl-runtime --test test_delegation_depth
 
 # ExtractionReport → TurnPhase warning mapping
 cargo test -p ainl-runtime --test test_turn_phase_granularity
+
+# Episodic tool canonicalization, EMIT_TO, evolution direct path, patches (integration)
+cargo test -p ainl-runtime --test test_engine
 ```
 
 The **`test_async_runtime`** target uses **`required-features = ["async"]`** in **`crates/ainl-runtime/Cargo.toml`**, so **`cargo test --workspace`** skips it unless the workspace enables **`ainl-runtime/async`**. CI that must cover async turns should run **`cargo test -p ainl-runtime --features async`**.

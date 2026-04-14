@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # Publish-prep for AINL workspace crates that ship to crates.io.
 #
-# Prerequisite: **ainl-memory** must lead the train whenever its schema or public
-# API moves ahead of the last crates.io release (currently 0.1.2-alpha). Local
-# `EpisodicNode` additions (`user_message`, `assistant_response`) and any
-# extractor-facing fields require **0.1.3-alpha** (or newer) before publishing
-# **ainl-persona**, **ainl-graph-extractor**, or **ainl-runtime**.
+# Order (see also **docs/ainl-runtime-graph-patch.md** — *Pre-release versions*):
+#   **ainl-memory** → **ainl-persona** → **ainl-graph-extractor** → **ainl-runtime**
+# Optional: **ainl-semantic-tagger** when it changes (extractor/runtime pin it).
+#
+# Whenever **ainl-memory** bumps its **pre-release** line, published dependents that
+# still declare an older caret floor (e.g. **^0.1.3-alpha**) can prevent Cargo from
+# unifying with **^0.1.5-alpha** / **^0.1.8-alpha** on another edge — **cargo publish**
+# for **ainl-runtime** then fails until **new** persona / extractor **versions** are on
+# crates.io with aligned **ainl-memory** requirements.
 #
 # This script does NOT publish. It:
-#   1. Summarizes local vs published assumptions
+#   1. Prints workspace **ainl-memory** version from Cargo.toml (sanity)
 #   2. Verifies workspace members build
 #   3. Runs `cargo publish --dry-run` for **ainl-memory** (must succeed)
-#   4. Runs the same for downstream crates (expected to fail until the prior
-#      crate exists on crates.io at the pinned version — still useful to catch
-#      unrelated packaging errors once dependencies are live)
+#   4. Runs the same for downstream crates (may fail until the prior crate is
+#      published and indexed — still catches unrelated packaging errors)
 #
 # Typical extra flags: `--allow-dirty` when validating before commit.
 #
@@ -23,15 +26,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 echo "=============================================="
-echo " 1) Local ainl-memory vs crates.io baseline"
+echo " 1) Workspace ainl-memory version (sanity)"
 echo "=============================================="
-echo "Published on crates.io through: 0.1.2-alpha (per crates.io index / maintainer)."
-echo "Workspace package version:"
 grep '^version' crates/ainl-memory/Cargo.toml || true
 echo ""
-echo "Notable API/schema deltas since 0.1.2-alpha (see crates/ainl-memory/CHANGELOG.md):"
-echo "  - EpisodicNode: optional user_message, assistant_response (JSON optional)."
-echo "  - new_episode: initializes those fields to None."
+echo "Changelog + schema notes: crates/ainl-memory/CHANGELOG.md"
+echo "crates.io alignment table: docs/ainl-runtime-graph-patch.md"
 echo ""
 
 echo "=============================================="
@@ -46,7 +46,8 @@ echo "=============================================="
 echo "Exact publish commands (run for real after each step lands on crates.io):"
 echo ""
 echo "  cd \"\$REPO_ROOT\""
-echo "  cargo publish -p ainl-memory $@"
+echo "  cargo publish -p ainl-memory $@          # wait for index if downstream dry-run fails"
+echo "  cargo publish -p ainl-semantic-tagger $@ # when tagger API/version changed"
 echo "  cargo publish -p ainl-persona $@"
 echo "  cargo publish -p ainl-graph-extractor $@"
 echo "  cargo publish -p ainl-runtime $@"
@@ -67,8 +68,9 @@ for pkg in "${DOWNSTREAM[@]}"; do
     echo "OK: ${pkg} (dependencies already on crates.io at required versions)"
   else
     downstream_fail=1
-    echo "NOTE: ${pkg} dry-run failed — expected until ainl-memory 0.1.3-alpha (and any"
-    echo "      intermediate persona release) is published and indexed on crates.io."
+    echo "NOTE: ${pkg} dry-run failed — expected until prior crates in the chain are"
+    echo "      published and indexed (or fix pre-release version unification; see"
+    echo "      docs/ainl-runtime-graph-patch.md)."
   fi
 done
 
