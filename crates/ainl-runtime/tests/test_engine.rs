@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
-    AinlRuntime, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis, RawSignal,
-    RuntimeConfig, TurnHooks, TurnInput, TurnPhase, TurnStatus, EVOLUTION_TRAIT_NAME,
+    AinlRuntime, AinlRuntimeError, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis,
+    RawSignal, RuntimeConfig, TurnHooks, TurnInput, TurnPhase, TurnStatus, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -775,19 +775,20 @@ fn test_internal_depth_enforced() {
     assert_eq!(out1.turn_status(), TurnStatus::Ok);
     assert_eq!(rt.test_delegation_depth(), 0);
 
-    // Prime internal nesting to the configured ceiling before re-entry: next `run_turn` increments
-    // to 2, which exceeds `max_delegation_depth` of 1.
+    // Simulate one nested `run_turn` already on the stack: next entry sees depth >= max.
     rt.test_set_delegation_depth(1);
-    let out2 = rt
+    let err = rt
         .run_turn(TurnInput {
             user_message: "second".into(),
             tools_invoked: vec![],
             depth: 0,
             ..Default::default()
         })
-        .unwrap();
-    assert!(out2.is_complete());
-    assert_eq!(out2.turn_status(), TurnStatus::DepthLimitExceeded);
+        .unwrap_err();
+    assert_eq!(
+        err,
+        AinlRuntimeError::DelegationDepthExceeded { depth: 1, max: 1 }
+    );
     assert_eq!(rt.test_delegation_depth(), 1);
 }
 

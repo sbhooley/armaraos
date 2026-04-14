@@ -1,6 +1,6 @@
 # ainl-runtime
 
-**Alpha (0.3.0-alpha) — API subject to change.**
+**Alpha (0.3.2-alpha) — API subject to change.**
 
 `ainl-runtime` is the **Rust orchestration layer** for the unified AINL **graph memory** stack: it coordinates [`ainl-memory`](https://crates.io/crates/ainl-memory), [`ainl-persona`](https://crates.io/crates/ainl-persona)’s [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) (shared with [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)’s [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html)), and optional **post-turn extraction**, with a [`TurnHooks`] seam for hosts (e.g. OpenFang).
 
@@ -31,7 +31,7 @@ It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on
 
 ```toml
 [dependencies]
-ainl-runtime = "0.3.0-alpha"
+ainl-runtime = "0.3.2-alpha"
 ```
 
 ```rust
@@ -57,8 +57,14 @@ let out = rt.run_turn(TurnInput {
 ## `RuntimeConfig`
 
 - **`agent_id`**: `String` (empty disables graph extraction on [`RuntimeContext`]; required for [`AinlRuntime`] turns).
+- **`max_delegation_depth`**: max nested [`AinlRuntime::run_turn`] entries tracked internally (default `8`); exceeded depth returns [`AinlRuntimeError::DelegationDepthExceeded`] (not [`TurnInput::depth`], which is metadata only).
 - **`max_steps`**: cap for the exploratory BFS in `run_turn` (default `1000`).
 - **`extraction_interval`**: run `GraphExtractorTask::run_pass` every N turns (`0` = never).
+
+## `AinlRuntimeError` (hard failures from `run_turn`)
+
+- **`Message(String)`** — store / validation / config failures; use **`message_str()`** for a borrowed view, or **`From<String>`** / **`?`** when chaining.
+- **`DelegationDepthExceeded { depth, max }`** — nested `run_turn` past **`max_delegation_depth`**; use **`is_delegation_depth_exceeded()`** or **`delegation_depth_exceeded()`** instead of matching on `TurnStatus` (there is no soft depth outcome).
 
 ## Persona evolution and ArmaraOS (OpenFang)
 

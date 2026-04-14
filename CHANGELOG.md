@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Changed (workspace crates)
+
+- **`ainl-runtime` 0.3.2-alpha:** `AinlRuntimeError` is now an enum (`Message`, `DelegationDepthExceeded`). Nested `run_turn` beyond `RuntimeConfig::max_delegation_depth` returns `Err(DelegationDepthExceeded { depth, max })` instead of a completed turn with `TurnStatus::DepthLimitExceeded` (that status variant was removed). Migration: use `AinlRuntimeError::from(s)` / `?` for string errors; match or use `is_delegation_depth_exceeded`, `delegation_depth_exceeded`, and `message_str` helpers. Default `max_delegation_depth` is **8**. See **`crates/ainl-runtime/README.md`**.
+
 ## [0.7.3] - 2026-04-12
 
 ### Added

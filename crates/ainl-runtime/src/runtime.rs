@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use ainl_graph_extractor::GraphExtractorTask;
@@ -48,7 +50,8 @@ pub struct AinlRuntime {
     extractor: GraphExtractorTask,
     turn_count: u32,
     last_extraction_turn: u32,
-    delegation_depth: u32,
+    /// Current delegation depth for the active `run_turn` call chain (incremented per nested entry).
+    current_depth: Arc<AtomicU32>,
     hooks: Box<dyn TurnHooks>,
     /// When `false`, [`Self::persist_evolution_snapshot`] and [`Self::evolve_persona_from_graph_signals`]
     /// return [`Err`] immediately so this runtime does not compete with another evolution writer
@@ -98,7 +101,7 @@ impl AinlRuntime {
             config,
             turn_count: init_turn_count,
             last_extraction_turn: init_last_extraction_turn,
-            delegation_depth: 0,
+            current_depth: Arc::new(AtomicU32::new(0)),
             hooks: Box::new(NoOpHooks),
             evolution_writes_enabled: true,
             persona_cache: init_persona_cache,
@@ -131,12 +134,12 @@ impl AinlRuntime {
 
     #[doc(hidden)]
     pub fn test_delegation_depth(&self) -> u32 {
-        self.delegation_depth
+        self.current_depth.load(Ordering::SeqCst)
     }
 
     #[doc(hidden)]
     pub fn test_set_delegation_depth(&mut self, depth: u32) {
-        self.delegation_depth = depth;
+        self.current_depth.store(depth, Ordering::SeqCst);
     }
 
     #[doc(hidden)]
@@ -306,25 +309,19 @@ impl AinlRuntime {
 
     /// Full single-turn orchestration (no LLM / no IR parse).
     pub fn run_turn(&mut self, input: TurnInput) -> Result<TurnOutcome, AinlRuntimeError> {
-        self.delegation_depth += 1;
-        let rt_ptr = self as *mut Self;
-        // Safety: `rt_ptr` aliases `self` for the synchronous body of `run_turn` only; the defer runs on
-        // return before `self` is invalidated.
-        // `scopeguard::defer!` only supports expression statements; use `guard` for the same drop semantics.
-        let _depth_guard = scopeguard::guard((), |()| unsafe {
-            if (*rt_ptr).delegation_depth > 0 {
-                (*rt_ptr).delegation_depth -= 1;
-            }
+        let depth = self
+            .current_depth
+            .fetch_add(1, Ordering::SeqCst);
+        let cd = Arc::clone(&self.current_depth);
+        let _depth_guard = scopeguard::guard((), move |()| {
+            cd.fetch_sub(1, Ordering::SeqCst);
         });
 
-        if self.delegation_depth > self.config.max_delegation_depth {
-            let result = TurnResult {
-                status: TurnStatus::DepthLimitExceeded,
-                ..Default::default()
-            };
-            let outcome = TurnOutcome::Complete(result);
-            self.hooks.on_turn_complete(&outcome);
-            return Ok(outcome);
+        if depth >= self.config.max_delegation_depth {
+            return Err(AinlRuntimeError::DelegationDepthExceeded {
+                depth,
+                max: self.config.max_delegation_depth,
+            });
         }
 
         if !self.config.enable_graph_memory {
@@ -340,7 +337,7 @@ impl AinlRuntime {
         }
 
         if self.config.agent_id.is_empty() {
-            return Err(AinlRuntimeError(
+            return Err(AinlRuntimeError::Message(
                 "RuntimeConfig.agent_id must be set for run_turn".into(),
             ));
         }
@@ -366,7 +363,7 @@ impl AinlRuntime {
                     d.source_id, d.target_id, d.edge_type
                 ));
             }
-            return Err(AinlRuntimeError(msg));
+            return Err(AinlRuntimeError::Message(msg));
         }
 
         self.hooks

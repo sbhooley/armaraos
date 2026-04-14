@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 pub struct RuntimeConfig {
     /// Owning agent id (required for extraction, graph queries, and [`AinlRuntime`]).
     pub agent_id: String,
-    /// Maximum nested [`AinlRuntime::run_turn`] depth (internal `delegation_depth`); see [`TurnInput::depth`].
+    /// Maximum nested [`AinlRuntime::run_turn`] depth (internal counter); see [`TurnInput::depth`].
     pub max_delegation_depth: u32,
     pub enable_graph_memory: bool,
     /// Cap for the minimal BFS graph walk in [`AinlRuntime::run_turn`].
@@ -56,7 +56,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             agent_id: String::new(),
-            max_delegation_depth: 10,
+            max_delegation_depth: 8,
             enable_graph_memory: true,
             max_steps: 1000,
             extraction_interval: 10,
@@ -169,9 +169,25 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn ainl_runtime_error_helpers() {
+        let e = AinlRuntimeError::DelegationDepthExceeded { depth: 2, max: 8 };
+        assert!(e.is_delegation_depth_exceeded());
+        assert_eq!(e.delegation_depth_exceeded(), Some((2, 8)));
+        assert!(e.message_str().is_none());
+
+        let m = AinlRuntimeError::Message("graph validation failed".into());
+        assert!(!m.is_delegation_depth_exceeded());
+        assert!(m.delegation_depth_exceeded().is_none());
+        assert_eq!(m.message_str(), Some("graph validation failed"));
+
+        let from_str: AinlRuntimeError = "via from".to_string().into();
+        assert_eq!(from_str.message_str(), Some("via from"));
+    }
+
+    #[test]
     fn test_runtime_config_default() {
         let config = RuntimeConfig::default();
-        assert_eq!(config.max_delegation_depth, 10);
+        assert_eq!(config.max_delegation_depth, 8);
         assert!(config.enable_graph_memory);
         assert!(config.agent_id.is_empty());
         assert_eq!(config.max_steps, 1000);

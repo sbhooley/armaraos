@@ -19,11 +19,21 @@ pub const EMIT_TO_EDGE: &str = "EMIT_TO";
 
 /// Hard failure for [`crate::AinlRuntime::run_turn`] (store open, invalid graph, invalid compile input, etc.).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AinlRuntimeError(pub String);
+pub enum AinlRuntimeError {
+    /// Nested [`crate::AinlRuntime::run_turn`] exceeded [`crate::RuntimeConfig::max_delegation_depth`].
+    DelegationDepthExceeded { depth: u32, max: u32 },
+    Message(String),
+}
 
 impl fmt::Display for AinlRuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            AinlRuntimeError::DelegationDepthExceeded { depth, max } => write!(
+                f,
+                "delegation depth exceeded (depth={depth}, max={max})"
+            ),
+            AinlRuntimeError::Message(s) => f.write_str(s),
+        }
     }
 }
 
@@ -31,7 +41,32 @@ impl Error for AinlRuntimeError {}
 
 impl From<String> for AinlRuntimeError {
     fn from(s: String) -> Self {
-        Self(s)
+        Self::Message(s)
+    }
+}
+
+impl AinlRuntimeError {
+    /// Borrow the payload when this is a [`Self::Message`] error (graph validation, missing `agent_id`, etc.).
+    #[must_use]
+    pub fn message_str(&self) -> Option<&str> {
+        match self {
+            Self::Message(s) => Some(s.as_str()),
+            Self::DelegationDepthExceeded { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_delegation_depth_exceeded(&self) -> bool {
+        matches!(self, Self::DelegationDepthExceeded { .. })
+    }
+
+    /// If this is [`Self::DelegationDepthExceeded`], returns `(depth, max)`.
+    #[must_use]
+    pub fn delegation_depth_exceeded(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::DelegationDepthExceeded { depth, max } => Some((*depth, *max)),
+            Self::Message(_) => None,
+        }
     }
 }
 
@@ -154,7 +189,7 @@ pub struct TurnInput {
     pub user_message: String,
     pub tools_invoked: Vec<String>,
     pub trace_event: Option<serde_json::Value>,
-    /// Caller-supplied depth hint. Not used for enforcement — internal `delegation_depth` is authoritative.
+    /// Caller-supplied depth hint for metadata/logging only — enforcement uses internal [`crate::AinlRuntime`] depth.
     pub depth: u32,
     /// Frame variables required by procedural `declared_reads` during patch dispatch.
     pub frame: HashMap<String, serde_json::Value>,
@@ -203,11 +238,10 @@ pub struct TurnWarning {
     pub error: String,
 }
 
-/// Soft outcome for depth / step caps / disabled graph (not store write failures — those become [`TurnWarning`]).
+/// Soft outcome for step caps / disabled graph (not store write failures — those become [`TurnWarning`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnStatus {
     Ok,
-    DepthLimitExceeded,
     StepLimitExceeded {
         steps_executed: u32,
     },

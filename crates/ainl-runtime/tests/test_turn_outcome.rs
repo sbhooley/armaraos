@@ -178,7 +178,10 @@ fn test_hard_store_open_failure_still_returns_err() {
             ..Default::default()
         })
         .unwrap_err();
-    let AinlRuntimeError(msg) = err;
+    let msg = match err {
+        AinlRuntimeError::Message(m) => m,
+        other => panic!("expected Message error, got {other:?}"),
+    };
     assert!(
         msg.contains("graph validation failed before turn"),
         "unexpected: {msg}"
