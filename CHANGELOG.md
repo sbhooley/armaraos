@@ -11,11 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/ainl-runtime.md`** — hub table + **Delegation depth and `AinlRuntimeError`**: internal counter, **`TurnInput::depth`** metadata only, removed **`TurnStatus::DepthLimitExceeded`**, helper methods, **`test_delegation_depth`** command; cross-link to graph-patch doc.
+- **`docs/ainl-runtime-graph-patch.md`** — **Delegation depth and hard errors** subsection (sync/async, **`AinlRuntimeError`**, tests).
+- **`docs/ainl-runtime-integration.md`** — delegation cap row expanded; **`map_ainl_turn_outcome`** warnings clarify depth vs **`TurnStatus`**; troubleshooting covers **`DelegationDepthExceeded`**.
+- **`docs/graph-memory.md`** — optional **`ainl-runtime`** paragraph notes internal **`max_delegation_depth`** enforcement.
+- **`docs/README.md`** — doc index rows for **`ainl-runtime.md`** / **`ainl-runtime-graph-patch.md`** mention delegation depth and hard errors.
 - **`crates/ainl-memory/README.md`** — fifth memory family (**`RuntimeStateNode`** / `runtime_state`), **`read_runtime_state` / `write_runtime_state`** on **`GraphMemory`** + **`GraphQuery`**, legacy JSON key compatibility; episodic / semantic **`tags`** on exported nodes.
-- **`crates/ainl-runtime/README.md`** — session persistence: DB location, **`persona_snapshot_json`**, **`TurnPhase::RuntimeStatePersist`**, test command for **`test_session_persistence`**; documentation map and async / error headings.
-- **`docs/ainl-runtime.md`** — hub: *Where to read next*, **`RuntimeStateNode`** + **`ExtractionReport`**, **`run_turn` / `run_turn_async`**, **`async`**, Mutex vs Tokio, hooks, verification (**`test_session_persistence`**) + **`required-features`**, embedding caveats.
-- **`docs/ainl-runtime-graph-patch.md`** — **`RuntimeStateNode`** / **`TurnPhase::RuntimeStatePersist`**; cross-links **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**, **`crates/ainl-runtime/README.md`**.
-- **`docs/ainl-runtime-integration.md`** — routed-turn table, WAL / **`runtime_state`**, quick reference for default-loop graph env vars (separate from **`ainl-runtime-engine`**).
+- **`crates/ainl-runtime/README.md`** — session persistence: DB location, **`persona_snapshot_json`**, **`TurnPhase::RuntimeStatePersist`**, test command for **`test_session_persistence`**; documentation map; **`TurnPhase`** vs **`ExtractionReport`** slot mapping; **`run_graph_extraction_pass`** **Result** semantics; async / delegation headings.
+- **`docs/ainl-runtime.md`** — hub: *Where to read next*, **`RuntimeStateNode`** + **`ExtractionReport`**, **`run_turn` / `run_turn_async`**, **`async`**, Mutex vs Tokio, hooks; delegation / **`AinlRuntimeError`** / **`test_delegation_depth`**; verification (**`test_session_persistence`**) + **`required-features`**, embedding caveats.
+- **`docs/ainl-runtime-graph-patch.md`** — **`RuntimeStateNode`** / **`TurnPhase::RuntimeStatePersist`**; **Delegation depth and hard errors** subsection; cross-links **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**, **`crates/ainl-runtime/README.md`**.
+- **`docs/ainl-runtime-integration.md`** — routed-turn table (delegation cap vs **`TurnInput::depth`**), WAL / **`runtime_state`**, default-loop graph env vars; troubleshooting / **`map_ainl_turn_outcome`** notes for **`DelegationDepthExceeded`**.
 - **`docs/graph-memory.md`** — **`runtime_state`** when **`AinlRuntime`** shares **`ainl_memory.db`**; **`run_persona_evolution_pass`** / **`ExtractionReport`**; **`AINL_EXTRACTOR_ENABLED`** vs **`AINL_TAGGER_ENABLED`** (**only** literal **`1`**) vs **`AINL_PERSONA_EVOLUTION`**; EndTurn write table; default vs **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`**; developer map; **See also** cross-links.
 - **`docs/data-directory.md`** — **`ainl_memory.db`** (**`runtime_state`**) and **`ainl_graph_memory_export.json`** / **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`**.
 - **`docs/persona-evolution.md`** — evolution pass return type / stub wording; related-docs and operator links to graph-memory env semantics and **`openfang-runtime/README.md`**.

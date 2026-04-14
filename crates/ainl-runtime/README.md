@@ -12,7 +12,14 @@ It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AI
 
 ### Turn outcomes, warnings, and phases
 
-- **`run_turn` / `run_turn_async`** return **`Result<TurnOutcome, AinlRuntimeError>`** — not a bare `TurnResult`. Use **`TurnOutcome::Complete`** vs **`PartialSuccess`** (non-fatal write failures still return a full **`TurnResult`** plus **`Vec<TurnWarning>`** tagged with **`TurnPhase`** such as extraction, fitness write-back, or runtime state persist).
+- **`run_turn` / `run_turn_async`** return **`Result<TurnOutcome, AinlRuntimeError>`** — not a bare `TurnResult`. Use **`TurnOutcome::Complete`** vs **`PartialSuccess`** (non-fatal write failures still return a full **`TurnResult`** plus **`Vec<TurnWarning>`** tagged with **`TurnPhase`**).
+- **`TurnPhase`** (exported at crate root; see rustdoc) covers episode edges, fitness write-back, **granular graph extraction**, export refresh, and session row persist:
+  - **`EpisodeWrite`**, **`FitnessWriteBack`**, **`ExtractionPass`**, **`PatternPersistence`**, **`PersonaEvolution`**, **`ExportRefresh`**, **`RuntimeStatePersist`**
+- When the scheduled **`GraphExtractorTask::run_pass`** runs (`extraction_interval` cadence), **`ainl_graph_extractor::ExtractionReport`** fields map to warnings as:
+  - **`extract_error`** → **`TurnPhase::ExtractionPass`**
+  - **`pattern_error`** → **`TurnPhase::PatternPersistence`**
+  - **`persona_error`** → **`TurnPhase::PersonaEvolution`**
+  so **`TurnOutcome::PartialSuccess`** can carry **multiple** extraction-related warnings in one turn. The report is still attached to **`TurnResult::extraction_report`** when the pass ran (see tests **`test_turn_phase_granularity`**).
 
 ### Delegation depth
 
@@ -48,7 +55,7 @@ ArmaraOS integration docs (repo root): **[`docs/ainl-runtime-graph-patch.md`](..
 - **Persona evolution (direct)** — [`AinlRuntime::evolution_engine`] / [`AinlRuntime::evolution_engine_mut`], [`AinlRuntime::apply_evolution_signals`], [`AinlRuntime::evolution_correction_tick`], [`AinlRuntime::persist_evolution_snapshot`], [`AinlRuntime::evolve_persona_from_graph_signals`] (`EvolutionEngine` lives in **ainl-persona**; the extractor is an additional signal source, not a hard gate).
 - **Boot** — [`AinlRuntime::load_artifact`] → [`AinlGraphArtifact`] (`export_graph` + `validate_graph`; fails on dangling edges).
 - **Turn pipeline** — [`AinlRuntime::run_turn`]: validate subgraph, compile persona lines from persona nodes, [`compile_memory_context`], **procedural patch dispatch** (declared-read gating + fitness EMA), record an episodic node (user message + tools), [`TurnHooks::on_emit`] for `EMIT_TO` edges, run extractor every `extraction_interval` turns.
-- **Legacy API** — [`RuntimeContext`] + `record_*` + [`RuntimeContext::run_graph_extraction_pass`] unchanged for light callers.
+- **Legacy API** — [`RuntimeContext`] + `record_*` + [`RuntimeContext::run_graph_extraction_pass`] returns **`Result<ExtractionReport, String>`** for config/memory errors only; the inner extractor still returns a report (per-phase errors live on **`ExtractionReport`**, use **`has_errors()`**).
 
 It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutcome`] / [`MemoryContext`] / patch adapter JSON.
 

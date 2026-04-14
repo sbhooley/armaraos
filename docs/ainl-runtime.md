@@ -6,7 +6,7 @@ The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over t
 
 | Topic | Doc |
 |--------|-----|
-| API, **`run_turn`** / **`run_turn_async`**, **`TurnOutcome`**, session **`runtime_state`**, mutex vs Tokio | **`crates/ainl-runtime/README.md`** |
+| API, **`run_turn`** / **`run_turn_async`**, **`TurnOutcome`**, delegation depth / **`AinlRuntimeError`**, session **`runtime_state`**, mutex vs Tokio | **`crates/ainl-runtime/README.md`** |
 | **`PatchAdapter`**, procedural rows, GraphPatch summaries, semantic ranking, crates.io alignment | **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** |
 | Optional **`AinlRuntimeBridge`** in **`openfang-runtime`**, manifest / env | **[ainl-runtime-integration.md](ainl-runtime-integration.md)** |
 | Live daemon **`GraphMemoryWriter`**, node kinds, on-disk layout | **[graph-memory.md](graph-memory.md)** |
@@ -21,9 +21,19 @@ The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over t
 | **`AinlRuntime::run_turn`** | Synchronous single-turn pipeline: validate subgraph, compile **`MemoryContext`**, dispatch procedural patches via **`PatchAdapter`**, record episodes, optional **`GraphExtractorTask::run_pass`**, sync **`TurnHooks`**. |
 | **`AinlRuntime::run_turn_async`** | Same semantics off the Tokio async executor: enable crate feature **`async`**, run SQLite-heavy work on **`tokio::task::spawn_blocking`**, optional **`TurnHooksAsync`**. |
 
-Both return **`Result<TurnOutcome, AinlRuntimeError>`** (**`Complete`** vs **`PartialSuccess`** with **`TurnWarning`** + **`TurnPhase`**). **`RuntimeConfig::max_delegation_depth`** applies to nested **`run_turn`** / **`run_turn_async`** the same way.
+Both return **`Result<TurnOutcome, AinlRuntimeError>`** (**`Complete`** vs **`PartialSuccess`** with **`TurnWarning`** + **`TurnPhase`**).
 
 **Semantic ranking:** **`compile_memory_context_for(None)`** does not inherit the latest episode body for **`MemoryContext::relevant_semantic`**; pass **`Some(user_message)`** for topic-aware ranking. **`run_turn`** / **`run_turn_async`** pass the current turn text. Details: **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** (*Memory context / semantic ranking*).
+
+### Delegation depth and `AinlRuntimeError`
+
+- **Nested turns** — each entry to **`run_turn`** or **`run_turn_async`** bumps an **internal** counter (`Arc<AtomicU32>`); it decrements when the call returns, including on **`Err`**. **`RuntimeConfig::max_delegation_depth`** (default **8**) limits how many nested entries may be active at once.
+- **Not caller-supplied** — **`TurnInput::depth`** is **metadata / logging only** and does **not** bypass enforcement.
+- **Hard error** — exceeding the cap returns **`Err(AinlRuntimeError::DelegationDepthExceeded { depth, max })`**. There is **no** **`TurnStatus::DepthLimitExceeded`** soft outcome (that variant was removed).
+- **Other failures** — graph validation, empty **`agent_id`**, etc. use **`AinlRuntimeError::Message`**; **`From<String>`** / **`?`** still apply for those. Helpers without exhaustive **`match`**: **`message_str()`**, **`is_delegation_depth_exceeded()`**, **`delegation_depth_exceeded()`** (see **`crates/ainl-runtime/README.md`** — *`AinlRuntimeError` (hard failures from `run_turn`)*).
+- **Tests** — **`cargo test -p ainl-runtime --test test_delegation_depth`**.
+
+More context for embedders and the GraphPatch story: **[ainl-runtime-graph-patch.md](ainl-runtime-graph-patch.md)** (*Delegation depth and hard errors*).
 
 ---
 
@@ -35,7 +45,15 @@ Both return **`Result<TurnOutcome, AinlRuntimeError>`** (**`Complete`** vs **`Pa
 
 ## Persona evolution pass (`ExtractionReport`)
 
-**`ainl-graph-extractor`** **`GraphExtractorTask::run_pass`** returns **`ExtractionReport`** (per-phase errors, **`has_errors`**). **`openfang-runtime`** **`GraphMemoryWriter::run_persona_evolution_pass`** surfaces the same shape for logging and tests. See **`crates/ainl-graph-extractor`** crate docs and **[persona-evolution.md](persona-evolution.md)**.
+**`ainl-graph-extractor`** **`GraphExtractorTask::run_pass`** returns **`ExtractionReport`** (not `Result`): merged signals, counters, and independent error slots **`extract_error`**, **`pattern_error`**, **`persona_error`**. Use **`has_errors()`** as the single “pass failed” guard.
+
+| Report field | Meaning (extractor) | **`AinlRuntime::run_turn`** maps to |
+|----------------|----------------------|--------------------------------------|
+| **`extract_error`** | Graph / heuristic collect or persona-row probe | **`TurnPhase::ExtractionPass`** → **`TurnWarning`** |
+| **`pattern_error`** | Recurrence update or episode tag flush | **`TurnPhase::PatternPersistence`** |
+| **`persona_error`** | Evolution **`write_persona_node`** | **`TurnPhase::PersonaEvolution`** |
+
+**`openfang-runtime`** **`GraphMemoryWriter::run_persona_evolution_pass`** returns the same struct and emits one **`warn!`** per populated slot (cold-path correction writes merge into **`persona_error`**). See **`crates/ainl-graph-extractor/README.md`**, **[persona-evolution.md](persona-evolution.md)**, and **`crates/ainl-runtime/README.md`** (*Turn outcomes*).
 
 ---
 
@@ -98,6 +116,9 @@ cargo clippy -p ainl-runtime --all-targets --features async -- -D warnings
 
 # Session persistence integration test (explicit test target)
 cargo test -p ainl-runtime --test test_session_persistence
+
+# ExtractionReport → TurnPhase warning mapping
+cargo test -p ainl-runtime --test test_turn_phase_granularity
 ```
 
 The **`test_async_runtime`** target uses **`required-features = ["async"]`** in **`crates/ainl-runtime/Cargo.toml`**, so **`cargo test --workspace`** skips it unless the workspace enables **`ainl-runtime/async`**. CI that must cover async turns should run **`cargo test -p ainl-runtime --features async`**.

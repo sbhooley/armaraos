@@ -18,6 +18,12 @@ This document is the **host-facing bridge** between ArmaraOS’s SQLite graph me
 
 For Tokio embedders, **`ainl-runtime`** can offload SQLite-heavy work with **`AinlRuntime::run_turn_async`** (`features = ["async"]`). Graph memory is guarded by **`std::sync::Mutex`** inside **`Arc`**, not **`tokio::sync::Mutex`**, so **`AinlRuntime::new`** and short borrows like **`sqlite_store()`** remain safe on any thread (including Tokio workers used in **`#[tokio::test]`**); see **`crates/ainl-runtime/README.md`**.
 
+### Delegation depth and hard errors
+
+Nested **`run_turn`** / **`run_turn_async`** calls share an **internal** depth counter (not **`TurnInput::depth`**, which is metadata only). Past **`RuntimeConfig::max_delegation_depth`** (default **8**), the runtime returns **`Err(AinlRuntimeError::DelegationDepthExceeded { depth, max })`**. String-shaped failures use **`AinlRuntimeError::Message`**; use **`message_str()`**, **`is_delegation_depth_exceeded()`**, and **`delegation_depth_exceeded()`** for partial matching. **`TurnStatus`** no longer carries a depth-limit variant — depth is a **hard** error, not a completed turn with a status flag.
+
+Hub overview and verification: **[ainl-runtime.md](ainl-runtime.md)**; crate README: **`crates/ainl-runtime/README.md`**; tests: **`cargo test -p ainl-runtime --test test_delegation_depth`**.
+
 ## Where patches come from
 
 `MemoryContext.active_patches` is `Vec<AinlMemoryNode>` where each node is `AinlNodeType::Procedural` with a [`ProceduralNode`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-memory/src/node.rs) payload: `label` / `pattern_name`, `patch_version`, `declared_reads`, `fitness`, `retired`, `compiled_graph` (`Vec<u8>`), `procedure_type`, etc. The same JSON shape is what Python `ainl_graph_memory` uses for procedural / patch-style rows at a higher layer.

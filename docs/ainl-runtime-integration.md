@@ -21,7 +21,7 @@ The built-in OpenFang agent loop remains the **default**. Unless the Cargo featu
 | **Graph DB** | Same per-agent `ainl_memory.db` as `GraphMemoryWriter` (second SQLite connection; WAL-safe). **`AinlRuntime`** may upsert a **`runtime_state`** node (session counters + optional persona snapshot JSON) on each completed turn — see **`crates/ainl-runtime/README.md`** (*Session persistence*). |
 | **Default agent loop graph toggles** | Unrelated to **`ainl-runtime-engine`** — the built-in loop uses **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, and export path **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** as documented in **[graph-memory.md](graph-memory.md)** and **`crates/openfang-runtime/README.md`**. |
 | **Evolution writes** | Bridge uses `AinlRuntime::with_evolution_writes_enabled(false)` so OpenFang keeps owning evolution row writes |
-| **Delegation cap** | `AinlRuntimeBridge::with_delegation_cap(..., runtime_limits.max_agent_call_depth)` |
+| **Delegation cap** | `AinlRuntimeBridge::with_delegation_cap(..., runtime_limits.max_agent_call_depth)` wires **`RuntimeConfig::max_delegation_depth`**. Enforcement is **internal** on each nested **`run_turn`** / **`run_turn_async`**; **`TurnInput::depth`** does not raise the cap. Over limit → **`Err(AinlRuntimeError::DelegationDepthExceeded)`** (see **`crates/ainl-runtime/README.md`**, **[ainl-runtime.md](ainl-runtime.md)**). |
 | **Tests** | `cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime test_agent_loop_uses_openfang_by_default` |
 
 ---
@@ -110,7 +110,7 @@ The bridge does **not** emit the same internal events as an LLM **`StopReason::E
 | **`delegation_to`** | From host **`TurnContext`** (episode rows from **ainl-runtime** still use `delegation_to: None` internally) |
 | **`cost_estimate`** | Always **`None`** — no token meter on this path |
 
-**Warnings:** `map_ainl_turn_outcome` **`warn!`**s for **MemoryContext** slices, **`extraction_report`**, **`TurnWarning`**, non-OK **`TurnStatus`**, and patch **`adapter_output`** blobs that do not yet have OpenFang equivalents.
+**Warnings:** `map_ainl_turn_outcome` **`warn!`**s for **MemoryContext** slices, **`extraction_report`**, **`TurnWarning`**, non-OK **`TurnStatus`** (e.g. **`StepLimitExceeded`**, **`GraphMemoryDisabled`** — **not** delegation depth; depth over the cap fails **`run_turn`** earlier as **`AinlRuntimeError::DelegationDepthExceeded`**), and patch **`adapter_output`** blobs that do not yet have OpenFang equivalents.
 
 ---
 
@@ -155,7 +155,7 @@ Until then, use this path only for **experimental graph-first** agents that do n
 |---------|----------------|
 | Path never triggers | Feature not enabled on **`openfang-runtime`**, or neither manifest flag nor `AINL_RUNTIME_ENGINE=1`, or graph memory failed to open. |
 | Falls back after “failed to construct bridge” | `try_lock` on `GraphMemoryWriter` failed (rare), or `SqliteGraphStore::open` failed — check paths and permissions. |
-| Falls back after `run_turn failed` | Graph validation failed (e.g. dangling edges), empty `agent_id`, or **ainl-runtime** hard error — see logs with `error =`. |
+| Falls back after `run_turn failed` | Graph validation failed (e.g. dangling edges), empty `agent_id`, **`AinlRuntimeError::DelegationDepthExceeded`** (too many nested **`run_turn`** entries vs **`max_delegation_depth`**), or other **`AinlRuntimeError::Message`** — see logs with `error =`. |
 | Duplicate / confusing persona rows | Do not enable **`evolution_writes_enabled`** on embedded **ainl-runtime** without coordinating with OpenFang’s persona pass (bridge keeps it **false**). |
 
 ---
