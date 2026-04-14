@@ -56,7 +56,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
-scopeguard = "1"
+scopeguard = { workspace = true }
 chrono = { workspace = true }
 ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
 ainl-persona = { path = "../ainl-persona", version = "0.1.3" }

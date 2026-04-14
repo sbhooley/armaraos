@@ -8,10 +8,30 @@ It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AI
 
 ## What v0.3 provides (beyond v0.2)
 
-- **Reference [`GraphPatchAdapter`]** (`"graph_patch"`) — normalizes each dispatched procedural patch into a JSON **dispatch envelope** (`kind: graph_patch_dispatch`, label, node id, `declared_reads`, `compiled_graph` size, optional UTF-8 preview, frame keys). Does **not** compile or run AINL IR in Rust.
-- **[`PatchDispatchContext`]** — passed to [`PatchAdapter::execute_patch`]; default impl bridges to legacy [`PatchAdapter::execute`].
-- **Fallback dispatch** — if no adapter is registered under the procedural **label**, `run_turn` tries the `graph_patch` adapter when present (install with [`AinlRuntime::register_default_patch_adapters`]).
-- **Optional host hook** — [`GraphPatchAdapter::with_host`] + [`GraphPatchHostDispatch`] for forwarding envelopes to another runtime (e.g. Python GraphPatch) without claiming parity.
+### Turn outcomes, warnings, and phases
+
+- **`run_turn` / `run_turn_async`** return **`Result<TurnOutcome, AinlRuntimeError>`** — not a bare `TurnResult`. Use **`TurnOutcome::Complete`** vs **`PartialSuccess`** (non-fatal write failures still return a full **`TurnResult`** plus **`Vec<TurnWarning>`** tagged with **`TurnPhase`** such as extraction, fitness write-back, or runtime state persist).
+
+### Delegation depth
+
+- **Internal depth guard** — nested **`run_turn`** calls increment a counter; beyond **`RuntimeConfig::max_delegation_depth`** you get **`AinlRuntimeError::DelegationDepthExceeded`** (hard error). **`TurnInput::depth`** remains metadata for logging only.
+
+### Session persistence (`RuntimeStateNode`)
+
+- **Turn counter + cadence** — completed turns persist **`turn_count`**, **`last_extraction_at_turn`**, and an optional **persona prompt cache** hint so cold starts can restore extraction rhythm and skip redundant persona SQL reads when the cache is still valid.
+
+### Topic relevance (`MemoryContext::relevant_semantic`)
+
+- **Ranking** — when you pass a non-empty message into **`compile_memory_context_for(Some(...))`** or use **`run_turn`** (which always passes the current user text), **`relevant_semantic`** is ordered with **`ainl_semantic_tagger::infer_topic_tags`** overlap on each node’s **`topic_cluster` / `topic:` tags**, with **`recurrence_count`** as a tiebreaker; empty text or no inferred topic tags falls back to high-recurrence semantic selection. Crate re-exports **`infer_topic_tags`** for tests and tooling.
+- **Migration** — see **Memory context / semantic ranking** below: **`compile_memory_context_for(None)`** does **not** reuse the latest episode body for ranking.
+
+### Procedural patches (`PatchAdapter` + `GraphPatchAdapter`)
+
+- **[`PatchAdapter`] + [`AdapterRegistry`]** — label-keyed **`execute_patch(&PatchDispatchContext)`**; register hosts with **`AinlRuntime::register_adapter`**. **`PatchDispatchResult`** includes **`adapter_name`** / **`adapter_output`** when an adapter succeeds.
+- **Reference [`GraphPatchAdapter`]** (`"graph_patch"`) — built-in fallback; returns a small JSON summary **`{ "label", "patch_version", "frame_keys" }`** (with declared-read safety checks). Does **not** compile or run AINL IR in Rust.
+- **[`PatchDispatchContext`]** — node + frame passed into **`execute_patch`**.
+- **Fallback dispatch** — if no adapter matches the procedural **label**, `run_turn` uses the registered **`graph_patch`** adapter when present (install with [`AinlRuntime::register_default_patch_adapters`]).
+- **Optional host hook** — [`GraphPatchAdapter::with_host`] + [`GraphPatchHostDispatch`] forwards that same summary JSON to another runtime (e.g. Python GraphPatch).
 
 **Limits (honest):** Rust GraphPatch support is **host-dispatch / extraction only**. Python-side GraphPatch (full `memory.patch`, IR promotion, overwrite guards, engine integration) remains the rich path until a future convergence milestone.
 
@@ -25,7 +45,7 @@ ArmaraOS integration story (openfang vs ainl-runtime): see **[`docs/ainl-runtime
 - **Turn pipeline** — [`AinlRuntime::run_turn`]: validate subgraph, compile persona lines from persona nodes, [`compile_memory_context`], **procedural patch dispatch** (declared-read gating + fitness EMA), record an episodic node (user message + tools), [`TurnHooks::on_emit`] for `EMIT_TO` edges, run extractor every `extraction_interval` turns.
 - **Legacy API** — [`RuntimeContext`] + `record_*` + [`RuntimeContext::run_graph_extraction_pass`] unchanged for light callers.
 
-It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`] / patch envelopes.
+It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutcome`] / [`MemoryContext`] / patch adapter JSON.
 
 ## Memory context / semantic ranking (migration)
 
