@@ -224,10 +224,10 @@ ArmaraOS maintains API compatibility with OpenFang:
 | openfang-kernel | 2 | Agent lifecycle, orchestration tracing | — |
 | openfang-api | 2 | HTTP API with dashboard enhancements | — |
 | ainl-memory | 3 | Graph-memory substrate (standalone); SQLite `GraphMemory` | **Integrated** — primary graph store for `GraphMemoryWriter` |
-| ainl-persona | 3 | Persona model + evolution APIs (`EvolutionEngine`, etc.) | **Partial** — persona **traits are read** from `PersonaNode` data in `ainl-memory` and merged into the system prompt in `agent_loop.rs`; **`EvolutionEngine` / trait evolution** is **not** wired into the daemon loop yet |
-| ainl-graph-extractor | 3 | Structured graph extraction (published / workspace crate) | **Not integrated** — `openfang-runtime` uses local **`graph_extractor.rs`** (regex heuristic) instead |
-| ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Not integrated** |
-| ainl-runtime | 3 | Standalone AINL execution stack (workspace + publish target); reference GraphPatch envelope + host hook (`GraphPatchAdapter`); integration notes in `docs/ainl-runtime-graph-patch.md` | **Not integrated** — convergence with `openfang-runtime` is **roadmap** |
+| ainl-persona | 3 | Persona model + evolution APIs (`EvolutionEngine`, etc.) | **Integrated** — feature `ainl-persona-evolution` (**default ON**); post-turn evolution + prompt merge in `agent_loop.rs` / `graph_memory_writer.rs` |
+| ainl-graph-extractor | 3 | Structured graph extraction (published / workspace crate) | **Integrated** — feature `ainl-extractor` (**default ON**); `ainl_graph_extractor_bridge.rs` + `graph_extractor.rs` fallback; runtime gate `AINL_EXTRACTOR_ENABLED` |
+| ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Integrated** — feature `ainl-tagger` (**default ON**); `ainl_semantic_tagger_bridge.rs`; runtime gate `AINL_TAGGER_ENABLED` |
+| ainl-runtime | 3 | Standalone AINL execution stack (workspace + publish target); reference GraphPatch envelope + host hook (`GraphPatchAdapter`); integration notes in `docs/ainl-runtime-graph-patch.md` | **Optional shim** — feature `ainl-runtime-engine` (**default OFF**); `ainl_runtime_bridge.rs`; approval gate pseudo-tool `ainl_runtime_engine`; step-based `cost_estimate` + kernel metering rollup |
 
 ---
 

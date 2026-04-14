@@ -1149,6 +1149,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "config_schema_version": state.kernel.config.config_schema_version,
         "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
         "agents": agents,
+        "openfang_runtime_ainl": openfang_runtime::ainl_integration_compile_flags(),
     }))
 }
 

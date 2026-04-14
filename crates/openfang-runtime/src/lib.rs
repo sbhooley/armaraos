@@ -3,6 +3,17 @@
 //! Manages the agent execution loop, LLM driver abstraction,
 //! tool execution, and WASM sandboxing for untrusted skill/plugin code.
 
+/// Compile-time **openfang-runtime** Cargo features for AINL crates (for `GET /api/status` handoff).
+#[must_use]
+pub fn ainl_integration_compile_flags() -> serde_json::Value {
+    serde_json::json!({
+        "ainl_extractor": cfg!(feature = "ainl-extractor"),
+        "ainl_tagger": cfg!(feature = "ainl-tagger"),
+        "ainl_persona_evolution": cfg!(feature = "ainl-persona-evolution"),
+        "ainl_runtime_engine": cfg!(feature = "ainl-runtime-engine"),
+    })
+}
+
 /// Default User-Agent header sent with all outgoing HTTP requests.
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
 pub const USER_AGENT: &str = "openfang/0.3.48";
@@ -33,6 +44,7 @@ pub mod embedding;
 pub mod graceful_shutdown;
 pub mod graph_extractor;
 pub mod graph_memory_writer;
+pub mod ainl_inbox_reader;
 pub mod hooks;
 pub mod persona_evolution;
 pub mod host_ainl_snapshot;

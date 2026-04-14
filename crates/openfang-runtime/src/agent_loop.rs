@@ -749,6 +749,10 @@ pub async fn run_agent_loop(
                     }
                 };
 
+                if let Some(ref gm) = graph_memory {
+                    gm.drain_python_graph_memory_inbox().await;
+                }
+
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
@@ -1030,23 +1034,60 @@ pub async fn run_agent_loop(
     let mut llm_fallback_note: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    if let Some(res) = try_consume_turn_via_ainl_runtime(
-        manifest,
-        &graph_memory,
-        session,
-        memory,
-        session_user_message,
-        hooks,
-        agent_id_str.as_str(),
-        compression_savings_pct,
-        compressed_input.clone(),
-        loop_t0,
-        &runtime_limits,
-        &orchestration_ctx,
-    )
-    .await
     {
-        return res;
+        let mut ainl_runtime_turn_allowed = true;
+        if ainl_runtime_engine_switch_active(manifest) {
+            if let Some(ref kh) = kernel {
+                if kh.requires_approval("ainl_runtime_engine") {
+                    let summary = format!(
+                        "{} requests ainl-runtime-engine (message {} chars)",
+                        manifest.name,
+                        session_user_message.len()
+                    );
+                    match kh
+                        .request_approval(agent_id_str, "ainl_runtime_engine", &summary)
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!(
+                                agent = %manifest.name,
+                                "ainl-runtime-engine: human approval denied — continuing with OpenFang loop"
+                            );
+                            ainl_runtime_turn_allowed = false;
+                        }
+                        Err(e) => {
+                            warn!(
+                                agent = %manifest.name,
+                                error = %e,
+                                "ainl-runtime-engine: approval request failed — continuing with OpenFang loop"
+                            );
+                            ainl_runtime_turn_allowed = false;
+                        }
+                    }
+                }
+            }
+        }
+        if ainl_runtime_turn_allowed {
+            if let Some(res) = try_consume_turn_via_ainl_runtime(
+                manifest,
+                &graph_memory,
+                session,
+                memory,
+                session_user_message,
+                hooks,
+                agent_id_str.as_str(),
+                compression_savings_pct,
+                compressed_input.clone(),
+                loop_t0,
+                &runtime_limits,
+                &orchestration_ctx,
+            )
+            .await
+            {
+                return res;
+            }
+        }
     }
 
     let mut btw_rx = btw_rx;
@@ -2563,6 +2604,10 @@ pub async fn run_agent_loop_streaming(
                     }
                 };
 
+                if let Some(ref gm) = graph_memory {
+                    gm.drain_python_graph_memory_inbox().await;
+                }
+
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
@@ -2842,23 +2887,60 @@ pub async fn run_agent_loop_streaming(
     let mut llm_fallback_note: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    if let Some(res) = try_consume_turn_via_ainl_runtime(
-        manifest,
-        &graph_memory,
-        session,
-        memory,
-        session_user_message_s,
-        hooks,
-        agent_id_str.as_str(),
-        compression_savings_pct,
-        compressed_input.clone(),
-        loop_t0,
-        &runtime_limits,
-        &orchestration_ctx,
-    )
-    .await
     {
-        return res;
+        let mut ainl_runtime_turn_allowed = true;
+        if ainl_runtime_engine_switch_active(manifest) {
+            if let Some(ref kh) = kernel {
+                if kh.requires_approval("ainl_runtime_engine") {
+                    let summary = format!(
+                        "{} requests ainl-runtime-engine (message {} chars)",
+                        manifest.name,
+                        session_user_message_s.len()
+                    );
+                    match kh
+                        .request_approval(agent_id_str, "ainl_runtime_engine", &summary)
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!(
+                                agent = %manifest.name,
+                                "ainl-runtime-engine: human approval denied — continuing with OpenFang loop (streaming)"
+                            );
+                            ainl_runtime_turn_allowed = false;
+                        }
+                        Err(e) => {
+                            warn!(
+                                agent = %manifest.name,
+                                error = %e,
+                                "ainl-runtime-engine: approval request failed — continuing with OpenFang loop (streaming)"
+                            );
+                            ainl_runtime_turn_allowed = false;
+                        }
+                    }
+                }
+            }
+        }
+        if ainl_runtime_turn_allowed {
+            if let Some(res) = try_consume_turn_via_ainl_runtime(
+                manifest,
+                &graph_memory,
+                session,
+                memory,
+                session_user_message_s,
+                hooks,
+                agent_id_str.as_str(),
+                compression_savings_pct,
+                compressed_input.clone(),
+                loop_t0,
+                &runtime_limits,
+                &orchestration_ctx,
+            )
+            .await
+            {
+                return res;
+            }
+        }
     }
 
     let mut btw_rx = btw_rx;

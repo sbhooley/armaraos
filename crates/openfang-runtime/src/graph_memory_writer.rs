@@ -135,6 +135,18 @@ impl GraphMemoryWriter {
         }
     }
 
+    /// Import `ainl_graph_memory_inbox.json` (Python `AinlMemorySyncWriter`) into this agent's
+    /// SQLite graph, then reset the inbox to an empty envelope.
+    pub async fn drain_python_graph_memory_inbox(&self) {
+        if let Err(e) = crate::ainl_inbox_reader::drain_inbox(self).await {
+            warn!(
+                agent_id = %self.agent_id,
+                error = %e,
+                "AINL graph memory inbox drain failed"
+            );
+        }
+    }
+
     /// Record a completed agent turn as an EpisodeNode.
     ///
     /// On success, returns the new episode **node** id (same id space as

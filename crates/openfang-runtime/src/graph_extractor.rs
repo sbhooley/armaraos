@@ -1,6 +1,11 @@
 //! Post-turn extraction: derives Semantic and Procedural graph nodes from completed agent turns
 //! without LLM calls.
 //!
+//! **Relationship to `ainl_graph_extractor_bridge`:** this module is **not** a duplicate pipeline.
+//! The bridge calls into it as a **regex / tool-sequence fallback** when structured crate extraction
+//! is disabled (`AINL_EXTRACTOR_ENABLED` off) or yields no candidates. Deprecation is **not**
+//! planned until the bridge path is validated across all production graphs.
+//!
 //! **Facts:** Primary path uses [`ainl_graph_extractor::extract_turn_semantic_tags_for_memory`]
 //! (same `ainl_semantic_tagger::tag_turn` pipeline as `ainl-graph-extractor` persona passes,
 //! minus tool/tone tags) and maps tags to [`ExtractedFact`]. If that yields no candidates, the

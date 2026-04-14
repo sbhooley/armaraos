@@ -2611,7 +2611,7 @@ impl OpenFangKernel {
 
                     // Persist usage to database (same as non-streaming path)
                     let model = &manifest.model.model;
-                    let cost = MeteringEngine::estimate_cost_with_catalog(
+                    let catalog_cost = MeteringEngine::estimate_cost_with_catalog(
                         &kernel_clone
                             .model_catalog
                             .read()
@@ -2620,6 +2620,8 @@ impl OpenFangKernel {
                         result.total_usage.input_tokens,
                         result.total_usage.output_tokens,
                     );
+                    let engine_addon = result.cost_usd.unwrap_or(0.0);
+                    let cost = catalog_cost + engine_addon;
                     let _ = kernel_clone
                         .metering
                         .record(&openfang_memory::usage::UsageRecord {
@@ -3361,12 +3363,14 @@ impl OpenFangKernel {
 
         // Record usage in the metering engine (uses catalog pricing as single source of truth)
         let model = &manifest.model.model;
-        let cost = MeteringEngine::estimate_cost_with_catalog(
+        let catalog_cost = MeteringEngine::estimate_cost_with_catalog(
             &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
             model,
             result.total_usage.input_tokens,
             result.total_usage.output_tokens,
         );
+        let engine_addon = result.cost_usd.unwrap_or(0.0);
+        let cost = catalog_cost + engine_addon;
         let _ = self.metering.record(&openfang_memory::usage::UsageRecord {
             agent_id: llm_billing_id,
             model: model.clone(),

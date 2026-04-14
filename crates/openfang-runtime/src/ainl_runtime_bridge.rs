@@ -72,11 +72,16 @@ pub fn map_ainl_turn_outcome(
 
     warn_on_unmapped_ainl_fields(ainl, r);
 
+    // ainl-runtime does not emit token-metered USD; surface a tiny deterministic host estimate so
+    // budget / usage_footer paths can attribute non-zero work when LLM usage is zero.
+    let step_units = r.steps_executed as f64;
+    let cost_estimate = Some((step_units * 1.0e-6).max(1e-9));
+
     TurnOutcome {
         output,
         tool_calls,
         delegation_to: turn_ctx.delegation_to.clone(),
-        cost_estimate: None,
+        cost_estimate,
     }
 }
 
@@ -133,7 +138,9 @@ fn warn_on_unmapped_ainl_fields(ainl: &AinlTurnOutcome, r: &AinlTurnResult) {
     if r.status != TurnStatus::Ok {
         warn!(status = ?r.status, "ainl-runtime: TurnStatus is reflected in output text only");
     }
-    warn!("ainl-runtime: no token-level cost model — cost_estimate is always None for this shim");
+    debug!(
+        "ainl-runtime: token-level LLM cost is unavailable — host maps steps_executed to a micro-USD estimate"
+    );
 }
 
 struct GraphPatchLogHost {
