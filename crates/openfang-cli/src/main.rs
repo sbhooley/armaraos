@@ -785,6 +785,14 @@ enum SecurityCommands {
 
 #[derive(Subcommand)]
 enum MemoryCommands {
+    /// Export AINL graph memory (`ainl_memory.db`) as JSON (`AgentGraphSnapshot`) for scripting / Python bridge.
+    GraphExport {
+        /// Agent UUID (directory name under `agents/`).
+        agent: String,
+        /// Write JSON to this file instead of stdout.
+        #[arg(short = 'o', long = "output")]
+        output: Option<std::path::PathBuf>,
+    },
     /// List KV pairs for an agent.
     List {
         /// Agent name or ID.
@@ -1214,6 +1222,9 @@ fn main() {
             SecurityCommands::Verify => cmd_security_verify(),
         },
         Some(Commands::Memory(sub)) => match sub {
+            MemoryCommands::GraphExport { agent, output } => {
+                cmd_memory_graph_export(&agent, output.as_deref())
+            }
             MemoryCommands::List { agent, json } => cmd_memory_list(&agent, json),
             MemoryCommands::Get { agent, key, json } => cmd_memory_get(&agent, &key, json),
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
@@ -6636,6 +6647,27 @@ fn cmd_security_verify() {
             ui::hint(msg);
         }
         std::process::exit(1);
+    }
+}
+
+fn cmd_memory_graph_export(agent: &str, output: Option<&std::path::Path>) {
+    match openfang_runtime::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(agent)
+    {
+        Ok(v) => {
+            let s = serde_json::to_string_pretty(&v).unwrap_or_default();
+            if let Some(p) = output {
+                if let Err(e) = std::fs::write(p, &s) {
+                    eprintln!("Failed to write {}: {e}", p.display());
+                    std::process::exit(1);
+                }
+            } else {
+                println!("{s}");
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     }
 }
 

@@ -171,12 +171,29 @@ impl GraphMemoryWriter {
 
     /// Record a semantic fact learned during a turn.
     pub async fn record_fact(&self, fact: String, confidence: f32, source_turn_id: Uuid) {
+        self.record_fact_with_tags(fact, confidence, source_turn_id, &[])
+            .await;
+    }
+
+    /// Like [`Self::record_fact`], with extra semantic tags (e.g. `trace_id:<uuid>` for correlation).
+    pub async fn record_fact_with_tags(
+        &self,
+        fact: String,
+        confidence: f32,
+        source_turn_id: Uuid,
+        extra_tags: &[String],
+    ) {
         let res = {
             let inner = self.inner.lock().await;
             let mut node = AinlMemoryNode::new_fact(fact.clone(), confidence, source_turn_id);
             node.agent_id = self.agent_id.clone();
             if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
                 semantic.source_episode_id = source_turn_id.to_string();
+                for t in extra_tags {
+                    if !semantic.tags.iter().any(|x| x == t) {
+                        semantic.tags.push(t.clone());
+                    }
+                }
             }
             let id = node.id;
             inner.write_node(&node).map(|()| id)
@@ -197,6 +214,27 @@ impl GraphMemoryWriter {
                 "AINL graph memory: failed to write fact"
             ),
         }
+    }
+
+    /// Export this agent’s subgraph as JSON (same shape as `ainl_memory::AgentGraphSnapshot`).
+    pub async fn export_graph_json(&self) -> Result<serde_json::Value, String> {
+        let inner = self.inner.lock().await;
+        let snap = inner.export_graph(&self.agent_id)?;
+        serde_json::to_value(&snap).map_err(|e| format!("export_graph json: {e}"))
+    }
+
+    /// Read `~/.armaraos/agents/<agent_id>/ainl_memory.db` and export the agent subgraph (blocking-friendly).
+    pub fn export_graph_json_for_agent(agent_id: &str) -> Result<serde_json::Value, String> {
+        let path = Self::db_path(agent_id)?;
+        if !path.is_file() {
+            return Err(format!(
+                "AINL graph memory DB not found at {} (expected per-agent SQLite)",
+                path.display()
+            ));
+        }
+        let memory = GraphMemory::new(&path).map_err(|e| format!("open graph memory: {e}"))?;
+        let snap = memory.export_graph(agent_id)?;
+        serde_json::to_value(&snap).map_err(|e| format!("export_graph json: {e}"))
     }
 
     /// Record an A2A delegation as an EpisodeNode with delegation_to set.
@@ -414,6 +452,34 @@ mod tests {
         } else {
             panic!("wrong node type");
         }
+    }
+
+    #[tokio::test]
+    async fn export_graph_json_round_trips_after_episode_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("export_rt.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "export-agent".to_string(),
+            on_write: None,
+        };
+        let trace = json!({"agent_id": "export-agent", "trace_id": "tr-abc"});
+        assert!(
+            writer
+                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()))
+                .await
+                .is_some()
+        );
+        let v = writer.export_graph_json().await.expect("export");
+        assert_eq!(v["agent_id"], "export-agent");
+        assert_eq!(v["schema_version"], "1.0");
+        let nodes = v["nodes"].as_array().expect("nodes array");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0]["agent_id"], "export-agent");
+        let nt = &nodes[0]["node_type"];
+        assert_eq!(nt["type"], "episode");
+        assert_eq!(nt["trace_event"], trace);
     }
 
     #[tokio::test]

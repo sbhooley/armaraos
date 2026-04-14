@@ -32,7 +32,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 /// When a kernel handle is present, graph-memory writes publish `SystemEvent::GraphMemoryWrite` for dashboard SSE.
 fn graph_memory_sse_hook(
@@ -47,6 +46,37 @@ fn graph_memory_sse_hook(
             });
         }) as Arc<dyn Fn(String, String) + Send + Sync>
     })
+}
+
+/// Correlation payload stored on Episode nodes (`trace_event` / `EpisodicNode.trace_event`).
+fn graph_memory_turn_trace_json(
+    agent_id: &str,
+    orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+) -> Option<serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    m.insert(
+        "agent_id".to_string(),
+        serde_json::Value::String(agent_id.to_string()),
+    );
+    if let Some(o) = orchestration_ctx {
+        if !o.trace_id.is_empty() {
+            m.insert(
+                "trace_id".to_string(),
+                serde_json::Value::String(o.trace_id.clone()),
+            );
+        }
+    }
+    Some(serde_json::Value::Object(m))
+}
+
+fn graph_memory_trace_fact_tags(
+    orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+) -> Vec<String> {
+    orchestration_ctx
+        .as_ref()
+        .filter(|o| !o.trace_id.is_empty())
+        .map(|o| vec![format!("trace_id:{}", o.trace_id)])
+        .unwrap_or_default()
 }
 
 /// Maximum retries for rate-limited or overloaded API calls.
@@ -523,11 +553,20 @@ pub async fn run_agent_loop(
                 info!(agent = %manifest.name, "Starting agent loop");
 
                 // Initialize AINL graph memory writer (non-fatal if it fails)
-                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
+                let graph_memory = match crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
                     &session.agent_id.to_string(),
                     graph_memory_sse_hook(&kernel),
-                )
-                .ok();
+                ) {
+                    Ok(gm) => Some(gm),
+                    Err(e) => {
+                        warn!(
+                            agent_id = %session.agent_id,
+                            error = %e,
+                            "AINL graph memory: writer unavailable (episodes/facts will not persist to ainl_memory.db)"
+                        );
+                        None
+                    }
+                };
 
                 let live_llm = kernel
                     .as_ref()
@@ -1101,28 +1140,42 @@ pub async fn run_agent_loop(
                 if let Some(ref gm) = graph_memory {
                     let tools_for_episode =
                         canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
-                    let episode_id = gm
-                        .record_turn(tools_for_episode, None, None)
+                    let turn_trace =
+                        graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
+                    let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
+                    if let Some(episode_id) = gm
+                        .record_turn(tools_for_episode, None, turn_trace)
                         .await
-                        .unwrap_or_else(Uuid::new_v4);
-                    let facts = crate::graph_extractor::extract_facts_for_turn(
-                        session_user_message,
-                        &final_response,
-                        &turn_tool_names,
-                    );
-                    for fact in facts {
-                        gm.record_fact(fact.text, fact.confidence, episode_id)
-                            .await;
-                    }
-                    if let Some(pattern) =
-                        crate::graph_extractor::extract_pattern(&turn_tool_names)
                     {
-                        gm.record_pattern(
-                            &pattern.name,
-                            pattern.tool_sequence,
-                            pattern.confidence,
-                        )
-                        .await;
+                        let facts = crate::graph_extractor::extract_facts_for_turn(
+                            session_user_message,
+                            &final_response,
+                            &turn_tool_names,
+                        );
+                        for fact in facts {
+                            gm.record_fact_with_tags(
+                                fact.text,
+                                fact.confidence,
+                                episode_id,
+                                &trace_tags,
+                            )
+                            .await;
+                        }
+                        if let Some(pattern) =
+                            crate::graph_extractor::extract_pattern(&turn_tool_names)
+                        {
+                            gm.record_pattern(
+                                &pattern.name,
+                                pattern.tool_sequence,
+                                pattern.confidence,
+                            )
+                            .await;
+                        }
+                    } else {
+                        warn!(
+                            agent_id = %session.agent_id,
+                            "AINL graph memory: episode write failed; skipping turn facts/patterns"
+                        );
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
@@ -1449,20 +1502,6 @@ pub async fn run_agent_loop(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
-                            }
-
-                            // Record successful tool results as semantic facts in AINL graph memory
-                            if !result.is_error {
-                                if let Some(ref gm) = graph_memory {
-                                    // Create a fact summarizing the tool execution
-                                    let fact = format!(
-                                        "Tool '{}' executed successfully",
-                                        tool_call.name
-                                    );
-                                    // Use a dummy UUID for source_turn_id (we don't track turn IDs yet)
-                                    let source_turn_id = uuid::Uuid::new_v4();
-                                    gm.record_fact(fact, 0.5, source_turn_id).await;
-                                }
                             }
 
                             let content =
@@ -2272,11 +2311,20 @@ pub async fn run_agent_loop_streaming(
                 info!(agent = %manifest.name, "Starting streaming agent loop");
 
                 // Initialize AINL graph memory writer (non-fatal if it fails)
-                let graph_memory = crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
+                let graph_memory = match crate::graph_memory_writer::GraphMemoryWriter::open_with_notify(
                     &session.agent_id.to_string(),
                     graph_memory_sse_hook(&kernel),
-                )
-                .ok();
+                ) {
+                    Ok(gm) => Some(gm),
+                    Err(e) => {
+                        warn!(
+                            agent_id = %session.agent_id,
+                            error = %e,
+                            "AINL graph memory: writer unavailable (episodes/facts will not persist to ainl_memory.db)"
+                        );
+                        None
+                    }
+                };
 
                 let live_llm = kernel
                     .as_ref()
@@ -2864,28 +2912,42 @@ pub async fn run_agent_loop_streaming(
                 if let Some(ref gm) = graph_memory {
                     let tools_for_episode =
                         canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
-                    let episode_id = gm
-                        .record_turn(tools_for_episode, None, None)
+                    let turn_trace =
+                        graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
+                    let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
+                    if let Some(episode_id) = gm
+                        .record_turn(tools_for_episode, None, turn_trace)
                         .await
-                        .unwrap_or_else(Uuid::new_v4);
-                    let facts = crate::graph_extractor::extract_facts_for_turn(
-                        session_user_message_s,
-                        &final_response,
-                        &turn_tool_names,
-                    );
-                    for fact in facts {
-                        gm.record_fact(fact.text, fact.confidence, episode_id)
-                            .await;
-                    }
-                    if let Some(pattern) =
-                        crate::graph_extractor::extract_pattern(&turn_tool_names)
                     {
-                        gm.record_pattern(
-                            &pattern.name,
-                            pattern.tool_sequence,
-                            pattern.confidence,
-                        )
-                        .await;
+                        let facts = crate::graph_extractor::extract_facts_for_turn(
+                            session_user_message_s,
+                            &final_response,
+                            &turn_tool_names,
+                        );
+                        for fact in facts {
+                            gm.record_fact_with_tags(
+                                fact.text,
+                                fact.confidence,
+                                episode_id,
+                                &trace_tags,
+                            )
+                            .await;
+                        }
+                        if let Some(pattern) =
+                            crate::graph_extractor::extract_pattern(&turn_tool_names)
+                        {
+                            gm.record_pattern(
+                                &pattern.name,
+                                pattern.tool_sequence,
+                                pattern.confidence,
+                            )
+                            .await;
+                        }
+                    } else {
+                        warn!(
+                            agent_id = %session.agent_id,
+                            "AINL graph memory: episode write failed; skipping turn facts/patterns (streaming)"
+                        );
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
@@ -3231,20 +3293,6 @@ pub async fn run_agent_loop_streaming(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
-                            }
-
-                            // Record successful tool results as semantic facts in AINL graph memory
-                            if !result.is_error {
-                                if let Some(ref gm) = graph_memory {
-                                    // Create a fact summarizing the tool execution
-                                    let fact = format!(
-                                        "Tool '{}' executed successfully",
-                                        tool_call.name
-                                    );
-                                    // Use a dummy UUID for source_turn_id (we don't track turn IDs yet)
-                                    let source_turn_id = Uuid::new_v4();
-                                    gm.record_fact(fact, 0.5, source_turn_id).await;
-                                }
                             }
 
                             let content =
