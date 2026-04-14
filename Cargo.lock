@@ -4531,6 +4531,7 @@ dependencies = [
 name = "openfang-runtime"
 version = "0.7.3"
 dependencies = [
+ "ainl-graph-extractor",
  "ainl-memory",
  "ainl-semantic-tagger",
  "anyhow",

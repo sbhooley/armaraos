@@ -1,9 +1,14 @@
-//! Lightweight post-turn extraction: derives Semantic and Procedural graph
-//! nodes from completed agent turns without requiring AINL programs.
+//! Post-turn extraction: derives Semantic and Procedural graph nodes from completed agent turns
+//! without LLM calls.
 //!
-//! Extraction is intentionally heuristic and non-LLM (no extra API call):
-//! fast regex + structural analysis over the assistant response text.
+//! **Facts:** Primary path uses [`ainl_graph_extractor::extract_turn_semantic_tags_for_memory`]
+//! (same `ainl_semantic_tagger::tag_turn` pipeline as `ainl-graph-extractor` persona passes,
+//! minus tool/tone tags) and maps tags to [`ExtractedFact`]. If that yields no candidates, the
+//! legacy regex heuristics in [`extract_facts_heuristic`] run unchanged.
+//!
+//! **Patterns:** [`extract_pattern`] remains the local tool-sequence heuristic (unchanged).
 
+use ainl_graph_extractor::extract_turn_semantic_tags_for_memory;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -22,7 +27,28 @@ pub struct ExtractedPattern {
     pub confidence: f32,
 }
 
-/// Extract semantic facts from an assistant response + user message.
+fn semantic_tags_to_extracted_facts(
+    tags: Vec<ainl_semantic_tagger::SemanticTag>,
+) -> Vec<ExtractedFact> {
+    tags.into_iter()
+        .map(|t| ExtractedFact {
+            text: format!("{}: {}", t.namespace.prefix(), t.value),
+            confidence: t.confidence,
+        })
+        .collect()
+}
+
+/// Primary path: deterministic tags from `ainl-graph-extractor` / `ainl-semantic-tagger` (`tag_turn`).
+fn extract_facts_crate_primary(
+    user_message: &str,
+    assistant_response: &str,
+    tools: &[String],
+) -> Vec<ExtractedFact> {
+    let tags = extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools);
+    semantic_tags_to_extracted_facts(tags)
+}
+
+/// Legacy regex + structural heuristics (fallback when the crate tag pipeline yields nothing).
 ///
 /// Rules (heuristic, no LLM call):
 /// 1. Named entity mentions with a clear assertion ("X is Y", "X was Y",
@@ -35,7 +61,7 @@ pub struct ExtractedPattern {
 ///    ("I've set", "I've created", "I've saved", "completed:", "done:") — confidence 0.75
 ///
 /// Returns up to 6 facts per turn to avoid graph bloat.
-pub fn extract_facts(user_message: &str, assistant_response: &str) -> Vec<ExtractedFact> {
+pub fn extract_facts_heuristic(user_message: &str, assistant_response: &str) -> Vec<ExtractedFact> {
     let mut facts: Vec<ExtractedFact> = Vec::new();
 
     // Rule 2: user self-disclosures (highest confidence — explicit user-stated facts)
@@ -131,6 +157,27 @@ pub fn extract_facts(user_message: &str, assistant_response: &str) -> Vec<Extrac
     facts
 }
 
+/// Extract semantic facts for graph memory: **crate tag pipeline first**, then regex fallback.
+///
+/// `tools` is forwarded to [`ainl_semantic_tagger::tag_turn`] (same inputs as episode tool names).
+pub fn extract_facts_for_turn(
+    user_message: &str,
+    assistant_response: &str,
+    tools: &[String],
+) -> Vec<ExtractedFact> {
+    let mut facts = extract_facts_crate_primary(user_message, assistant_response, tools);
+    if facts.is_empty() {
+        facts = extract_facts_heuristic(user_message, assistant_response);
+    }
+    facts.truncate(6);
+    facts
+}
+
+/// Back-compat wrapper: same as [`extract_facts_for_turn`] with no tool names for tagging.
+pub fn extract_facts(user_message: &str, assistant_response: &str) -> Vec<ExtractedFact> {
+    extract_facts_for_turn(user_message, assistant_response, &[])
+}
+
 /// Extract a procedural pattern if the tool sequence for this turn
 /// matches a known high-value workflow.
 ///
@@ -207,6 +254,44 @@ mod tests {
     }
 
     #[test]
+    fn crate_path_produces_topic_fact_from_realistic_turn() {
+        let facts = extract_facts_for_turn(
+            "Help me fix my rust project: cargo errors and serde derives",
+            "We can run clippy and check the borrow checker.",
+            &[],
+        );
+        assert!(
+            facts.iter().any(|f| {
+                f.text.to_lowercase().contains("topic:")
+                    && f.text.to_lowercase().contains("rust")
+            }),
+            "expected topic:rust style fact, got {facts:?}"
+        );
+    }
+
+    #[test]
+    fn fallback_triggers_when_crate_tags_filtered_to_empty() {
+        // Tool-only signals from tag_turn are filtered in the crate path; no topic/preference
+        // in plain greetings — heuristic still finds nothing, so both can be empty. Use user
+        // disclosure so fallback regex must carry the turn.
+        let facts = extract_facts_for_turn(
+            "I work at Contoso on weekends",
+            "Noted.",
+            &["file_read".into()],
+        );
+        assert!(
+            facts.iter().any(|f| f.text.contains("Contoso")),
+            "expected heuristic fallback for user disclosure, got {facts:?}"
+        );
+        assert!(
+            facts
+                .iter()
+                .any(|f| f.text.contains("User said:") || f.text.contains("topic:")),
+            "expected at least one crate-style or heuristic fact, got {facts:?}"
+        );
+    }
+
+    #[test]
     fn extract_pattern_web_research() {
         let p = extract_pattern(&["web_search".to_string(), "file_read".to_string()]);
         assert_eq!(p.as_ref().map(|x| x.name.as_str()), Some("web_research"));
@@ -216,5 +301,11 @@ mod tests {
     fn extract_pattern_delegation_prefers_over_research() {
         let p = extract_pattern(&["web_search".to_string(), "agent_send".to_string()]);
         assert_eq!(p.as_ref().map(|x| x.name.as_str()), Some("agent_delegation"));
+    }
+
+    #[test]
+    fn extract_facts_heuristic_direct_still_works() {
+        let facts = extract_facts_heuristic("I prefer concise answers always", "OK.");
+        assert!(!facts.is_empty());
     }
 }

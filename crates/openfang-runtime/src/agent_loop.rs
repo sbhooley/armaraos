@@ -1105,9 +1105,10 @@ pub async fn run_agent_loop(
                         .record_turn(tools_for_episode, None, None)
                         .await
                         .unwrap_or_else(Uuid::new_v4);
-                    let facts = crate::graph_extractor::extract_facts(
+                    let facts = crate::graph_extractor::extract_facts_for_turn(
                         session_user_message,
                         &final_response,
+                        &turn_tool_names,
                     );
                     for fact in facts {
                         gm.record_fact(fact.text, fact.confidence, episode_id)
@@ -2856,9 +2857,10 @@ pub async fn run_agent_loop_streaming(
                         .record_turn(tools_for_episode, None, None)
                         .await
                         .unwrap_or_else(Uuid::new_v4);
-                    let facts = crate::graph_extractor::extract_facts(
+                    let facts = crate::graph_extractor::extract_facts_for_turn(
                         session_user_message_s,
                         &final_response,
+                        &turn_tool_names,
                     );
                     for fact in facts {
                         gm.record_fact(fact.text, fact.confidence, episode_id)
