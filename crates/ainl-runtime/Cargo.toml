@@ -1,6 +1,6 @@
 [package]
 name = "ainl-runtime"
-version = "0.3.5-alpha"
+version = "0.3.6-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors = ["Steven Hooley"]
@@ -58,10 +58,10 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 scopeguard = { workspace = true }
 chrono = { workspace = true }
-ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.4" }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.5" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.6" }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6" }
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = [
     "rt",

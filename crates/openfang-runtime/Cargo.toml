@@ -16,13 +16,13 @@ ainl-runtime-engine = ["dep:ainl-runtime"]
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.5", optional = true }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5", optional = true }
-ainl-persona = { path = "../ainl-persona", version = "0.1.4", optional = true }
+ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6", optional = true }
+ainl-persona = { path = "../ainl-persona", version = "0.1.6", optional = true }
 # Workspace path keeps `ainl-memory` / `ainl-persona` in sync with `openfang-runtime` (crates.io
 # `ainl-runtime` alone would pull registry copies and fail to type-check). Version aligns with crates.io.
-ainl-runtime = { path = "../ainl-runtime", version = "0.3.5-alpha", optional = true, features = ["async"] }
+ainl-runtime = { path = "../ainl-runtime", version = "0.3.6-alpha", optional = true, features = ["async"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
