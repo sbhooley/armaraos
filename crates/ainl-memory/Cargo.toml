@@ -1,6 +1,6 @@
 [package]
 name = "ainl-memory"
-version = "0.1.7-alpha"
+version = "0.1.8-alpha"
 description = "AINL graph-memory substrate - agent memory as execution graph"
 authors = ["Steven Hooley"]
 readme = "README.md"

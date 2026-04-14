@@ -26,12 +26,7 @@ pub fn extract_turn_semantic_tags_for_memory(
 ) -> Vec<SemanticTag> {
     tag_turn(user_message, assistant_response, tools)
         .into_iter()
-        .filter(|t| {
-            !matches!(
-                t.namespace,
-                TagNamespace::Tool | TagNamespace::Tone
-            )
-        })
+        .filter(|t| !matches!(t.namespace, TagNamespace::Tool | TagNamespace::Tone))
         .collect()
 }
 
@@ -47,14 +42,16 @@ mod tests {
             &[],
         );
         assert!(
-            tags.iter().any(|t| t.namespace == TagNamespace::Topic && t.value == "rust"),
+            tags.iter()
+                .any(|t| t.namespace == TagNamespace::Topic && t.value == "rust"),
             "expected rust topic, got {tags:?}"
         );
     }
 
     #[test]
     fn turn_extract_filters_tools_and_tone() {
-        let tags = extract_turn_semantic_tags_for_memory("Hello", Some("Hi there"), &["bash".into()]);
+        let tags =
+            extract_turn_semantic_tags_for_memory("Hello", Some("Hi there"), &["bash".into()]);
         assert!(!tags.iter().any(|t| t.namespace == TagNamespace::Tool));
         assert!(!tags.iter().any(|t| t.namespace == TagNamespace::Tone));
     }

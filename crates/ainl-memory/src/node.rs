@@ -4,9 +4,47 @@
 //! Designed to be standalone (zero ArmaraOS deps) yet compatible with
 //! OrchestrationTraceEvent serialization.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use uuid::Uuid;
+
+fn deserialize_updated_at<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+
+    struct TsVisitor;
+    impl<'de> Visitor<'de> for TsVisitor {
+        type Value = i64;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("unix timestamp or RFC3339 string")
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i64, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i64, E> {
+            i64::try_from(v).map_err(de::Error::custom)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<i64, E> {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(v) {
+                return Ok(dt.timestamp());
+            }
+            v.parse::<i64>().map_err(de::Error::custom)
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<i64, E> {
+            self.visit_str(&v)
+        }
+    }
+
+    deserializer.deserialize_any(TsVisitor)
+}
 
 /// Coarse node kind for store queries (matches `node_type` column values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +53,8 @@ pub enum AinlNodeKind {
     Semantic,
     Procedural,
     Persona,
+    /// Agent-scoped persisted session counters / persona cache (see [`RuntimeStateNode`]).
+    RuntimeState,
 }
 
 impl AinlNodeKind {
@@ -24,6 +64,7 @@ impl AinlNodeKind {
             Self::Semantic => "semantic",
             Self::Procedural => "procedural",
             Self::Persona => "persona",
+            Self::RuntimeState => "runtime_state",
         }
     }
 }
@@ -302,14 +343,20 @@ impl ProceduralNode {
     }
 }
 
-/// Persisted session counters and persona prompt cache for one agent (`ainl-runtime` ↔ SQLite).
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+/// Persisted runtime state for an agent session.
+/// Written at end of each turn; read on `AinlRuntime::new` (ainl-runtime) to restore state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeStateNode {
     pub agent_id: String,
-    pub turn_count: u32,
-    pub last_extraction_turn: u32,
-    pub last_persona_prompt: Option<String>,
-    pub updated_at: String,
+    #[serde(default)]
+    pub turn_count: u64,
+    #[serde(default, alias = "last_extraction_turn")]
+    pub last_extraction_at_turn: u64,
+    /// Serialized persona contribution (JSON string value) — avoids re-deriving from graph on cold start.
+    #[serde(default, alias = "last_persona_prompt")]
+    pub persona_snapshot_json: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_updated_at")]
+    pub updated_at: i64,
 }
 
 /// Core AINL node types - the vocabulary of agent memory.
@@ -341,9 +388,7 @@ pub enum AinlNodeType {
     },
 
     /// Runtime session state (turn counters, extraction cadence, persona cache snapshot).
-    RuntimeState {
-        runtime_state: RuntimeStateNode,
-    },
+    RuntimeState { runtime_state: RuntimeStateNode },
 }
 
 /// A node in the AINL memory graph

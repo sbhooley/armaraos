@@ -147,15 +147,25 @@ impl RuntimeContext {
             .extractor
             .as_mut()
             .expect("get_or_insert_with always leaves Some")
-            .run_pass(store)?;
+            .run_pass(store);
 
-        tracing::info!(
-            agent_id = %report.agent_id,
-            signals_extracted = report.signals_extracted,
-            signals_applied = report.signals_applied,
-            semantic_nodes_updated = report.semantic_nodes_updated,
-            "ainl-graph-extractor pass completed"
-        );
+        if report.has_errors() {
+            tracing::warn!(
+                agent_id = %report.agent_id,
+                extract_error = ?report.extract_error,
+                pattern_error = ?report.pattern_error,
+                persona_error = ?report.persona_error,
+                "ainl-graph-extractor pass completed with phase errors"
+            );
+        } else {
+            tracing::info!(
+                agent_id = %report.agent_id,
+                signals_extracted = report.signals_extracted,
+                signals_applied = report.signals_applied,
+                semantic_nodes_updated = report.semantic_nodes_updated,
+                "ainl-graph-extractor pass completed"
+            );
+        }
         Ok(report)
     }
 }

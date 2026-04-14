@@ -15,7 +15,8 @@ fn test_export_import_roundtrip() {
     let ag = agent(1);
     let mut ids = Vec::new();
     for i in 0..5 {
-        let mut n = AinlMemoryNode::new_episode(Uuid::new_v4(), 1_900_000_000 + i, vec![], None, None);
+        let mut n =
+            AinlMemoryNode::new_episode(Uuid::new_v4(), 1_900_000_000 + i, vec![], None, None);
         n.agent_id = ag.clone();
         store.write_node(&n).unwrap();
         ids.push(n.id);

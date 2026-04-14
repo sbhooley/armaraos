@@ -142,8 +142,12 @@ fn test_both_failures_accumulate_warnings() {
     let TurnOutcome::PartialSuccess { warnings, .. } = &out else {
         panic!("expected PartialSuccess, got {out:?}");
     };
-    assert!(warnings.iter().any(|w| w.phase == TurnPhase::FitnessWriteBack));
-    assert!(warnings.iter().any(|w| w.phase == TurnPhase::ExtractionPass));
+    assert!(warnings
+        .iter()
+        .any(|w| w.phase == TurnPhase::FitnessWriteBack));
+    assert!(warnings
+        .iter()
+        .any(|w| w.phase == TurnPhase::ExtractionPass));
     assert!(warnings.len() >= 2, "{warnings:?}");
 }
 

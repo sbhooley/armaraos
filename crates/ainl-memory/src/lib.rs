@@ -46,7 +46,7 @@ pub mod store;
 
 pub use node::{
     AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, MemoryCategory,
-    PersonaLayer, PersonaNode, PersonaSource, ProcedureType, ProceduralNode, RuntimeStateNode,
+    PersonaLayer, PersonaNode, PersonaSource, ProceduralNode, ProcedureType, RuntimeStateNode,
     SemanticNode, Sentiment, StrengthEvent,
 };
 pub use query::{
@@ -263,6 +263,16 @@ impl GraphMemory {
         label: &str,
     ) -> Result<(), String> {
         self.store.insert_graph_edge_checked(from_id, to_id, label)
+    }
+
+    /// Read persisted [`RuntimeStateNode`] for `agent_id` (most recent row).
+    pub fn read_runtime_state(&self, agent_id: &str) -> Result<Option<RuntimeStateNode>, String> {
+        self.store.read_runtime_state(agent_id)
+    }
+
+    /// Upsert persisted [`RuntimeStateNode`] for the given agent (stable node id per `agent_id`).
+    pub fn write_runtime_state(&self, state: &RuntimeStateNode) -> Result<(), String> {
+        self.store.write_runtime_state(state)
     }
 
     /// Write a fully constructed node (additive API for callers that set extended metadata).

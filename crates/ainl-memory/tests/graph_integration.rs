@@ -41,9 +41,7 @@ fn test_write_episode_and_query() {
     if let AinlNodeType::Episode { episodic } = &recent[0].node_type {
         assert_eq!(episodic.delegation_to, Some("agent-B".to_string()));
         assert_eq!(episodic.tool_calls.len(), 2);
-        assert!(episodic
-            .tool_calls
-            .contains(&"agent_delegate".to_string()));
+        assert!(episodic.tool_calls.contains(&"agent_delegate".to_string()));
         println!("✓ Episode data validated");
     } else {
         panic!("Wrong node type");
@@ -212,13 +210,7 @@ fn test_metadata_roundtrip_all_categories() {
     let store = SqliteGraphStore::open(&db_path).expect("open");
 
     let tid = Uuid::new_v4();
-    let mut ep = AinlMemoryNode::new_episode(
-        tid,
-        1700000000,
-        vec!["t1".into()],
-        None,
-        None,
-    );
+    let mut ep = AinlMemoryNode::new_episode(tid, 1700000000, vec!["t1".into()], None, None);
     ep.importance_score = 0.8;
     ep.agent_id = "ag1".into();
     ep.memory_category = MemoryCategory::Episodic;

@@ -28,7 +28,8 @@
 
 use crate::node::{AinlMemoryNode, AinlNodeType, MemoryCategory, RuntimeStateNode};
 use crate::snapshot::{
-    AgentGraphSnapshot, DanglingEdgeDetail, GraphValidationReport, SnapshotEdge, SNAPSHOT_SCHEMA_VERSION,
+    AgentGraphSnapshot, DanglingEdgeDetail, GraphValidationReport, SnapshotEdge,
+    SNAPSHOT_SCHEMA_VERSION,
 };
 use chrono::Utc;
 use rusqlite::OptionalExtension;
@@ -181,16 +182,10 @@ fn node_type_name(node: &AinlMemoryNode) -> &'static str {
     }
 }
 
-fn runtime_state_timestamp(rs: &RuntimeStateNode) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(&rs.updated_at)
-        .map(|d| d.timestamp())
-        .unwrap_or_else(|_| Utc::now().timestamp())
-}
-
 fn node_timestamp(node: &AinlMemoryNode) -> i64 {
     match &node.node_type {
         AinlNodeType::Episode { episodic } => episodic.timestamp,
-        AinlNodeType::RuntimeState { runtime_state } => runtime_state_timestamp(runtime_state),
+        AinlNodeType::RuntimeState { runtime_state } => runtime_state.updated_at,
         _ => chrono::Utc::now().timestamp(),
     }
 }
@@ -206,7 +201,13 @@ fn persist_edge(
     conn.execute(
         "INSERT OR REPLACE INTO ainl_graph_edges (from_id, to_id, label, weight, metadata)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![from_id.to_string(), to_id.to_string(), label, weight, metadata],
+        rusqlite::params![
+            from_id.to_string(),
+            to_id.to_string(),
+            label,
+            weight,
+            metadata
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -269,13 +270,23 @@ fn persist_node(conn: &rusqlite::Connection, node: &AinlMemoryNode) -> Result<()
     .map_err(|e| e.to_string())?;
 
     for edge in &node.edges {
-        persist_edge(conn, node.id, edge.target_id, &edge.label, 1.0, None::<&str>)?;
+        persist_edge(
+            conn,
+            node.id,
+            edge.target_id,
+            &edge.label,
+            1.0,
+            None::<&str>,
+        )?;
     }
 
     Ok(())
 }
 
-fn try_insert_node_ignore(conn: &rusqlite::Connection, node: &AinlMemoryNode) -> Result<(), String> {
+fn try_insert_node_ignore(
+    conn: &rusqlite::Connection,
+    node: &AinlMemoryNode,
+) -> Result<(), String> {
     let payload = serde_json::to_string(node).map_err(|e| e.to_string())?;
     let type_name = node_type_name(node);
     let timestamp = node_timestamp(node);
@@ -288,10 +299,7 @@ fn try_insert_node_ignore(conn: &rusqlite::Connection, node: &AinlMemoryNode) ->
     Ok(())
 }
 
-fn try_insert_edge_ignore(
-    conn: &rusqlite::Connection,
-    edge: &SnapshotEdge,
-) -> Result<(), String> {
+fn try_insert_edge_ignore(conn: &rusqlite::Connection, edge: &SnapshotEdge) -> Result<(), String> {
     let meta = match &edge.metadata {
         Some(v) => Some(serde_json::to_string(v).map_err(|e| e.to_string())?),
         None => None,
@@ -387,7 +395,12 @@ impl SqliteGraphStore {
     }
 
     /// Like [`Self::insert_graph_edge`], but verifies both endpoints exist first (clear errors for strict runtime wiring).
-    pub fn insert_graph_edge_checked(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<(), String> {
+    pub fn insert_graph_edge_checked(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        label: &str,
+    ) -> Result<(), String> {
         if !self.node_row_exists(&from_id.to_string())? {
             return Err(format!(
                 "insert_graph_edge_checked: missing source node row {}",
@@ -412,7 +425,10 @@ impl SqliteGraphStore {
         weight: f32,
         metadata: Option<&serde_json::Value>,
     ) -> Result<(), String> {
-        let meta = metadata.map(serde_json::to_string).transpose().map_err(|e| e.to_string())?;
+        let meta = metadata
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| e.to_string())?;
         persist_edge(&self.conn, from_id, to_id, label, weight, meta.as_deref())
     }
 
@@ -453,10 +469,10 @@ impl SqliteGraphStore {
         Ok(nodes)
     }
 
-    /// Load the latest persisted [`RuntimeStateNode`] for `agent_id`, if any.
+    /// Read the most recent persisted [`RuntimeStateNode`] for `agent_id`, if any.
     ///
-    /// Rows are stored with `node_type = 'runtime_state'` and JSON `$.agent_id` matching the agent.
-    pub fn load_runtime_state(&self, agent_id: &str) -> Result<Option<RuntimeStateNode>, String> {
+    /// Rows are stored with `node_type = 'runtime_state'` and JSON `$.node_type.runtime_state.agent_id` matching the agent.
+    pub fn read_runtime_state(&self, agent_id: &str) -> Result<Option<RuntimeStateNode>, String> {
         if agent_id.is_empty() {
             return Ok(None);
         }
@@ -488,7 +504,7 @@ impl SqliteGraphStore {
     }
 
     /// Upsert one [`RuntimeStateNode`] row per agent (stable id via [`Uuid::new_v5`]).
-    pub fn save_runtime_state(&self, state: &RuntimeStateNode) -> Result<(), String> {
+    pub fn write_runtime_state(&self, state: &RuntimeStateNode) -> Result<(), String> {
         let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, state.agent_id.as_bytes());
         let node = AinlMemoryNode {
             id,
@@ -552,8 +568,7 @@ impl SqliteGraphStore {
 
         let mut edge_pairs = Vec::new();
         for (from_id, to_id, label) in all_edges {
-            let touches_agent =
-                agent_nodes.contains(&from_id) || agent_nodes.contains(&to_id);
+            let touches_agent = agent_nodes.contains(&from_id) || agent_nodes.contains(&to_id);
             if touches_agent {
                 edge_pairs.push((from_id, to_id, label));
             }
@@ -583,7 +598,8 @@ impl SqliteGraphStore {
             }
         }
 
-        let mut touched: HashSet<String> = HashSet::with_capacity(edge_pairs.len().saturating_mul(2));
+        let mut touched: HashSet<String> =
+            HashSet::with_capacity(edge_pairs.len().saturating_mul(2));
         for (a, b, _) in &edge_pairs {
             if agent_nodes.contains(a) {
                 touched.insert(a.clone());
@@ -616,7 +632,9 @@ impl SqliteGraphStore {
     fn node_row_exists(&self, id: &str) -> Result<bool, String> {
         let v: Option<i32> = self
             .conn
-            .query_row("SELECT 1 FROM ainl_graph_nodes WHERE id = ?1", [id], |_| Ok(1))
+            .query_row("SELECT 1 FROM ainl_graph_nodes WHERE id = ?1", [id], |_| {
+                Ok(1)
+            })
             .optional()
             .map_err(|e| e.to_string())?;
         Ok(v.is_some())

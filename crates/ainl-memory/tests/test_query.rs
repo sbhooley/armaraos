@@ -35,7 +35,8 @@ fn set_episode_outcome(path: &std::path::Path, id: Uuid, outcome: &str) {
 fn test_query_episodes() {
     let (store, _path) = open();
     for i in 0..3 {
-        let mut n = AinlMemoryNode::new_episode(Uuid::new_v4(), 1_700_000_000 + i, vec![], None, None);
+        let mut n =
+            AinlMemoryNode::new_episode(Uuid::new_v4(), 1_700_000_000 + i, vec![], None, None);
         n.agent_id = AGENT.into();
         store.write_node(&n).unwrap();
     }
@@ -48,7 +49,8 @@ fn test_query_episodes() {
 fn test_query_recent_episodes_limit() {
     let (store, _path) = open();
     for i in 0..5 {
-        let mut n = AinlMemoryNode::new_episode(Uuid::new_v4(), 1_800_000_000 + i, vec![], None, None);
+        let mut n =
+            AinlMemoryNode::new_episode(Uuid::new_v4(), 1_800_000_000 + i, vec![], None, None);
         n.agent_id = AGENT.into();
         store.write_node(&n).unwrap();
     }

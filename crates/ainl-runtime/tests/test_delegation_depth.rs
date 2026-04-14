@@ -1,9 +1,7 @@
 //! Internal nested [`ainl_runtime::AinlRuntime::run_turn`] depth and [`AinlRuntimeError::DelegationDepthExceeded`].
 
 use ainl_memory::{AinlMemoryNode, GraphStore, SqliteGraphStore};
-use ainl_runtime::{
-    AinlRuntime, AinlRuntimeError, RuntimeConfig, TurnInput, TurnStatus,
-};
+use ainl_runtime::{AinlRuntime, AinlRuntimeError, RuntimeConfig, TurnInput, TurnStatus};
 use uuid::Uuid;
 
 fn open_store() -> (tempfile::TempDir, SqliteGraphStore) {

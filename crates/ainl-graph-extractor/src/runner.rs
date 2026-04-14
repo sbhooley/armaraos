@@ -9,9 +9,6 @@ use ainl_memory::SqliteGraphStore;
 /// invocations. For long-running agent loops, instantiate
 /// [`GraphExtractorTask`] directly and call [`GraphExtractorTask::run_pass`]
 /// to preserve streak state between passes.
-pub fn run_extraction_pass(
-    store: &SqliteGraphStore,
-    agent_id: &str,
-) -> Result<ExtractionReport, String> {
+pub fn run_extraction_pass(store: &SqliteGraphStore, agent_id: &str) -> ExtractionReport {
     GraphExtractorTask::new(agent_id).run_pass(store)
 }

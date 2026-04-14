@@ -102,7 +102,8 @@ fn test_high_reference_count_not_gating() {
     store.write_node(&sem).expect("write");
 
     let mut task = GraphExtractorTask::new("agent-ref");
-    task.run_pass(&store).expect("pass");
+    let r = task.run_pass(&store);
+    assert!(!r.has_errors(), "{r:?}");
 
     let s = load_semantic(&store, sem.id);
     assert_eq!(s.recurrence_count, 1);
@@ -142,7 +143,8 @@ fn test_full_pass_writes_persona_node() {
     }
     store.write_node(&proc).expect("write proc");
 
-    run_extraction_pass(&store, "agent-p").expect("pass");
+    let r = run_extraction_pass(&store, "agent-p");
+    assert!(!r.has_errors(), "{r:?}");
 
     let personas: Vec<_> = store
         .find_by_type("persona")
@@ -185,7 +187,8 @@ fn test_extraction_report_counts() {
         store.write_node(&sem).expect("write");
     }
 
-    let report = run_extraction_pass(&store, agent).expect("pass");
+    let report = run_extraction_pass(&store, agent);
+    assert!(!report.has_errors(), "{report:?}");
     assert_eq!(report.semantic_nodes_updated, 2);
 }
 
@@ -202,8 +205,10 @@ fn test_idempotent_pass() {
     }
     store.write_node(&sem).expect("write");
 
-    run_extraction_pass(&store, agent).expect("first");
-    let r2 = run_extraction_pass(&store, agent).expect("second");
+    let r1 = run_extraction_pass(&store, agent);
+    assert!(!r1.has_errors(), "{r1:?}");
+    let r2 = run_extraction_pass(&store, agent);
+    assert!(!r2.has_errors(), "{r2:?}");
     assert_eq!(r2.semantic_nodes_updated, 0);
 
     let evo = store
@@ -261,7 +266,8 @@ fn test_no_duplicate_instrumentality_from_tools() {
         .count();
     assert_eq!(merged_inst, 2);
 
-    let report = run_extraction_pass(&store, "agent-dup-tools").expect("run");
+    let report = run_extraction_pass(&store, "agent-dup-tools");
+    assert!(!report.has_errors(), "{report:?}");
     let mut expected_inst = 0.5_f32;
     expected_inst = ema_weighted_step(expected_inst, 0.8, 0.6);
     expected_inst = ema_weighted_step(expected_inst, 0.8, 0.6);
@@ -298,7 +304,8 @@ fn test_brevity_streak_survives_pass_boundary() {
     let ep1 = mk_implicit_brevity_episode(agent, 1, tid1);
     store.write_node(&ep1).expect("write ep1");
 
-    let r1 = task.run_pass(&store).expect("pass1");
+    let r1 = task.run_pass(&store);
+    assert!(!r1.has_errors(), "{r1:?}");
     let verbosity_pass1: Vec<_> = r1
         .merged_signals
         .iter()
@@ -313,7 +320,8 @@ fn test_brevity_streak_survives_pass_boundary() {
     let ep2 = mk_implicit_brevity_episode(agent, 2, tid2);
     store.write_node(&ep2).expect("write ep2");
 
-    let r2 = task.run_pass(&store).expect("pass2");
+    let r2 = task.run_pass(&store);
+    assert!(!r2.has_errors(), "{r2:?}");
     let implicit_verbosity: Vec<_> = r2
         .merged_signals
         .iter()
@@ -339,7 +347,8 @@ fn test_run_pass_signals_extracted_ge_signals_applied() {
     ep.agent_id = "agent-sigcount".into();
     store.write_node(&ep).expect("write");
 
-    let report = run_extraction_pass(&store, "agent-sigcount").expect("pass");
+    let report = run_extraction_pass(&store, "agent-sigcount");
+    assert!(!report.has_errors(), "{report:?}");
     assert!(
         report.signals_extracted >= report.signals_applied,
         "extracted={} applied={}",
@@ -384,7 +393,8 @@ fn test_correction_tick_via_engine() {
     store.write_node(&sem).expect("write");
 
     let mut task = GraphExtractorTask::new("agent-corr");
-    task.run_pass(&store).expect("pass");
+    let r = task.run_pass(&store);
+    assert!(!r.has_errors(), "{r:?}");
 
     let before = task
         .evolution_engine

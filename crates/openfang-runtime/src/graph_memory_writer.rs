@@ -13,7 +13,7 @@
 //! via [`armaraos_graph_memory_export_json_path`] / `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang**
 //! `docs/adapters/AINL_GRAPH_MEMORY.md`).
 
-use ainl_graph_extractor::GraphExtractorTask;
+use ainl_graph_extractor::{ExtractionReport, GraphExtractorTask};
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 use ainl_persona::PersonaAxis;
 use std::path::PathBuf;
@@ -315,7 +315,7 @@ impl GraphMemoryWriter {
     ///
     /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
     /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.
-    pub async fn run_persona_evolution_pass(&self) -> Result<(), String> {
+    pub async fn run_persona_evolution_pass(&self) -> ExtractionReport {
         let inner = self.inner.lock().await;
         let store = inner.sqlite_store();
         let had_persona_before_pass = inner
@@ -324,17 +324,57 @@ impl GraphMemoryWriter {
             .iter()
             .any(|n| n.agent_id == self.agent_id);
         let mut task = GraphExtractorTask::new(&self.agent_id);
-        let report = task.run_pass(store)?;
+        let mut report = task.run_pass(store);
+
+        if let Some(ref e) = report.extract_error {
+            warn!(
+                agent_id = %self.agent_id,
+                error = %e,
+                "graph extractor signal merge failed"
+            );
+        }
+        if let Some(ref e) = report.pattern_error {
+            warn!(
+                agent_id = %self.agent_id,
+                error = %e,
+                "graph extractor pattern persistence failed"
+            );
+        }
+        if let Some(ref e) = report.persona_error {
+            warn!(
+                agent_id = %self.agent_id,
+                error = %e,
+                "graph extractor persona evolution write failed"
+            );
+        }
+
         if report.merged_signals.is_empty() {
             for ax in PersonaAxis::ALL {
                 task.evolution_engine.correction_tick(ax, 0.5);
             }
             let snapshot = task.evolution_engine.snapshot();
             if had_persona_before_pass {
-                task.evolution_engine.write_persona_node(store, &snapshot)?;
+                if let Err(e) = task.evolution_engine.write_persona_node(store, &snapshot) {
+                    warn!(
+                        agent_id = %self.agent_id,
+                        error = %e,
+                        "graph extractor persona evolution write failed"
+                    );
+                    merge_persona_err(&mut report.persona_error, e);
+                }
             }
         }
-        Ok(())
+        report
+    }
+}
+
+fn merge_persona_err(slot: &mut Option<String>, e: String) {
+    match slot {
+        None => *slot = Some(e),
+        Some(prev) => {
+            prev.push_str("; correction write: ");
+            prev.push_str(&e);
+        }
     }
 }
 
@@ -382,7 +422,11 @@ mod tests {
                 .await
                 .is_some()
         );
-        writer.run_persona_evolution_pass().await.expect("evolve");
+        let evolve_report = writer.run_persona_evolution_pass().await;
+        assert!(
+            !evolve_report.has_errors(),
+            "unexpected extraction errors: {evolve_report:?}"
+        );
 
         let nodes = writer.recall_persona(3600).await;
         let evo = nodes.iter().find(|n| {
@@ -445,7 +489,8 @@ mod tests {
                 Some(json!({ "outcome": "success" })),
             )
             .await;
-        writer.run_persona_evolution_pass().await.unwrap();
+        let r1 = writer.run_persona_evolution_pass().await;
+        assert!(!r1.has_errors(), "{r1:?}");
         let c1 = evolution_cycle(&writer).await;
         assert!(c1 >= 1);
 
@@ -456,7 +501,8 @@ mod tests {
                 Some(json!({ "outcome": "success" })),
             )
             .await;
-        writer.run_persona_evolution_pass().await.unwrap();
+        let r2_pass = writer.run_persona_evolution_pass().await;
+        assert!(!r2_pass.has_errors(), "{r2_pass:?}");
         let c2 = evolution_cycle(&writer).await;
         assert!(
             c2 > c1,

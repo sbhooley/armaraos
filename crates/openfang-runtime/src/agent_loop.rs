@@ -1266,13 +1266,7 @@ pub async fn run_agent_loop(
                     tokio::task::yield_now().await;
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
-                        if let Err(e) = gm.run_persona_evolution_pass().await {
-                            warn!(
-                                agent_id = %agent_id,
-                                error = %e,
-                                "AINL graph memory: persona evolution pass failed"
-                            );
-                        }
+                        let _report = gm.run_persona_evolution_pass().await;
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
@@ -3046,13 +3040,7 @@ pub async fn run_agent_loop_streaming(
                     tokio::task::yield_now().await;
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
-                        if let Err(e) = gm.run_persona_evolution_pass().await {
-                            warn!(
-                                agent_id = %agent_id,
-                                error = %e,
-                                "AINL graph memory: persona evolution pass failed (streaming)"
-                            );
-                        }
+                        let _report = gm.run_persona_evolution_pass().await;
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }

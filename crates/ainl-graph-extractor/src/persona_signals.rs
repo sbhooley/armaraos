@@ -227,12 +227,30 @@ fn correction_emit_tag(tag: &SemanticTag) -> String {
     }
 }
 
+/// Collected signals plus episode tag writes deferred to [`flush_episode_pattern_tags`].
+#[derive(Debug, Default)]
+pub struct ExtractPassCollected {
+    pub signals: Vec<RawSignal>,
+    pub pending_tags: Vec<(Uuid, Vec<String>)>,
+}
+
 /// Episode-ordered heuristics plus semantic domain pass; updates `state` and may patch episode rows.
 pub fn extract_pass(
     store: &SqliteGraphStore,
     agent_id: &str,
     state: &mut PersonaSignalExtractorState,
 ) -> Result<Vec<RawSignal>, String> {
+    let collected = extract_pass_collect(store, agent_id, state)?;
+    flush_episode_pattern_tags(store, &collected.pending_tags)?;
+    Ok(collected.signals)
+}
+
+/// Build signals and pending episode tag patches without writing episodes yet.
+pub fn extract_pass_collect(
+    store: &SqliteGraphStore,
+    agent_id: &str,
+    state: &mut PersonaSignalExtractorState,
+) -> Result<ExtractPassCollected, String> {
     state.pass_seq = state.pass_seq.saturating_add(1);
 
     let mut episodes: Vec<AinlMemoryNode> = store
@@ -246,6 +264,7 @@ pub fn extract_pass(
     });
 
     let mut out = Vec::new();
+    let mut pending_tags: Vec<(Uuid, Vec<String>)> = Vec::new();
 
     for ep_node in &episodes {
         let episode_id = ep_node.id;
@@ -343,11 +362,27 @@ pub fn extract_pass(
             }
         }
 
-        append_episode_tags(store, episode_id, &tags)?;
+        if !tags.is_empty() {
+            pending_tags.push((episode_id, tags));
+        }
     }
 
     out.extend(domain_emergence_signals(store, agent_id, state)?);
-    Ok(out)
+    Ok(ExtractPassCollected {
+        signals: out,
+        pending_tags,
+    })
+}
+
+/// Apply episode `persona_signals_emitted` tag patches from [`extract_pass_collect`].
+pub fn flush_episode_pattern_tags(
+    store: &SqliteGraphStore,
+    pending: &[(Uuid, Vec<String>)],
+) -> Result<(), String> {
+    for (episode_id, tags) in pending {
+        append_episode_tags(store, *episode_id, tags)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

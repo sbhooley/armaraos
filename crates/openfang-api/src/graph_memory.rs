@@ -102,7 +102,7 @@ fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
         AinlNodeType::RuntimeState { runtime_state } => (
             format!(
                 "Runtime state · turns {} · last extract {}",
-                runtime_state.turn_count, runtime_state.last_extraction_turn
+                runtime_state.turn_count, runtime_state.last_extraction_at_turn
             ),
             None,
         ),

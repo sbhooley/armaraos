@@ -48,8 +48,8 @@ pub struct AinlRuntime {
     config: RuntimeConfig,
     memory: ainl_memory::GraphMemory,
     extractor: GraphExtractorTask,
-    turn_count: u32,
-    last_extraction_turn: u32,
+    turn_count: u64,
+    last_extraction_at_turn: u64,
     /// Current delegation depth for the active `run_turn` call chain (incremented per nested entry).
     current_depth: Arc<AtomicU32>,
     hooks: Box<dyn TurnHooks>,
@@ -64,6 +64,9 @@ pub struct AinlRuntime {
     /// Test hook: next fitness write-back from procedural dispatch fails without touching SQLite.
     #[doc(hidden)]
     test_force_fitness_write_failure: bool,
+    /// Test hook: next runtime-state SQLite persist fails (non-fatal warning).
+    #[doc(hidden)]
+    test_force_runtime_state_write_failure: bool,
     adapter_registry: AdapterRegistry,
 }
 
@@ -71,21 +74,25 @@ impl AinlRuntime {
     pub fn new(config: RuntimeConfig, store: SqliteGraphStore) -> Self {
         let agent_id = config.agent_id.clone();
         let memory = ainl_memory::GraphMemory::from_sqlite_store(store);
-        let (init_turn_count, init_persona_cache, init_last_extraction_turn) =
+        let (init_turn_count, init_persona_cache, init_last_extraction_at_turn) =
             if agent_id.is_empty() {
                 (0, None, 0)
             } else {
-                match memory.sqlite_store().load_runtime_state(&agent_id) {
+                match memory.read_runtime_state(&agent_id) {
                     Ok(Some(state)) => {
                         tracing::info!(
                             agent_id = %agent_id,
                             turn_count = state.turn_count,
                             "restored runtime state"
                         );
+                        let persona_cache = state
+                            .persona_snapshot_json
+                            .as_ref()
+                            .and_then(|json| serde_json::from_str::<String>(json).ok());
                         (
                             state.turn_count,
-                            state.last_persona_prompt,
-                            state.last_extraction_turn,
+                            persona_cache,
+                            state.last_extraction_at_turn,
                         )
                     }
                     Ok(None) => (0, None, 0),
@@ -100,13 +107,14 @@ impl AinlRuntime {
             memory,
             config,
             turn_count: init_turn_count,
-            last_extraction_turn: init_last_extraction_turn,
+            last_extraction_at_turn: init_last_extraction_at_turn,
             current_depth: Arc::new(AtomicU32::new(0)),
             hooks: Box::new(NoOpHooks),
             evolution_writes_enabled: true,
             persona_cache: init_persona_cache,
             test_force_extraction_failure: false,
             test_force_fitness_write_failure: false,
+            test_force_runtime_state_write_failure: false,
             adapter_registry: AdapterRegistry::new(),
         }
     }
@@ -128,8 +136,13 @@ impl AinlRuntime {
     }
 
     #[doc(hidden)]
-    pub fn test_turn_count(&self) -> u32 {
+    pub fn test_turn_count(&self) -> u64 {
         self.turn_count
+    }
+
+    #[doc(hidden)]
+    pub fn test_persona_cache(&self) -> Option<&str> {
+        self.persona_cache.as_deref()
     }
 
     #[doc(hidden)]
@@ -150,6 +163,17 @@ impl AinlRuntime {
     #[doc(hidden)]
     pub fn test_set_force_fitness_write_failure(&mut self, fail: bool) {
         self.test_force_fitness_write_failure = fail;
+    }
+
+    /// Test hook: access the graph extractor task for per-phase error injection.
+    #[doc(hidden)]
+    pub fn test_extractor_mut(&mut self) -> &mut GraphExtractorTask {
+        &mut self.extractor
+    }
+
+    #[doc(hidden)]
+    pub fn test_set_force_runtime_state_write_failure(&mut self, fail: bool) {
+        self.test_force_runtime_state_write_failure = fail;
     }
 
     pub fn with_hooks(mut self, hooks: impl TurnHooks + 'static) -> Self {
@@ -309,9 +333,7 @@ impl AinlRuntime {
 
     /// Full single-turn orchestration (no LLM / no IR parse).
     pub fn run_turn(&mut self, input: TurnInput) -> Result<TurnOutcome, AinlRuntimeError> {
-        let depth = self
-            .current_depth
-            .fetch_add(1, Ordering::SeqCst);
+        let depth = self.current_depth.fetch_add(1, Ordering::SeqCst);
         let cd = Arc::clone(&self.current_depth);
         let _depth_guard = scopeguard::guard((), move |()| {
             cd.fetch_sub(1, Ordering::SeqCst);
@@ -526,8 +548,8 @@ impl AinlRuntime {
         self.turn_count = self.turn_count.wrapping_add(1);
 
         let should_extract = self.config.extraction_interval > 0
-            && self.turn_count.saturating_sub(self.last_extraction_turn)
-                >= self.config.extraction_interval;
+            && self.turn_count.saturating_sub(self.last_extraction_at_turn)
+                >= self.config.extraction_interval as u64;
 
         let t_extract = Instant::now();
         let (extraction_report, _extraction_failed) = if should_extract {
@@ -553,48 +575,62 @@ impl AinlRuntime {
                 );
                 (None, true)
             } else {
-                match self.extractor.run_pass(self.memory.sqlite_store()) {
-                    Ok(report) => {
-                        tracing::info!(
-                            agent_id = %report.agent_id,
-                            signals_extracted = report.signals_extracted,
-                            signals_applied = report.signals_applied,
-                            semantic_nodes_updated = report.semantic_nodes_updated,
-                            "ainl-graph-extractor pass completed (scheduled)"
-                        );
-                        self.hooks.on_extraction_complete(&report);
-                        self.persona_cache = None;
-                        tracing::debug!(
-                            target: "ainl_runtime",
-                            duration_ms = t_extract.elapsed().as_millis() as u64,
-                            signals_ingested = report.signals_extracted as u64,
-                            skipped = false,
-                            "extraction_pass"
-                        );
-                        (Some(report), false)
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            phase = ?TurnPhase::ExtractionPass,
-                            error = %e,
-                            "non-fatal turn write failed — continuing"
-                        );
-                        turn_warnings.push(TurnWarning {
-                            phase: TurnPhase::ExtractionPass,
-                            error: e,
-                        });
-                        tracing::debug!(
-                            target: "ainl_runtime",
-                            duration_ms = t_extract.elapsed().as_millis() as u64,
-                            signals_ingested = 0u64,
-                            skipped = false,
-                            "extraction_pass"
-                        );
-                        (None, true)
-                    }
+                let report = self.extractor.run_pass(self.memory.sqlite_store());
+                if let Some(ref e) = report.extract_error {
+                    tracing::warn!(
+                        phase = ?TurnPhase::ExtractionPass,
+                        error = %e,
+                        "non-fatal turn write failed — continuing"
+                    );
+                    turn_warnings.push(TurnWarning {
+                        phase: TurnPhase::ExtractionPass,
+                        error: e.clone(),
+                    });
                 }
+                if let Some(ref e) = report.pattern_error {
+                    tracing::warn!(
+                        phase = ?TurnPhase::PatternPersistence,
+                        error = %e,
+                        "non-fatal turn write failed — continuing"
+                    );
+                    turn_warnings.push(TurnWarning {
+                        phase: TurnPhase::PatternPersistence,
+                        error: e.clone(),
+                    });
+                }
+                if let Some(ref e) = report.persona_error {
+                    tracing::warn!(
+                        phase = ?TurnPhase::PersonaEvolution,
+                        error = %e,
+                        "non-fatal turn write failed — continuing"
+                    );
+                    turn_warnings.push(TurnWarning {
+                        phase: TurnPhase::PersonaEvolution,
+                        error: e.clone(),
+                    });
+                }
+                let extraction_failed = report.has_errors();
+                if !extraction_failed {
+                    tracing::info!(
+                        agent_id = %report.agent_id,
+                        signals_extracted = report.signals_extracted,
+                        signals_applied = report.signals_applied,
+                        semantic_nodes_updated = report.semantic_nodes_updated,
+                        "ainl-graph-extractor pass completed (scheduled)"
+                    );
+                }
+                self.hooks.on_extraction_complete(&report);
+                self.persona_cache = None;
+                tracing::debug!(
+                    target: "ainl_runtime",
+                    duration_ms = t_extract.elapsed().as_millis() as u64,
+                    signals_ingested = report.signals_extracted as u64,
+                    skipped = false,
+                    "extraction_pass"
+                );
+                (Some(report), extraction_failed)
             };
-            self.last_extraction_turn = self.turn_count;
+            self.last_extraction_at_turn = self.turn_count;
             res
         } else {
             tracing::debug!(
@@ -607,10 +643,9 @@ impl AinlRuntime {
             (None, false)
         };
 
-        if let Err(e) = try_export_graph_json_armaraos(
-            self.memory.sqlite_store(),
-            &self.config.agent_id,
-        ) {
+        if let Err(e) =
+            try_export_graph_json_armaraos(self.memory.sqlite_store(), &self.config.agent_id)
+        {
             tracing::warn!(
                 phase = ?TurnPhase::ExportRefresh,
                 error = %e,
@@ -620,6 +655,35 @@ impl AinlRuntime {
                 phase: TurnPhase::ExportRefresh,
                 error: e,
             });
+        }
+
+        if !self.config.agent_id.is_empty() {
+            let state = RuntimeStateNode {
+                agent_id: self.config.agent_id.clone(),
+                turn_count: self.turn_count,
+                last_extraction_at_turn: self.last_extraction_at_turn,
+                persona_snapshot_json: self
+                    .persona_cache
+                    .as_ref()
+                    .and_then(|p| serde_json::to_string(p).ok()),
+                updated_at: chrono::Utc::now().timestamp(),
+            };
+            let write_res = if std::mem::take(&mut self.test_force_runtime_state_write_failure) {
+                Err("injected runtime state write failure".to_string())
+            } else {
+                self.memory.write_runtime_state(&state)
+            };
+            if let Err(e) = write_res {
+                tracing::warn!(
+                    phase = ?TurnPhase::RuntimeStatePersist,
+                    error = %e,
+                    "failed to persist runtime state — cadence will reset on next restart"
+                );
+                turn_warnings.push(TurnWarning {
+                    phase: TurnPhase::RuntimeStatePersist,
+                    error: e,
+                });
+            }
         }
 
         let result = TurnResult {
@@ -640,23 +704,6 @@ impl AinlRuntime {
                 warnings: turn_warnings,
             }
         };
-
-        if !self.config.agent_id.is_empty() {
-            let persist_state = RuntimeStateNode {
-                agent_id: self.config.agent_id.clone(),
-                turn_count: self.turn_count,
-                last_extraction_turn: self.last_extraction_turn,
-                last_persona_prompt: self.persona_cache.clone(),
-                updated_at: chrono::Utc::now().to_rfc3339(),
-            };
-            if let Err(e) = self
-                .memory
-                .sqlite_store()
-                .save_runtime_state(&persist_state)
-            {
-                tracing::warn!(error = %e, "failed to persist runtime state — non-fatal");
-            }
-        }
 
         self.hooks.on_turn_complete(&outcome);
         Ok(outcome)
@@ -1029,10 +1076,7 @@ fn format_persona_line(p: &PersonaNode) -> String {
 /// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
 /// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
 /// Refresh `{AINL_GRAPH_MEMORY_ARMARAOS_EXPORT}/{agent_id}_graph_export.json` when the env var is set.
-fn try_export_graph_json_armaraos(
-    store: &SqliteGraphStore,
-    agent_id: &str,
-) -> Result<(), String> {
+fn try_export_graph_json_armaraos(store: &SqliteGraphStore, agent_id: &str) -> Result<(), String> {
     let trimmed = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT").unwrap_or_default();
     let dir = trimmed.trim();
     if dir.is_empty() {

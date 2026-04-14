@@ -17,7 +17,10 @@ mod turn_extract;
 
 pub use ainl_persona::{AXIS_EVOLUTION_SNAPSHOT, EVOLUTION_TRAIT_NAME};
 pub use extractor::{ExtractionReport, GraphExtractorTask};
-pub use persona_signals::{extract_pass, PersonaSignalExtractorState};
+pub use persona_signals::{
+    extract_pass, extract_pass_collect, flush_episode_pattern_tags, ExtractPassCollected,
+    PersonaSignalExtractorState,
+};
 pub use recurrence::update_semantic_recurrence;
 pub use runner::run_extraction_pass;
 pub use turn_extract::extract_turn_semantic_tags_for_memory;

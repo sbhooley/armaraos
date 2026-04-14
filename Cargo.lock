@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-graph-extractor"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ainl-memory",
  "ainl-persona",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-memory"
-version = "0.1.7-alpha"
+version = "0.1.8-alpha"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-runtime"
-version = "0.3.2-alpha"
+version = "0.3.3-alpha"
 dependencies = [
  "ainl-graph-extractor",
  "ainl-memory",

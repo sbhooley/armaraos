@@ -3,8 +3,8 @@
 //! Higher-level query functions built on top of GraphStore.
 
 use crate::node::{
-    AinlMemoryNode, AinlNodeType, EpisodicNode, PersonaLayer, PersonaNode, ProcedureType,
-    ProceduralNode, SemanticNode, StrengthEvent,
+    AinlMemoryNode, AinlNodeType, EpisodicNode, PersonaLayer, PersonaNode, ProceduralNode,
+    ProcedureType, RuntimeStateNode, SemanticNode, StrengthEvent,
 };
 use crate::snapshot::SnapshotEdge;
 use crate::store::{GraphStore, SqliteGraphStore};
@@ -158,7 +158,10 @@ pub fn recall_by_topic_cluster(
     Ok(out)
 }
 
-pub fn recall_contradictions(store: &dyn GraphStore, node_id: Uuid) -> Result<Vec<SemanticNode>, String> {
+pub fn recall_contradictions(
+    store: &dyn GraphStore,
+    node_id: Uuid,
+) -> Result<Vec<SemanticNode>, String> {
     let Some(node) = store.read_node(node_id)? else {
         return Ok(Vec::new());
     };
@@ -294,7 +297,9 @@ pub fn recall_low_success_procedures(
             continue;
         }
         if let AinlNodeType::Procedural { procedural } = &node.node_type {
-            let total = procedural.success_count.saturating_add(procedural.failure_count);
+            let total = procedural
+                .success_count
+                .saturating_add(procedural.failure_count);
             if total > 0 && procedural.success_rate < threshold {
                 out.push(procedural.clone());
             }
@@ -305,7 +310,10 @@ pub fn recall_low_success_procedures(
 
 // --- Persona helpers ---
 
-pub fn recall_strength_history(store: &dyn GraphStore, node_id: Uuid) -> Result<Vec<StrengthEvent>, String> {
+pub fn recall_strength_history(
+    store: &dyn GraphStore,
+    node_id: Uuid,
+) -> Result<Vec<StrengthEvent>, String> {
     let Some(node) = store.read_node(node_id)? else {
         return Ok(Vec::new());
     };
@@ -442,7 +450,9 @@ impl<'a> GraphQuery<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![&self.agent_id, limit as i64], |row| row.get::<_, String>(0))
+            .query_map(params![&self.agent_id, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| e.to_string())?;
         load_nodes_from_payload_rows(rows)
     }
@@ -461,7 +471,9 @@ impl<'a> GraphQuery<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![&col, since_ts, &self.agent_id], |row| row.get::<_, String>(0))
+            .query_map(params![&col, since_ts, &self.agent_id], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| e.to_string())?;
         load_nodes_from_payload_rows(rows)
     }
@@ -593,7 +605,8 @@ impl<'a> GraphQuery<'a> {
             .map_err(|e| e.to_string())?;
         match row {
             Some(payload) => {
-                let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+                let node: AinlMemoryNode =
+                    serde_json::from_str(&payload).map_err(|e| e.to_string())?;
                 Ok(Some(node))
             }
             None => Ok(None),
@@ -633,7 +646,9 @@ impl<'a> GraphQuery<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![&self.agent_id, limit as i64], |row| row.get::<_, String>(0))
+            .query_map(params![&self.agent_id, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| e.to_string())?;
         load_nodes_from_payload_rows(rows)
     }
@@ -664,10 +679,9 @@ impl<'a> GraphQuery<'a> {
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(
-                params![&self.agent_id, tool_name, limit as i64],
-                |row| row.get::<_, String>(0),
-            )
+            .query_map(params![&self.agent_id, tool_name, limit as i64], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(|e| e.to_string())?;
         load_nodes_from_payload_rows(rows)
     }
@@ -690,11 +704,17 @@ impl<'a> GraphQuery<'a> {
             .map_err(|e| e.to_string())?;
         match row {
             Some(payload) => {
-                let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+                let node: AinlMemoryNode =
+                    serde_json::from_str(&payload).map_err(|e| e.to_string())?;
                 Ok(Some(node))
             }
             None => Ok(None),
         }
+    }
+
+    /// Latest persisted [`RuntimeStateNode`] for this query's `agent_id`.
+    pub fn read_runtime_state(&self) -> Result<Option<RuntimeStateNode>, String> {
+        self.store.read_runtime_state(&self.agent_id)
     }
 }
 
@@ -733,8 +753,8 @@ mod tests {
         store.write_node(&node1).expect("Write failed");
         store.write_node(&node2).expect("Write failed");
 
-        let delegations = recall_recent(&store, now - 100, 10, Some("agent_delegate"))
-            .expect("Query failed");
+        let delegations =
+            recall_recent(&store, now - 100, 10, Some("agent_delegate")).expect("Query failed");
 
         assert_eq!(delegations.len(), 1);
     }
@@ -762,7 +782,10 @@ mod tests {
 
     #[test]
     fn test_query_active_patches() {
-        let path = std::env::temp_dir().join(format!("ainl_query_active_patch_{}.db", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "ainl_query_active_patch_{}.db",
+            uuid::Uuid::new_v4()
+        ));
         let _ = std::fs::remove_file(&path);
         let store = SqliteGraphStore::open(&path).expect("open");
         let ag = "agent-active-patch";

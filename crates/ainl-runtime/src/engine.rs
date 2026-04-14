@@ -21,17 +21,19 @@ pub const EMIT_TO_EDGE: &str = "EMIT_TO";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AinlRuntimeError {
     /// Nested [`crate::AinlRuntime::run_turn`] exceeded [`crate::RuntimeConfig::max_delegation_depth`].
-    DelegationDepthExceeded { depth: u32, max: u32 },
+    DelegationDepthExceeded {
+        depth: u32,
+        max: u32,
+    },
     Message(String),
 }
 
 impl fmt::Display for AinlRuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AinlRuntimeError::DelegationDepthExceeded { depth, max } => write!(
-                f,
-                "delegation depth exceeded (depth={depth}, max={max})"
-            ),
+            AinlRuntimeError::DelegationDepthExceeded { depth, max } => {
+                write!(f, "delegation depth exceeded (depth={depth}, max={max})")
+            }
             AinlRuntimeError::Message(s) => f.write_str(s),
         }
     }
@@ -229,6 +231,8 @@ pub enum TurnPhase {
     PatternPersistence,
     PersonaEvolution,
     ExportRefresh,
+    /// Persisted session counters / persona cache snapshot (SQLite).
+    RuntimeStatePersist,
 }
 
 /// One non-fatal failure recorded during a turn (the turn still returns a usable [`TurnResult`]).
@@ -242,9 +246,7 @@ pub struct TurnWarning {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnStatus {
     Ok,
-    StepLimitExceeded {
-        steps_executed: u32,
-    },
+    StepLimitExceeded { steps_executed: u32 },
     GraphMemoryDisabled,
 }
 

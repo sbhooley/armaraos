@@ -116,7 +116,9 @@ fn test_import_strict_rejects_dangling() {
         }],
     };
     let mut store = SqliteGraphStore::open(&path).unwrap();
-    let err = store.import_graph(&snap, false).expect_err("strict import must fail");
+    let err = store
+        .import_graph(&snap, false)
+        .expect_err("strict import must fail");
     assert!(
         err.to_lowercase().contains("foreign"),
         "unexpected error: {err}"
