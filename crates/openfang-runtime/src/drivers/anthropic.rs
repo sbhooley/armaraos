@@ -4,6 +4,7 @@
 //! system prompt extraction, and retry on 429/529 errors.
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::vitals_classifier::heuristic_vitals_from_content;
 use async_trait::async_trait;
 use futures::StreamExt;
 use openfang_types::message::{
@@ -648,12 +649,13 @@ impl LlmDriver for AnthropicDriver {
                 );
             }
 
+            let vitals = heuristic_vitals_from_content(&content, tool_calls.len());
             return Ok(CompletionResponse {
                 content,
                 stop_reason,
                 tool_calls,
                 usage,
-                vitals: None,
+                vitals,
             });
         }
 
@@ -835,6 +837,7 @@ fn convert_response(api: ApiResponse) -> CompletionResponse {
         _ => StopReason::EndTurn,
     };
 
+    let vitals = heuristic_vitals_from_content(&content, tool_calls.len());
     CompletionResponse {
         content,
         stop_reason,
@@ -845,7 +848,7 @@ fn convert_response(api: ApiResponse) -> CompletionResponse {
             cache_creation_input_tokens: api.usage.cache_creation_input_tokens,
             cache_read_input_tokens: api.usage.cache_read_input_tokens,
         },
-        vitals: None,
+        vitals,
     }
 }
 

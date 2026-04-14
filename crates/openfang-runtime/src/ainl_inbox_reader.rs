@@ -310,12 +310,50 @@ fn convert_one_inbox_node(
             n
         }
         "patch" => {
+            // Python PatchRecord → ProceduralNode with patch_version ≥ 1 and label set.
+            // Python fields: label_name, pattern_name, source_episode_ids, patch_version,
+            //                patched_at, parent_patch_id, retired_at.
+            let pattern_name = value_as_str(map.get("pattern_name"))
+                .filter(|s| !s.is_empty())
+                .or_else(|| value_as_str(map.get("label_name")).filter(|s| !s.is_empty()))
+                .unwrap_or(label.as_str())
+                .to_string();
+            let label_name = value_as_str(map.get("label_name"))
+                .unwrap_or("")
+                .to_string();
+            let patch_version = map
+                .get("patch_version")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1)
+                .max(1) as u32;
+            let retired = map
+                .get("retired_at")
+                .map(|v| !v.is_null())
+                .unwrap_or(false);
+            let source_episode_ids = value_string_vec(map.get("source_episode_ids"));
+            let mut n = AinlMemoryNode::new_procedural_tools(
+                pattern_name,
+                source_episode_ids,
+                0.75,
+            );
+            if let AinlNodeType::Procedural { ref mut procedural } = n.node_type {
+                procedural.patch_version = patch_version;
+                procedural.label = label_name;
+                procedural.retired = retired;
+                // Store parent patch linkage as trace_id if present.
+                procedural.trace_id = map
+                    .get("parent_patch_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+            }
             debug!(
                 agent_id = %writer_agent_id,
                 inbox_id = %id_str,
-                "inbox: patch nodes are not imported into ainl-memory yet — skipped"
+                patch_version = patch_version,
+                "inbox: importing patch node as procedural"
             );
-            return None;
+            n
         }
         other => {
             warn!(
@@ -562,6 +600,95 @@ mod tests {
             assert_eq!(episodic.vitals_phase.as_deref(), Some("reasoning:0.69"));
             let trust = episodic.vitals_trust.expect("vitals_trust must be Some");
             assert!((trust - 0.69_f32).abs() < 1e-4, "trust={trust}");
+        }
+    }
+
+    /// Gap N — patch node from Python inbox is imported as ProceduralNode.
+    #[tokio::test]
+    async fn test_inbox_drain_imports_patch_as_procedural() {
+        let (writer, _dir) = open_writer_in_mem();
+        let inbox = json!({
+            "schema_version": "1",
+            "nodes": [{
+                "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "node_type": "patch",
+                "agent_id": AGENT,
+                "label": "my_patch",
+                "payload": {
+                    "label_name": "L_my_patch",
+                    "pattern_name": "my_pattern",
+                    "source_episode_ids": ["ep1", "ep2"],
+                    "patch_version": 2,
+                    "patched_at": 1700000000,
+                    "parent_patch_id": "parent-patch-xyz",
+                    "retired_at": null
+                },
+                "tags": [],
+                "created_at": 0.0
+            }],
+            "edges": [],
+            "source_features": [],
+        });
+        drain_raw_into_writer(&writer, &inbox).await;
+
+        let gm = writer.inner.lock().await;
+        let snapshot = gm.export_graph(AGENT).expect("export_graph");
+        drop(gm);
+
+        let procedural = snapshot.nodes.iter().find(|n| {
+            matches!(&n.node_type, AinlNodeType::Procedural { procedural } if procedural.patch_version >= 1)
+        });
+        assert!(procedural.is_some(), "no procedural node found after patch import");
+        if let AinlNodeType::Procedural { procedural } = &procedural.unwrap().node_type {
+            assert_eq!(procedural.patch_version, 2);
+            assert_eq!(procedural.label.as_str(), "L_my_patch");
+            assert!(!procedural.retired, "should not be retired (retired_at was null)");
+            assert_eq!(
+                procedural.trace_id.as_deref(),
+                Some("parent-patch-xyz"),
+                "parent_patch_id should be stored as trace_id"
+            );
+            assert!(procedural.pattern_name == "my_pattern", "pattern_name mismatch");
+        }
+    }
+
+    /// Gap N — retired patch node sets retired = true.
+    #[tokio::test]
+    async fn test_inbox_drain_retired_patch_sets_retired_flag() {
+        let (writer, _dir) = open_writer_in_mem();
+        let inbox = json!({
+            "schema_version": "1",
+            "nodes": [{
+                "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "node_type": "patch",
+                "agent_id": AGENT,
+                "label": "old_patch",
+                "payload": {
+                    "label_name": "L_old_patch",
+                    "pattern_name": "old_pattern",
+                    "source_episode_ids": [],
+                    "patch_version": 1,
+                    "patched_at": 1700000000,
+                    "retired_at": 1710000000
+                },
+                "tags": [],
+                "created_at": 0.0
+            }],
+            "edges": [],
+            "source_features": [],
+        });
+        drain_raw_into_writer(&writer, &inbox).await;
+
+        let gm = writer.inner.lock().await;
+        let snapshot = gm.export_graph(AGENT).expect("export_graph");
+        drop(gm);
+
+        let procedural = snapshot.nodes.iter().find(|n| {
+            matches!(&n.node_type, AinlNodeType::Procedural { procedural } if procedural.patch_version >= 1)
+        });
+        assert!(procedural.is_some(), "no procedural node after retired patch import");
+        if let AinlNodeType::Procedural { procedural } = &procedural.unwrap().node_type {
+            assert!(procedural.retired, "retired_at present should set retired=true");
         }
     }
 

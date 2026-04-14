@@ -23,6 +23,7 @@
 //! - `VERTEX_AI_ACCESS_TOKEN` — Pre-generated token (optional, for testing)
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::vitals_classifier::heuristic_vitals_from_content;
 use async_trait::async_trait;
 use futures::StreamExt;
 use openfang_types::message::{
@@ -487,12 +488,13 @@ fn convert_response(resp: VertexResponse) -> Result<CompletionResponse, LlmError
         })
         .unwrap_or_default();
 
+    let vitals = heuristic_vitals_from_content(&content, tool_calls.len());
     Ok(CompletionResponse {
         content,
         stop_reason,
         tool_calls,
         usage,
-        vitals: None,
+        vitals,
     })
 }
 
@@ -722,12 +724,13 @@ impl LlmDriver for VertexAIDriver {
                 }]
             };
 
+            let vitals = heuristic_vitals_from_content(&content, final_tool_calls.len());
             return Ok(CompletionResponse {
                 content,
                 stop_reason,
                 tool_calls: final_tool_calls,
                 usage,
-                vitals: None,
+                vitals,
             });
         }
 

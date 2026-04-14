@@ -9,6 +9,7 @@
 //! hung CLI processes from blocking agents indefinitely.
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::vitals_classifier::heuristic_vitals_from_content;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use openfang_types::message::{ContentBlock, Role, StopReason, TokenUsage};
@@ -419,11 +420,13 @@ impl LlmDriver for ClaudeCodeDriver {
                 .or(parsed.text)
                 .unwrap_or_default();
             let usage = parsed.usage.unwrap_or_default();
+            let content = vec![ContentBlock::Text {
+                text: text.clone(),
+                provider_metadata: None,
+            }];
+            let vitals = heuristic_vitals_from_content(&content, 0);
             return Ok(CompletionResponse {
-                content: vec![ContentBlock::Text {
-                    text: text.clone(),
-                    provider_metadata: None,
-                }],
+                content,
                 stop_reason: StopReason::EndTurn,
                 tool_calls: Vec::new(),
                 usage: TokenUsage {
@@ -431,17 +434,19 @@ impl LlmDriver for ClaudeCodeDriver {
                     output_tokens: usage.output_tokens,
                     ..Default::default()
                 },
-                vitals: None,
+                vitals,
             });
         }
 
         // Fallback: treat entire stdout as plain text
         let text = stdout.trim().to_string();
+        let content = vec![ContentBlock::Text {
+            text,
+            provider_metadata: None,
+        }];
+        let vitals = heuristic_vitals_from_content(&content, 0);
         Ok(CompletionResponse {
-            content: vec![ContentBlock::Text {
-                text,
-                provider_metadata: None,
-            }],
+            content,
             stop_reason: StopReason::EndTurn,
             tool_calls: Vec::new(),
             usage: TokenUsage {
@@ -449,7 +454,7 @@ impl LlmDriver for ClaudeCodeDriver {
                 output_tokens: 0,
                 ..Default::default()
             },
-            vitals: None,
+            vitals,
         })
     }
 
@@ -654,15 +659,17 @@ impl LlmDriver for ClaudeCodeDriver {
             })
             .await;
 
+        let content = vec![ContentBlock::Text {
+            text: full_text,
+            provider_metadata: None,
+        }];
+        let vitals = heuristic_vitals_from_content(&content, 0);
         Ok(CompletionResponse {
-            content: vec![ContentBlock::Text {
-                text: full_text,
-                provider_metadata: None,
-            }],
+            content,
             stop_reason: StopReason::EndTurn,
             tool_calls: Vec::new(),
             usage: final_usage,
-            vitals: None,
+            vitals,
         })
     }
 }

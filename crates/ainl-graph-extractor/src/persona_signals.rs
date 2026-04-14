@@ -414,6 +414,9 @@ mod tests {
             user_message: None,
             assistant_response: None,
             tags: vec![],
+            vitals_gate: None,
+            vitals_phase: None,
+            vitals_trust: None,
         }
     }
 

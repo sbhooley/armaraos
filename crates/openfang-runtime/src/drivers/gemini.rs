@@ -9,6 +9,7 @@
 //! - Response: `candidates[0].content.parts[]`
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::vitals_classifier::heuristic_vitals_from_content;
 use async_trait::async_trait;
 use futures::StreamExt;
 use openfang_types::message::{
@@ -607,12 +608,13 @@ fn convert_response(resp: GeminiResponse) -> Result<CompletionResponse, LlmError
         })
         .unwrap_or_default();
 
+    let vitals = heuristic_vitals_from_content(&content, tool_calls.len());
     Ok(CompletionResponse {
         content,
         stop_reason,
         tool_calls,
         usage,
-        vitals: None,
+        vitals,
     })
 }
 
@@ -1083,12 +1085,13 @@ impl LlmDriver for GeminiDriver {
                 .send(StreamEvent::ContentComplete { stop_reason, usage })
                 .await;
 
+            let vitals = heuristic_vitals_from_content(&content, tool_calls.len());
             return Ok(CompletionResponse {
                 content,
                 stop_reason,
                 tool_calls,
                 usage,
-                vitals: None,
+                vitals,
             });
         }
 
