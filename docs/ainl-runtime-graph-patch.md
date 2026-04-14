@@ -32,7 +32,7 @@ Hub overview and verification: **[ainl-runtime.md](ainl-runtime.md)**; crate REA
 
 - Implement [`PatchAdapter`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-runtime/src/adapters/mod.rs) (`name`, `execute_patch`) and register with **`AinlRuntime::register_adapter`**.
 - Each active procedural row is dispatched by **procedural `label`**: lookup **`adapter_registry.get(label)`**, else fallback to the built-in **`graph_patch`** adapter when **`register_default_patch_adapters()`** has been called.
-- **`PatchDispatchResult`** records **`adapter_name`** and optional **`adapter_output`** (`serde_json::Value`) on success; **`Err`** from **`execute_patch`** is logged and the turn continues with metadata-only dispatch (fitness update still applies when the node persists).
+- **`PatchDispatchResult`** records optional **`adapter_output`** (`serde_json::Value`) when **`execute_patch`** returns **`Ok`**; **`adapter_name`** is set when an adapter was selected (including on **`Err`**, after which output stays **`None`**). **`Err`** from **`execute_patch`** is logged and the turn continues as metadata-only dispatch (fitness update still applies when the node persists).
 
 ## crates.io dependency alignment
 
@@ -43,9 +43,17 @@ When consuming **`ainl-runtime`** from the registry (not path deps), Cargo resol
 | **ainl-memory** | **0.1.8-alpha** |
 | **ainl-persona** | **0.1.4** (0.1.3 caps `ainl-memory` at ^0.1.7-alpha and conflicts with graph-extractor + memory 0.1.8) |
 | **ainl-graph-extractor** | **0.1.5** |
-| **ainl-semantic-tagger** | **0.1.2-alpha** |
+| **ainl-semantic-tagger** | **0.1.5** (match the release’s `Cargo.toml`; workspace may be ahead of older registry pins) |
 
 Workspace **path** dependencies sidestep this; **`cargo publish -p ainl-runtime`** validates the tarball against the index.
+
+### Pre-release versions and `cargo publish`
+
+When **`ainl-memory`** moves to a **newer pre-release** (for example **0.1.5-alpha** after **0.1.3-alpha**), a dependency written as **`ainl-memory = "^0.1.3-alpha"`** in a crate **already on crates.io** can force the resolver to pick **only** **0.1.3-alpha** for that subtree. That **does not unify** with another edge that requires **`^0.1.5-alpha`** (or **0.1.8-alpha**), so **`cargo publish -p ainl-runtime`** fails with “failed to select a version for `ainl-memory`”.
+
+**Fix:** publish **new semver versions** of intermediate crates (**`ainl-persona`**, **`ainl-graph-extractor`**) whose published `Cargo.toml` declares the **same** **`ainl-memory`** floor the stack needs, **then** publish **`ainl-runtime`**. Republishing the same persona/extractor version number is not possible on crates.io; bump the crate version.
+
+Operational checklist: **`scripts/publish-prep-ainl-crates.sh`** (ordered dry-runs) and the table above after each release.
 
 ## What to register
 

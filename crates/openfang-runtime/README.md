@@ -49,6 +49,19 @@ Slim build without the crates.io dependency:
 cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution
 ```
 
+## AINL graph memory JSON export (Python `ainl_graph_memory` bridge)
+
+After persona evolution, **`run_agent_loop`** refreshes a JSON **`AgentGraphSnapshot`** so **ainativelang** **`GraphStore`** can load the same subgraph as dashboard SQLite without a manual **`openfang memory graph-export`**.
+
+| Env | Rust behavior |
+|-----|-----------------|
+| **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** set (non-empty) | Treated as a **directory**. Writes **`{dir}/{agent_id}_graph_export.json`** (one file per agent — avoids multi-agent overwrites). |
+| **Unset** | Writes **`{openfang_home_dir()}/agents/{agent_id}/ainl_graph_memory_export.json`** (next to **`ainl_memory.db`**, same home rules as **`GraphMemoryWriter::open`**). |
+
+Entry point: **`graph_memory_writer::armaraos_graph_memory_export_json_path`**. Python resolution (directory vs **`.json`** file, auto-fallback when env unset) lives in **ainativelang** **`armaraos/bridge/ainl_graph_memory.py`** — see **[`docs/adapters/AINL_GRAPH_MEMORY.md`](https://github.com/sbhooley/ainativelang/blob/main/docs/adapters/AINL_GRAPH_MEMORY.md)**.
+
+**Tests:** **`cargo test -p openfang-runtime --test armaraos_graph_export_json_path`**.
+
 ## See also (ArmaraOS operator docs)
 
 - **[`docs/graph-memory.md`](../../docs/graph-memory.md)** — SQLite paths, inbox drain, end-of-turn writes, orchestration vs graph stores.

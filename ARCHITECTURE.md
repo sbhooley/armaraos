@@ -265,6 +265,7 @@ ArmaraOS maintains API compatibility with OpenFang:
 
 6. **Publishing to crates.io** (ongoing)
    - Continue releasing **`ainl-memory`**, **`ainl-persona`**, **`ainl-graph-extractor`**, **`ainl-semantic-tagger`**, **`ainl-runtime`** as the workspace matures.
+   - Playbook: **`docs/ainl-crates-publish.md`** (dependency order, dry-run vs live index).
    - Documentation: rustdoc + examples
 
 ---

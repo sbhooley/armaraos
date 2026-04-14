@@ -1,6 +1,6 @@
 # Graph memory inbox sync (Python → ArmaraOS)
 
-Python **`ainl_graph_memory`** persists to a JSON **`GraphStore`** and can **read** the Rust-exported snapshot (`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` / **`ainl_graph_memory_export.json`**). Mutations from Python do not open **`ainl_memory.db`** directly. **`armaraos.bridge.ainl_memory_sync.AinlMemorySyncWriter`** **appends** **`MemoryNode`** dicts into **`ainl_graph_memory_inbox.json`** so ArmaraOS can merge them into SQLite (see **[graph-memory.md](graph-memory.md)** — **`GraphMemoryWriter::drain_python_graph_memory_inbox`**).
+Python **`ainl_graph_memory`** persists to a JSON **`GraphStore`** and can **read** the Rust-exported snapshot: optional **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** as a **directory** (`{ARMARAOS_AGENT_ID}_graph_export.json` inside it) or a single **`.json`** file, or the default **`…/agents/<id>/ainl_graph_memory_export.json`** when the export env is unset (**`ARMARAOS_AGENT_ID`** set). Mutations from Python do not open **`ainl_memory.db`** directly. **`armaraos.bridge.ainl_memory_sync.AinlMemorySyncWriter`** **appends** **`MemoryNode`** dicts into **`ainl_graph_memory_inbox.json`** so ArmaraOS can merge them into SQLite (see **[graph-memory.md](graph-memory.md)** — **`GraphMemoryWriter::drain_python_graph_memory_inbox`**).
 
 ## When rows are pushed
 
