@@ -16,6 +16,10 @@ ArmaraOS stores per-agent graph memory in `~/.armaraos/agents/<agent_id>/ainl_me
 1. **`GraphMemoryWriter::run_persona_evolution_pass`** (spawned after each turn) runs **`ainl-graph-extractor`**: semantic recurrence bumps, graph signal extraction, heuristic persona signals, then persists the evolution snapshot when appropriate. It returns an **`ExtractionReport`** (`extract_error` / `pattern_error` / `persona_error` + **`has_errors()`**); partial failures are **`warn!`**’d, not thrown.
 2. **`PersonaEvolutionHook::evolve_from_turn`** (optional) runs **after** that pass. It re-reads the latest evolution snapshot, applies **explicit** signals derived from this turn’s tool list and optional `delegation_to`, then writes the snapshot again. This matters because dashboard episodes often omit `trace_event.outcome: "success"`, so `ainl-persona`’s episodic extractor skips tool-based hints unless this hook runs.
 
+### Same report shape in **`ainl-runtime`**
+
+If you embed **`AinlRuntime`** on the **same** `ainl_memory.db` (tests, tooling, or optional **`ainl-runtime-engine`** chat shim), a scheduled **`GraphExtractorTask::run_pass`** still yields **`ExtractionReport`**. **`run_turn`** promotes each populated error slot to its own **`TurnWarning`**: **`extract_error`** → **`TurnPhase::ExtractionPass`**, **`pattern_error`** → **`PatternPersistence`**, **`persona_error`** → **`PersonaEvolution`**, so **`TurnOutcome::PartialSuccess`** can carry multiple extraction diagnostics in one turn. That parallels OpenFang’s per-slot **`warn!`** without conflating phases. Hub: **[ainl-runtime.md](ainl-runtime.md)**, **`crates/ainl-runtime/README.md`**, integration **[ainl-runtime-integration.md](ainl-runtime-integration.md)**.
+
 ## Runtime toggle: `AINL_PERSONA_EVOLUTION`
 
 The turn hook is **off by default** (no env → no extra writes).

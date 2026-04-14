@@ -247,15 +247,25 @@ impl Default for MemoryContext {
 }
 
 /// Non-fatal bookkeeping phase inside [`AinlRuntime::run_turn`] (SQLite / export / persona persistence).
+///
+/// Scheduled graph extraction maps [`ainl_graph_extractor::ExtractionReport`] fields onto
+/// **`ExtractionPass`**, **`PatternPersistence`**, and **`PersonaEvolution`** so hosts can tell
+/// signal-merge failures apart from pattern flush vs persona row writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TurnPhase {
+    /// Episode row / `EMIT_TO` / emit routing writes.
     EpisodeWrite,
+    /// Procedural fitness EMA write-back.
     FitnessWriteBack,
+    /// Graph / heuristic extraction or persona-row probe (`ExtractionReport::extract_error`).
     ExtractionPass,
+    /// Semantic recurrence update or episode tag flush (`ExtractionReport::pattern_error`).
     PatternPersistence,
+    /// Evolution persona snapshot write (`ExtractionReport::persona_error`).
     PersonaEvolution,
+    /// ArmaraOS graph JSON export refresh (`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`).
     ExportRefresh,
-    /// Persisted session counters / persona cache snapshot (SQLite).
+    /// Persisted session counters / persona cache snapshot (SQLite `runtime_state` row).
     RuntimeStatePersist,
 }
 
