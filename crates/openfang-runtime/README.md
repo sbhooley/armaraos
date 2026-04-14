@@ -41,7 +41,7 @@ export AINL_EXTRACTOR_ENABLED=1
 
 Accepted truthy values: `1`, `true`, `yes`, `on` (case-insensitive). When unset or falsey, the runtime keeps the legacy [`graph_extractor`](src/graph_extractor.rs) heuristics for facts and patterns while persona evolution still runs if the feature remains enabled.
 
-**Persona evolution pass return type:** when **`ainl-extractor`** is enabled, **`GraphMemoryWriter::run_persona_evolution_pass`** returns **`ainl_graph_extractor::ExtractionReport`** (type-alias **`PersonaEvolutionExtractionReport`**). Without **`ainl-extractor`**, the same method returns a small stub report (see **`graph_memory_writer.rs`**). Inspect **`has_errors()`** and the **`extract_error` / `pattern_error` / `persona_error`** fields when present; the implementation logs warnings for each populated slot so operators see partial extractor failures without failing the spawned task.
+**Persona evolution pass return type:** when **`ainl-extractor`** is enabled, **`GraphMemoryWriter::run_persona_evolution_pass`** returns **`ainl_graph_extractor::ExtractionReport`** (type-alias **`PersonaEvolutionExtractionReport`**). Without **`ainl-extractor`**, the same method returns a small stub report (see **`graph_memory_writer.rs`**). Inspect **`has_errors()`** and the **`extract_error` / `pattern_error` / `persona_error`** fields when present; the implementation logs one **`warn!`** per populated slot (signal merge vs pattern persistence vs persona write) so operators see partial extractor failures without failing the spawned task. **`AinlRuntime::run_turn`** maps the same three fields to distinct **`TurnPhase`** warnings — see **`docs/ainl-runtime.md`** (*Persona evolution pass*).
 
 Slim build without the crates.io dependency:
 

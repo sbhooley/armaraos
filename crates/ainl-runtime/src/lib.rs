@@ -9,6 +9,9 @@
 //! helpers ([`AinlRuntime::apply_evolution_signals`], [`AinlRuntime::persist_evolution_snapshot`], …) drive it
 //! without going through the extractor. [`GraphExtractorTask::run_pass`] remains one signal producer (graph
 //! extract + recurrence + pattern heuristics), not the only way to evolve persona axes.
+//! Scheduled passes attach [`ExtractionReport`] to [`TurnResult`]; populated
+//! **`extract_error` / `pattern_error` / `persona_error`** slots become separate [`TurnWarning`] entries
+//! tagged with [`TurnPhase::ExtractionPass`], [`TurnPhase::PatternPersistence`], and [`TurnPhase::PersonaEvolution`].
 //!
 //! For a minimal “record episodes + run extractor” path without the full engine, see [`RuntimeContext`].
 //!

@@ -110,7 +110,7 @@ The bridge does **not** emit the same internal events as an LLM **`StopReason::E
 | **`delegation_to`** | From host **`TurnContext`** (episode rows from **ainl-runtime** still use `delegation_to: None` internally) |
 | **`cost_estimate`** | Always **`None`** — no token meter on this path |
 
-**Warnings:** `map_ainl_turn_outcome` **`warn!`**s for **MemoryContext** slices, **`extraction_report`**, **`TurnWarning`**, non-OK **`TurnStatus`** (e.g. **`StepLimitExceeded`**, **`GraphMemoryDisabled`** — **not** delegation depth; depth over the cap fails **`run_turn`** earlier as **`AinlRuntimeError::DelegationDepthExceeded`**), and patch **`adapter_output`** blobs that do not yet have OpenFang equivalents.
+**Warnings:** `map_ainl_turn_outcome` **`warn!`**s for **MemoryContext** slices, **`extraction_report`**, each **`TurnWarning`** (including **granular** extractor phases: **`TurnPhase::ExtractionPass`**, **`PatternPersistence`**, **`PersonaEvolution`** — one warning per populated **`ExtractionReport`** slot), non-OK **`TurnStatus`** (e.g. **`StepLimitExceeded`**, **`GraphMemoryDisabled`** — **not** delegation depth; depth over the cap fails **`run_turn`** earlier as **`AinlRuntimeError::DelegationDepthExceeded`**), and patch **`adapter_output`** blobs that do not yet have OpenFang equivalents.
 
 ---
 
