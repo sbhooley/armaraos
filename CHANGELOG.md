@@ -11,29 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- **`crates/ainl-memory/README.md`** — fifth memory family (**`RuntimeStateNode`** / `runtime_state`), **`read_runtime_state` / `write_runtime_state`** on **`GraphMemory`** + **`GraphQuery`**, legacy JSON key compatibility; episodic / semantic **`tags`** column described for ArmaraOS exports.
-- **`crates/ainl-runtime/README.md`** — session persistence: DB location, **`persona_snapshot_json`**, **`TurnPhase::RuntimeStatePersist`**, test command for **`test_session_persistence`**.
-- **`docs/graph-memory.md`** — **`runtime_state`** row when **`AinlRuntime`** shares **`ainl_memory.db`**; **`run_persona_evolution_pass`** → **`ExtractionReport`**; developer map; **See also** links **`docs/ainl-runtime.md`**, GraphPatch / integration, and crate README.
-- **`docs/data-directory.md`** — **`ainl_memory.db`** row mentions optional **`runtime_state`**.
-- **`docs/ainl-runtime-integration.md`** — routed-turn table + limitations: WAL, **`runtime_state`** writes from the bridge path.
-- **`docs/README.md`** — graph-memory index blurb (**`ExtractionReport`**, **`runtime_state`**, extractor/tagger toggles); Integrations + Reference rows for **`docs/ainl-runtime.md`** and persona evolution.
-- **`docs/persona-evolution.md`** — evolution pass return type and stub report wording.
-- **`docs/ainl-runtime-graph-patch.md`** — session persistence (**`RuntimeStateNode`**, **`TurnPhase::RuntimeStatePersist`**); cross-links **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**, **`crates/ainl-runtime/README.md`**.
-- **`crates/openfang-runtime/README.md`** — **`ExtractionReport`** from **`run_persona_evolution_pass`**, operator guidance.
+- **`crates/ainl-memory/README.md`** — fifth memory family (**`RuntimeStateNode`** / `runtime_state`), **`read_runtime_state` / `write_runtime_state`** on **`GraphMemory`** + **`GraphQuery`**, legacy JSON key compatibility; episodic / semantic **`tags`** on exported nodes.
+- **`crates/ainl-runtime/README.md`** — session persistence: DB location, **`persona_snapshot_json`**, **`TurnPhase::RuntimeStatePersist`**, test command for **`test_session_persistence`**; documentation map and async / error headings.
+- **`docs/ainl-runtime.md`** — hub: *Where to read next*, **`RuntimeStateNode`** + **`ExtractionReport`**, **`run_turn` / `run_turn_async`**, **`async`**, Mutex vs Tokio, hooks, verification (**`test_session_persistence`**) + **`required-features`**, embedding caveats.
+- **`docs/ainl-runtime-graph-patch.md`** — **`RuntimeStateNode`** / **`TurnPhase::RuntimeStatePersist`**; cross-links **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**, **`crates/ainl-runtime/README.md`**.
+- **`docs/ainl-runtime-integration.md`** — routed-turn table, WAL / **`runtime_state`**, quick reference for default-loop graph env vars (separate from **`ainl-runtime-engine`**).
+- **`docs/graph-memory.md`** — **`runtime_state`** when **`AinlRuntime`** shares **`ainl_memory.db`**; **`run_persona_evolution_pass`** / **`ExtractionReport`**; **`AINL_EXTRACTOR_ENABLED`** vs **`AINL_TAGGER_ENABLED`** (**only** literal **`1`**) vs **`AINL_PERSONA_EVOLUTION`**; EndTurn write table; default vs **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`**; developer map; **See also** cross-links.
+- **`docs/data-directory.md`** — **`ainl_memory.db`** (**`runtime_state`**) and **`ainl_graph_memory_export.json`** / **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`**.
+- **`docs/persona-evolution.md`** — evolution pass return type / stub wording; related-docs and operator links to graph-memory env semantics and **`openfang-runtime/README.md`**.
+- **`docs/README.md`** — graph-memory blurb (**`ExtractionReport`**, **`runtime_state`**, extractor/tagger toggles); Integrations + Reference rows for **`docs/ainl-runtime.md`** and persona evolution.
+- **`docs/architecture.md`** — graph-memory subsection + **`openfang-runtime`** / **`ainl-runtime`** crate rows (bridges, env toggles, hub link).
+- **`docs/configuration.md`** — graph-memory toggles are **process environment** variables (not `config.toml` keys); pointer to **`docs/graph-memory.md`**.
+- **`crates/openfang-runtime/README.md`** — default features; **`AINL_TAGGER_ENABLED`** (**only** literal **`1`**) vs truthy **`AINL_EXTRACTOR_ENABLED`**; **`run_persona_evolution_pass`** return type with vs without **`ainl-extractor`**; test commands for **`ainl-tagger`**.
+- **`crates/openfang-runtime/src/graph_memory_writer.rs`** — module doc: post-turn episode + batch semantic/procedural writes.
+- **Root `ARCHITECTURE.md`** — Layer 3 **`openfang-runtime`** wiring and episode / semantic **`tags`** on exported nodes.
+- **`crates/ainl-graph-extractor/README.md`** — **`GraphExtractorTask`** vs **`run_extraction_pass`**, **`ExtractionReport`** per-phase error slots, example + test commands.
 - **`crates/ainl-graph-extractor/src/lib.rs`** / **`crates/ainl-memory/src/lib.rs`** — crate-level rustdoc for **`ExtractionReport`** and runtime state nodes.
-- **`docs/graph-memory.md`** — **`AINL_TAGGER_ENABLED`** accepts **only** the literal **`1`** (vs truthy **`AINL_EXTRACTOR_ENABLED`** / **`AINL_PERSONA_EVOLUTION`**); EndTurn episode row wording; optional env table and tests for **`ainl_semantic_tagger_bridge`**.
-- **`docs/persona-evolution.md`** — Related-docs link to graph-memory env semantics.
-- **`.env.example`** — graph-memory block: cross-links (**`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**) + commented **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** alongside **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**.
-- **Root `ARCHITECTURE.md`** — episode / semantic **`tags`** fields on exported nodes.
-- **`crates/openfang-runtime/src/graph_memory_writer.rs`** — module-level doc aligned with post-turn batch writes (not per-tool facts).
-- **`Root ARCHITECTURE.md`** — Layer 3 **`openfang-runtime`** integration: **`graph_memory_writer`**, **`agent_loop`** (extractor bridge vs **`graph_extractor`**, **`run_persona_evolution_pass`**, **`PersonaEvolutionHook`**), **`ainl_semantic_tagger_bridge`**; operator refs (**`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**).
-- **`docs/architecture.md`** — graph-memory subsection + **`openfang-runtime`** crate row: bridges, **`AINL_PERSONA_EVOLUTION`**, env toggles; **`ainl-runtime`** row links **`docs/ainl-runtime.md`**.
-- **`docs/data-directory.md`** — **`ainl_graph_memory_export.json`** / **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** (in addition to **`runtime_state`** on **`ainl_memory.db`**).
-- **`docs/graph-memory.md`** — default vs **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** export paths; **See also** ↔ **`persona-evolution.md`**, **`crates/openfang-runtime/README.md`**.
-- **`docs/ainl-runtime-integration.md`** — quick reference: default-loop graph env vars (separate from **`ainl-runtime-engine`**).
-- **`docs/persona-evolution.md`** — operator quick-links table; **Related docs** → **`openfang-runtime/README.md`**.
-- **`docs/ainl-runtime.md`** — merged documentation hub: *Where to read next* table, **`RuntimeStateNode`** + **`ExtractionReport`** sections, **`run_turn` / `run_turn_async`**, **`async`** feature, **`std::sync::Mutex`** vs Tokio, hooks table, verification (**`test_session_persistence`**) + CI note for **`required-features`**, embedding caveats.
-- **`crates/ainl-runtime/README.md`** — documentation map (**`ainl-runtime-integration.md`**), delegation applies to **`run_turn_async`**, minimal async example, **`AinlRuntimeError`** heading; **`Cargo.toml`** package description mentions **`run_turn_async`**.
+- **`.env.example`** — commented graph-memory toggles with cross-links to **`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**.
 - **`crates/ainl-runtime/src/lib.rs`** — async paragraph links **`docs/ainl-runtime.md`**.
 - **`crates/ainl-runtime/tests/test_async_runtime.rs`** — module doc points to hub doc.
 

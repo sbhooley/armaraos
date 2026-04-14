@@ -1413,6 +1413,8 @@ usage_footer = "tokens"
 
 Complete table of all environment variables referenced by the configuration. None of these are read by the config file itself -- they are read at runtime by the kernel and channel adapters.
 
+**Graph memory (SQLite + optional export / tagging):** toggles such as **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, and **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** are **not** `config.toml` keys—they are **process environment** variables consumed by **`openfang-runtime`** when recording turns. Semantics (including that **`AINL_TAGGER_ENABLED`** must be exactly **`1`** to enable tag writes) are documented in **[`graph-memory.md`](graph-memory.md)** and **[`persona-evolution.md`](persona-evolution.md)**; see also **`.env.example`**.
+
 ### LLM Provider Keys
 
 | Variable | Used By | Description |
