@@ -740,6 +740,11 @@ impl AinlRuntime {
 
     /// Score and rank semantic nodes from `user_message` via `infer_topic_tags` (topic overlap +
     /// recurrence tiebreaker), or high-recurrence fallback when the message is empty or yields no topic tags.
+    ///
+    /// **Vitals trust bonus (Gap L):** nodes tagged `vitals:*:pass` receive a `+0.2 * confidence`
+    /// bonus so high-trust episodes surface above zero-topic-overlap peers. Nodes tagged
+    /// `vitals:elevated` receive a `-0.1` penalty to deprioritise warn/fail episodes in recall.
+    /// This is a secondary signal — topic overlap still dominates.
     fn relevant_semantic_nodes(
         &self,
         user_message: &str,
@@ -782,6 +787,21 @@ impl AinlRuntime {
                                     s = 0.5;
                                     break;
                                 }
+                            }
+                        }
+                    }
+                    // Vitals trust bonus: `vitals:*:pass` → +0.2 * node confidence.
+                    // `vitals:elevated` → -0.1 penalty (warn/fail gate).
+                    // Uses the node's own confidence as a proxy for vitals trust since
+                    // SemanticNode.tags is Vec<String> without per-tag confidence.
+                    let confidence = semantic.confidence;
+                    for tag in &semantic.tags {
+                        let tl = tag.to_lowercase();
+                        if tl.starts_with("vitals:") {
+                            if tl.ends_with(":pass") {
+                                s += 0.2 * confidence;
+                            } else if tl == "vitals:elevated" {
+                                s -= 0.1;
                             }
                         }
                     }
