@@ -1,20 +1,7 @@
-//! Reference [`GraphPatchAdapter`] — structured GraphPatch dispatch without executing AINL IR in Rust.
+//! Reference [`GraphPatchAdapter`] — built-in fallback for procedural patches (`"graph_patch"`).
 //!
-//! ## What this is (and is not)
-//!
-//! - **Is:** normalizes active procedural patch rows (same shape as Python `memory.patch` / graph
-//!   store patch records) into a JSON **dispatch envelope** for a host, or returns that envelope
-//!   directly when no host hook is installed.
-//! - **Is not:** an AINL compiler, an IR interpreter, or parity with Python `RuntimeEngine` GraphPatch.
-//!
-//! ## Payload shape
-//!
-//! The envelope includes `patch_label` (procedural `label` or `pattern_name`), `patch_node_id`,
-//! `patch_version`, `declared_reads`, `compiled_graph_byte_len`, optional UTF-8 preview of
-//! `compiled_graph` when valid UTF-8, `tool_sequence`, `trace_id`, and `frame_keys`. Hosts should
-//! treat unknown fields as forward-compatible.
+//! Returns a small JSON summary for hosts; optional [`GraphPatchHostDispatch`] forwards that value.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -23,7 +10,7 @@ use super::PatchAdapter;
 use crate::engine::PatchDispatchContext;
 use ainl_memory::AinlNodeType;
 
-/// Optional host hook: receives the normalized GraphPatch envelope (see module docs).
+/// Optional host hook: receives the same JSON summary as [`GraphPatchAdapter::execute_patch`].
 pub trait GraphPatchHostDispatch: Send + Sync {
     fn on_patch_dispatch(&self, envelope: Value) -> Result<Value, String>;
 }
@@ -52,29 +39,26 @@ impl Default for GraphPatchAdapter {
     }
 }
 
-fn build_envelope(ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
+fn build_summary(ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
     let proc = match &ctx.node.node_type {
         AinlNodeType::Procedural { procedural } => procedural,
         _ => {
             return Err("graph_patch: PatchDispatchContext.node is not procedural".to_string());
         }
     };
-    let utf8_preview = std::str::from_utf8(&proc.compiled_graph)
-        .ok()
-        .map(|s| s.chars().take(256).collect::<String>());
+    for key in &proc.declared_reads {
+        if !ctx.frame.contains_key(key) {
+            return Err(format!(
+                "graph_patch: declared read {key:?} missing from frame (adapter safety check)"
+            ));
+        }
+    }
+    let mut frame_keys: Vec<String> = ctx.frame.keys().cloned().collect();
+    frame_keys.sort_unstable();
     Ok(json!({
-        "kind": "graph_patch_dispatch",
-        "patch_label": ctx.patch_label,
-        "patch_node_id": ctx.node.id.to_string(),
-        "pattern_name": proc.pattern_name,
+        "label": ctx.patch_label,
         "patch_version": proc.patch_version,
-        "procedure_type": format!("{:?}", proc.procedure_type),
-        "declared_reads": proc.declared_reads,
-        "compiled_graph_byte_len": proc.compiled_graph.len(),
-        "compiled_graph_utf8_preview": utf8_preview,
-        "tool_sequence": proc.tool_sequence,
-        "trace_id": proc.trace_id,
-        "frame_keys": ctx.frame.keys().cloned().collect::<Vec<String>>(),
+        "frame_keys": frame_keys,
     }))
 }
 
@@ -83,24 +67,12 @@ impl PatchAdapter for GraphPatchAdapter {
         Self::NAME
     }
 
-    fn execute(
-        &self,
-        _label: &str,
-        _frame: &HashMap<String, serde_json::Value>,
-    ) -> Result<Value, String> {
-        Err(
-            "graph_patch: dispatch uses execute_patch with PatchDispatchContext; register via \
-             AinlRuntime::register_adapter(GraphPatchAdapter::new()) or register_default_patch_adapters"
-                .to_string(),
-        )
-    }
-
     fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
-        let envelope = build_envelope(ctx)?;
+        let summary = build_summary(ctx)?;
         if let Some(h) = &self.host {
-            h.on_patch_dispatch(envelope)
+            h.on_patch_dispatch(summary)
         } else {
-            Ok(envelope)
+            Ok(summary)
         }
     }
 }

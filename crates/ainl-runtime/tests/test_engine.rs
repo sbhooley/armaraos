@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
-    AinlRuntime, AinlRuntimeError, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis,
-    RawSignal, RuntimeConfig, TurnHooks, TurnInput, TurnPhase, TurnStatus, EVOLUTION_TRAIT_NAME,
+    AinlRuntime, AinlRuntimeError, MemoryNodeType, PatchAdapter, PatchDispatchContext,
+    PatchSkipReason, PersonaAxis, RawSignal, RuntimeConfig, TurnHooks, TurnInput, TurnPhase,
+    TurnStatus, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -205,14 +206,10 @@ impl PatchAdapter for EchoAdapter {
         "echo"
     }
 
-    fn execute(
-        &self,
-        label: &str,
-        frame: &HashMap<String, serde_json::Value>,
-    ) -> Result<serde_json::Value, String> {
+    fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<serde_json::Value, String> {
         Ok(serde_json::json!({
-            "echoed_label": label,
-            "frame_keys": frame.keys().cloned().collect::<Vec<String>>(),
+            "echoed_label": ctx.patch_label,
+            "frame_keys": ctx.frame.keys().cloned().collect::<Vec<String>>(),
         }))
     }
 }
@@ -224,11 +221,7 @@ impl PatchAdapter for FailAdapter {
         "fail"
     }
 
-    fn execute(
-        &self,
-        _: &str,
-        _: &HashMap<String, serde_json::Value>,
-    ) -> Result<serde_json::Value, String> {
+    fn execute_patch(&self, _: &PatchDispatchContext<'_>) -> Result<serde_json::Value, String> {
         Err("intentional failure".to_string())
     }
 }

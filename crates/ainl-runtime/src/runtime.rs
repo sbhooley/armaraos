@@ -291,13 +291,16 @@ impl AinlRuntime {
             .with(|m| AinlGraphArtifact::load(m.sqlite_store(), &self.config.agent_id))
     }
 
-    /// Same as [`Self::compile_memory_context_for`] with `user_message: None` (semantic relevance falls back
-    /// to the latest episode’s `user_message` when present).
+    /// Same as [`Self::compile_memory_context_for`] with `user_message: None` (treated as empty for
+    /// semantic ranking; see [`Self::compile_memory_context_for`]).
     pub fn compile_memory_context(&self) -> Result<MemoryContext, String> {
         self.compile_memory_context_for(None)
     }
 
     /// Build [`MemoryContext`] from the live store plus current extractor axis state.
+    ///
+    /// `relevant_semantic` is ranked from this `user_message` only (`ainl-semantic-tagger` topic tags
+    /// + recurrence); `None` is treated as empty (high-recurrence fallback), not the latest episode text.
     pub fn compile_memory_context_for(
         &self,
         user_message: Option<&str>,
@@ -309,23 +312,12 @@ impl AinlRuntime {
         let store = m.sqlite_store();
         let q = store.query(&self.config.agent_id);
         let recent_episodes = q.recent_episodes(5)?;
-        let effective_user = user_message
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                recent_episodes.first().and_then(|n| {
-                    if let AinlNodeType::Episode { episodic } = &n.node_type {
-                        episodic.user_message.clone().filter(|m| !m.is_empty())
-                    } else {
-                        None
-                    }
-                })
-            });
         let all_semantic = q.semantic_nodes()?;
-        let relevant_semantic = match effective_user.as_deref() {
-            Some(msg) => self.relevant_semantic_nodes(msg, all_semantic, 10),
-            None => fallback_high_recurrence_semantic(all_semantic, 10),
-        };
+        let relevant_semantic = self.relevant_semantic_nodes(
+            user_message.unwrap_or(""),
+            all_semantic,
+            10,
+        );
         let active_patches = q.active_patches()?;
         let persona_snapshot = persona_snapshot_if_evolved(&self.extractor);
         Ok(MemoryContext {
@@ -734,8 +726,9 @@ impl AinlRuntime {
         Ok(outcome)
     }
 
-    /// Score and rank semantic nodes for the current user text (`ainl-semantic-tagger` topic tags + recurrence).
-    pub fn relevant_semantic_nodes(
+    /// Score and rank semantic nodes from `user_message` via `infer_topic_tags` (topic overlap +
+    /// recurrence tiebreaker), or high-recurrence fallback when the message is empty or yields no topic tags.
+    fn relevant_semantic_nodes(
         &self,
         user_message: &str,
         all_semantic: Vec<AinlMemoryNode>,
@@ -748,7 +741,7 @@ impl AinlRuntime {
             .map(|t| t.value.to_lowercase())
             .collect();
 
-        if user_topics.is_empty() {
+        if user_message.trim().is_empty() || user_topics.is_empty() {
             return fallback_high_recurrence_semantic(all_semantic, limit);
         }
 
@@ -772,8 +765,8 @@ impl AinlRuntime {
                         for tag in &semantic.tags {
                             let tl = tag.to_lowercase();
                             if let Some(rest) = tl.strip_prefix("topic:") {
-                                let slug = rest.trim();
-                                if user_topics.contains(slug) {
+                                let slug = rest.trim().to_lowercase();
+                                if user_topics.contains(&slug) {
                                     s = 0.5;
                                     break;
                                 }
@@ -784,9 +777,7 @@ impl AinlRuntime {
                 }
                 _ => (0.0, 0),
             };
-            if score > 0.0 {
-                scored.push((score, rec, n));
-            }
+            scored.push((score, rec, n));
         }
 
         scored.sort_by(|a, b| {

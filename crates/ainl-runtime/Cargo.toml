@@ -1,6 +1,6 @@
 [package]
 name = "ainl-runtime"
-version = "0.3.3-alpha"
+version = "0.3.5-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors = ["Steven Hooley"]
@@ -23,6 +23,10 @@ path = "tests/test_engine.rs"
 [[test]]
 name = "test_graph_patch_adapter"
 path = "tests/test_graph_patch_adapter.rs"
+
+[[test]]
+name = "test_semantic_ranking"
+path = "tests/test_semantic_ranking.rs"
 
 [[test]]
 name = "test_session_persistence"

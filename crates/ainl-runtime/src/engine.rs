@@ -91,11 +91,11 @@ impl AinlRuntimeError {
     }
 }
 
-/// Per-patch inputs for [`crate::PatchAdapter::execute_patch`] (procedural / GraphPatch nodes).
+/// Per-patch inputs for [`crate::PatchAdapter::execute_patch`] (procedural patch nodes).
 ///
 /// [`AinlRuntime`] resolves a label-keyed adapter first, then falls back to the reference
 /// [`crate::GraphPatchAdapter`] (registered as [`crate::GraphPatchAdapter::NAME`]) when no adapter
-/// matches the patch IR label.
+/// matches the procedural patch `label`.
 #[derive(Debug, Clone, Copy)]
 pub struct PatchDispatchContext<'a> {
     pub patch_label: &'a str,

@@ -23,8 +23,8 @@ use crate::engine::{
     TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning, EMIT_TO_EDGE,
 };
 use super::{
-    compile_persona_from_nodes, emit_target_name, fallback_high_recurrence_semantic,
-    normalize_tools_for_episode, persona_snapshot_if_evolved, procedural_label, record_turn_episode,
+    compile_persona_from_nodes, emit_target_name, normalize_tools_for_episode,
+    persona_snapshot_if_evolved, procedural_label, record_turn_episode,
     try_export_graph_json_armaraos,
 };
 
@@ -161,21 +161,8 @@ impl super::AinlRuntime {
         })
         .await?;
 
-        let effective_user = Some(input.user_message.clone())
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                recent_episodes.first().and_then(|n| {
-                    if let AinlNodeType::Episode { episodic } = &n.node_type {
-                        episodic.user_message.clone().filter(|m| !m.is_empty())
-                    } else {
-                        None
-                    }
-                })
-            });
-        let relevant_semantic = match effective_user.as_deref() {
-            Some(msg) => self.relevant_semantic_nodes(msg, all_semantic, 10),
-            None => fallback_high_recurrence_semantic(all_semantic, 10),
-        };
+        let relevant_semantic =
+            self.relevant_semantic_nodes(input.user_message.as_str(), all_semantic, 10);
         let memory_context = MemoryContext {
             recent_episodes,
             relevant_semantic,

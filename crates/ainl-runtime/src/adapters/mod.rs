@@ -1,4 +1,4 @@
-//! Patch adapter registry and reference [`GraphPatchAdapter`] for GraphPatch-shaped procedural nodes.
+//! Patch adapter registry and reference [`GraphPatchAdapter`] for procedural patch dispatch.
 
 mod graph_patch;
 
@@ -8,28 +8,19 @@ use std::collections::HashMap;
 
 use crate::engine::PatchDispatchContext;
 
-/// Trait for patch/tool adapters. Implement to give dispatched patches a host execution target.
-/// Register via [`crate::AinlRuntime::register_adapter`].
+/// Label-keyed procedural patch executor. Register via [`crate::AinlRuntime::register_adapter`].
 ///
-/// Label-keyed dispatch calls [`Self::execute_patch`] with a [`PatchDispatchContext`]. The default
-/// implementation delegates to [`Self::execute`] with the patch label and frame (back-compat for
-/// simple adapters). The reference [`GraphPatchAdapter`] overrides [`Self::execute_patch`] to emit a
-/// structured GraphPatch envelope (and optional host hook).
+/// Dispatch: [`crate::AinlRuntime`] resolves an adapter by procedural `label` first, then falls
+/// back to [`GraphPatchAdapter::NAME`] when registered via [`crate::AinlRuntime::register_default_patch_adapters`].
 pub trait PatchAdapter: Send + Sync {
-    /// Canonical registry key (often the procedural IR `label`, e.g. `bash` or `L_my_patch`).
+    /// Label this adapter handles (matched against the procedural patch `label`).
     fn name(&self) -> &str;
 
-    /// Legacy entrypoint; used by the default [`Self::execute_patch`].
-    fn execute(
-        &self,
-        label: &str,
-        frame: &HashMap<String, serde_json::Value>,
-    ) -> Result<serde_json::Value, String>;
-
-    /// Rich dispatch context (node id, procedural payload, frame). Override for GraphPatch-style hosts.
-    fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<serde_json::Value, String> {
-        self.execute(ctx.patch_label, ctx.frame)
-    }
+    /// Execute the patch. Returns a JSON value the host can inspect.
+    ///
+    /// Non-fatal at the runtime layer: on [`Err`], the runtime logs and continues as a metadata
+    /// dispatch (fitness update still proceeds when applicable).
+    fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<serde_json::Value, String>;
 }
 
 #[derive(Default)]
@@ -47,12 +38,14 @@ impl AdapterRegistry {
             .insert(adapter.name().to_string(), Box::new(adapter));
     }
 
-    pub fn get(&self, name: &str) -> Option<&dyn PatchAdapter> {
-        self.adapters.get(name).map(|boxed| boxed.as_ref())
+    pub fn get(&self, label: &str) -> Option<&dyn PatchAdapter> {
+        self.adapters.get(label).map(|boxed| boxed.as_ref())
     }
 
     pub fn registered_names(&self) -> Vec<&str> {
-        self.adapters.keys().map(|s| s.as_str()).collect()
+        let mut names: Vec<&str> = self.adapters.keys().map(|s| s.as_str()).collect();
+        names.sort_unstable();
+        names
     }
 
     pub fn is_empty(&self) -> bool {
