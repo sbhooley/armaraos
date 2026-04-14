@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
     AinlRuntime, GraphPatchAdapter, GraphPatchHostDispatch, PatchAdapter, PatchDispatchContext,
-    RuntimeConfig, TurnInput, TurnOutcome,
+    RuntimeConfig, TurnInput, TurnStatus,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -62,8 +62,10 @@ fn graph_patch_adapter_matches_active_patch() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out.outcome, TurnOutcome::Success));
+    assert!(out.is_complete());
+    assert_eq!(out.turn_status(), TurnStatus::Ok);
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "L_custom_patch")
@@ -102,6 +104,7 @@ fn graph_patch_adapter_returns_structured_result() {
         })
         .unwrap();
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "L_metrics")
@@ -150,7 +153,7 @@ fn graph_patch_adapter_host_callback_receives_envelope() {
             ..Default::default()
         })
         .unwrap();
-    assert!(out.patch_dispatch_results[0].dispatched);
+    assert!(out.result().patch_dispatch_results[0].dispatched);
     let got = captured.lock().unwrap().take().expect("host saw envelope");
     assert_eq!(
         got.get("patch_label").and_then(|x| x.as_str()),
@@ -185,7 +188,7 @@ fn graph_patch_adapter_host_error_nonfatal() {
             ..Default::default()
         })
         .unwrap();
-    let r = &out.patch_dispatch_results[0];
+    let r = &out.result().patch_dispatch_results[0];
     assert!(r.dispatched);
     assert!(r.adapter_output.is_none());
     assert_eq!(r.adapter_name.as_deref(), Some(GraphPatchAdapter::NAME));
@@ -265,6 +268,7 @@ fn label_specific_adapter_beats_graph_patch_fallback() {
         })
         .unwrap();
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "echo")

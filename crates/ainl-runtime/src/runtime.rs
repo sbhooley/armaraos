@@ -1,6 +1,7 @@
 //! Unified-graph orchestration runtime (v0.2): load, compile context, patch dispatch, record, emit, extract.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use ainl_graph_extractor::GraphExtractorTask;
@@ -19,8 +20,9 @@ use uuid::Uuid;
 
 use crate::adapters::{AdapterRegistry, GraphPatchAdapter};
 use crate::engine::{
-    AinlGraphArtifact, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
-    TurnInput, TurnOutcome, TurnOutput, EMIT_TO_EDGE,
+    AinlGraphArtifact, AinlRuntimeError, MemoryContext, PatchDispatchContext, PatchDispatchResult,
+    PatchSkipReason, TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning,
+    EMIT_TO_EDGE,
 };
 use crate::hooks::{NoOpHooks, TurnHooks};
 use crate::RuntimeConfig;
@@ -56,6 +58,9 @@ pub struct AinlRuntime {
     /// Test hook: when set, the next scheduled extraction pass is treated as failed (`PartialSuccess`).
     #[doc(hidden)]
     test_force_extraction_failure: bool,
+    /// Test hook: next fitness write-back from procedural dispatch fails without touching SQLite.
+    #[doc(hidden)]
+    test_force_fitness_write_failure: bool,
     adapter_registry: AdapterRegistry,
 }
 
@@ -98,6 +103,7 @@ impl AinlRuntime {
             evolution_writes_enabled: true,
             persona_cache: init_persona_cache,
             test_force_extraction_failure: false,
+            test_force_fitness_write_failure: false,
             adapter_registry: AdapterRegistry::new(),
         }
     }
@@ -136,6 +142,11 @@ impl AinlRuntime {
     #[doc(hidden)]
     pub fn test_set_force_extraction_failure(&mut self, fail: bool) {
         self.test_force_extraction_failure = fail;
+    }
+
+    #[doc(hidden)]
+    pub fn test_set_force_fitness_write_failure(&mut self, fail: bool) {
+        self.test_force_fitness_write_failure = fail;
     }
 
     pub fn with_hooks(mut self, hooks: impl TurnHooks + 'static) -> Self {
@@ -294,7 +305,7 @@ impl AinlRuntime {
     }
 
     /// Full single-turn orchestration (no LLM / no IR parse).
-    pub fn run_turn(&mut self, input: TurnInput) -> Result<TurnOutput, String> {
+    pub fn run_turn(&mut self, input: TurnInput) -> Result<TurnOutcome, AinlRuntimeError> {
         self.delegation_depth += 1;
         let rt_ptr = self as *mut Self;
         // Safety: `rt_ptr` aliases `self` for the synchronous body of `run_turn` only; the defer runs on
@@ -307,27 +318,31 @@ impl AinlRuntime {
         });
 
         if self.delegation_depth > self.config.max_delegation_depth {
-            let out = TurnOutput {
-                outcome: TurnOutcome::DepthLimitExceeded,
+            let result = TurnResult {
+                status: TurnStatus::DepthLimitExceeded,
                 ..Default::default()
             };
-            self.hooks.on_turn_complete(&out);
-            return Ok(out);
+            let outcome = TurnOutcome::Complete(result);
+            self.hooks.on_turn_complete(&outcome);
+            return Ok(outcome);
         }
 
         if !self.config.enable_graph_memory {
             let memory_context = MemoryContext::default();
-            let out = TurnOutput {
+            let result = TurnResult {
                 memory_context,
-                outcome: TurnOutcome::GraphMemoryDisabled,
+                status: TurnStatus::GraphMemoryDisabled,
                 ..Default::default()
             };
-            self.hooks.on_turn_complete(&out);
-            return Ok(out);
+            let outcome = TurnOutcome::Complete(result);
+            self.hooks.on_turn_complete(&outcome);
+            return Ok(outcome);
         }
 
         if self.config.agent_id.is_empty() {
-            return Err("RuntimeConfig.agent_id must be set for run_turn".to_string());
+            return Err(AinlRuntimeError(
+                "RuntimeConfig.agent_id must be set for run_turn".into(),
+            ));
         }
 
         let span = tracing::info_span!(
@@ -341,7 +356,8 @@ impl AinlRuntime {
         let validation: GraphValidationReport = self
             .memory
             .sqlite_store()
-            .validate_graph(&self.config.agent_id)?;
+            .validate_graph(&self.config.agent_id)
+            .map_err(AinlRuntimeError::from)?;
         if !validation.is_valid {
             let mut msg = String::from("graph validation failed before turn");
             for d in &validation.dangling_edge_details {
@@ -350,14 +366,13 @@ impl AinlRuntime {
                     d.source_id, d.target_id, d.edge_type
                 ));
             }
-            return Err(msg);
+            return Err(AinlRuntimeError(msg));
         }
 
         self.hooks
             .on_artifact_loaded(&self.config.agent_id, validation.node_count);
 
-        let mut patches_failed: Vec<String> = Vec::new();
-        let mut warnings: Vec<String> = Vec::new();
+        let mut turn_warnings: Vec<TurnWarning> = Vec::new();
 
         let t_persona = Instant::now();
         let persona_prompt_contribution = if let Some(cached) = &self.persona_cache {
@@ -367,8 +382,9 @@ impl AinlRuntime {
                 .memory
                 .sqlite_store()
                 .query(&self.config.agent_id)
-                .persona_nodes()?;
-            let compiled = compile_persona_from_nodes(&nodes)?;
+                .persona_nodes()
+                .map_err(AinlRuntimeError::from)?;
+            let compiled = compile_persona_from_nodes(&nodes).map_err(AinlRuntimeError::from)?;
             self.persona_cache = compiled.clone();
             compiled
         };
@@ -382,7 +398,9 @@ impl AinlRuntime {
         );
 
         let t_memory = Instant::now();
-        let memory_context = self.compile_memory_context_for(Some(&input.user_message))?;
+        let memory_context = self
+            .compile_memory_context_for(Some(&input.user_message))
+            .map_err(AinlRuntimeError::from)?;
         self.hooks.on_memory_context_ready(&memory_context);
         tracing::debug!(
             target: "ainl_runtime",
@@ -398,7 +416,7 @@ impl AinlRuntime {
             self.dispatch_patches_collect(
                 &memory_context.active_patches,
                 &input.frame,
-                &mut patches_failed,
+                &mut turn_warnings,
             )
         } else {
             Vec::new()
@@ -424,28 +442,43 @@ impl AinlRuntime {
             .filter(|r| r.dispatched)
             .count() as u32;
         if dispatched_count >= self.config.max_steps {
-            let out = TurnOutput {
+            let result = TurnResult {
                 patch_dispatch_results,
                 memory_context,
                 persona_prompt_contribution,
                 steps_executed: dispatched_count,
-                outcome: TurnOutcome::StepLimitExceeded {
+                status: TurnStatus::StepLimitExceeded {
                     steps_executed: dispatched_count,
                 },
                 ..Default::default()
             };
-            self.hooks.on_turn_complete(&out);
-            return Ok(out);
+            let outcome = TurnOutcome::Complete(result);
+            self.hooks.on_turn_complete(&outcome);
+            return Ok(outcome);
         }
 
         let t_episode = Instant::now();
         let tools_canonical = normalize_tools_for_episode(&input.tools_invoked);
-        let episode_id = record_turn_episode(
+        let episode_id = match record_turn_episode(
             &self.memory,
             &self.config.agent_id,
             &input,
             &tools_canonical,
-        )?;
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    phase = ?TurnPhase::EpisodeWrite,
+                    error = %e,
+                    "non-fatal turn write failed — continuing"
+                );
+                turn_warnings.push(TurnWarning {
+                    phase: TurnPhase::EpisodeWrite,
+                    error: e,
+                });
+                Uuid::nil()
+            }
+        };
         self.hooks.on_episode_recorded(episode_id);
         tracing::debug!(
             target: "ainl_runtime",
@@ -454,10 +487,24 @@ impl AinlRuntime {
             "episode_record"
         );
 
-        for &tid in &input.emit_targets {
-            self.memory
-                .sqlite_store()
-                .insert_graph_edge_checked(episode_id, tid, EMIT_TO_EDGE)?;
+        if !episode_id.is_nil() {
+            for &tid in &input.emit_targets {
+                if let Err(e) = self.memory.sqlite_store().insert_graph_edge_checked(
+                    episode_id,
+                    tid,
+                    EMIT_TO_EDGE,
+                ) {
+                    tracing::warn!(
+                        phase = ?TurnPhase::EpisodeWrite,
+                        error = %e,
+                        "non-fatal turn write failed — continuing"
+                    );
+                    turn_warnings.push(TurnWarning {
+                        phase: TurnPhase::EpisodeWrite,
+                        error: e,
+                    });
+                }
+            }
         }
 
         let emit_payload = serde_json::json!({
@@ -468,8 +515,15 @@ impl AinlRuntime {
             "turn_count": self.turn_count.wrapping_add(1),
         });
         if let Err(e) = self.route_emit_edges(episode_id, &emit_payload) {
-            tracing::warn!(error = %e, "emit routing failed — continuing");
-            warnings.push(format!("emit_routing: {e}"));
+            tracing::warn!(
+                phase = ?TurnPhase::EpisodeWrite,
+                error = %e,
+                "non-fatal turn write failed — continuing"
+            );
+            turn_warnings.push(TurnWarning {
+                phase: TurnPhase::EpisodeWrite,
+                error: format!("emit_routing: {e}"),
+            });
         }
 
         self.turn_count = self.turn_count.wrapping_add(1);
@@ -479,11 +533,20 @@ impl AinlRuntime {
                 >= self.config.extraction_interval;
 
         let t_extract = Instant::now();
-        let (extraction_report, extraction_failed) = if should_extract {
+        let (extraction_report, _extraction_failed) = if should_extract {
             let force_fail = std::mem::take(&mut self.test_force_extraction_failure);
 
             let res = if force_fail {
-                tracing::warn!(error = "test_forced", "extraction pass failed — continuing");
+                let e = "test_forced".to_string();
+                tracing::warn!(
+                    phase = ?TurnPhase::ExtractionPass,
+                    error = %e,
+                    "non-fatal turn write failed — continuing"
+                );
+                turn_warnings.push(TurnWarning {
+                    phase: TurnPhase::ExtractionPass,
+                    error: e,
+                });
                 tracing::debug!(
                     target: "ainl_runtime",
                     duration_ms = t_extract.elapsed().as_millis() as u64,
@@ -514,7 +577,15 @@ impl AinlRuntime {
                         (Some(report), false)
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "extraction pass failed — continuing");
+                        tracing::warn!(
+                            phase = ?TurnPhase::ExtractionPass,
+                            error = %e,
+                            "non-fatal turn write failed — continuing"
+                        );
+                        turn_warnings.push(TurnWarning {
+                            phase: TurnPhase::ExtractionPass,
+                            error: e,
+                        });
                         tracing::debug!(
                             target: "ainl_runtime",
                             duration_ms = t_extract.elapsed().as_millis() as u64,
@@ -539,25 +610,38 @@ impl AinlRuntime {
             (None, false)
         };
 
-        let outcome = if extraction_failed || !patches_failed.is_empty() || !warnings.is_empty() {
-            TurnOutcome::PartialSuccess {
-                episode_recorded: true,
-                extraction_failed,
-                patches_failed,
-                warnings,
-            }
-        } else {
-            TurnOutcome::Success
-        };
+        if let Err(e) = try_export_graph_json_armaraos(
+            self.memory.sqlite_store(),
+            &self.config.agent_id,
+        ) {
+            tracing::warn!(
+                phase = ?TurnPhase::ExportRefresh,
+                error = %e,
+                "non-fatal turn write failed — continuing"
+            );
+            turn_warnings.push(TurnWarning {
+                phase: TurnPhase::ExportRefresh,
+                error: e,
+            });
+        }
 
-        let out = TurnOutput {
+        let result = TurnResult {
             episode_id,
             persona_prompt_contribution,
             memory_context,
             extraction_report,
             steps_executed: dispatched_count,
-            outcome,
             patch_dispatch_results,
+            status: TurnStatus::Ok,
+        };
+
+        let outcome = if turn_warnings.is_empty() {
+            TurnOutcome::Complete(result)
+        } else {
+            TurnOutcome::PartialSuccess {
+                result,
+                warnings: turn_warnings,
+            }
         };
 
         if !self.config.agent_id.is_empty() {
@@ -577,8 +661,8 @@ impl AinlRuntime {
             }
         }
 
-        self.hooks.on_turn_complete(&out);
-        Ok(out)
+        self.hooks.on_turn_complete(&outcome);
+        Ok(outcome)
     }
 
     /// Score and rank semantic nodes for the current user text (`ainl-semantic-tagger` topic tags + recurrence).
@@ -649,22 +733,29 @@ impl AinlRuntime {
         patches: &[AinlMemoryNode],
         frame: &HashMap<String, serde_json::Value>,
     ) -> Vec<PatchDispatchResult> {
-        let mut discarded = Vec::new();
-        self.dispatch_patches_collect(patches, frame, &mut discarded)
+        let mut w = Vec::new();
+        self.dispatch_patches_collect(patches, frame, &mut w)
     }
 
     fn dispatch_patches_collect(
         &mut self,
         patches: &[AinlMemoryNode],
         frame: &HashMap<String, serde_json::Value>,
-        patches_failed: &mut Vec<String>,
+        turn_warnings: &mut Vec<TurnWarning>,
     ) -> Vec<PatchDispatchResult> {
         let mut out = Vec::new();
         for node in patches {
             let res = self.dispatch_one_patch(node, frame);
             if let Some(PatchSkipReason::PersistFailed(ref e)) = res.skip_reason {
-                tracing::warn!(label = %res.label, error = %e, "patch fitness write failed — continuing");
-                patches_failed.push(res.label.clone());
+                tracing::warn!(
+                    phase = ?TurnPhase::FitnessWriteBack,
+                    error = %e,
+                    "non-fatal turn write failed — continuing"
+                );
+                turn_warnings.push(TurnWarning {
+                    phase: TurnPhase::FitnessWriteBack,
+                    error: format!("{}: {}", res.label, e),
+                });
             }
             out.push(res);
         }
@@ -811,6 +902,21 @@ impl AinlRuntime {
             }
         };
 
+        if self.test_force_fitness_write_failure {
+            self.test_force_fitness_write_failure = false;
+            let e = "injected fitness write failure".to_string();
+            return PatchDispatchResult {
+                label: label_src.clone(),
+                patch_version: pv,
+                fitness_before,
+                fitness_after: fitness_before,
+                dispatched: false,
+                skip_reason: Some(PatchSkipReason::PersistFailed(e)),
+                adapter_output,
+                adapter_name,
+            };
+        }
+
         if let Err(e) = self.memory.write_node(&updated) {
             return PatchDispatchResult {
                 label: label_src.clone(),
@@ -925,6 +1031,29 @@ fn format_persona_line(p: &PersonaNode) -> String {
 
 /// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
 /// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
+/// Refresh `{AINL_GRAPH_MEMORY_ARMARAOS_EXPORT}/{agent_id}_graph_export.json` when the env var is set.
+fn try_export_graph_json_armaraos(
+    store: &SqliteGraphStore,
+    agent_id: &str,
+) -> Result<(), String> {
+    let trimmed = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT").unwrap_or_default();
+    let dir = trimmed.trim();
+    if dir.is_empty() {
+        return Ok(());
+    }
+    let dir_path = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir_path).map_err(|e| format!("export mkdir: {e}"))?;
+    let path = dir_path.join(format!("{agent_id}_graph_export.json"));
+    let snap = store.export_graph(agent_id)?;
+    let v = serde_json::to_value(&snap).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&v).map_err(|e| format!("json encode: {e}"))?,
+    )
+    .map_err(|e| format!("write export: {e}"))?;
+    Ok(())
+}
+
 fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
     if tools_invoked.is_empty() {
         return vec!["turn".to_string()];

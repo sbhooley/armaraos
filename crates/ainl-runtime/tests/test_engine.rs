@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
     AinlRuntime, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis, RawSignal,
-    RuntimeConfig, TurnHooks, TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
+    RuntimeConfig, TurnHooks, TurnInput, TurnPhase, TurnStatus, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -103,9 +103,10 @@ fn test_patch_dispatch_satisfied_reads() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out.outcome, TurnOutcome::Success));
-    assert_eq!(out.patch_dispatch_results.len(), 1);
-    let r = &out.patch_dispatch_results[0];
+    assert!(out.is_complete());
+    assert_eq!(out.turn_status(), TurnStatus::Ok);
+    assert_eq!(out.result().patch_dispatch_results.len(), 1);
+    let r = &out.result().patch_dispatch_results[0];
     assert!(r.dispatched);
     assert!(r.fitness_after > r.fitness_before);
     assert_eq!(r.label, "L_patch");
@@ -132,7 +133,7 @@ fn test_patch_dispatch_missing_read() {
             ..Default::default()
         })
         .unwrap();
-    let r = &out.patch_dispatch_results[0];
+    let r = &out.result().patch_dispatch_results[0];
     assert!(!r.dispatched);
     assert_eq!(
         r.skip_reason,
@@ -192,7 +193,7 @@ fn test_patch_dispatch_skips_zero_version() {
             ..Default::default()
         })
         .unwrap();
-    let r = &out.patch_dispatch_results[0];
+    let r = &out.result().patch_dispatch_results[0];
     assert!(!r.dispatched);
     assert_eq!(r.skip_reason, Some(PatchSkipReason::ZeroVersion));
 }
@@ -263,8 +264,10 @@ fn test_adapter_registry_registers_and_executes() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out.outcome, TurnOutcome::Success));
+    assert!(out.is_complete());
+    assert_eq!(out.turn_status(), TurnStatus::Ok);
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "echo")
@@ -310,6 +313,7 @@ fn test_no_adapter_metadata_only() {
         })
         .unwrap();
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "echo")
@@ -348,10 +352,10 @@ fn test_adapter_failure_graceful() {
         })
         .unwrap();
     assert!(
-        matches!(out.outcome, TurnOutcome::Success)
-            || matches!(out.outcome, TurnOutcome::PartialSuccess { .. })
+        (out.is_complete() && out.turn_status() == TurnStatus::Ok) || out.is_partial_success()
     );
     let r = out
+        .result()
         .patch_dispatch_results
         .iter()
         .find(|x| x.label == "fail")
@@ -463,8 +467,12 @@ fn test_persona_cache_invalidated_after_extraction() {
             ..Default::default()
         })
         .unwrap();
-    assert!(out1.extraction_report.is_some());
-    let c1 = out1.persona_prompt_contribution.clone().expect("p1");
+    assert!(out1.result().extraction_report.is_some());
+    let c1 = out1
+        .result()
+        .persona_prompt_contribution
+        .clone()
+        .expect("p1");
 
     let store = rt.sqlite_store();
     let mut pn = store.read_node(persona_id).unwrap().expect("persona row");
@@ -480,7 +488,11 @@ fn test_persona_cache_invalidated_after_extraction() {
             ..Default::default()
         })
         .unwrap();
-    let c2 = out2.persona_prompt_contribution.clone().expect("p2");
+    let c2 = out2
+        .result()
+        .persona_prompt_contribution
+        .clone()
+        .expect("p2");
     assert_ne!(c1, c2);
     assert!(c2.contains("0.99"));
 }
@@ -759,7 +771,8 @@ fn test_internal_depth_enforced() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out1.outcome, TurnOutcome::Success));
+    assert!(out1.is_complete());
+    assert_eq!(out1.turn_status(), TurnStatus::Ok);
     assert_eq!(rt.test_delegation_depth(), 0);
 
     // Prime internal nesting to the configured ceiling before re-entry: next `run_turn` increments
@@ -773,7 +786,8 @@ fn test_internal_depth_enforced() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out2.outcome, TurnOutcome::DepthLimitExceeded));
+    assert!(out2.is_complete());
+    assert_eq!(out2.turn_status(), TurnStatus::DepthLimitExceeded);
     assert_eq!(rt.test_delegation_depth(), 1);
 }
 
@@ -803,15 +817,11 @@ fn test_partial_success_extraction_failure() {
         })
         .unwrap();
 
-    assert!(matches!(
-        out.outcome,
-        TurnOutcome::PartialSuccess {
-            extraction_failed: true,
-            ..
-        }
-    ));
-    assert_ne!(out.episode_id, Uuid::nil());
-    assert!(out.extraction_report.is_none());
+    assert!(out.is_partial_success());
+    let warns = out.warnings();
+    assert!(warns.iter().any(|w| w.phase == TurnPhase::ExtractionPass));
+    assert_ne!(out.result().episode_id, Uuid::nil());
+    assert!(out.result().extraction_report.is_none());
 }
 
 #[test]
@@ -862,7 +872,7 @@ fn test_runtime_state_survives_restart() {
             })
             .unwrap();
         assert!(
-            out.extraction_report.is_none(),
+            out.result().extraction_report.is_none(),
             "extraction should not run before combined turn 10"
         );
     }
@@ -875,7 +885,7 @@ fn test_runtime_state_survives_restart() {
         })
         .unwrap();
     assert!(
-        out.extraction_report.is_some(),
+        out.result().extraction_report.is_some(),
         "extraction should run at combined turn 10"
     );
 }
@@ -902,6 +912,7 @@ fn test_scheduled_extractor_pass_still_runs_after_turn() {
             ..Default::default()
         })
         .unwrap();
-    assert!(matches!(out.outcome, TurnOutcome::Success));
-    assert!(out.extraction_report.is_some());
+    assert!(out.is_complete());
+    assert_eq!(out.turn_status(), TurnStatus::Ok);
+    assert!(out.result().extraction_report.is_some());
 }

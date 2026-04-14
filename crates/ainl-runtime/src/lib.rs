@@ -27,8 +27,9 @@ pub use ainl_persona::{
 };
 
 pub use engine::{
-    AinlGraphArtifact, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
-    TurnInput, TurnOutcome, TurnOutput, EMIT_TO_EDGE,
+    AinlGraphArtifact, AinlRuntimeError, MemoryContext, PatchDispatchContext, PatchDispatchResult,
+    PatchSkipReason, TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning,
+    EMIT_TO_EDGE,
 };
 pub use hooks::{NoOpHooks, TurnHooks};
 pub use runtime::AinlRuntime;
@@ -162,6 +163,7 @@ impl RuntimeContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TurnStatus;
     use ainl_memory::{AinlMemoryNode, SqliteGraphStore};
     use std::path::PathBuf;
     use uuid::Uuid;
@@ -231,8 +233,9 @@ mod tests {
                 ..Default::default()
             })
             .expect("turn");
-        assert!(matches!(out.outcome, TurnOutcome::Success));
-        assert_ne!(out.episode_id, Uuid::nil());
-        assert!(out.extraction_report.is_some());
+        assert!(out.is_complete());
+        assert_eq!(out.turn_status(), TurnStatus::Ok);
+        assert_ne!(out.result().episode_id, Uuid::nil());
+        assert!(out.result().extraction_report.is_some());
     }
 }

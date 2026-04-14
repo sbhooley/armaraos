@@ -1,6 +1,7 @@
 //! Loaded graph artifacts and per-turn data shapes for [`crate::AinlRuntime`].
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
 
 use ainl_graph_extractor::ExtractionReport;
@@ -15,6 +16,24 @@ use uuid::Uuid;
 
 /// Edge label for emit routing (matches `ainl_graph_edges.label`).
 pub const EMIT_TO_EDGE: &str = "EMIT_TO";
+
+/// Hard failure for [`crate::AinlRuntime::run_turn`] (store open, invalid graph, invalid compile input, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AinlRuntimeError(pub String);
+
+impl fmt::Display for AinlRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for AinlRuntimeError {}
+
+impl From<String> for AinlRuntimeError {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
 
 /// Per-patch inputs for [`crate::PatchAdapter::execute_patch`] (procedural / GraphPatch nodes).
 ///
@@ -166,19 +185,48 @@ impl Default for MemoryContext {
     }
 }
 
-/// Output of a single agent turn orchestrated by [`crate::AinlRuntime`].
+/// Non-fatal bookkeeping phase inside [`AinlRuntime::run_turn`] (SQLite / export / persona persistence).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TurnPhase {
+    EpisodeWrite,
+    FitnessWriteBack,
+    ExtractionPass,
+    PatternPersistence,
+    PersonaEvolution,
+    ExportRefresh,
+}
+
+/// One non-fatal failure recorded during a turn (the turn still returns a usable [`TurnResult`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnWarning {
+    pub phase: TurnPhase,
+    pub error: String,
+}
+
+/// Soft outcome for depth / step caps / disabled graph (not store write failures — those become [`TurnWarning`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnStatus {
+    Ok,
+    DepthLimitExceeded,
+    StepLimitExceeded {
+        steps_executed: u32,
+    },
+    GraphMemoryDisabled,
+}
+
+/// Payload from a finished turn (memory context, episode id, patch dispatch, etc.).
 #[derive(Debug, Clone)]
-pub struct TurnOutput {
+pub struct TurnResult {
     pub episode_id: Uuid,
     pub persona_prompt_contribution: Option<String>,
     pub memory_context: MemoryContext,
     pub extraction_report: Option<ExtractionReport>,
     pub steps_executed: u32,
-    pub outcome: TurnOutcome,
     pub patch_dispatch_results: Vec<PatchDispatchResult>,
+    pub status: TurnStatus,
 }
 
-impl Default for TurnOutput {
+impl Default for TurnResult {
     fn default() -> Self {
         Self {
             episode_id: Uuid::nil(),
@@ -186,26 +234,53 @@ impl Default for TurnOutput {
             memory_context: MemoryContext::default(),
             extraction_report: None,
             steps_executed: 0,
-            outcome: TurnOutcome::Success,
             patch_dispatch_results: Vec::new(),
+            status: TurnStatus::Ok,
         }
     }
 }
 
-/// High-level turn result (soft limits use variants instead of `Err` when `Ok` carries diagnostics).
+/// Full success vs partial success after non-fatal write failures.
 #[derive(Debug, Clone)]
 pub enum TurnOutcome {
-    Success,
-    DepthLimitExceeded,
-    StepLimitExceeded {
-        steps_executed: u32,
-    },
-    GraphMemoryDisabled,
+    /// All bookkeeping writes succeeded.
+    Complete(TurnResult),
+    /// Turn completed but one or more non-fatal writes failed; [`TurnResult`] is still valid.
     PartialSuccess {
-        episode_recorded: bool,
-        extraction_failed: bool,
-        patches_failed: Vec<String>,
-        warnings: Vec<String>,
+        result: TurnResult,
+        warnings: Vec<TurnWarning>,
     },
-    Error(String),
+}
+
+impl TurnOutcome {
+    pub fn result(&self) -> &TurnResult {
+        match self {
+            TurnOutcome::Complete(r) | TurnOutcome::PartialSuccess { result: r, .. } => r,
+        }
+    }
+
+    pub fn warnings(&self) -> &[TurnWarning] {
+        match self {
+            TurnOutcome::Complete(_) => &[],
+            TurnOutcome::PartialSuccess { warnings, .. } => warnings.as_slice(),
+        }
+    }
+
+    pub fn into_result(self) -> TurnResult {
+        match self {
+            TurnOutcome::Complete(r) | TurnOutcome::PartialSuccess { result: r, .. } => r,
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        matches!(self, TurnOutcome::Complete(_))
+    }
+
+    pub fn is_partial_success(&self) -> bool {
+        matches!(self, TurnOutcome::PartialSuccess { .. })
+    }
+
+    pub fn turn_status(&self) -> TurnStatus {
+        self.result().status
+    }
 }
