@@ -5,14 +5,20 @@ edition.workspace = true
 license.workspace = true
 description = "Agent runtime and execution environment for OpenFang"
 
+[features]
+default = ["ainl-persona-evolution", "ainl-extractor"]
+ainl-persona-evolution = ["dep:ainl-persona"]
+ainl-tagger = ["dep:ainl-semantic-tagger"]
+ainl-extractor = ["dep:ainl-graph-extractor"]
+
 [dependencies]
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.2-alpha" }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.4" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.5", optional = true }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5", optional = true }
+ainl-persona = { path = "../ainl-persona", version = "0.1.4", optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -9,6 +9,11 @@ pub const USER_AGENT: &str = "openfang/0.3.48";
 
 pub mod a2a;
 pub mod agent_loop;
+pub mod ainl_graph_extractor_bridge;
+pub mod ainl_semantic_tagger_bridge;
+
+#[cfg(all(test, feature = "ainl-extractor"))]
+mod tests;
 pub mod ainl_bundle_cron;
 pub mod apply_patch;
 pub mod audit;
@@ -27,6 +32,7 @@ pub mod graceful_shutdown;
 pub mod graph_extractor;
 pub mod graph_memory_writer;
 pub mod hooks;
+pub mod persona_evolution;
 pub mod host_ainl_snapshot;
 pub mod host_functions;
 pub mod image_gen;

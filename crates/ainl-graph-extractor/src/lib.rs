@@ -23,4 +23,5 @@ pub use persona_signals::{
 };
 pub use recurrence::update_semantic_recurrence;
 pub use runner::run_extraction_pass;
+pub use ainl_semantic_tagger::{tag_tool_names, SemanticTag, TagNamespace};
 pub use turn_extract::extract_turn_semantic_tags_for_memory;

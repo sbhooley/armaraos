@@ -273,6 +273,9 @@ pub struct EpisodicNode {
     /// Optional assistant reply text for offline extractors; omitted unless set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_response: Option<String>,
+    /// Deterministic semantic category tags for this episode (e.g. from `ainl-semantic-tagger` / tool sequence).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 impl EpisodicNode {
@@ -496,6 +499,7 @@ impl AinlMemoryNode {
             follows_episode_id: None,
             user_message: None,
             assistant_response: None,
+            tags: Vec::new(),
         };
         Self::base(
             MemoryCategory::Episodic,

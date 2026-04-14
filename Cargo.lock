@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-semantic-tagger"
-version = "0.1.2-alpha"
+version = "0.1.5"
 dependencies = [
  "regex-lite",
  "serde",

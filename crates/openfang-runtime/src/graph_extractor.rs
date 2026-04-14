@@ -8,7 +8,8 @@
 //!
 //! **Patterns:** [`extract_pattern`] remains the local tool-sequence heuristic (unchanged).
 
-use ainl_graph_extractor::extract_turn_semantic_tags_for_memory;
+#[cfg(feature = "ainl-extractor")]
+use ainl_graph_extractor::{extract_turn_semantic_tags_for_memory, SemanticTag};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -27,9 +28,8 @@ pub struct ExtractedPattern {
     pub confidence: f32,
 }
 
-fn semantic_tags_to_extracted_facts(
-    tags: Vec<ainl_semantic_tagger::SemanticTag>,
-) -> Vec<ExtractedFact> {
+#[cfg(feature = "ainl-extractor")]
+fn semantic_tags_to_extracted_facts(tags: Vec<SemanticTag>) -> Vec<ExtractedFact> {
     tags.into_iter()
         .map(|t| ExtractedFact {
             text: format!("{}: {}", t.namespace.prefix(), t.value),
@@ -39,6 +39,7 @@ fn semantic_tags_to_extracted_facts(
 }
 
 /// Primary path: deterministic tags from `ainl-graph-extractor` / `ainl-semantic-tagger` (`tag_turn`).
+#[cfg(feature = "ainl-extractor")]
 fn extract_facts_crate_primary(
     user_message: &str,
     assistant_response: &str,
@@ -46,6 +47,15 @@ fn extract_facts_crate_primary(
 ) -> Vec<ExtractedFact> {
     let tags = extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools);
     semantic_tags_to_extracted_facts(tags)
+}
+
+#[cfg(not(feature = "ainl-extractor"))]
+fn extract_facts_crate_primary(
+    _user_message: &str,
+    _assistant_response: &str,
+    _tools: &[String],
+) -> Vec<ExtractedFact> {
+    Vec::new()
 }
 
 /// Legacy regex + structural heuristics (fallback when the crate tag pipeline yields nothing).
@@ -159,7 +169,7 @@ pub fn extract_facts_heuristic(user_message: &str, assistant_response: &str) -> 
 
 /// Extract semantic facts for graph memory: **crate tag pipeline first**, then regex fallback.
 ///
-/// `tools` is forwarded to [`ainl_semantic_tagger::tag_turn`] (same inputs as episode tool names).
+/// `tools` is forwarded to the same `tag_turn` pipeline as [`ainl_graph_extractor::extract_turn_semantic_tags_for_memory`].
 pub fn extract_facts_for_turn(
     user_message: &str,
     assistant_response: &str,
@@ -254,6 +264,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ainl-extractor")]
     fn crate_path_produces_topic_fact_from_realistic_turn() {
         let facts = extract_facts_for_turn(
             "Help me fix my rust project: cargo errors and serde derives",
@@ -270,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ainl-extractor")]
     fn fallback_triggers_when_crate_tags_filtered_to_empty() {
         // Tool-only signals from tag_turn are filtered in the crate path; no topic/preference
         // in plain greetings — heuristic still finds nothing, so both can be empty. Use user

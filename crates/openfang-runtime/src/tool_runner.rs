@@ -2260,6 +2260,7 @@ async fn tool_agent_delegate(
                 vec!["agent_delegate".to_string()],
                 Some(selected.to_string()),
                 trace_event,
+                &[],
             )
             .await;
     }

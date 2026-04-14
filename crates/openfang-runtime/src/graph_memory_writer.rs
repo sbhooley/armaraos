@@ -13,17 +13,36 @@
 //! via [`armaraos_graph_memory_export_json_path`] / `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang**
 //! `docs/adapters/AINL_GRAPH_MEMORY.md`).
 
-use ainl_graph_extractor::{ExtractionReport, GraphExtractorTask};
-use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
+#[cfg(feature = "ainl-extractor")]
+use ainl_graph_extractor::GraphExtractorTask;
+#[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
+use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+/// Result of [`GraphMemoryWriter::run_persona_evolution_pass`].
+#[cfg(feature = "ainl-extractor")]
+pub type PersonaEvolutionExtractionReport = ainl_graph_extractor::ExtractionReport;
+
+#[cfg(not(feature = "ainl-extractor"))]
+#[derive(Debug, Clone)]
+pub struct PersonaEvolutionExtractionReport {
+    pub agent_id: String,
+}
+
+#[cfg(not(feature = "ainl-extractor"))]
+impl PersonaEvolutionExtractionReport {
+    pub fn has_errors(&self) -> bool {
+        false
+    }
+}
+
 /// Horizon for “any persona row exists” checks (per-agent DB; long window ≈ all history).
-const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
+pub(crate) const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
 
 /// JSON snapshot path for the Python `ainl_graph_memory` bridge (auto-refresh after persona evolution).
 ///
@@ -48,9 +67,9 @@ pub fn armaraos_graph_memory_export_json_path(agent_id: &str) -> PathBuf {
 /// Thread-safe wrapper around GraphMemory for use in the async agent loop.
 #[derive(Clone)]
 pub struct GraphMemoryWriter {
-    inner: Arc<Mutex<GraphMemory>>,
-    agent_id: String,
-    on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    pub(crate) inner: Arc<Mutex<GraphMemory>>,
+    pub(crate) agent_id: String,
+    pub(crate) on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
 }
 
 impl GraphMemoryWriter {
@@ -81,6 +100,20 @@ impl GraphMemoryWriter {
         })
     }
 
+    /// Test-only: bind a caller-supplied [`GraphMemory`] (e.g. temp-file SQLite) instead of `~/.armaraos/...`.
+    #[cfg(test)]
+    pub(crate) fn from_memory_for_tests(
+        memory: GraphMemory,
+        agent_id: impl Into<String>,
+        on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: agent_id.into(),
+            on_write,
+        }
+    }
+
     fn db_path(agent_id: &str) -> Result<PathBuf, String> {
         // Must match kernel agent dirs (`KernelConfig::home_dir` / `openfang_home_dir`) and
         // `GET /api/graph-memory` — not `dirs::home_dir().join(".armaraos")` alone (breaks `ARMARAOS_HOME`).
@@ -105,6 +138,7 @@ impl GraphMemoryWriter {
         tool_calls: Vec<String>,
         delegation_to: Option<String>,
         trace_json: Option<serde_json::Value>,
+        episode_tags: &[String],
     ) -> Option<Uuid> {
         let kind = if delegation_to.is_some() {
             "delegation"
@@ -128,9 +162,14 @@ impl GraphMemoryWriter {
                 trace_json,
             );
             node.agent_id = self.agent_id.clone();
-            if let Some(prev) = prev_id {
-                if let AinlNodeType::Episode { ref mut episodic } = node.node_type {
+            if let AinlNodeType::Episode { ref mut episodic } = node.node_type {
+                if let Some(prev) = prev_id {
                     episodic.follows_episode_id = Some(prev.to_string());
+                }
+                for t in episode_tags {
+                    if !episodic.tags.iter().any(|x| x == t) {
+                        episodic.tags.push(t.clone());
+                    }
                 }
             }
             let new_id = node.id;
@@ -280,7 +319,12 @@ impl GraphMemoryWriter {
     /// Record an A2A delegation as an EpisodeNode with delegation_to set.
     pub async fn record_delegation(&self, target_agent_id: &str, tool_calls: Vec<String>) {
         let _ = self
-            .record_turn(tool_calls, Some(target_agent_id.to_string()), None)
+            .record_turn(
+                tool_calls,
+                Some(target_agent_id.to_string()),
+                None,
+                &[],
+            )
             .await;
     }
 
@@ -296,6 +340,24 @@ impl GraphMemoryWriter {
         inner
             .recall_by_type(ainl_memory::AinlNodeKind::Persona, seconds_ago)
             .unwrap_or_default()
+    }
+
+    /// Persona payloads for `agent_id` within the lookback window (same SQL path as
+    /// [`Self::recall_persona`], filtered to matching rows).
+    pub async fn recall_persona_for_agent(
+        &self,
+        agent_id: &str,
+        lookback_secs: i64,
+    ) -> Vec<ainl_memory::PersonaNode> {
+        self.recall_persona(lookback_secs)
+            .await
+            .into_iter()
+            .filter(|n| n.agent_id == agent_id)
+            .filter_map(|n| match n.node_type {
+                ainl_memory::AinlNodeType::Persona { persona } => Some(persona),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Post-turn persona evolution: run `ainl-graph-extractor`’s [`GraphExtractorTask::run_pass`]
@@ -316,59 +378,72 @@ impl GraphMemoryWriter {
     ///
     /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
     /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.
-    pub async fn run_persona_evolution_pass(&self) -> ExtractionReport {
-        let inner = self.inner.lock().await;
-        let store = inner.sqlite_store();
-        let had_persona_before_pass = inner
-            .recall_by_type(ainl_memory::AinlNodeKind::Persona, PERSONA_PRIOR_LOOKBACK_SECS)
-            .unwrap_or_default()
-            .iter()
-            .any(|n| n.agent_id == self.agent_id);
-        let mut task = GraphExtractorTask::new(&self.agent_id);
-        let mut report = task.run_pass(store);
+    pub async fn run_persona_evolution_pass(&self) -> PersonaEvolutionExtractionReport {
+        #[cfg(feature = "ainl-extractor")]
+        {
+            let inner = self.inner.lock().await;
+            let store = inner.sqlite_store();
+            let had_persona_before_pass = inner
+                .recall_by_type(ainl_memory::AinlNodeKind::Persona, PERSONA_PRIOR_LOOKBACK_SECS)
+                .unwrap_or_default()
+                .iter()
+                .any(|n| n.agent_id == self.agent_id);
+            let mut task = GraphExtractorTask::new(&self.agent_id);
+            let mut report = task.run_pass(store);
 
-        if let Some(ref e) = report.extract_error {
-            warn!(
-                agent_id = %self.agent_id,
-                error = %e,
-                "graph extractor signal merge failed"
-            );
-        }
-        if let Some(ref e) = report.pattern_error {
-            warn!(
-                agent_id = %self.agent_id,
-                error = %e,
-                "graph extractor pattern persistence failed"
-            );
-        }
-        if let Some(ref e) = report.persona_error {
-            warn!(
-                agent_id = %self.agent_id,
-                error = %e,
-                "graph extractor persona evolution write failed"
-            );
-        }
-
-        if report.merged_signals.is_empty() {
-            for ax in PersonaAxis::ALL {
-                task.evolution_engine.correction_tick(ax, 0.5);
+            if let Some(ref e) = report.extract_error {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "graph extractor signal merge failed"
+                );
             }
-            let snapshot = task.evolution_engine.snapshot();
-            if had_persona_before_pass {
-                if let Err(e) = task.evolution_engine.write_persona_node(store, &snapshot) {
-                    warn!(
-                        agent_id = %self.agent_id,
-                        error = %e,
-                        "graph extractor persona evolution write failed"
-                    );
-                    merge_persona_err(&mut report.persona_error, e);
+            if let Some(ref e) = report.pattern_error {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "graph extractor pattern persistence failed"
+                );
+            }
+            if let Some(ref e) = report.persona_error {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "graph extractor persona evolution write failed"
+                );
+            }
+
+            if report.merged_signals.is_empty() {
+                #[cfg(feature = "ainl-persona-evolution")]
+                {
+                    for ax in PersonaAxis::ALL {
+                        task.evolution_engine.correction_tick(ax, 0.5);
+                    }
+                    let snapshot = task.evolution_engine.snapshot();
+                    if had_persona_before_pass {
+                        if let Err(e) = task.evolution_engine.write_persona_node(store, &snapshot) {
+                            warn!(
+                                agent_id = %self.agent_id,
+                                error = %e,
+                                "graph extractor persona evolution write failed"
+                            );
+                            merge_persona_err(&mut report.persona_error, e);
+                        }
+                    }
                 }
             }
+            report
         }
-        report
+        #[cfg(not(feature = "ainl-extractor"))]
+        {
+            PersonaEvolutionExtractionReport {
+                agent_id: self.agent_id.clone(),
+            }
+        }
     }
 }
 
+#[cfg(feature = "ainl-extractor")]
 fn merge_persona_err(slot: &mut Option<String>, e: String) {
     match slot {
         None => *slot = Some(e),
@@ -386,6 +461,7 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    #[cfg(feature = "ainl-persona-evolution")]
     async fn correction_tick_all_axes_no_panic() {
         let mut engine = ainl_persona::EvolutionEngine::new("tick-test-agent");
         for ax in ainl_persona::PersonaAxis::ALL {
@@ -396,6 +472,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ainl-extractor")]
     async fn persona_evolution_writes_evolution_node_after_tool_turn() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("evo_persona.db");
@@ -419,6 +496,7 @@ mod tests {
                     vec!["shell_exec".into()],
                     None,
                     Some(json!({ "outcome": "success" })),
+                    &[],
                 )
                 .await
                 .is_some()
@@ -451,6 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ainl-extractor")]
     async fn persona_evolution_cycle_increments_over_two_passes() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("evo_cycle.db");
@@ -488,6 +567,7 @@ mod tests {
                 vec!["shell_exec".into()],
                 None,
                 Some(json!({ "outcome": "success" })),
+                &[],
             )
             .await;
         let r1 = writer.run_persona_evolution_pass().await;
@@ -500,6 +580,7 @@ mod tests {
                 vec!["web_search".into()],
                 None,
                 Some(json!({ "outcome": "success" })),
+                &[],
             )
             .await;
         let r2_pass = writer.run_persona_evolution_pass().await;
@@ -530,6 +611,7 @@ mod tests {
                     vec!["web_search".to_string(), "file_read".to_string()],
                     None,
                     None,
+                    &[],
                 )
                 .await
                 .is_some()
@@ -583,7 +665,7 @@ mod tests {
         let trace = json!({"agent_id": "export-agent", "trace_id": "tr-abc"});
         assert!(
             writer
-                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()))
+                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()), &[])
                 .await
                 .is_some()
         );
@@ -610,11 +692,11 @@ mod tests {
         };
 
         let id1 = writer
-            .record_turn(vec!["a".to_string()], None, None)
+            .record_turn(vec!["a".to_string()], None, None, &[])
             .await
             .expect("ep1");
         let id2 = writer
-            .record_turn(vec!["b".to_string()], None, None)
+            .record_turn(vec!["b".to_string()], None, None, &[])
             .await
             .expect("ep2");
 

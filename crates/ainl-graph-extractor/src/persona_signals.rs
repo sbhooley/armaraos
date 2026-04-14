@@ -413,6 +413,7 @@ mod tests {
             follows_episode_id: None,
             user_message: None,
             assistant_response: None,
+            tags: vec![],
         }
     }
 

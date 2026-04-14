@@ -185,3 +185,7 @@ lto = "thin"
 codegen-units = 8
 opt-level = 2
 strip = false
+
+# Use the workspace crate for the crates.io dependency name (same version).
+[patch.crates-io]
+ainl-graph-extractor = { path = "crates/ainl-graph-extractor" }

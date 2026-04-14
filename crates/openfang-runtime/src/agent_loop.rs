@@ -10,8 +10,9 @@
 //! The `graph_memory` binding is `None` only when that open fails (permissions, disk, schema,
 //! etc.); there is no alternate code path that skips the writer for “normal” agents.
 //! When open succeeds, post-turn persistence (`record_turn`, `record_fact_with_tags`,
-//! `record_pattern`, spawned `run_persona_evolution_pass`) uses the same handle for both
-//! streaming and non-streaming loops.
+//! `record_pattern`, spawned `run_persona_evolution_pass`, and when `AINL_PERSONA_EVOLUTION=1`
+//! also [`crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn`]) uses the same handle
+//! for both streaming and non-streaming loops.
 
 use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
@@ -1215,35 +1216,50 @@ pub async fn run_agent_loop(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                let tools_for_episode =
+                    canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if let Some(ref gm) = graph_memory {
-                    let tools_for_episode =
-                        canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                     let turn_trace =
                         graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
                     let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
                     let pattern_trace_id = graph_memory_pattern_trace_id(&orchestration_ctx);
+                    let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
+                        &tools_for_episode,
+                    );
                     if let Some(episode_id) = gm
-                        .record_turn(tools_for_episode.clone(), None, turn_trace)
+                        .record_turn(
+                            tools_for_episode.clone(),
+                            None,
+                            turn_trace,
+                            &episode_tags,
+                        )
                         .await
                     {
-                        let facts = crate::graph_extractor::extract_facts_for_turn(
-                            session_user_message,
-                            &final_response,
-                            &tools_for_episode,
-                        );
+                        let (facts, turn_pattern) =
+                            crate::ainl_graph_extractor_bridge::graph_memory_turn_extraction(
+                                session_user_message,
+                                &final_response,
+                                &tools_for_episode,
+                                &turn_tool_names,
+                                agent_id_str.as_str(),
+                            );
                         for fact in facts {
+                            let mut fact_tags: Vec<String> = trace_tags.to_vec();
+                            fact_tags.extend(
+                                crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_fact(
+                                    &fact.text,
+                                ),
+                            );
                             gm.record_fact_with_tags(
                                 fact.text,
                                 fact.confidence,
                                 episode_id,
-                                &trace_tags,
+                                &fact_tags,
                             )
                             .await;
                         }
-                        if let Some(pattern) =
-                            crate::graph_extractor::extract_pattern(&turn_tool_names)
-                        {
+                        if let Some(pattern) = turn_pattern {
                             gm.record_pattern(
                                 &pattern.name,
                                 pattern.tool_sequence,
@@ -1260,6 +1276,10 @@ pub async fn run_agent_loop(
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
+                    let turn_outcome = crate::persona_evolution::TurnOutcome {
+                        tool_calls: tools_for_episode.clone(),
+                        delegation_to: None,
+                    };
                     // Cooperative barrier before evolution: post-turn graph writes are awaited above,
                     // but `yield_now` lets the runtime finish scheduling work so the spawned reader is
                     // less likely to race the tail of the write path on the same SQLite connection.
@@ -1267,6 +1287,19 @@ pub async fn run_agent_loop(
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
                         let _report = gm.run_persona_evolution_pass().await;
+                        if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
+                            &gm,
+                            &agent_id,
+                            &turn_outcome,
+                        )
+                        .await
+                        {
+                            warn!(
+                                agent_id = %agent_id,
+                                error = %e,
+                                "AINL persona turn evolution (AINL_PERSONA_EVOLUTION) failed; continuing"
+                            );
+                        }
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
@@ -2991,35 +3024,50 @@ pub async fn run_agent_loop_streaming(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                let tools_for_episode =
+                    canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if let Some(ref gm) = graph_memory {
-                    let tools_for_episode =
-                        canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                     let turn_trace =
                         graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
                     let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
                     let pattern_trace_id = graph_memory_pattern_trace_id(&orchestration_ctx);
+                    let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
+                        &tools_for_episode,
+                    );
                     if let Some(episode_id) = gm
-                        .record_turn(tools_for_episode.clone(), None, turn_trace)
+                        .record_turn(
+                            tools_for_episode.clone(),
+                            None,
+                            turn_trace,
+                            &episode_tags,
+                        )
                         .await
                     {
-                        let facts = crate::graph_extractor::extract_facts_for_turn(
-                            session_user_message_s,
-                            &final_response,
-                            &tools_for_episode,
-                        );
+                        let (facts, turn_pattern) =
+                            crate::ainl_graph_extractor_bridge::graph_memory_turn_extraction(
+                                session_user_message_s,
+                                &final_response,
+                                &tools_for_episode,
+                                &turn_tool_names,
+                                agent_id_str.as_str(),
+                            );
                         for fact in facts {
+                            let mut fact_tags: Vec<String> = trace_tags.to_vec();
+                            fact_tags.extend(
+                                crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_fact(
+                                    &fact.text,
+                                ),
+                            );
                             gm.record_fact_with_tags(
                                 fact.text,
                                 fact.confidence,
                                 episode_id,
-                                &trace_tags,
+                                &fact_tags,
                             )
                             .await;
                         }
-                        if let Some(pattern) =
-                            crate::graph_extractor::extract_pattern(&turn_tool_names)
-                        {
+                        if let Some(pattern) = turn_pattern {
                             gm.record_pattern(
                                 &pattern.name,
                                 pattern.tool_sequence,
@@ -3036,11 +3084,28 @@ pub async fn run_agent_loop_streaming(
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
+                    let turn_outcome = crate::persona_evolution::TurnOutcome {
+                        tool_calls: tools_for_episode.clone(),
+                        delegation_to: None,
+                    };
                     // Same cooperative barrier as the non-streaming path (see above).
                     tokio::task::yield_now().await;
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
                         let _report = gm.run_persona_evolution_pass().await;
+                        if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
+                            &gm,
+                            &agent_id,
+                            &turn_outcome,
+                        )
+                        .await
+                        {
+                            warn!(
+                                agent_id = %agent_id,
+                                error = %e,
+                                "AINL persona turn evolution (AINL_PERSONA_EVOLUTION) failed; continuing (streaming)"
+                            );
+                        }
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
@@ -4495,23 +4560,38 @@ pub fn deduplicate_tool_calls(response: &crate::llm_driver::CompletionResponse) 
     deduplicated
 }
 
-/// Normalize per-turn tool names via [`ainl_semantic_tagger::tag_tool_names`] for stable graph
+/// Normalize per-turn tool names via [`ainl_graph_extractor::tag_tool_names`] for stable graph
 /// episode storage: plain lowercase slugs (for example `bash`), deduped in first-seen order.
 /// Does not use namespaced debug strings such as `tool:bash` — only each tag's `value` string.
 fn canonicalize_turn_tool_names_for_graph_storage(raw: &[String]) -> Vec<String> {
-    use ainl_semantic_tagger::{tag_tool_names, TagNamespace};
-    let tags = tag_tool_names(raw);
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for t in tags {
-        if t.namespace != TagNamespace::Tool {
-            continue;
+    #[cfg(feature = "ainl-extractor")]
+    {
+        use ainl_graph_extractor::{tag_tool_names, TagNamespace};
+        let tags = tag_tool_names(raw);
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for t in tags {
+            if t.namespace != TagNamespace::Tool {
+                continue;
+            }
+            if seen.insert(t.value.clone()) {
+                out.push(t.value);
+            }
         }
-        if seen.insert(t.value.clone()) {
-            out.push(t.value);
-        }
+        out
     }
-    out
+    #[cfg(not(feature = "ainl-extractor"))]
+    {
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for s in raw {
+            let n = s.to_ascii_lowercase();
+            if seen.insert(n.clone()) {
+                out.push(n);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -4524,6 +4604,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
+    #[cfg(feature = "ainl-extractor")]
     fn canonicalize_turn_tool_names_shell_aliases_to_single_bash() {
         let raw = vec![
             "bash".into(),
@@ -4538,6 +4619,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ainl-extractor")]
     fn canonicalize_turn_tool_names_python_and_python3_same_key() {
         assert_eq!(
             canonicalize_turn_tool_names_for_graph_storage(&["python".into(), "python3".into()]),
@@ -4550,6 +4632,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ainl-extractor")]
     fn canonicalize_turn_tool_names_distinct_tools_preserved() {
         let raw = vec!["file_read".into(), "search_web".into()];
         assert_eq!(
