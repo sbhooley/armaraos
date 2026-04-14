@@ -59,7 +59,7 @@ tracing = { workspace = true }
 scopeguard = { workspace = true }
 chrono = { workspace = true }
 ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.3" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.4" }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.2-alpha" }
 async-trait = { workspace = true, optional = true }

@@ -12,7 +12,7 @@ openfang-skills = { path = "../openfang-skills" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.8-alpha" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.2-alpha" }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.5" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.3" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.4" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
