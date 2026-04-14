@@ -20,6 +20,8 @@ ArmaraOS stores per-agent graph memory in `~/.armaraos/agents/<agent_id>/ainl_me
 
 If you embed **`AinlRuntime`** on the **same** `ainl_memory.db` (tests, tooling, or optional **`ainl-runtime-engine`** chat shim), a scheduled **`GraphExtractorTask::run_pass`** still yields **`ExtractionReport`**. **`run_turn`** promotes each populated error slot to its own **`TurnWarning`**: **`extract_error`** → **`TurnPhase::ExtractionPass`**, **`pattern_error`** → **`PatternPersistence`**, **`persona_error`** → **`PersonaEvolution`**, so **`TurnOutcome::PartialSuccess`** can carry multiple extraction diagnostics in one turn. That parallels OpenFang’s per-slot **`warn!`** without conflating phases. Hub: **[ainl-runtime.md](ainl-runtime.md)**, **`crates/ainl-runtime/README.md`**, integration **[ainl-runtime-integration.md](ainl-runtime-integration.md)**.
 
+**Third path (tests / admin tooling):** **`AinlRuntime`** also exposes the same in-process **`EvolutionEngine`** for **`apply_evolution_signals`**, **`evolution_correction_tick`**, **`persist_evolution_snapshot`**, and **`evolve_persona_from_graph_signals`** without going through **`run_pass`** — see **[ainl-runtime.md](ainl-runtime.md)** (*Persona evolution: extractor vs direct `EvolutionEngine`*). Coordinate writers on the same DB to avoid conflicting evolution row updates.
+
 ## Runtime toggle: `AINL_PERSONA_EVOLUTION`
 
 The turn hook is **off by default** (no env → no extra writes).

@@ -8,6 +8,7 @@
 
 - [`run_extraction_pass`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/fn.run_extraction_pass.html) — convenience one-shot: builds a fresh [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html) per call (streak-based heuristics do not carry across invocations). Returns [`ExtractionReport`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.ExtractionReport.html) directly (not `Result`).
 - Stateful agents should construct [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html) once and call [`run_pass`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html#method.run_pass) each tick (same as **ainl-runtime** and **openfang-runtime**).
+- The task’s public **`evolution_engine`** field is the same **`EvolutionEngine`** instance **ainl-runtime** exposes for direct **`ingest_signals`** / **`correction_tick`** / **`evolve`** — **`run_pass`** is one signal producer, not the only evolution entrypoint (ArmaraOS hub: **[docs/ainl-runtime.md](../../docs/ainl-runtime.md)**).
 - Re-exports [`EVOLUTION_TRAIT_NAME`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/constant.EVOLUTION_TRAIT_NAME.html) from **ainl-persona** so callers do not duplicate the evolution trait string.
 
 ### `ExtractionReport` (per-phase errors)

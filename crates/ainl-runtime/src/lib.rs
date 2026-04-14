@@ -22,6 +22,17 @@
 //! [`AinlRuntime::compile_memory_context`] still calls `compile_memory_context_for(None)` (empty
 //! message → high-recurrence fallback). [`AinlRuntime::run_turn`] always passes the current turn text.
 //!
+//! ## Episodic `tools_invoked` (canonical storage)
+//!
+//! Raw **`TurnInput::tools_invoked`** strings are normalized with **`ainl_semantic_tagger::tag_tool_names`**
+//! before the episode row is written: stored values are canonical tool tag **values**, deduplicated and
+//! sorted. Empty input uses **`["turn"]`**. The emit payload’s tool list matches the persisted episode.
+//!
+//! ## Episode id in turn results
+//!
+//! The returned episode identifier is the graph **node row id** (`AinlMemoryNode::id`), not necessarily
+//! **`EpisodicNode::turn_id`**. Use it for **`EMIT_TO`** edges and store queries keyed by node id.
+//!
 //! **Async / Tokio:** enable the optional **`async`** crate feature for `AinlRuntime::run_turn_async`.
 //! Graph memory is then `Arc<std::sync::Mutex<GraphMemory>>` (not `tokio::sync::Mutex`) so
 //! [`AinlRuntime::new`] and [`AinlRuntime::sqlite_store`] can take short locks on any thread; SQLite

@@ -7,7 +7,7 @@
 ## What it does
 
 - Reads episodic, semantic, procedural, and persona nodes for an agent id and turns them into weighted [`RawSignal`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.RawSignal.html) values on configurable [`PersonaAxis`](https://docs.rs/ainl-persona/latest/ainl_persona/enum.PersonaAxis.html) axes.
-- [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) runs extract → ingest (EMA-style updates) → snapshot → optional write of an evolution bundle persona row (trait name [`EVOLUTION_TRAIT_NAME`](https://docs.rs/ainl-persona/latest/ainl_persona/constant.EVOLUTION_TRAIT_NAME.html)).
+- [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) runs extract → ingest (EMA-style updates) → snapshot → optional write of an evolution bundle persona row (trait name [`EVOLUTION_TRAIT_NAME`](https://docs.rs/ainl-persona/latest/ainl_persona/constant.EVOLUTION_TRAIT_NAME.html)). Public methods include **`extract_signals`**, **`ingest_signals`**, **`correction_tick`**, **`snapshot`**, **`write_persona_node`**, and **`evolve`** (full graph-backed pass).
 
 ## Where it fits
 

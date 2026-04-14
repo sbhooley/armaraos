@@ -15,6 +15,32 @@ The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over t
 
 ---
 
+## Orientation FAQ
+
+### What is the public Rust API?
+
+The primary surface is **`AinlRuntime`** (**`run_turn`** / optional **`run_turn_async`** with crate feature **`async`**), **`RuntimeConfig`**, **`TurnInput`**, **`TurnOutcome`** / **`TurnWarning`** / **`TurnPhase`**, **`AinlRuntimeError`**, **`MemoryContext`**, **`TurnHooks`** (and **`TurnHooksAsync`** when **`async`** is enabled), plus **`PatchAdapter`** / **`AdapterRegistry`** / **`GraphPatchAdapter`**. **`ainl-runtime`** also **re-exports** selected types from **`ainl-memory`**, **`ainl-persona`**, **`ainl-graph-extractor`**, and **`infer_topic_tags`** from **`ainl-semantic-tagger`** — see **`crates/ainl-runtime/src/lib.rs`** and rustdoc.
+
+For a **minimal** path without the full engine, **`RuntimeContext`** plus **`record_delegation`** / **`record_tool_execution`** (and optional extractor pass helpers) remains supported.
+
+### What depends on `ainl-runtime` in this workspace?
+
+Only **`openfang-runtime`**, as an **optional** `path` dependency behind Cargo feature **`ainl-runtime-engine`** (see **[ainl-runtime-integration.md](ainl-runtime-integration.md)**). Stock **`openfang-kernel`** builds do **not** enable that feature, so release daemons omit the bridge unless packaging opts in. Other crates (including the live chat loop) talk to the graph via **`ainl-memory`** directly — e.g. **`GraphMemoryWriter`**.
+
+### Does this crate call MCP, the AINL CLI, or `ainl serve`?
+
+**No.** MCP client/server wiring lives in **`openfang-runtime`** / **`openfang-cli`**. Executing compiled **`.ainl`** IR uses the **Python** AINL toolchain (`ainl run`, MCP `ainl_run`, etc.). The kernel schedules that separately — **[scheduled-ainl.md](scheduled-ainl.md)**.
+
+### Is this “runtime core” or “integration glue”?
+
+It is a **Rust graph-orchestration core** for a **single turn** over **`ainl-memory`** (context compilation, procedural patch dispatch, episodic writes, scheduled **`GraphExtractorTask`**, session **`runtime_state`**), with hooks for a host to attach LLM / tools / streaming. It does **not** parse or execute AINL IR opcodes in Rust.
+
+### Overlap with Python `runtime/engine.py`?
+
+**No shared code.** Python’s **`RuntimeEngine`** compiles and runs IR graphs and adapters. **`ainl-runtime`** can read and write the **same SQLite graph** as the daemon when pointed at the same **`ainl_memory.db`**, so stacks can align **operationally** (plus optional Python inbox / export paths in **[graph-memory.md](graph-memory.md)**), not by embedding Python in this crate.
+
+---
+
 ## What it does
 
 | API | When to use |
@@ -69,7 +95,7 @@ It is **not** always equal to **`EpisodicNode::turn_id`** inside the payload (th
 
 ---
 
-### Delegation depth and `AinlRuntimeError`
+## Delegation depth and `AinlRuntimeError`
 
 - **Nested turns** — each entry to **`run_turn`** or **`run_turn_async`** bumps an **internal** counter (`Arc<AtomicU32>`); it decrements when the call returns, including on **`Err`**. **`RuntimeConfig::max_delegation_depth`** (default **8**) limits how many nested entries may be active at once.
 - **Not caller-supplied** — **`TurnInput::depth`** is **metadata / logging only** and does **not** bypass enforcement.
