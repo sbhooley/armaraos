@@ -106,6 +106,49 @@ fn graph_memory_expected_db_path(agent_id: &openfang_types::agent::AgentId) -> s
         .join("ainl_memory.db")
 }
 
+/// When `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` is set, rewrite that path with a fresh JSON export
+/// after persona evolution so Python `ainl_graph_memory` can read the latest turn without a manual CLI export.
+async fn graph_memory_refresh_armaraos_export_json(agent_id: &str) {
+    let Ok(raw) = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT") else {
+        return;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let path = std::path::PathBuf::from(trimmed);
+    match crate::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(agent_id) {
+        Ok(v) => {
+            let body = match serde_json::to_vec_pretty(&v) {
+                Ok(b) => b,
+                Err(e) => {
+                    warn!(
+                        agent_id = %agent_id,
+                        error = %e,
+                        "AINL graph memory: serialize failed for AINL_GRAPH_MEMORY_ARMARAOS_EXPORT refresh"
+                    );
+                    return;
+                }
+            };
+            if let Err(e) = tokio::fs::write(&path, body).await {
+                warn!(
+                    agent_id = %agent_id,
+                    path = %path.display(),
+                    error = %e,
+                    "AINL graph memory: failed to write AINL_GRAPH_MEMORY_ARMARAOS_EXPORT snapshot"
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                agent_id = %agent_id,
+                error = %e,
+                "AINL graph memory: export failed while refreshing AINL_GRAPH_MEMORY_ARMARAOS_EXPORT"
+            );
+        }
+    }
+}
+
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
 
@@ -1215,13 +1258,15 @@ pub async fn run_agent_loop(
                     // less likely to race the tail of the write path on the same SQLite connection.
                     tokio::task::yield_now().await;
                     tokio::spawn(async move {
+                        let agent_id = gm.agent_id().to_string();
                         if let Err(e) = gm.run_persona_evolution_pass().await {
                             warn!(
-                                agent_id = %gm.agent_id(),
+                                agent_id = %agent_id,
                                 error = %e,
                                 "AINL graph memory: persona evolution pass failed"
                             );
                         }
+                        graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
 
@@ -2993,13 +3038,15 @@ pub async fn run_agent_loop_streaming(
                     // Same cooperative barrier as the non-streaming path (see above).
                     tokio::task::yield_now().await;
                     tokio::spawn(async move {
+                        let agent_id = gm.agent_id().to_string();
                         if let Err(e) = gm.run_persona_evolution_pass().await {
                             warn!(
-                                agent_id = %gm.agent_id(),
+                                agent_id = %agent_id,
                                 error = %e,
                                 "AINL graph memory: persona evolution pass failed (streaming)"
                             );
                         }
+                        graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
 
