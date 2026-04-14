@@ -235,3 +235,12 @@ fn test_correction_tick() {
         "correction_tick weighted EMA, after={after} expected={expected}"
     );
 }
+
+#[test]
+fn correction_tick_all_axes_no_panic() {
+    let mut engine = EvolutionEngine::new("all-axes-tick");
+    for ax in PersonaAxis::ALL {
+        engine.correction_tick(ax, 0.5);
+    }
+    let _ = engine.snapshot();
+}

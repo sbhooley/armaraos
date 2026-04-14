@@ -1125,6 +1125,17 @@ pub async fn run_agent_loop(
                         .await;
                     }
                 }
+                if let Some(gm) = graph_memory.clone() {
+                    tokio::spawn(async move {
+                        if let Err(e) = gm.run_persona_evolution_pass().await {
+                            warn!(
+                                agent_id = %gm.agent_id(),
+                                error = %e,
+                                "AINL graph memory: persona evolution pass failed"
+                            );
+                        }
+                    });
+                }
 
                 // Save session
                 memory
@@ -2876,6 +2887,17 @@ pub async fn run_agent_loop_streaming(
                         )
                         .await;
                     }
+                }
+                if let Some(gm) = graph_memory.clone() {
+                    tokio::spawn(async move {
+                        if let Err(e) = gm.run_persona_evolution_pass().await {
+                            warn!(
+                                agent_id = %gm.agent_id(),
+                                error = %e,
+                                "AINL graph memory: persona evolution pass failed (streaming)"
+                            );
+                        }
+                    });
                 }
 
                 memory

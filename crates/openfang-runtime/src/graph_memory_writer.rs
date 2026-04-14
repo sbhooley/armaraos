@@ -7,7 +7,9 @@
 //! This is the wire that makes ainl-memory non-dead-code in the binary and
 //! fulfills the architectural claim: execution IS the memory.
 
+use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
+use ainl_persona::PersonaAxis;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -23,6 +25,11 @@ pub struct GraphMemoryWriter {
 }
 
 impl GraphMemoryWriter {
+    /// Agent id this writer is bound to (same as graph rows `agent_id`).
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
     /// Open or create the AINL graph memory DB for this agent.
     /// Path: ~/.armaraos/agents/<agent_id>/ainl_memory.db
     pub fn open(agent_id: &str) -> Result<Self, String> {
@@ -212,11 +219,143 @@ impl GraphMemoryWriter {
             .recall_by_type(ainl_memory::AinlNodeKind::Persona, seconds_ago)
             .unwrap_or_default()
     }
+
+    /// Post-turn persona evolution: run `ainl-graph-extractor`’s [`GraphExtractorTask::run_pass`]
+    /// (semantic recurrence, graph `RawSignal`s, `extract_pass`, ingest, write evolution persona).
+    ///
+    /// When the merged signal batch is empty (cold graph / no extractable cues), applies a
+    /// lightweight [`ainl_persona::EvolutionEngine::correction_tick`] on every axis toward `0.5`
+    /// and persists again so axes still drift slowly over time.
+    ///
+    /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
+    /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.
+    pub async fn run_persona_evolution_pass(&self) -> Result<(), String> {
+        let inner = self.inner.lock().await;
+        let store = inner.sqlite_store();
+        let mut task = GraphExtractorTask::new(&self.agent_id);
+        let report = task.run_pass(store)?;
+        if report.merged_signals.is_empty() {
+            for ax in PersonaAxis::ALL {
+                task.evolution_engine.correction_tick(ax, 0.5);
+            }
+            let snapshot = task.evolution_engine.snapshot();
+            task.evolution_engine.write_persona_node(store, &snapshot)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ainl_persona::EVOLUTION_TRAIT_NAME;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn correction_tick_all_axes_no_panic() {
+        let mut engine = ainl_persona::EvolutionEngine::new("tick-test-agent");
+        for ax in ainl_persona::PersonaAxis::ALL {
+            engine.correction_tick(ax, 0.5);
+        }
+        let snap = engine.snapshot();
+        assert_eq!(snap.agent_id, "tick-test-agent");
+    }
+
+    #[tokio::test]
+    async fn persona_evolution_writes_evolution_node_after_tool_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("evo_persona.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "evo-agent".to_string(),
+            on_write: None,
+        };
+
+        assert!(
+            writer
+                .record_turn(
+                    vec!["shell_exec".into()],
+                    None,
+                    Some(json!({ "outcome": "success" })),
+                )
+                .await
+                .is_some()
+        );
+        writer.run_persona_evolution_pass().await.expect("evolve");
+
+        let nodes = writer.recall_persona(3600).await;
+        let evo = nodes.iter().find(|n| {
+            matches!(
+                &n.node_type,
+                ainl_memory::AinlNodeType::Persona { persona }
+                    if persona.trait_name == EVOLUTION_TRAIT_NAME
+            )
+        });
+        assert!(
+            evo.is_some(),
+            "expected evolution PersonaNode, got {nodes:?}"
+        );
+        let ainl_memory::AinlNodeType::Persona { persona } = &evo.unwrap().node_type else {
+            panic!();
+        };
+        assert!(
+            !persona.axis_scores.is_empty(),
+            "axis_scores should be populated"
+        );
+    }
+
+    #[tokio::test]
+    async fn persona_evolution_cycle_increments_over_two_passes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("evo_cycle.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "evo-cycle-agent".to_string(),
+            on_write: None,
+        };
+
+        async fn evolution_cycle(w: &GraphMemoryWriter) -> u32 {
+            let nodes = w.recall_persona(3600).await;
+            nodes
+                .iter()
+                .find_map(|n| {
+                    if let ainl_memory::AinlNodeType::Persona { persona } = &n.node_type {
+                        (persona.trait_name == EVOLUTION_TRAIT_NAME)
+                            .then_some(persona.evolution_cycle)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0)
+        }
+
+        writer
+            .record_turn(
+                vec!["shell_exec".into()],
+                None,
+                Some(json!({ "outcome": "success" })),
+            )
+            .await;
+        writer.run_persona_evolution_pass().await.unwrap();
+        let c1 = evolution_cycle(&writer).await;
+        assert!(c1 >= 1);
+
+        writer
+            .record_turn(
+                vec!["web_search".into()],
+                None,
+                Some(json!({ "outcome": "success" })),
+            )
+            .await;
+        writer.run_persona_evolution_pass().await.unwrap();
+        let c2 = evolution_cycle(&writer).await;
+        assert!(
+            c2 > c1,
+            "evolution_cycle should increase, got {c1} then {c2}"
+        );
+    }
 
     #[tokio::test]
     async fn test_graph_memory_writer_records_episode() {

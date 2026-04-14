@@ -4533,6 +4533,7 @@ version = "0.7.3"
 dependencies = [
  "ainl-graph-extractor",
  "ainl-memory",
+ "ainl-persona",
  "ainl-semantic-tagger",
  "anyhow",
  "async-trait",
