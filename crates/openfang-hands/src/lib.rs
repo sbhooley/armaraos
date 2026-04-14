@@ -6,6 +6,17 @@
 
 pub mod bundled;
 pub mod registry;
+mod validate;
+
+pub use validate::{
+    validate_hand_path, validate_hand_schema_version, warn_emitter_ir_schema_mismatch,
+    ValidationReport,
+};
+
+/// Expected `schema_version` in HAND.toml (flat or `[hand]` table).
+pub const HAND_SCHEMA_VERSION: &str = "1";
+/// Expected `schema_version` in emitted `*.ainl.json` (AINL IR) for `ainl emit --target armaraos`.
+pub const AINL_IR_SCHEMA_VERSION: &str = "1";
 
 use chrono::{DateTime, Utc};
 use openfang_types::agent::AgentId;
@@ -17,6 +28,9 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HandError {
+    // TODO(openfang-hands 1.0): return `SchemaMismatch` from load when `schema_version` ≠ `HAND_SCHEMA_VERSION` (alpha: warn-only).
+    #[error("Schema version mismatch: expected {expected}, found {found}")]
+    SchemaMismatch { expected: String, found: String },
     #[error("Hand not found: {0}")]
     NotFound(String),
     #[error("Hand already active: {0}")]
@@ -335,6 +349,9 @@ pub fn parse_hand_toml(content: &str) -> Result<HandDefinition, toml::de::Error>
 pub struct HandDefinition {
     /// Unique hand identifier (e.g. "clip").
     pub id: String,
+    /// Contract version from emitter (`[hand].schema_version`) or flat HAND.toml extension.
+    #[serde(default)]
+    pub schema_version: Option<String>,
     /// Human-readable name.
     pub name: String,
     /// What this Hand does.

@@ -718,6 +718,23 @@ fn test_evolve_persona_from_graph_signals_without_scheduled_extractor() {
 }
 
 #[test]
+fn test_evolution_writes_disabled_errors_on_persist_and_evolve() {
+    let (_d, store) = open_store();
+    let ag = "evo-guard";
+    let mut rt = AinlRuntime::new(default_rt_cfg(ag), store).with_evolution_writes_enabled(false);
+    let msg_persist = rt.persist_evolution_snapshot().unwrap_err();
+    assert!(
+        msg_persist.contains("evolution_writes_enabled is false"),
+        "unexpected persist err: {msg_persist}"
+    );
+    let msg_evolve = rt.evolve_persona_from_graph_signals().unwrap_err();
+    assert!(
+        msg_evolve.contains("evolution_writes_enabled is false"),
+        "unexpected evolve err: {msg_evolve}"
+    );
+}
+
+#[test]
 fn test_internal_depth_enforced() {
     let (_d, store) = open_store();
     let ag = "depth-agent";

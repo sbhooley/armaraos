@@ -135,6 +135,7 @@ impl HandRegistry {
         let skill_content = std::fs::read_to_string(&skill_path).unwrap_or_default();
 
         let def = bundled::parse_bundled("custom", &toml_content, &skill_content)?;
+        crate::warn_emitter_ir_schema_mismatch(path, &toml_content);
 
         if self.definitions.contains_key(&def.id) {
             return Err(HandError::AlreadyActive(format!(

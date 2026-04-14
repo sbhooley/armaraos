@@ -28,6 +28,7 @@ toml = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 openfang-runtime = { path = "../openfang-runtime" }
+openfang-hands = { path = "../openfang-hands" }
 uuid = { workspace = true }
 ratatui = { workspace = true }
 colored = { workspace = true }

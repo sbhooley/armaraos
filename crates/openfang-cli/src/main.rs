@@ -19,7 +19,7 @@ use openfang_api::server::read_daemon_info;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 #[cfg(windows)]
 use std::sync::atomic::Ordering;
@@ -397,6 +397,11 @@ enum ChannelCommands {
 
 #[derive(Subcommand)]
 enum HandCommands {
+    /// Validate a Hand directory or HAND.toml path (schema + entrypoint checks).
+    Validate {
+        /// Path to Hand directory or HAND.toml file.
+        path: PathBuf,
+    },
     /// List all available hands.
     List,
     /// Show currently active hand instances.
@@ -1144,6 +1149,7 @@ fn main() {
             ChannelCommands::Disable { channel } => cmd_channel_toggle(&channel, false),
         },
         Some(Commands::Hand(sub)) => match sub {
+            HandCommands::Validate { path } => cmd_hand_validate(path.as_path()),
             HandCommands::List => cmd_hand_list(),
             HandCommands::Active => cmd_hand_active(),
             HandCommands::Install { path } => cmd_hand_install(&path),
@@ -4848,6 +4854,12 @@ fn cmd_hand_install(path: &str) {
         "Use `openfang hand activate {}` to start it.",
         body["id"].as_str().unwrap_or("?")
     );
+}
+
+fn cmd_hand_validate(path: &Path) {
+    let report = openfang_hands::validate_hand_path(path);
+    report.print_summary();
+    std::process::exit(if report.errors > 0 { 1 } else { 0 });
 }
 
 fn cmd_hand_list() {

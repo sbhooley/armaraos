@@ -24,6 +24,20 @@ use crate::hooks::{NoOpHooks, TurnHooks};
 use crate::RuntimeConfig;
 
 /// Orchestrates ainl-memory, persona snapshot state, and graph extraction for one agent.
+///
+/// ## Evolution writes vs ArmaraOS / openfang-runtime
+///
+/// In production ArmaraOS, **openfang-runtime**’s `GraphMemoryWriter::run_persona_evolution_pass`
+/// is the active writer of the evolution persona row ([`crate::EVOLUTION_TRAIT_NAME`]) to each
+/// agent’s `ainl_memory.db`. This struct holds its own [`GraphExtractorTask`] and
+/// [`EvolutionEngine`]. Calling [`Self::persist_evolution_snapshot`] or
+/// [`Self::evolve_persona_from_graph_signals`] **concurrently** with that pass on the **same**
+/// SQLite store is undefined (competing last-writer wins on the same persona node).
+///
+/// Prefer [`Self::with_evolution_writes_enabled(false)`] when a host embeds `AinlRuntime` alongside
+/// openfang while openfang remains the sole evolution writer. [`Self::evolution_engine_mut`] can
+/// still mutate in-memory axis state; calling [`EvolutionEngine::write_persona_node`] yourself
+/// bypasses this guard and must be avoided in that configuration.
 pub struct AinlRuntime {
     config: RuntimeConfig,
     memory: ainl_memory::GraphMemory,
@@ -32,6 +46,10 @@ pub struct AinlRuntime {
     last_extraction_turn: u32,
     delegation_depth: u32,
     hooks: Box<dyn TurnHooks>,
+    /// When `false`, [`Self::persist_evolution_snapshot`] and [`Self::evolve_persona_from_graph_signals`]
+    /// return [`Err`] immediately so this runtime does not compete with another evolution writer
+    /// (e.g. openfang’s post-turn pass) on the same DB. Default: `true`.
+    evolution_writes_enabled: bool,
     persona_cache: Option<String>,
     /// Test hook: when set, the next scheduled extraction pass is treated as failed (`PartialSuccess`).
     #[doc(hidden)]
@@ -75,6 +93,7 @@ impl AinlRuntime {
             last_extraction_turn: init_last_extraction_turn,
             delegation_depth: 0,
             hooks: Box::new(NoOpHooks),
+            evolution_writes_enabled: true,
             persona_cache: init_persona_cache,
             test_force_extraction_failure: false,
             adapter_registry: AdapterRegistry::new(),
@@ -116,6 +135,29 @@ impl AinlRuntime {
         self
     }
 
+    /// Set whether [`Self::persist_evolution_snapshot`] and [`Self::evolve_persona_from_graph_signals`]
+    /// may write the evolution persona row. When `false`, those methods return [`Err`]. Chaining
+    /// after [`Self::new`] is the supported way to disable writes for hosts that delegate evolution
+    /// persistence elsewhere (see struct-level docs).
+    pub fn with_evolution_writes_enabled(mut self, enabled: bool) -> Self {
+        self.evolution_writes_enabled = enabled;
+        self
+    }
+
+    fn require_evolution_writes_enabled(&self) -> Result<(), String> {
+        if self.evolution_writes_enabled {
+            Ok(())
+        } else {
+            Err(
+                "ainl_runtime: evolution_writes_enabled is false — persist_evolution_snapshot and \
+                 evolve_persona_from_graph_signals are disabled so this runtime does not compete \
+                 with openfang-runtime GraphMemoryWriter::run_persona_evolution_pass on the same \
+                 ainl_memory.db"
+                    .to_string(),
+            )
+        }
+    }
+
     /// Borrow the backing SQLite store (same connection as graph memory).
     pub fn sqlite_store(&self) -> &SqliteGraphStore {
         self.memory.sqlite_store()
@@ -133,6 +175,8 @@ impl AinlRuntime {
     }
 
     /// Mutable access to the persona [`EvolutionEngine`] (see [`Self::evolution_engine`]).
+    ///
+    /// Direct calls to [`EvolutionEngine::write_persona_node`] bypass [`Self::evolution_writes_enabled`].
     pub fn evolution_engine_mut(&mut self) -> &mut EvolutionEngine {
         &mut self.extractor.evolution_engine
     }
@@ -148,7 +192,10 @@ impl AinlRuntime {
     }
 
     /// Snapshot current axis EMA state and persist the evolution persona bundle to the store.
+    ///
+    /// Returns [`Err`] when [`Self::evolution_writes_enabled`] is `false` (see [`Self::with_evolution_writes_enabled`]).
     pub fn persist_evolution_snapshot(&mut self) -> Result<PersonaSnapshot, String> {
+        self.require_evolution_writes_enabled()?;
         let store = self.memory.sqlite_store();
         let snap = self.extractor.evolution_engine.snapshot();
         self.extractor
@@ -161,7 +208,10 @@ impl AinlRuntime {
     ///
     /// This does **not** run semantic `recurrence_count` bumps or the extractor’s `extract_pass`
     /// heuristics — use [`GraphExtractorTask::run_pass`] for the full scheduled pipeline.
+    ///
+    /// Returns [`Err`] when [`Self::evolution_writes_enabled`] is `false` (see [`Self::with_evolution_writes_enabled`]).
     pub fn evolve_persona_from_graph_signals(&mut self) -> Result<PersonaSnapshot, String> {
+        self.require_evolution_writes_enabled()?;
         let store = self.memory.sqlite_store();
         self.extractor.evolution_engine.evolve(store)
     }

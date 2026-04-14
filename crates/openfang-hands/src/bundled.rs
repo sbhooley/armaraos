@@ -61,6 +61,7 @@ pub fn parse_bundled(
 ) -> Result<HandDefinition, HandError> {
     let mut def: HandDefinition =
         parse_hand_toml(toml_content).map_err(|e| HandError::TomlParse(e.to_string()))?;
+    crate::validate_hand_schema_version(&def);
     if !skill_content.is_empty() {
         def.skill_content = Some(skill_content.to_string());
     }
