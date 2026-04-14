@@ -6,9 +6,18 @@
 
 use crate::persona_signals::{extract_pass, PersonaSignalExtractorState};
 use crate::recurrence::update_semantic_recurrence;
-use ainl_memory::SqliteGraphStore;
+use ainl_memory::{GraphStore, SqliteGraphStore};
 use ainl_persona::{EvolutionEngine, PersonaSnapshot, RawSignal};
 use chrono::{DateTime, Utc};
+
+fn store_has_any_persona_for_agent(store: &SqliteGraphStore, agent_id: &str) -> Result<bool, String> {
+    for n in store.find_by_type("persona")? {
+        if n.agent_id == agent_id {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 
 pub struct GraphExtractorTask {
     pub agent_id: String,
@@ -48,8 +57,16 @@ impl GraphExtractorTask {
         let merged_signals = signals.clone();
         let signals_applied = self.evolution_engine.ingest_signals(signals);
         let persona_snapshot = self.evolution_engine.snapshot();
-        self.evolution_engine
-            .write_persona_node(store, &persona_snapshot)?;
+        // Avoid persisting a default 0.5-axis evolution node on a totally cold graph (no signals,
+        // no recurrence work, no prior persona). Still persist when this pass touched semantics or
+        // the agent already has any persona row so follow-up passes remain idempotent.
+        let should_persist_persona = signals_extracted > 0
+            || semantic_nodes_updated > 0
+            || store_has_any_persona_for_agent(store, &self.agent_id)?;
+        if should_persist_persona {
+            self.evolution_engine
+                .write_persona_node(store, &persona_snapshot)?;
+        }
         Ok(ExtractionReport {
             agent_id: self.agent_id.clone(),
             semantic_nodes_updated,

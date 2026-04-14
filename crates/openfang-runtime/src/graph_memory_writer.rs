@@ -16,6 +16,9 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+/// Horizon for “any persona row exists” checks (per-agent DB; long window ≈ all history).
+const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
+
 /// Thread-safe wrapper around GraphMemory for use in the async agent loop.
 #[derive(Clone)]
 pub struct GraphMemoryWriter {
@@ -259,17 +262,23 @@ impl GraphMemoryWriter {
     }
 
     /// Post-turn persona evolution: run `ainl-graph-extractor`’s [`GraphExtractorTask::run_pass`]
-    /// (semantic recurrence, graph `RawSignal`s, `extract_pass`, ingest, write evolution persona).
+    /// (semantic recurrence, graph `RawSignal`s, `extract_pass`, ingest, optional evolution write).
     ///
     /// When the merged signal batch is empty (cold graph / no extractable cues), applies a
     /// lightweight [`ainl_persona::EvolutionEngine::correction_tick`] on every axis toward `0.5`
-    /// and persists again so axes still drift slowly over time.
+    /// and persists **only if** this agent already had at least one [`PersonaNode`] in the store
+    /// before this pass — skipping the meaningless neutral bootstrap on a brand-new graph.
     ///
     /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
     /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.
     pub async fn run_persona_evolution_pass(&self) -> Result<(), String> {
         let inner = self.inner.lock().await;
         let store = inner.sqlite_store();
+        let had_persona_before_pass = inner
+            .recall_by_type(ainl_memory::AinlNodeKind::Persona, PERSONA_PRIOR_LOOKBACK_SECS)
+            .unwrap_or_default()
+            .iter()
+            .any(|n| n.agent_id == self.agent_id);
         let mut task = GraphExtractorTask::new(&self.agent_id);
         let report = task.run_pass(store)?;
         if report.merged_signals.is_empty() {
@@ -277,7 +286,9 @@ impl GraphMemoryWriter {
                 task.evolution_engine.correction_tick(ax, 0.5);
             }
             let snapshot = task.evolution_engine.snapshot();
-            task.evolution_engine.write_persona_node(store, &snapshot)?;
+            if had_persona_before_pass {
+                task.evolution_engine.write_persona_node(store, &snapshot)?;
+            }
         }
         Ok(())
     }
@@ -309,6 +320,13 @@ mod tests {
             agent_id: "evo-agent".to_string(),
             on_write: None,
         };
+
+        {
+            let inner = writer.inner.lock().await;
+            inner
+                .write_persona("seed_trait", 0.6, vec![])
+                .expect("seed baseline persona so evolution can persist on cold signal passes");
+        }
 
         assert!(
             writer
@@ -353,6 +371,13 @@ mod tests {
             agent_id: "evo-cycle-agent".to_string(),
             on_write: None,
         };
+
+        {
+            let inner = writer.inner.lock().await;
+            inner
+                .write_persona("seed_trait", 0.6, vec![])
+                .expect("seed baseline persona so evolution can persist on cold signal passes");
+        }
 
         async fn evolution_cycle(w: &GraphMemoryWriter) -> u32 {
             let nodes = w.recall_persona(3600).await;
