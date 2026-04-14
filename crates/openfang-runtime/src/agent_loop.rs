@@ -106,17 +106,24 @@ fn graph_memory_expected_db_path(agent_id: &openfang_types::agent::AgentId) -> s
         .join("ainl_memory.db")
 }
 
-/// When `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` is set, rewrite that path with a fresh JSON export
-/// after persona evolution so Python `ainl_graph_memory` can read the latest turn without a manual CLI export.
+/// After persona evolution, write a fresh `AgentGraphSnapshot` JSON for Python `ainl_graph_memory`.
+///
+/// Path resolution matches [`crate::graph_memory_writer::armaraos_graph_memory_export_json_path`]:
+/// optional `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (**directory**) → `{dir}/{agent_id}_graph_export.json`,
+/// else `{openfang_home_dir()}/agents/{agent_id}/ainl_graph_memory_export.json`.
 async fn graph_memory_refresh_armaraos_export_json(agent_id: &str) {
-    let Ok(raw) = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT") else {
-        return;
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return;
+    let path = crate::graph_memory_writer::armaraos_graph_memory_export_json_path(agent_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            warn!(
+                agent_id = %agent_id,
+                path = %parent.display(),
+                error = %e,
+                "AINL graph memory: failed to create parent dir for ArmaraOS graph export"
+            );
+            return;
+        }
     }
-    let path = std::path::PathBuf::from(trimmed);
     match crate::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(agent_id) {
         Ok(v) => {
             let body = match serde_json::to_vec_pretty(&v) {

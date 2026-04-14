@@ -10,7 +10,8 @@
 //! **Export:** [`GraphMemoryWriter::export_graph_json`] and [`GraphMemoryWriter::export_graph_json_for_agent`]
 //! call into **ainl-memory**’s graph export (same JSON shape as `AgentGraphSnapshot`). CLI:
 //! `openfang memory graph-export <agent> --output path.json`. Python `ainl_graph_memory` can seed reads
-//! from that file via `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang** `docs/adapters/AINL_GRAPH_MEMORY.md`).
+//! via [`armaraos_graph_memory_export_json_path`] / `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang**
+//! `docs/adapters/AINL_GRAPH_MEMORY.md`).
 
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
@@ -23,6 +24,26 @@ use uuid::Uuid;
 
 /// Horizon for “any persona row exists” checks (per-agent DB; long window ≈ all history).
 const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
+
+/// JSON snapshot path for the Python `ainl_graph_memory` bridge (auto-refresh after persona evolution).
+///
+/// If `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` is set, it names a **directory**; the file is
+/// `{dir}/{agent_id}_graph_export.json`. If unset, uses the agent data directory next to `ainl_memory.db`:
+/// `{openfang_home_dir()}/agents/{agent_id}/ainl_graph_memory_export.json`.
+pub fn armaraos_graph_memory_export_json_path(agent_id: &str) -> PathBuf {
+    let trimmed = std::env::var("AINL_GRAPH_MEMORY_ARMARAOS_EXPORT")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !trimmed.is_empty() {
+        PathBuf::from(trimmed).join(format!("{agent_id}_graph_export.json"))
+    } else {
+        openfang_types::config::openfang_home_dir()
+            .join("agents")
+            .join(agent_id)
+            .join("ainl_graph_memory_export.json")
+    }
+}
 
 /// Thread-safe wrapper around GraphMemory for use in the async agent loop.
 #[derive(Clone)]
