@@ -1179,6 +1179,10 @@ pub async fn run_agent_loop(
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
+                    // Cooperative barrier before evolution: post-turn graph writes are awaited above,
+                    // but `yield_now` lets the runtime finish scheduling work so the spawned reader is
+                    // less likely to race the tail of the write path on the same SQLite connection.
+                    tokio::task::yield_now().await;
                     tokio::spawn(async move {
                         if let Err(e) = gm.run_persona_evolution_pass().await {
                             warn!(
@@ -2951,6 +2955,8 @@ pub async fn run_agent_loop_streaming(
                     }
                 }
                 if let Some(gm) = graph_memory.clone() {
+                    // Same cooperative barrier as the non-streaming path (see above).
+                    tokio::task::yield_now().await;
                     tokio::spawn(async move {
                         if let Err(e) = gm.run_persona_evolution_pass().await {
                             warn!(
