@@ -9,16 +9,18 @@ use ainl_memory::{
     RuntimeStateNode, SqliteGraphStore,
 };
 use ainl_persona::axes::default_axis_map;
-use ainl_persona::{EvolutionEngine, PersonaAxis, PersonaSnapshot, RawSignal, INGEST_SCORE_EPSILON};
+use ainl_persona::{
+    EvolutionEngine, PersonaAxis, PersonaSnapshot, RawSignal, INGEST_SCORE_EPSILON,
+};
 use ainl_semantic_tagger::infer_topic_tags;
 use ainl_semantic_tagger::tag_tool_names;
 use ainl_semantic_tagger::TagNamespace;
 use uuid::Uuid;
 
-use crate::adapters::AdapterRegistry;
+use crate::adapters::{AdapterRegistry, GraphPatchAdapter};
 use crate::engine::{
-    AinlGraphArtifact, MemoryContext, PatchDispatchResult, PatchSkipReason, TurnInput, TurnOutcome,
-    TurnOutput, EMIT_TO_EDGE,
+    AinlGraphArtifact, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
+    TurnInput, TurnOutcome, TurnOutput, EMIT_TO_EDGE,
 };
 use crate::hooks::{NoOpHooks, TurnHooks};
 use crate::RuntimeConfig;
@@ -61,30 +63,30 @@ impl AinlRuntime {
     pub fn new(config: RuntimeConfig, store: SqliteGraphStore) -> Self {
         let agent_id = config.agent_id.clone();
         let memory = ainl_memory::GraphMemory::from_sqlite_store(store);
-        let (init_turn_count, init_persona_cache, init_last_extraction_turn) = if agent_id.is_empty()
-        {
-            (0, None, 0)
-        } else {
-            match memory.sqlite_store().load_runtime_state(&agent_id) {
-                Ok(Some(state)) => {
-                    tracing::info!(
-                        agent_id = %agent_id,
-                        turn_count = state.turn_count,
-                        "restored runtime state"
-                    );
-                    (
-                        state.turn_count,
-                        state.last_persona_prompt,
-                        state.last_extraction_turn,
-                    )
+        let (init_turn_count, init_persona_cache, init_last_extraction_turn) =
+            if agent_id.is_empty() {
+                (0, None, 0)
+            } else {
+                match memory.sqlite_store().load_runtime_state(&agent_id) {
+                    Ok(Some(state)) => {
+                        tracing::info!(
+                            agent_id = %agent_id,
+                            turn_count = state.turn_count,
+                            "restored runtime state"
+                        );
+                        (
+                            state.turn_count,
+                            state.last_persona_prompt,
+                            state.last_extraction_turn,
+                        )
+                    }
+                    Ok(None) => (0, None, 0),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to load runtime state — starting fresh");
+                        (0, None, 0)
+                    }
                 }
-                Ok(None) => (0, None, 0),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to load runtime state — starting fresh");
-                    (0, None, 0)
-                }
-            }
-        };
+            };
         Self {
             extractor: GraphExtractorTask::new(&agent_id),
             memory,
@@ -103,6 +105,12 @@ impl AinlRuntime {
     /// Register a [`crate::PatchAdapter`] keyed by [`PatchAdapter::name`] (e.g. procedural patch label).
     pub fn register_adapter(&mut self, adapter: impl crate::PatchAdapter + 'static) {
         self.adapter_registry.register(adapter);
+    }
+
+    /// Install the reference [`GraphPatchAdapter`] as fallback for procedural patches without a
+    /// label-specific adapter (see [`PatchDispatchContext`]).
+    pub fn register_default_patch_adapters(&mut self) {
+        self.register_adapter(GraphPatchAdapter::new());
     }
 
     /// Names of currently registered patch adapters.
@@ -188,7 +196,9 @@ impl AinlRuntime {
 
     /// Apply a host correction nudge on one axis ([`EvolutionEngine::correction_tick`]).
     pub fn evolution_correction_tick(&mut self, axis: PersonaAxis, correction: f32) {
-        self.extractor.evolution_engine.correction_tick(axis, correction);
+        self.extractor
+            .evolution_engine
+            .correction_tick(axis, correction);
     }
 
     /// Snapshot current axis EMA state and persist the evolution persona bundle to the store.
@@ -228,7 +238,10 @@ impl AinlRuntime {
     }
 
     /// Build [`MemoryContext`] from the live store plus current extractor axis state.
-    pub fn compile_memory_context_for(&self, user_message: Option<&str>) -> Result<MemoryContext, String> {
+    pub fn compile_memory_context_for(
+        &self,
+        user_message: Option<&str>,
+    ) -> Result<MemoryContext, String> {
         if self.config.agent_id.is_empty() {
             return Err("RuntimeConfig.agent_id must be set".to_string());
         }
@@ -462,9 +475,7 @@ impl AinlRuntime {
         self.turn_count = self.turn_count.wrapping_add(1);
 
         let should_extract = self.config.extraction_interval > 0
-            && self
-                .turn_count
-                .saturating_sub(self.last_extraction_turn)
+            && self.turn_count.saturating_sub(self.last_extraction_turn)
                 >= self.config.extraction_interval;
 
         let t_extract = Instant::now();
@@ -528,10 +539,7 @@ impl AinlRuntime {
             (None, false)
         };
 
-        let outcome = if extraction_failed
-            || !patches_failed.is_empty()
-            || !warnings.is_empty()
-        {
+        let outcome = if extraction_failed || !patches_failed.is_empty() || !warnings.is_empty() {
             TurnOutcome::PartialSuccess {
                 episode_recorded: true,
                 extraction_failed,
@@ -560,7 +568,11 @@ impl AinlRuntime {
                 last_persona_prompt: self.persona_cache.clone(),
                 updated_at: chrono::Utc::now().to_rfc3339(),
             };
-            if let Err(e) = self.memory.sqlite_store().save_runtime_state(&persist_state) {
+            if let Err(e) = self
+                .memory
+                .sqlite_store()
+                .save_runtime_state(&persist_state)
+            {
                 tracing::warn!(error = %e, "failed to persist runtime state — non-fatal");
             }
         }
@@ -728,29 +740,39 @@ impl AinlRuntime {
 
         let patch_label = label_src.clone();
         let adapter_key = patch_label.as_str();
-        let (adapter_output, adapter_name) =
-            if let Some(adapter) = self.adapter_registry.get(adapter_key) {
-                match adapter.execute(adapter_key, frame) {
-                    Ok(output) => {
-                        tracing::debug!(
-                            label = %patch_label,
-                            adapter = %adapter_key,
-                            "adapter executed patch"
-                        );
-                        (Some(output), Some(adapter_key.to_string()))
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            label = %patch_label,
-                            error = %e,
-                            "adapter execution failed — continuing as metadata dispatch"
-                        );
-                        (None, Some(adapter_key.to_string()))
-                    }
+        let ctx = PatchDispatchContext {
+            patch_label: adapter_key,
+            node,
+            frame,
+        };
+        let (adapter_output, adapter_name) = if let Some(adapter) = self
+            .adapter_registry
+            .get(adapter_key)
+            .or_else(|| self.adapter_registry.get(GraphPatchAdapter::NAME))
+        {
+            let aname = adapter.name().to_string();
+            match adapter.execute_patch(&ctx) {
+                Ok(output) => {
+                    tracing::debug!(
+                        label = %patch_label,
+                        adapter = %aname,
+                        "adapter executed patch"
+                    );
+                    (Some(output), Some(aname))
                 }
-            } else {
-                (None, None)
-            };
+                Err(e) => {
+                    tracing::warn!(
+                        label = %patch_label,
+                        adapter = %aname,
+                        error = %e,
+                        "adapter execution failed — continuing as metadata dispatch"
+                    );
+                    (None, Some(aname))
+                }
+            }
+        } else {
+            (None, None)
+        };
 
         let fitness_before = fitness_opt.unwrap_or(0.5);
         let fitness_after = 0.2_f32 * 1.0 + 0.8 * fitness_before;
@@ -770,9 +792,7 @@ impl AinlRuntime {
                     fitness_before,
                     fitness_after: fitness_before,
                     dispatched: false,
-                    skip_reason: Some(PatchSkipReason::MissingDeclaredRead(
-                        "node_row".into(),
-                    )),
+                    skip_reason: Some(PatchSkipReason::MissingDeclaredRead("node_row".into())),
                     adapter_output,
                     adapter_name,
                 };
@@ -840,7 +860,10 @@ fn procedural_label(p: &ProceduralNode) -> String {
     }
 }
 
-fn fallback_high_recurrence_semantic(all: Vec<AinlMemoryNode>, limit: usize) -> Vec<AinlMemoryNode> {
+fn fallback_high_recurrence_semantic(
+    all: Vec<AinlMemoryNode>,
+    limit: usize,
+) -> Vec<AinlMemoryNode> {
     let mut v: Vec<_> = all
         .into_iter()
         .filter(|n| {
@@ -861,7 +884,9 @@ fn fallback_high_recurrence_semantic(all: Vec<AinlMemoryNode>, limit: usize) -> 
     v.into_iter().take(limit).collect()
 }
 
-fn persona_snapshot_if_evolved(extractor: &GraphExtractorTask) -> Option<ainl_persona::PersonaSnapshot> {
+fn persona_snapshot_if_evolved(
+    extractor: &GraphExtractorTask,
+) -> Option<ainl_persona::PersonaSnapshot> {
     let snap = extractor.evolution_engine.snapshot();
     let defaults = default_axis_map(0.5);
     for axis in PersonaAxis::ALL {

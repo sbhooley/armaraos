@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphStore, SqliteGraphStore};
 use ainl_runtime::{
-    AinlRuntime, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis, RawSignal, RuntimeConfig,
-    TurnHooks, TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
+    AinlRuntime, MemoryNodeType, PatchAdapter, PatchSkipReason, PersonaAxis, RawSignal,
+    RuntimeConfig, TurnHooks, TurnInput, TurnOutcome, EVOLUTION_TRAIT_NAME,
 };
 use uuid::Uuid;
 
@@ -272,7 +272,10 @@ fn test_adapter_registry_registers_and_executes() {
     assert!(r.dispatched);
     assert_eq!(r.adapter_name.as_deref(), Some("echo"));
     let outv = r.adapter_output.as_ref().expect("adapter output");
-    assert_eq!(outv.get("echoed_label").and_then(|v| v.as_str()), Some("echo"));
+    assert_eq!(
+        outv.get("echoed_label").and_then(|v| v.as_str()),
+        Some("echo")
+    );
     let keys = outv
         .get("frame_keys")
         .and_then(|v| v.as_array())
@@ -573,12 +576,7 @@ fn test_episode_tools_dedup_many_variants_one_bash() {
     let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
     rt.run_turn(TurnInput {
         user_message: "c".into(),
-        tools_invoked: vec![
-            "Bash".into(),
-            "bash".into(),
-            "sh".into(),
-            "shell".into(),
-        ],
+        tools_invoked: vec!["Bash".into(), "bash".into(), "sh".into(), "shell".into()],
         ..Default::default()
     })
     .unwrap();
@@ -684,9 +682,15 @@ fn test_evolution_correction_tick_persisted() {
     let (_d, store) = open_store();
     let ag = "evo-corr";
     let mut rt = AinlRuntime::new(default_rt_cfg(ag), store);
-    let before = rt.evolution_engine().snapshot().score(PersonaAxis::Curiosity);
+    let before = rt
+        .evolution_engine()
+        .snapshot()
+        .score(PersonaAxis::Curiosity);
     rt.evolution_correction_tick(PersonaAxis::Curiosity, 0.15);
-    let mid = rt.evolution_engine().snapshot().score(PersonaAxis::Curiosity);
+    let mid = rt
+        .evolution_engine()
+        .snapshot()
+        .score(PersonaAxis::Curiosity);
     assert!((mid - before).abs() > 0.0001);
     let snap = rt.persist_evolution_snapshot().unwrap();
     let stored = evolution_axis_score(rt.sqlite_store(), ag, PersonaAxis::Curiosity).unwrap();
@@ -698,13 +702,8 @@ fn test_evolve_persona_from_graph_signals_without_scheduled_extractor() {
     let (_d, store) = open_store();
     let ag = "evo-graph";
     let tid = Uuid::new_v4();
-    let mut ep = AinlMemoryNode::new_episode(
-        tid,
-        chrono::Utc::now().timestamp(),
-        vec![],
-        None,
-        None,
-    );
+    let mut ep =
+        AinlMemoryNode::new_episode(tid, chrono::Utc::now().timestamp(), vec![], None, None);
     ep.agent_id = ag.into();
     if let AinlNodeType::Episode { ref mut episodic } = ep.node_type {
         episodic.persona_signals_emitted = vec!["Instrumentality:0.9".to_string()];
@@ -885,13 +884,7 @@ fn test_runtime_state_survives_restart() {
 fn test_scheduled_extractor_pass_still_runs_after_turn() {
     let (_d, store) = open_store();
     let ag = "evo-sched";
-    let mut ep = AinlMemoryNode::new_episode(
-        Uuid::new_v4(),
-        3_000_000_000,
-        vec![],
-        None,
-        None,
-    );
+    let mut ep = AinlMemoryNode::new_episode(Uuid::new_v4(), 3_000_000_000, vec![], None, None);
     ep.agent_id = ag.into();
     store.write_node(&ep).unwrap();
     let cfg = RuntimeConfig {

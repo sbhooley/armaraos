@@ -1,4 +1,4 @@
-//! **ainl-runtime** v0.2 — orchestration layer for the unified AINL graph (memory substrate + extraction).
+//! **ainl-runtime** v0.3 — orchestration layer for the unified AINL graph (memory substrate + extraction).
 //!
 //! This crate **does not** call LLMs, parse AINL IR, or implement tool adapters. It coordinates
 //! [`ainl_memory`], persona axis state via [`ainl_persona::EvolutionEngine`] (shared with
@@ -17,7 +17,7 @@ mod engine;
 mod hooks;
 mod runtime;
 
-pub use adapters::{AdapterRegistry, PatchAdapter};
+pub use adapters::{AdapterRegistry, GraphPatchAdapter, GraphPatchHostDispatch, PatchAdapter};
 
 pub use ainl_graph_extractor::{run_extraction_pass, ExtractionReport, GraphExtractorTask};
 pub use ainl_persona::axes::default_axis_map;
@@ -27,8 +27,8 @@ pub use ainl_persona::{
 };
 
 pub use engine::{
-    AinlGraphArtifact, MemoryContext, PatchDispatchResult, PatchSkipReason, TurnInput, TurnOutcome,
-    TurnOutput, EMIT_TO_EDGE,
+    AinlGraphArtifact, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
+    TurnInput, TurnOutcome, TurnOutput, EMIT_TO_EDGE,
 };
 pub use hooks::{NoOpHooks, TurnHooks};
 pub use runtime::AinlRuntime;

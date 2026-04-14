@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use ainl_graph_extractor::ExtractionReport;
-use ainl_memory::{AgentGraphSnapshot, AinlMemoryNode, GraphValidationReport, SqliteGraphStore};
+use ainl_memory::{
+    AgentGraphSnapshot, AinlMemoryNode, AinlNodeType, GraphValidationReport, ProceduralNode,
+    SqliteGraphStore,
+};
 use ainl_persona::PersonaSnapshot;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -12,6 +15,27 @@ use uuid::Uuid;
 
 /// Edge label for emit routing (matches `ainl_graph_edges.label`).
 pub const EMIT_TO_EDGE: &str = "EMIT_TO";
+
+/// Per-patch inputs for [`crate::PatchAdapter::execute_patch`] (procedural / GraphPatch nodes).
+///
+/// [`AinlRuntime`] resolves a label-keyed adapter first, then falls back to the reference
+/// [`crate::GraphPatchAdapter`] (registered as [`crate::GraphPatchAdapter::NAME`]) when no adapter
+/// matches the patch IR label.
+#[derive(Debug, Clone, Copy)]
+pub struct PatchDispatchContext<'a> {
+    pub patch_label: &'a str,
+    pub node: &'a AinlMemoryNode,
+    pub frame: &'a HashMap<String, serde_json::Value>,
+}
+
+impl<'a> PatchDispatchContext<'a> {
+    pub fn procedural(&self) -> Option<&'a ProceduralNode> {
+        match &self.node.node_type {
+            AinlNodeType::Procedural { procedural } => Some(procedural),
+            _ => None,
+        }
+    }
+}
 
 /// Result of attempting to dispatch one procedural patch node.
 #[derive(Debug, Clone)]
@@ -173,7 +197,9 @@ impl Default for TurnOutput {
 pub enum TurnOutcome {
     Success,
     DepthLimitExceeded,
-    StepLimitExceeded { steps_executed: u32 },
+    StepLimitExceeded {
+        steps_executed: u32,
+    },
     GraphMemoryDisabled,
     PartialSuccess {
         episode_recorded: bool,

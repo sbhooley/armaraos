@@ -227,7 +227,7 @@ ArmaraOS maintains API compatibility with OpenFang:
 | ainl-persona | 3 | Persona model + evolution APIs (`EvolutionEngine`, etc.) | **Partial** — persona **traits are read** from `PersonaNode` data in `ainl-memory` and merged into the system prompt in `agent_loop.rs`; **`EvolutionEngine` / trait evolution** is **not** wired into the daemon loop yet |
 | ainl-graph-extractor | 3 | Structured graph extraction (published / workspace crate) | **Not integrated** — `openfang-runtime` uses local **`graph_extractor.rs`** (regex heuristic) instead |
 | ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Not integrated** |
-| ainl-runtime | 3 | Standalone AINL execution stack (workspace + publish target) | **Not integrated** — convergence with `openfang-runtime` is **roadmap** |
+| ainl-runtime | 3 | Standalone AINL execution stack (workspace + publish target); reference GraphPatch envelope + host hook (`GraphPatchAdapter`); integration notes in `docs/ainl-runtime-graph-patch.md` | **Not integrated** — convergence with `openfang-runtime` is **roadmap** |
 
 ---
 

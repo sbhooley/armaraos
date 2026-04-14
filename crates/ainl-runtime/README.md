@@ -1,26 +1,37 @@
 # ainl-runtime
 
-**Alpha (0.2.0-alpha) — API subject to change.**
+**Alpha (0.3.0-alpha) — API subject to change.**
 
 `ainl-runtime` is the **Rust orchestration layer** for the unified AINL **graph memory** stack: it coordinates [`ainl-memory`](https://crates.io/crates/ainl-memory), [`ainl-persona`](https://crates.io/crates/ainl-persona)’s [`EvolutionEngine`](https://docs.rs/ainl-persona/latest/ainl_persona/struct.EvolutionEngine.html) (shared with [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)’s [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html)), and optional **post-turn extraction**, with a [`TurnHooks`] seam for hosts (e.g. OpenFang).
 
 It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AINL CLI, and **not** an LLM or IR parser.
 
-## What v0.2 provides
+## What v0.3 provides (beyond v0.2)
+
+- **Reference [`GraphPatchAdapter`]** (`"graph_patch"`) — normalizes each dispatched procedural patch into a JSON **dispatch envelope** (`kind: graph_patch_dispatch`, label, node id, `declared_reads`, `compiled_graph` size, optional UTF-8 preview, frame keys). Does **not** compile or run AINL IR in Rust.
+- **[`PatchDispatchContext`]** — passed to [`PatchAdapter::execute_patch`]; default impl bridges to legacy [`PatchAdapter::execute`].
+- **Fallback dispatch** — if no adapter is registered under the procedural **label**, `run_turn` tries the `graph_patch` adapter when present (install with [`AinlRuntime::register_default_patch_adapters`]).
+- **Optional host hook** — [`GraphPatchAdapter::with_host`] + [`GraphPatchHostDispatch`] for forwarding envelopes to another runtime (e.g. Python GraphPatch) without claiming parity.
+
+**Limits (honest):** Rust GraphPatch support is **host-dispatch / extraction only**. Python-side GraphPatch (full `memory.patch`, IR promotion, overwrite guards, engine integration) remains the rich path until a future convergence milestone.
+
+ArmaraOS integration story (openfang vs ainl-runtime): see **[`docs/ainl-runtime-graph-patch.md`](../../docs/ainl-runtime-graph-patch.md)** in the repo root.
+
+## What v0.2 still provides
 
 - **[`AinlRuntime`]** — owns a [`ainl_memory::GraphMemory`] over a [`SqliteGraphStore`], a stateful [`GraphExtractorTask`], and [`RuntimeConfig`].
 - **Persona evolution (direct)** — [`AinlRuntime::evolution_engine`] / [`AinlRuntime::evolution_engine_mut`], [`AinlRuntime::apply_evolution_signals`], [`AinlRuntime::evolution_correction_tick`], [`AinlRuntime::persist_evolution_snapshot`], [`AinlRuntime::evolve_persona_from_graph_signals`] (`EvolutionEngine` lives in **ainl-persona**; the extractor is an additional signal source, not a hard gate).
 - **Boot** — [`AinlRuntime::load_artifact`] → [`AinlGraphArtifact`] (`export_graph` + `validate_graph`; fails on dangling edges).
-- **Turn pipeline** — [`AinlRuntime::run_turn`]: validate subgraph, compile persona lines from persona nodes, [`compile_memory_context`], capped BFS walk (`next` / `follows` / `DERIVED_FROM`), record an episodic node (user message + tools), run extractor every `extraction_interval` turns.
+- **Turn pipeline** — [`AinlRuntime::run_turn`]: validate subgraph, compile persona lines from persona nodes, [`compile_memory_context`], **procedural patch dispatch** (declared-read gating + fitness EMA), record an episodic node (user message + tools), [`TurnHooks::on_emit`] for `EMIT_TO` edges, run extractor every `extraction_interval` turns.
 - **Legacy API** — [`RuntimeContext`] + `record_*` + [`RuntimeContext::run_graph_extraction_pass`] unchanged for light callers.
 
-It still does **not** execute arbitrary AINL IR, call adapters, or route emit edges; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`].
+It still does **not** execute arbitrary AINL IR in Rust; hosts wire LLM/tools on top of [`TurnOutput`] / [`MemoryContext`] / patch envelopes.
 
 ## Quick start (`AinlRuntime`)
 
 ```toml
 [dependencies]
-ainl-runtime = "0.2.0-alpha"
+ainl-runtime = "0.3.0-alpha"
 ```
 
 ```rust
@@ -34,6 +45,7 @@ let cfg = RuntimeConfig {
     ..Default::default()
 };
 let mut rt = AinlRuntime::new(cfg, store);
+rt.register_default_patch_adapters(); // GraphPatch fallback for procedural patches
 let _artifact = rt.load_artifact()?;
 let out = rt.run_turn(TurnInput {
     user_message: "Hello".into(),
