@@ -1389,12 +1389,19 @@ pub async fn run_agent_loop(
                     let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
                         &tools_for_episode,
                     );
+                    let (ep_vitals_gate, ep_vitals_phase, ep_vitals_trust) =
+                        response.vitals.as_ref().map(|v| {
+                            (Some(v.gate.as_str().to_string()), Some(v.phase.clone()), Some(v.trust))
+                        }).unwrap_or((None, None, None));
                     if let Some(episode_id) = gm
                         .record_turn(
                             tools_for_episode.clone(),
                             None,
                             turn_trace,
                             &episode_tags,
+                            ep_vitals_gate,
+                            ep_vitals_phase,
+                            ep_vitals_trust,
                         )
                         .await
                     {
@@ -3264,6 +3271,9 @@ pub async fn run_agent_loop_streaming(
                             None,
                             turn_trace,
                             &episode_tags,
+                            None, // vitals not available in streaming path yet
+                            None,
+                            None,
                         )
                         .await
                     {
@@ -4808,7 +4818,10 @@ fn canonicalize_turn_tool_names_for_graph_storage(raw: &[String]) -> Vec<String>
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for s in raw {
-            let n = s.to_ascii_lowercase();
+            let n = s.trim().to_ascii_lowercase();
+            if n.is_empty() {
+                continue;
+            }
             if seen.insert(n.clone()) {
                 out.push(n);
             }
@@ -5040,7 +5053,8 @@ mod tests {
                     stop_reason: StopReason::EndTurn,
                     tool_calls: vec![],
                     usage: TokenUsage::default(),
-                })
+                                vitals: None,
+})
             }
         }
 
@@ -5136,7 +5150,8 @@ mod tests {
                         output_tokens: 5,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             } else {
                 // Second call: LLM returns EndTurn with EMPTY text (the bug)
                 Ok(CompletionResponse {
@@ -5148,7 +5163,8 @@ mod tests {
                         output_tokens: 0,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
     }
@@ -5172,7 +5188,8 @@ mod tests {
                     output_tokens: 0,
                     ..Default::default()
                 },
-            })
+                        vitals: None,
+})
         }
     }
 
@@ -5197,7 +5214,8 @@ mod tests {
                     output_tokens: 8,
                     ..Default::default()
                 },
-            })
+                        vitals: None,
+})
         }
     }
 
@@ -5523,7 +5541,8 @@ mod tests {
                         output_tokens: 0,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             } else {
                 // Second call (retry): normal response
                 Ok(CompletionResponse {
@@ -5538,7 +5557,8 @@ mod tests {
                         output_tokens: 8,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
     }
@@ -5562,7 +5582,8 @@ mod tests {
                     output_tokens: 0,
                     ..Default::default()
                 },
-            })
+                        vitals: None,
+})
         }
     }
 
@@ -6586,7 +6607,8 @@ mod tests {
                         output_tokens: 10,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             } else {
                 Ok(CompletionResponse {
                     content: vec![ContentBlock::Text {
@@ -6600,7 +6622,8 @@ mod tests {
                         output_tokens: 8,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
     }
@@ -6626,7 +6649,8 @@ mod tests {
                         output_tokens: 15,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             } else {
                 // After tool result, return normal response
                 Ok(CompletionResponse {
@@ -6641,7 +6665,8 @@ mod tests {
                         output_tokens: 12,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
     }

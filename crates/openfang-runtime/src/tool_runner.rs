@@ -2261,6 +2261,9 @@ async fn tool_agent_delegate(
                 Some(selected.to_string()),
                 trace_event,
                 &[],
+                None,
+                None,
+                None,
             )
             .await;
     }

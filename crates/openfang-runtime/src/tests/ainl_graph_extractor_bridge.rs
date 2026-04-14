@@ -34,6 +34,9 @@ async fn extract_facts_writes_semantic_row_via_graph_memory_hook() {
             None,
             Some(json!({ "outcome": "success" })),
             &[],
+            None,
+            None,
+            None,
         )
         .await
         .expect("episode id");

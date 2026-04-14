@@ -32,6 +32,18 @@
 //! - Simple trait-based API via `GraphStore`
 //! - Bring your own storage backend
 //!
+//! ## Graph store: query, export, validation (since 0.1.4-alpha)
+//!
+//! - **[`SqliteGraphStore`]**: SQLite backend with **`PRAGMA foreign_keys = ON`**, `FOREIGN KEY` constraints
+//!   on `ainl_graph_edges`, one-time migration for legacy DBs (see [CHANGELOG.md](../CHANGELOG.md)).
+//! - **[`GraphQuery`]**: `store.query(agent_id)` — agent-scoped SQL helpers (episodes, lineage, tags, …).
+//! - **Snapshots**: [`AgentGraphSnapshot`], [`SnapshotEdge`], [`SNAPSHOT_SCHEMA_VERSION`];
+//!   [`SqliteGraphStore::export_graph`] / [`SqliteGraphStore::import_graph`] (strict vs repair via
+//!   `allow_dangling_edges`).
+//! - **Validation**: [`GraphValidationReport`], [`DanglingEdgeDetail`]; [`SqliteGraphStore::validate_graph`]
+//!   for agent-scoped semantics beyond raw FK enforcement.
+//! - **[`GraphMemory`]** forwards the above where hosts should not reach past the facade (see impl block).
+//!
 //! ## Node Types
 //!
 //! - **Episode**: What happened during an agent turn (tool calls, delegations)

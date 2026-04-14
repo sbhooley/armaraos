@@ -1,4 +1,9 @@
 //! Serializable graph snapshots and validation reports.
+//!
+//! - **[`AgentGraphSnapshot`]**: nodes + edges for one `agent_id`, `exported_at`, and `schema_version`.
+//! - **[`SnapshotEdge`]**: maps to `ainl_graph_edges` (`source_id`↔`from_id`, `target_id`↔`to_id`, `edge_type`↔`label`).
+//! - **[`GraphValidationReport`]**: counts, dangling pairs, optional [`DanglingEdgeDetail`] (includes edge label),
+//!   `cross_agent_boundary_edges`, orphan node ids, `is_valid`.
 
 use crate::node::AinlMemoryNode;
 use chrono::{DateTime, Utc};

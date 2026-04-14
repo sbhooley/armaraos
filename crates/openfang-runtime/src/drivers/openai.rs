@@ -4,6 +4,7 @@
 
 use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
 use crate::think_filter::{FilterAction, StreamingThinkFilter};
+use crate::vitals_classifier::{self, TokenLogprob};
 use async_trait::async_trait;
 use futures::StreamExt;
 use openfang_types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
@@ -140,6 +141,13 @@ struct OaiRequest {
     /// Moonshot Kimi K2.5: disable thinking so multi-turn with tool_calls works without preserving reasoning_content.
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<serde_json::Value>,
+    /// Request token logprobs for cognitive vitals classification.
+    /// Sent as `true` for all models; silently absent in response for unsupported models.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    logprobs: bool,
+    /// Number of alternative token logprobs to return per position (OpenAI: max 20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_logprobs: Option<u8>,
 }
 
 /// Returns true if a model uses `max_completion_tokens` instead of `max_tokens`.
@@ -256,6 +264,9 @@ struct OaiResponse {
 struct OaiChoice {
     message: OaiResponseMessage,
     finish_reason: Option<String>,
+    /// Token logprobs, present when `logprobs: true` was sent in the request.
+    #[serde(default)]
+    logprobs: Option<OaiChoiceLogprobs>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +282,46 @@ struct OaiResponseMessage {
 struct OaiUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
+}
+
+/// One alternative token at a given position (part of `OaiTokenLogprob::top_logprobs`).
+#[derive(Debug, Deserialize)]
+struct OaiTopLogprob {
+    token: String,
+    logprob: f32,
+}
+
+/// Logprob entry for a single generated token.
+#[derive(Debug, Deserialize)]
+struct OaiTokenLogprob {
+    token: String,
+    logprob: f32,
+    #[serde(default)]
+    top_logprobs: Vec<OaiTopLogprob>,
+}
+
+/// Logprob content for a choice (wraps the token list).
+#[derive(Debug, Deserialize)]
+struct OaiChoiceLogprobs {
+    #[serde(default)]
+    content: Vec<OaiTokenLogprob>,
+}
+
+/// Convert provider logprob structs into classifier input.
+fn oai_logprobs_to_token_logprobs(logprobs: OaiChoiceLogprobs) -> Vec<TokenLogprob> {
+    logprobs
+        .content
+        .into_iter()
+        .map(|t| TokenLogprob {
+            token: t.token,
+            logprob: t.logprob,
+            top_alternatives: t
+                .top_logprobs
+                .into_iter()
+                .map(|a| (a.token, a.logprob))
+                .collect(),
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -479,6 +530,8 @@ impl LlmDriver for OpenAIDriver {
             } else {
                 None
             },
+            logprobs: true,
+            top_logprobs: Some(5),
         };
 
         let max_retries = 3;
@@ -742,11 +795,18 @@ impl LlmDriver for OpenAIDriver {
                 usage.output_tokens = 1;
             }
 
+            // Classify cognitive vitals from token logprobs if the provider returned them.
+            let vitals = choice
+                .logprobs
+                .map(oai_logprobs_to_token_logprobs)
+                .and_then(|toks| vitals_classifier::classify(&toks));
+
             return Ok(CompletionResponse {
                 content,
                 stop_reason,
                 tool_calls,
                 usage,
+                vitals,
             });
         }
 
@@ -936,6 +996,9 @@ impl LlmDriver for OpenAIDriver {
             } else {
                 None
             },
+            // Logprobs not yet collected in the streaming path; field must still be present.
+            logprobs: false,
+            top_logprobs: None,
         };
 
         // Retry loop for the initial HTTP request
@@ -1384,6 +1447,7 @@ impl LlmDriver for OpenAIDriver {
                 stop_reason,
                 tool_calls,
                 usage,
+                vitals: None,
             });
         }
 
@@ -1564,6 +1628,7 @@ fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
                     cache_creation_input_tokens: 0,
                     cache_read_input_tokens: 0,
                 },
+                vitals: None,
             });
         }
         return None;
@@ -1574,6 +1639,7 @@ fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
         tool_calls,
         stop_reason: StopReason::ToolUse,
         usage: TokenUsage::default(),
+        vitals: None,
     })
 }
 

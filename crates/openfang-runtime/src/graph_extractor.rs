@@ -50,7 +50,7 @@ fn extract_facts_crate_primary(
     assistant_response: &str,
     tools: &[String],
 ) -> Vec<ExtractedFact> {
-    let tags = extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools);
+    let tags = extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools, None);
     semantic_tags_to_extracted_facts(tags)
 }
 

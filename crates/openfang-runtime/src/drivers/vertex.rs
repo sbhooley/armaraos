@@ -492,6 +492,7 @@ fn convert_response(resp: VertexResponse) -> Result<CompletionResponse, LlmError
         stop_reason,
         tool_calls,
         usage,
+        vitals: None,
     })
 }
 
@@ -726,6 +727,7 @@ impl LlmDriver for VertexAIDriver {
                 stop_reason,
                 tool_calls: final_tool_calls,
                 usage,
+                vitals: None,
             });
         }
 

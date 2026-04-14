@@ -836,7 +836,8 @@ mod tests {
                         output_tokens: 50,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
 
@@ -899,7 +900,8 @@ mod tests {
                         output_tokens: 50,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
 
@@ -995,7 +997,8 @@ mod tests {
                         output_tokens: 100,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
 
@@ -1192,7 +1195,8 @@ mod tests {
                         output_tokens: 20,
                         ..Default::default()
                     },
-                })
+                                vitals: None,
+})
             }
         }
 

@@ -431,6 +431,7 @@ impl LlmDriver for ClaudeCodeDriver {
                     output_tokens: usage.output_tokens,
                     ..Default::default()
                 },
+                vitals: None,
             });
         }
 
@@ -448,6 +449,7 @@ impl LlmDriver for ClaudeCodeDriver {
                 output_tokens: 0,
                 ..Default::default()
             },
+            vitals: None,
         })
     }
 
@@ -660,6 +662,7 @@ impl LlmDriver for ClaudeCodeDriver {
             stop_reason: StopReason::EndTurn,
             tool_calls: Vec::new(),
             usage: final_usage,
+            vitals: None,
         })
     }
 }

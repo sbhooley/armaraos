@@ -18,6 +18,11 @@ pub trait TurnHooks: Send + Sync {
     fn on_extraction_complete(&self, _report: &ExtractionReport) {}
     fn on_emit(&self, _target: &str, _payload: &serde_json::Value) {}
     fn on_turn_complete(&self, _outcome: &TurnOutcome) {}
+    /// Called after episode write when vitals were present on the `TurnInput`.
+    ///
+    /// `gate` is "pass" / "warn" / "fail"; `phase` is e.g. "reasoning:0.69"; `trust` is in [0, 1].
+    /// Default implementation logs nothing; hosts use this for dashboards, alerting, or routing.
+    fn on_vitals_classified(&self, _gate: &str, _phase: &str, _trust: f32) {}
 }
 
 /// Default hook implementation (no side effects).

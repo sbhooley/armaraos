@@ -1250,7 +1250,7 @@ url = "https://mcp.example.com/sse"
 
 **AINL MCP:** `ainl install-mcp --host armaraos` registers an `ainl` server whose `env` entry forwards `AINL_MCP_EXPOSURE_PROFILE`, `AINL_MCP_TOOLS`, `AINL_MCP_TOOLS_EXCLUDE`, `AINL_MCP_RESOURCES`, and `AINL_MCP_RESOURCES_EXCLUDE` from the parent process. Set values in `~/.armaraos/.env` (for example `AINL_MCP_EXPOSURE_PROFILE=inspect_only` for read-first tooling and the `ainl://authoring-cheatsheet` resource) without editing this file; leave `AINL_MCP_EXPOSURE_PROFILE` unset for the full MCP tool list.
 
-**AINL graph memory (process environment):** Optional **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, and **`AINL_PERSONA_EVOLUTION`** are **not** `config.toml` keys—they apply to the **`openfang-runtime`** / daemon process (set in `~/.armaraos/.env` or the service plist, same as other env vars). They control structured fact extraction, deterministic tag strings on episode/fact rows, and the incremental persona turn hook. Semantics differ per variable; see **[graph-memory.md](graph-memory.md)** (*Optional extraction and tagging*) and root **`.env.example`**.
+**AINL graph memory (process environment):** **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, and **`AINL_PERSONA_EVOLUTION`** are **not** `config.toml` keys—they apply to the **`openfang-runtime`** / daemon process (set in `~/.armaraos/.env` or the service plist, same as other env vars). `AINL_EXTRACTOR_ENABLED` and `AINL_PERSONA_EVOLUTION` are **opt-out** (default on when their Cargo features are compiled in; set to `0`/`false`/`no`/`off` to disable). `AINL_TAGGER_ENABLED` is **opt-in** (must be exactly `1`). See **[graph-memory.md](graph-memory.md)** (*Optional extraction and tagging*) and root **`.env.example`**.
 
 **Transport variants** (tagged union on `type`):
 
@@ -1413,7 +1413,7 @@ usage_footer = "tokens"
 
 Complete table of all environment variables referenced by the configuration. None of these are read by the config file itself -- they are read at runtime by the kernel and channel adapters.
 
-**Graph memory (SQLite + optional export / tagging):** toggles such as **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, and **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** are **not** `config.toml` keys—they are **process environment** variables consumed by **`openfang-runtime`** when recording turns. Semantics (including that **`AINL_TAGGER_ENABLED`** must be exactly **`1`** to enable tag writes) are documented in **[`graph-memory.md`](graph-memory.md)** and **[`persona-evolution.md`](persona-evolution.md)**; see also **`.env.example`**.
+**Graph memory (SQLite + optional export / tagging):** toggles such as **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, and **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** are **not** `config.toml` keys—they are **process environment** variables consumed by **`openfang-runtime`** when recording turns. `AINL_EXTRACTOR_ENABLED` and `AINL_PERSONA_EVOLUTION` are **opt-out** (default on; set to `0`/`false`/`no`/`off` to disable). `AINL_TAGGER_ENABLED` must be exactly **`1`** to enable tag writes (opt-in). Full semantics in **[`graph-memory.md`](graph-memory.md)** and **[`persona-evolution.md`](persona-evolution.md)**; see also **`.env.example`**.
 
 ### LLM Provider Keys
 

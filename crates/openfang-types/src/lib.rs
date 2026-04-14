@@ -25,6 +25,7 @@ pub mod taint;
 pub mod task_queue;
 pub mod tool;
 pub mod tool_compat;
+pub mod vitals;
 pub mod webhook;
 
 /// Safely truncate a string to at most `max_bytes`, never splitting a UTF-8 char.

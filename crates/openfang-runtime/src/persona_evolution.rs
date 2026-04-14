@@ -5,7 +5,10 @@
 //! persisted [`ainl_persona::EVOLUTION_TRAIT_NAME`] snapshot after
 //! [`crate::graph_memory_writer::GraphMemoryWriter::run_persona_evolution_pass`].
 //!
-//! Enable at runtime with **`AINL_PERSONA_EVOLUTION=1`** (see `docs/persona-evolution.md`).
+//! **Activation:** the `ainl-persona-evolution` feature (on by default) is the primary control.
+//! Evolution runs automatically for every turn when the feature is compiled in.
+//! Set `AINL_PERSONA_EVOLUTION=0` (or `false`/`no`/`off`) to opt out at runtime without
+//! recompiling. Any other value (or absence) keeps evolution enabled.
 
 use crate::graph_memory_writer::GraphMemoryWriter;
 use std::sync::Arc;
@@ -17,12 +20,16 @@ pub struct TurnOutcome {
     pub delegation_to: Option<String>,
 }
 
-/// `true` when **`AINL_PERSONA_EVOLUTION`** is set to a truthy value (`1`, `true`, `yes`, `on`).
+/// `true` when persona evolution should run for this process.
+///
+/// When the `ainl-persona-evolution` feature is compiled in, evolution is **enabled by default**.
+/// Set `AINL_PERSONA_EVOLUTION=0` (or `false`/`no`/`off`) to opt out at runtime.
+/// Any other value (or absence) leaves evolution enabled.
 pub fn persona_turn_evolution_env_enabled() -> bool {
-    std::env::var("AINL_PERSONA_EVOLUTION")
+    !std::env::var("AINL_PERSONA_EVOLUTION")
         .map(|v| {
             let t = v.trim().to_ascii_lowercase();
-            matches!(t.as_str(), "1" | "true" | "yes" | "on")
+            matches!(t.as_str(), "0" | "false" | "no" | "off")
         })
         .unwrap_or(false)
 }
@@ -251,6 +258,9 @@ mod tests {
                     None,
                     Some(json!({ "outcome": "success" })),
                     &[],
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .is_some()

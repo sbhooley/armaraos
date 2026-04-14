@@ -33,13 +33,13 @@ cargo test -p openfang-runtime --lib --features ainl-tagger test_tag_episode_fro
 
 Link the published **`ainl-graph-extractor`** crate (persona evolution pass + turn-scoped semantic tags) with Cargo feature **`ainl-extractor`**. It is enabled in **default** features alongside **`ainl-persona-evolution`**.
 
-For **post-turn fact / procedural pattern extraction** in the agent loop, the structured bridge is used only when this env var is set:
+For **post-turn fact / procedural pattern extraction** in the agent loop, the structured crate path is **on by default** when the feature is compiled in. To opt out at runtime without recompiling, set:
 
 ```bash
-export AINL_EXTRACTOR_ENABLED=1
+export AINL_EXTRACTOR_ENABLED=0  # also: false, no, off
 ```
 
-Accepted truthy values: `1`, `true`, `yes`, `on` (case-insensitive). When unset or falsey, the runtime keeps the legacy [`graph_extractor`](src/graph_extractor.rs) heuristics for facts and patterns while persona evolution still runs if the feature remains enabled.
+When the variable is absent (the normal case) or set to any other value, the crate path runs. This is an **opt-out** semantics — the reverse of the previous behaviour. If you have legacy shell scripts that set `AINL_EXTRACTOR_ENABLED=1` to enable the extractor, they continue to work (non-falsy = enabled).
 
 **Persona evolution pass return type:** when **`ainl-extractor`** is enabled, **`GraphMemoryWriter::run_persona_evolution_pass`** returns **`ainl_graph_extractor::ExtractionReport`** (type-alias **`PersonaEvolutionExtractionReport`**). Without **`ainl-extractor`**, the same method returns a small stub report (see **`graph_memory_writer.rs`**). Inspect **`has_errors()`** and the **`extract_error` / `pattern_error` / `persona_error`** fields when present; the implementation logs one **`warn!`** per populated slot (signal merge vs pattern persistence vs persona write) so operators see partial extractor failures without failing the spawned task. **`AinlRuntime::run_turn`** maps the same three fields to distinct **`TurnPhase`** warnings — see **`docs/ainl-runtime.md`** (*Persona evolution pass*).
 
@@ -62,10 +62,34 @@ Entry point: **`graph_memory_writer::armaraos_graph_memory_export_json_path`**. 
 
 **Tests:** **`cargo test -p openfang-runtime --test armaraos_graph_export_json_path`**.
 
+## Cognitive vitals (`vitals_classifier`)
+
+When the OpenAI driver (or any OpenRouter passthrough that surfaces logprobs) returns token logprob data, the runtime classifies it into a **`CognitiveVitals`** reading and attaches it to the `CompletionResponse`:
+
+| Field | Description |
+|-------|-------------|
+| `gate` | `Pass` / `Warn` / `Fail` — coarse signal quality indicator |
+| `phase` | Dominant phase label with trust score (e.g. `"reasoning:0.82"`) |
+| `trust` | Scalar `[0, 1]` — high = low entropy + high logprob confidence |
+| `mean_logprob` | Mean token log-probability over the sampled window |
+| `entropy` | Mean positional entropy estimate |
+
+Phases: `Reasoning`, `Retrieval`, `Refusal`, `Creative`, `Hallucination`, `Adversarial`. The classifier uses heuristic vocabulary matching (adversarial n-gram detection for prompt-injection patterns) and entropy thresholds — no external model or network call.
+
+Vitals propagate downstream:
+
+- **`EpisodicNode`** — `vitals_gate`, `vitals_phase`, `vitals_trust` stored alongside episode data.
+- **`ainl-persona` signals** — confident reasoning nudges `Systematicity`; hallucination/creative phases nudge `Curiosity`.
+- **`ainl-graph-extractor`** tags — `vitals:reasoning:pass` / `vitals:elevated` `SemanticTag`s.
+- **AINL frame** — `_vitals_gate`, `_vitals_phase`, `_vitals_trust` keys injected so AINL programs can branch on cognitive state.
+- **`TurnHooks::on_vitals_classified`** — host hook for real-time reaction.
+
+Providers that don't return logprobs (Anthropic, Gemini, etc.) produce `vitals: None`; the system is fully fail-open.
+
 ## See also (ArmaraOS operator docs)
 
 - **[`docs/graph-memory.md`](../../docs/graph-memory.md)** — SQLite paths, inbox drain, end-of-turn writes, orchestration vs graph stores.
-- **[`docs/persona-evolution.md`](../../docs/persona-evolution.md)** — **`AINL_PERSONA_EVOLUTION`** axis hook vs **`run_persona_evolution_pass`**.
+- **[`docs/persona-evolution.md`](../../docs/persona-evolution.md)** — `AINL_PERSONA_EVOLUTION` axis hook vs `run_persona_evolution_pass`.
 - **[`docs/graph-memory-sync.md`](../../docs/graph-memory-sync.md)** — short hub linking Python **`AinlMemorySyncWriter`** and this README.
 
 ## Optional ainl-runtime turn path (`ainl-runtime-engine`)
@@ -88,7 +112,8 @@ cargo build -p openfang-runtime --features ainl-runtime-engine
 **Tests:**
 
 ```bash
-cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime test_agent_loop_uses_openfang_by_default
+cargo test -p openfang-runtime --features ainl-runtime-engine test_agent_loop_uses_openfang_by_default
+# Or: cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime
 ```
 
 **Daemon note:** `openfang-kernel` does not enable this feature by default; shipping the shim in production binaries requires forwarding **`features = ["ainl-runtime-engine"]`** on the `openfang-runtime` dependency (or an equivalent workspace feature) in your packaging graph.

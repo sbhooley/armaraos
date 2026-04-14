@@ -152,12 +152,16 @@ impl GraphMemoryWriter {
     ///
     /// On success, returns the new episode **node** id (same id space as
     /// [`Self::record_fact`] `source_turn_id` in existing call sites).
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_turn(
         &self,
         tool_calls: Vec<String>,
         delegation_to: Option<String>,
         trace_json: Option<serde_json::Value>,
         episode_tags: &[String],
+        vitals_gate: Option<String>,
+        vitals_phase: Option<String>,
+        vitals_trust: Option<f32>,
     ) -> Option<Uuid> {
         let kind = if delegation_to.is_some() {
             "delegation"
@@ -190,6 +194,9 @@ impl GraphMemoryWriter {
                         episodic.tags.push(t.clone());
                     }
                 }
+                episodic.vitals_gate = vitals_gate.clone();
+                episodic.vitals_phase = vitals_phase.clone();
+                episodic.vitals_trust = vitals_trust;
             }
             let new_id = node.id;
             match inner.write_node(&node) {
@@ -343,6 +350,9 @@ impl GraphMemoryWriter {
                 Some(target_agent_id.to_string()),
                 None,
                 &[],
+                None,
+                None,
+                None,
             )
             .await;
     }
@@ -476,6 +486,7 @@ fn merge_persona_err(slot: &mut Option<String>, e: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "ainl-persona-evolution")]
     use ainl_persona::EVOLUTION_TRAIT_NAME;
     use serde_json::json;
 
@@ -516,6 +527,9 @@ mod tests {
                     None,
                     Some(json!({ "outcome": "success" })),
                     &[],
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .is_some()
@@ -587,6 +601,9 @@ mod tests {
                 None,
                 Some(json!({ "outcome": "success" })),
                 &[],
+                None,
+                None,
+                None,
             )
             .await;
         let r1 = writer.run_persona_evolution_pass().await;
@@ -600,6 +617,9 @@ mod tests {
                 None,
                 Some(json!({ "outcome": "success" })),
                 &[],
+                None,
+                None,
+                None,
             )
             .await;
         let r2_pass = writer.run_persona_evolution_pass().await;
@@ -631,6 +651,9 @@ mod tests {
                     None,
                     None,
                     &[],
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .is_some()
@@ -684,7 +707,7 @@ mod tests {
         let trace = json!({"agent_id": "export-agent", "trace_id": "tr-abc"});
         assert!(
             writer
-                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()), &[])
+                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()), &[], None, None, None)
                 .await
                 .is_some()
         );
@@ -711,11 +734,11 @@ mod tests {
         };
 
         let id1 = writer
-            .record_turn(vec!["a".to_string()], None, None, &[])
+            .record_turn(vec!["a".to_string()], None, None, &[], None, None, None)
             .await
             .expect("ep1");
         let id2 = writer
-            .record_turn(vec!["b".to_string()], None, None, &[])
+            .record_turn(vec!["b".to_string()], None, None, &[], None, None, None)
             .await
             .expect("ep2");
 

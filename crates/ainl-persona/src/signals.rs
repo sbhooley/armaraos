@@ -89,8 +89,136 @@ pub fn episodic_should_process(ep: &EpisodicNode) -> bool {
     false
 }
 
+/// Extract persona signals from `EpisodicNode::vitals_*` fields.
+///
+/// These complement the existing heuristic signals (tool names, outcomes, duration)
+/// with signals derived from the LLM's own token-level confidence during generation.
+///
+/// Axis mappings:
+/// - `Systematicity` ← high trust / reasoning/retrieval gate=pass (the agent generated
+///   structured, confident output)
+/// - `Curiosity` ← hallucination or creative phase (the agent was probing uncertain territory)
+/// - `Persistence` ← warn/fail gate but non-zero trust (the agent continued under uncertainty)
+/// - `Verbosity` ← creative phase (open-ended, expansive generation)
+pub fn extract_vitals_signals(node_id: Uuid, ep: &EpisodicNode) -> Vec<RawSignal> {
+    let gate = match ep.vitals_gate.as_deref() {
+        Some(g) => g,
+        None => return Vec::new(),
+    };
+    let phase = ep.vitals_phase.as_deref().unwrap_or("");
+    let trust = ep.vitals_trust.unwrap_or(0.5).clamp(0.0, 1.0);
+
+    let phase_kind = phase.split(':').next().unwrap_or("");
+
+    let mut out = Vec::new();
+
+    match gate {
+        "pass" => {
+            match phase_kind {
+                "reasoning" | "retrieval" => {
+                    // Confident structured output → Systematicity reward.
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Systematicity,
+                        reward: 0.7 + 0.3 * trust,
+                        weight: 0.65,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                }
+                "creative" => {
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Curiosity,
+                        reward: 0.65,
+                        weight: 0.5,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Verbosity,
+                        reward: 0.6,
+                        weight: 0.45,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                }
+                _ => {}
+            }
+        }
+        "warn" => {
+            match phase_kind {
+                "hallucination" => {
+                    // Agent ventured into uncertain territory — mild Curiosity nudge,
+                    // negative Systematicity (reduces structured-output score slightly).
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Curiosity,
+                        reward: 0.55,
+                        weight: 0.4,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Systematicity,
+                        reward: 0.2,
+                        weight: 0.4,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                }
+                "refusal" => {
+                    // Refusal with Warn → cautious agent; mild Systematicity signal.
+                    out.push(RawSignal {
+                        axis: PersonaAxis::Systematicity,
+                        reward: 0.5,
+                        weight: 0.3,
+                        source_node_id: node_id,
+                        source_node_type: MemoryNodeType::Episodic,
+                    });
+                }
+                _ => {
+                    // Generic Warn: Persistence signal if trust is non-trivial.
+                    if trust > 0.3 {
+                        out.push(RawSignal {
+                            axis: PersonaAxis::Persistence,
+                            reward: 0.55,
+                            weight: 0.4,
+                            source_node_id: node_id,
+                            source_node_type: MemoryNodeType::Episodic,
+                        });
+                    }
+                }
+            }
+        }
+        "fail" => {
+            // Adversarial or high-entropy hallucination: suppress Systematicity,
+            // weak Persistence if the agent was still producing something.
+            out.push(RawSignal {
+                axis: PersonaAxis::Systematicity,
+                reward: 0.1,
+                weight: 0.5,
+                source_node_id: node_id,
+                source_node_type: MemoryNodeType::Episodic,
+            });
+            if trust > 0.2 {
+                out.push(RawSignal {
+                    axis: PersonaAxis::Persistence,
+                    reward: 0.4,
+                    weight: 0.3,
+                    source_node_id: node_id,
+                    source_node_type: MemoryNodeType::Episodic,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    out
+}
+
 pub fn extract_episodic_signals(node_id: Uuid, ep: &EpisodicNode) -> Vec<RawSignal> {
     let mut out = Vec::new();
+
+    // Vitals-derived signals (first, so they can be overridden/complemented by heuristics).
+    out.extend(extract_vitals_signals(node_id, ep));
 
     for hint in &ep.persona_signals_emitted {
         if let Some(sig) = parse_axis_hint(node_id, hint) {

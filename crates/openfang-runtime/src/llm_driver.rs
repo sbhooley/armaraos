@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use openfang_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use openfang_types::tool::{ToolCall, ToolDefinition};
+use openfang_types::vitals::CognitiveVitals;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -78,6 +79,10 @@ pub struct CompletionResponse {
     pub tool_calls: Vec<ToolCall>,
     /// Token usage statistics.
     pub usage: TokenUsage,
+    /// Cognitive vitals derived from token logprobs, if the provider returned them.
+    /// `None` for providers that do not expose logprobs (Anthropic, Ollama, etc.)
+    /// or when classification is skipped for reasoning-model completions.
+    pub vitals: Option<CognitiveVitals>,
 }
 
 impl CompletionResponse {
@@ -294,6 +299,7 @@ mod tests {
             stop_reason: StopReason::EndTurn,
             tool_calls: vec![],
             usage: TokenUsage::default(),
+            vitals: None,
         };
         assert_eq!(response.text(), "Hello world!");
     }
@@ -361,6 +367,7 @@ mod tests {
                         output_tokens: 3,
                         ..Default::default()
                     },
+                    vitals: None,
                 })
             }
         }

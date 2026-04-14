@@ -13,29 +13,30 @@ ArmaraOS stores per-agent graph memory in `~/.armaraos/agents/<agent_id>/ainl_me
 
 ## Two write paths
 
-1. **`GraphMemoryWriter::run_persona_evolution_pass`** (spawned after each turn) runs **`ainl-graph-extractor`**: semantic recurrence bumps, graph signal extraction, heuristic persona signals, then persists the evolution snapshot when appropriate. It returns an **`ExtractionReport`** (`extract_error` / `pattern_error` / `persona_error` + **`has_errors()`**); partial failures are **`warn!`**’d, not thrown.
-2. **`PersonaEvolutionHook::evolve_from_turn`** (optional) runs **after** that pass. It re-reads the latest evolution snapshot, applies **explicit** signals derived from this turn’s tool list and optional `delegation_to`, then writes the snapshot again. This matters because dashboard episodes often omit `trace_event.outcome: "success"`, so `ainl-persona`’s episodic extractor skips tool-based hints unless this hook runs.
+1. **`GraphMemoryWriter::run_persona_evolution_pass`** (spawned after each turn) runs **`ainl-graph-extractor`**: semantic recurrence bumps, graph signal extraction, heuristic persona signals, then persists the evolution snapshot when appropriate. It returns an **`ExtractionReport`** (`extract_error` / `pattern_error` / `persona_error` + **`has_errors()`**); partial failures are **`warn!`**'d, not thrown.
+2. **`PersonaEvolutionHook::evolve_from_turn`** runs **after** that pass — by default in every turn. It re-reads the latest evolution snapshot, applies **explicit** signals derived from this turn's tool list and optional `delegation_to`, then writes the snapshot again. This matters because dashboard episodes often omit `trace_event.outcome: "success"`, so `ainl-persona`'s episodic extractor skips tool-based hints unless this hook runs.
 
 ### Same report shape in **`ainl-runtime`**
 
-If you embed **`AinlRuntime`** on the **same** `ainl_memory.db` (tests, tooling, or optional **`ainl-runtime-engine`** chat shim), a scheduled **`GraphExtractorTask::run_pass`** still yields **`ExtractionReport`**. **`run_turn`** promotes each populated error slot to its own **`TurnWarning`**: **`extract_error`** → **`TurnPhase::ExtractionPass`**, **`pattern_error`** → **`PatternPersistence`**, **`persona_error`** → **`PersonaEvolution`**, so **`TurnOutcome::PartialSuccess`** can carry multiple extraction diagnostics in one turn. That parallels OpenFang’s per-slot **`warn!`** without conflating phases. Hub: **[ainl-runtime.md](ainl-runtime.md)**, **`crates/ainl-runtime/README.md`**, integration **[ainl-runtime-integration.md](ainl-runtime-integration.md)**.
+If you embed **`AinlRuntime`** on the **same** `ainl_memory.db` (tests, tooling, or optional **`ainl-runtime-engine`** chat shim), a scheduled **`GraphExtractorTask::run_pass`** still yields **`ExtractionReport`**. **`run_turn`** promotes each populated error slot to its own **`TurnWarning`**: **`extract_error`** → **`TurnPhase::ExtractionPass`**, **`pattern_error`** → **`PatternPersistence`**, **`persona_error`** → **`PersonaEvolution`**, so **`TurnOutcome::PartialSuccess`** can carry multiple extraction diagnostics in one turn. That parallels OpenFang's per-slot **`warn!`** without conflating phases. Hub: **[ainl-runtime.md](ainl-runtime.md)**, **`crates/ainl-runtime/README.md`**, integration **[ainl-runtime-integration.md](ainl-runtime-integration.md)**.
 
 **Third path (tests / admin tooling):** **`AinlRuntime`** also exposes the same in-process **`EvolutionEngine`** for **`apply_evolution_signals`**, **`evolution_correction_tick`**, **`persist_evolution_snapshot`**, and **`evolve_persona_from_graph_signals`** without going through **`run_pass`** — see **[ainl-runtime.md](ainl-runtime.md)** (*Persona evolution: extractor vs direct `EvolutionEngine`*). Coordinate writers on the same DB to avoid conflicting evolution row updates.
 
 ## Runtime toggle: `AINL_PERSONA_EVOLUTION`
 
-The turn hook is **off by default** (no env → no extra writes).
+The turn hook is **on by default** when the `ainl-persona-evolution` Cargo feature is compiled in (which it is in default builds). No env var is required.
 
-Set one of:
+To opt out without recompiling:
 
-- `AINL_PERSONA_EVOLUTION=1`
-- `AINL_PERSONA_EVOLUTION=true` (also `yes`, `on`, case-insensitive)
+```bash
+export AINL_PERSONA_EVOLUTION=0  # also: false, no, off (case-insensitive)
+```
 
-to enable `PersonaEvolutionHook::evolve_from_turn` from the agent loop. When unset or falsey, the hook returns immediately without touching SQLite.
+When the variable is absent (the normal case) or set to any other value, `PersonaEvolutionHook::evolve_from_turn` runs after each turn. Legacy scripts that set `AINL_PERSONA_EVOLUTION=1` continue to work correctly (non-falsy = enabled).
 
 ## How axis scores move (grow / decay)
 
-- **Growth:** Each matching `RawSignal` nudges an axis score with a **weighted EMA** (see `ainl_persona::AxisState::update_weighted` and `EMA_ALPHA` in the `ainl-persona` crate). Repeated similar tools (e.g. `shell_exec` → instrumentality hints) push the score toward the signal’s `reward`, bounded in `[0, 1]`.
+- **Growth:** Each matching `RawSignal` nudges an axis score with a **weighted EMA** (see `ainl_persona::AxisState::update_weighted` and `EMA_ALPHA` in the `ainl-persona` crate). Repeated similar tools (e.g. `shell_exec` → instrumentality hints) push the score toward the signal's `reward`, bounded in `[0, 1]`.
 - **Decay / neutral pull:** When `run_persona_evolution_pass` sees **no merged signals** for a pass but the agent already had at least one persona row, it applies `EvolutionEngine::correction_tick` on every axis toward `0.5` and persists — a slow re-centering when the graph goes quiet.
 
 Trait-level `strength` on non-evolution persona rows is not rewritten by this hook; only the axis snapshot row is updated via `write_persona_node`.
@@ -50,12 +51,14 @@ The full **`GraphMemoryWriter::run_persona_evolution_pass`** implementation (sem
 
 ## Tests
 
-`openfang-runtime` includes `test_persona_strength_increases_after_repeated_tool`: with `AINL_PERSONA_EVOLUTION=1`, two successive `PersonaEvolutionHook::evolve_from_turn` calls (same `shell_exec` tool list) each bump **`evolution_cycle`** on the axis snapshot row. Axis scores use a weighted EMA toward `reward * weight`, so a given axis is not guaranteed to move monotonically upward on every repeated tool; the cycle counter is the stable “learning persisted” signal.
+`openfang-runtime` includes `test_persona_strength_increases_after_repeated_tool`: two successive `PersonaEvolutionHook::evolve_from_turn` calls (same `shell_exec` tool list) each bump **`evolution_cycle`** on the axis snapshot row. Axis scores use a weighted EMA toward `reward * weight`, so a given axis is not guaranteed to move monotonically upward on every repeated tool; the cycle counter is the stable "learning persisted" signal.
+
+Additional integration tests (`tests/test_persona_evolution.rs`): default-on assertion (`AINL_PERSONA_EVOLUTION` absent → enabled), opt-out via `AINL_PERSONA_EVOLUTION=0`, non-fatal `Err` on agent_id mismatch, clean no-op on empty `TurnOutcome`.
 
 ## Related docs
 
 - `docs/graph-memory-sync.md` — Python **`AinlMemorySyncWriter`** → **`ainl_graph_memory_inbox.json`** when **`ARMARAOS_AGENT_ID`**
-- `docs/graph-memory.md` — SQLite layout, export path, **`AINL_EXTRACTOR_ENABLED`** vs **`AINL_TAGGER_ENABLED`** (tagger: **only** `1`), EndTurn write order, scheduled `ainl run` bundles.
+- `docs/graph-memory.md` — SQLite layout, export path, **`AINL_EXTRACTOR_ENABLED`** (opt-out) vs **`AINL_TAGGER_ENABLED`** (tagger: **only** `1`), EndTurn write order, scheduled `ainl run` bundles.
 - `crates/openfang-runtime/README.md` — **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, default Cargo features.
 - `crates/ainl-persona/README.md` — axis model and evolution engine API.
 - `docs/ainl-runtime.md` — **`ainl-runtime`** hub (async path, tests); **`docs/ainl-runtime-integration.md`** — optional OpenFang embed.

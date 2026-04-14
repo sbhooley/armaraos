@@ -1,23 +1,30 @@
 //! Bridge to the published [`ainl-graph-extractor`](https://crates.io/crates/ainl-graph-extractor)
 //! crate for turn-scoped semantic tags and optional tool-sequence pattern hints.
 //!
-//! **Runtime toggle:** when this crate is built with the `ainl-extractor` feature, set
-//! `AINL_EXTRACTOR_ENABLED=1` (or `true` / `yes` / `on`) so the agent loop uses this bridge for
-//! fact/pattern extraction instead of the legacy [`crate::graph_extractor`] path.
+//! **Activation:** the `ainl-extractor` feature (on by default) is the sole control.
+//! The crate path is always active when the feature is compiled in.
+//! The legacy `AINL_EXTRACTOR_ENABLED` env var is retained for explicit opt-out only:
+//! set `AINL_EXTRACTOR_ENABLED=0` (or `false`/`no`/`off`) to fall back to heuristic-only
+//! extraction without recompiling. Any other value (or absence) keeps the crate path enabled.
 
 /// Separator between user message and assistant message in [`format_turn_payload`].
 pub const TURN_USER_ASSISTANT_SEP: &str = "\n\n---\n\n";
 const TOOLS_MARKER: &str = "\n\n__AINL_TOOLS__\n";
 
-/// `true` when `AINL_EXTRACTOR_ENABLED` is set to a truthy value (`1`, `true`, `yes`, `on`).
+/// `true` when the `ainl-extractor` feature is compiled in AND `AINL_EXTRACTOR_ENABLED` is not
+/// explicitly set to a falsy value (`0`, `false`, `no`, `off`).
+///
+/// Default (env var absent): **enabled** when the feature is compiled in.
 pub fn ainl_extractor_runtime_enabled() -> bool {
     #[cfg(feature = "ainl-extractor")]
     {
-        std::env::var("AINL_EXTRACTOR_ENABLED")
+        // Opt-out: AINL_EXTRACTOR_ENABLED=0|false|no|off disables the crate path at runtime.
+        // Any other value, or absence, keeps it enabled.
+        !std::env::var("AINL_EXTRACTOR_ENABLED")
             .map(|v| {
                 matches!(
                     v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
+                    "0" | "false" | "no" | "off"
                 )
             })
             .unwrap_or(false)
@@ -100,6 +107,7 @@ impl AinlExtractorBridge {
                 user,
                 assistant,
                 &tools,
+                None,
             );
             tags.into_iter()
                 .map(|t| {
@@ -152,7 +160,12 @@ fn pattern_from_bridge_turn(
     })
 }
 
-/// Facts + procedural pattern for one graph-memory turn (respects `AINL_EXTRACTOR_ENABLED`).
+/// Facts + procedural pattern for one graph-memory turn.
+///
+/// **Path selection (logged at `debug` level):**
+/// - `crate_primary` — `ainl-graph-extractor` tag pipeline (`ainl-extractor` feature, not opted out)
+/// - `heuristic_fallback` — regex heuristics from [`crate::graph_extractor`] (when crate path
+///   yields no candidates, or when the feature is off / opted out via env var)
 pub fn graph_memory_turn_extraction(
     user_message: &str,
     assistant_response: &str,
@@ -175,14 +188,33 @@ pub fn graph_memory_turn_extraction(
                 })
                 .collect();
         if out.is_empty() {
+            tracing::debug!(
+                agent_id = %agent_id,
+                extraction_path = "heuristic_fallback",
+                reason = "crate_primary_yielded_no_candidates",
+                "graph_memory_turn_extraction: falling back to regex heuristics"
+            );
             out = crate::graph_extractor::extract_facts_for_turn(
                 user_message,
                 assistant_response,
                 tools_for_episode,
             );
+        } else {
+            tracing::debug!(
+                agent_id = %agent_id,
+                extraction_path = "crate_primary",
+                facts = out.len(),
+                "graph_memory_turn_extraction: crate tagger path produced facts"
+            );
         }
         out
     } else {
+        tracing::debug!(
+            agent_id = %agent_id,
+            extraction_path = "heuristic_fallback",
+            reason = if cfg!(feature = "ainl-extractor") { "env_opt_out" } else { "feature_disabled" },
+            "graph_memory_turn_extraction: using regex heuristics"
+        );
         crate::graph_extractor::extract_facts_for_turn(
             user_message,
             assistant_response,

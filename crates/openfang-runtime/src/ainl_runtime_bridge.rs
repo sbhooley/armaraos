@@ -35,6 +35,10 @@ pub struct TurnContext {
     /// Carried into the mapped EndTurn-style payload; ainl-runtime episode rows still use `None`
     /// for `delegation_to` today — this field is host metadata only.
     pub delegation_to: Option<String>,
+    /// Cognitive vitals from the LLM completion (passed through to `TurnInput` → episode write).
+    pub vitals_gate: Option<String>,
+    pub vitals_phase: Option<String>,
+    pub vitals_trust: Option<f32>,
 }
 
 /// OpenFang-facing summary of an **ainl-runtime** turn (mirrors fields we surface on an EndTurn-style event).
@@ -239,13 +243,28 @@ impl AinlRuntimeBridge {
         user_message: &str,
         ctx: &TurnContext,
     ) -> TurnInput {
+        let mut frame = ctx.frame.clone();
+        // Inject cognitive vitals as AINL frame keys so programs can branch on them
+        // via `core.GET result "_vitals_gate"` without any syntax changes.
+        if let Some(ref gate) = ctx.vitals_gate {
+            frame.insert("_vitals_gate".to_string(), Value::String(gate.clone()));
+        }
+        if let Some(ref phase) = ctx.vitals_phase {
+            frame.insert("_vitals_phase".to_string(), Value::String(phase.clone()));
+        }
+        if let Some(trust) = ctx.vitals_trust {
+            frame.insert("_vitals_trust".to_string(), Value::from(trust as f64));
+        }
         TurnInput {
             user_message: user_message.to_string(),
             tools_invoked: ctx.tools_invoked.clone(),
             trace_event: ctx.trace_event.clone(),
             depth: ctx.depth,
-            frame: ctx.frame.clone(),
+            frame,
             emit_targets: ctx.emit_targets.clone(),
+            vitals_gate: ctx.vitals_gate.clone(),
+            vitals_phase: ctx.vitals_phase.clone(),
+            vitals_trust: ctx.vitals_trust,
         }
     }
 

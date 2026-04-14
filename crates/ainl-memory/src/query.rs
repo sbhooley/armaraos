@@ -1,6 +1,15 @@
 //! Graph traversal and querying utilities.
 //!
-//! Higher-level query functions built on top of GraphStore.
+//! Two layers:
+//!
+//! 1. **Free functions** (e.g. [`recall_recent`], [`walk_from`], [`find_patterns`]) — take [`GraphStore`]
+//!    plus parameters such as `agent_id` where filtering applies.
+//! 2. **[`GraphQuery`]** — returned by [`SqliteGraphStore::query`]; holds `agent_id` and offers SQL-backed
+//!    filters (`episodes`, `lineage`, `by_tag`, `subgraph_edges`, [`GraphQuery::read_runtime_state`], …).
+//!
+//! Serialized node JSON uses top-level `agent_id` and nested `node_type` fields (e.g. `$.node_type.outcome`);
+//! edge rows use SQLite columns `from_id`, `to_id`, `label` (see [`crate::snapshot::SnapshotEdge`] for the
+//! export/import naming `source_id` / `target_id` / `edge_type`).
 
 use crate::node::{
     AinlMemoryNode, AinlNodeType, EpisodicNode, PersonaLayer, PersonaNode, ProceduralNode,

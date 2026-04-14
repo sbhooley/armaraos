@@ -703,6 +703,15 @@ impl AinlRuntime {
             }
         }
 
+        // Fire vitals hook before building the outcome so hosts can act synchronously.
+        if let (Some(gate), Some(phase), Some(trust)) = (
+            input.vitals_gate.as_deref(),
+            input.vitals_phase.as_deref(),
+            input.vitals_trust,
+        ) {
+            self.hooks.on_vitals_classified(gate, phase, trust);
+        }
+
         let result = TurnResult {
             episode_id,
             persona_prompt_contribution,
@@ -711,6 +720,9 @@ impl AinlRuntime {
             steps_executed: dispatched_count,
             patch_dispatch_results,
             status: TurnStatus::Ok,
+            vitals_gate: input.vitals_gate.clone(),
+            vitals_phase: input.vitals_phase.clone(),
+            vitals_trust: input.vitals_trust,
         };
 
         let outcome = if turn_warnings.is_empty() {
@@ -1156,6 +1168,10 @@ pub(crate) fn record_turn_episode(
     if let AinlNodeType::Episode { ref mut episodic } = node.node_type {
         episodic.user_message = Some(input.user_message.clone());
         episodic.tools_invoked = tools;
+        // Persist cognitive vitals from the host LLM completion (fail-open: all fields are Option).
+        episodic.vitals_gate = input.vitals_gate.clone();
+        episodic.vitals_phase = input.vitals_phase.clone();
+        episodic.vitals_trust = input.vitals_trust;
     }
     memory.write_node(&node)?;
     Ok(node.id)

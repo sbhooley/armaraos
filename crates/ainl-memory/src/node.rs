@@ -276,6 +276,16 @@ pub struct EpisodicNode {
     /// Deterministic semantic category tags for this episode (e.g. from `ainl-semantic-tagger` / tool sequence).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Coarse cognitive gate from the LLM completion that produced this episode: "pass" / "warn" / "fail".
+    /// `None` when the provider did not return logprobs (Anthropic, Ollama, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vitals_gate: Option<String>,
+    /// Fine-grained cognitive phase + confidence, e.g. `"reasoning:0.69"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vitals_phase: Option<String>,
+    /// Scalar trust score in [0, 1]. Higher = more confident / lower entropy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vitals_trust: Option<f32>,
 }
 
 impl EpisodicNode {
@@ -500,6 +510,9 @@ impl AinlMemoryNode {
             user_message: None,
             assistant_response: None,
             tags: Vec::new(),
+            vitals_gate: None,
+            vitals_phase: None,
+            vitals_trust: None,
         };
         Self::base(
             MemoryCategory::Episodic,

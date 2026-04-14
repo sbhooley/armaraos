@@ -217,6 +217,12 @@ pub struct TurnInput {
     /// After the episode row is written, `EMIT_TO` edges are inserted from `episode_id` to each target
     /// (additive; default empty). Hosts/tests use this to wire emit routing in the same turn.
     pub emit_targets: Vec<Uuid>,
+    /// Cognitive vitals from the LLM completion that produced this turn (if available).
+    /// Written onto the [`EpisodicNode`](ainl_memory::EpisodicNode) during episode persistence.
+    /// `None` for providers that do not return logprobs (Anthropic, Ollama, etc.).
+    pub vitals_gate: Option<String>,
+    pub vitals_phase: Option<String>,
+    pub vitals_trust: Option<f32>,
 }
 
 /// Compiled memory context for a turn (prompt-side assembly in the host).
@@ -294,6 +300,10 @@ pub struct TurnResult {
     pub steps_executed: u32,
     pub patch_dispatch_results: Vec<PatchDispatchResult>,
     pub status: TurnStatus,
+    /// Cognitive vitals persisted on the episode node (echoed from `TurnInput`).
+    pub vitals_gate: Option<String>,
+    pub vitals_phase: Option<String>,
+    pub vitals_trust: Option<f32>,
 }
 
 impl Default for TurnResult {
@@ -306,6 +316,9 @@ impl Default for TurnResult {
             steps_executed: 0,
             patch_dispatch_results: Vec::new(),
             status: TurnStatus::Ok,
+            vitals_gate: None,
+            vitals_phase: None,
+            vitals_trust: None,
         }
     }
 }

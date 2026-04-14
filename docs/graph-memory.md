@@ -58,15 +58,15 @@ When **`ARMARAOS_AGENT_ID`** is set, **ainativelang** can append **`MemoryNode`*
 
 ---
 
-## Optional extraction and tagging (env + features)
+## Extraction, tagging, and persona evolution (env + features)
 
-These control **extra** graph richness on top of the always-on **episode** row plus **legacy `graph_extractor` heuristics** whenever structured extraction is off. All are **opt-in at runtime** unless noted.
+These control **extra** graph richness on top of the always-on **episode** row. `AINL_EXTRACTOR_ENABLED` and `AINL_PERSONA_EVOLUTION` are **opt-out** (on by default when their Cargo features are compiled in); `AINL_TAGGER_ENABLED` is **opt-in** (must be explicitly enabled).
 
-| Variable | Cargo feature | When enabled |
-|----------|---------------|--------------|
-| **`AINL_EXTRACTOR_ENABLED`** | **`ainl-extractor`** (default) | **Truthy** value: **`1`**, **`true`**, **`yes`**, **`on`** (case-insensitive, trimmed). EndTurn fact + pattern extraction uses **`ainl_graph_extractor_bridge`** instead of legacy **`graph_extractor`**. **`run_persona_evolution_pass`** still runs when the **`ainl-extractor`** feature is compiled in; it does **not** read this env var. |
-| **`AINL_TAGGER_ENABLED`** | **`ainl-tagger`** (default in ArmaraOS) | Must be **exactly** **`1`** after trim. Episode and fact nodes get additional **`SemanticTaggerBridge`** tag strings at write time. (**Unlike** **`AINL_EXTRACTOR_ENABLED`**, `true` / `yes` / `on` do **not** enable the tagger.) |
-| **`AINL_PERSONA_EVOLUTION`** | **`ainl-persona-evolution`** (default) | **Truthy** as in the extractor row. After **`run_persona_evolution_pass`**, runs **`PersonaEvolutionHook::evolve_from_turn`** (see **[persona-evolution.md](persona-evolution.md)**). |
+| Variable | Cargo feature | Semantics |
+|----------|---------------|-----------|
+| **`AINL_EXTRACTOR_ENABLED`** | **`ainl-extractor`** (default) | **Opt-out.** When the feature is compiled in, the crate path (`ainl_graph_extractor_bridge`) is **on by default**. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**, case-insensitive) to fall back to legacy `graph_extractor` heuristics. `run_persona_evolution_pass` does **not** read this env var. |
+| **`AINL_TAGGER_ENABLED`** | **`ainl-tagger`** (default in ArmaraOS) | **Opt-in.** Must be **exactly** **`1`** after trim to enable `SemanticTaggerBridge` tag strings on episode and fact nodes. (`true` / `yes` / `on` do **not** enable the tagger — deliberate strictness to avoid accidental activation.) |
+| **`AINL_PERSONA_EVOLUTION`** | **`ainl-persona-evolution`** (default) | **Opt-out.** When the feature is compiled in, `PersonaEvolutionHook::evolve_from_turn` runs after each turn by default. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**) to disable (see **[persona-evolution.md](persona-evolution.md)**). |
 
 Slim builds: **`cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution`** (see crate README).
 
@@ -91,15 +91,16 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 | Optional turn orchestration | **`ainl_runtime::AinlRuntime`** — **`run_turn`**, **`run_turn_async`** (feature **`async`**); may persist **`runtime_state`** in the same DB when embedded — not the default daemon loop — **`crates/ainl-runtime/README.md`**, **[ainl-runtime-integration.md](ainl-runtime-integration.md)**. When this path records episodes, **`tools_invoked`** are **canonicalized** at write time (**`ainl-semantic-tagger`**); episode **ids** in turn results are **graph node ids** (see **[ainl-runtime.md](ainl-runtime.md)** *Episodic tools* / *Episode identity*). |
 | Graph extractor bridge | **`openfang_runtime::ainl_graph_extractor_bridge`** — turn payload formatting, **`graph_memory_turn_extraction`**, **`ainl_extractor_runtime_enabled`** |
 | Semantic tagger bridge | **`openfang_runtime::ainl_semantic_tagger_bridge::SemanticTaggerBridge`** — **`tag_episode`**, **`tag_fact`**, gated by **`AINL_TAGGER_ENABLED`** |
-| Persona turn hook | **`openfang_runtime::persona_evolution`** — **`PersonaEvolutionHook`**, **`TurnOutcome`**, **`persona_turn_evolution_env_enabled`** |
-| Legacy heuristics | **`graph_extractor.rs`** — used when **`AINL_EXTRACTOR_ENABLED`** is unset or the **`ainl-extractor`** feature is off |
+| Persona turn hook | **`openfang_runtime::persona_evolution`** — **`PersonaEvolutionHook`**, **`TurnOutcome`**, **`persona_turn_evolution_env_enabled`** (opt-out; default on) |
+| Cognitive vitals | **`openfang_runtime::vitals_classifier`** — `classify_vitals`, `CognitiveVitals` (`gate`, `phase`, `trust`, `mean_logprob`, `entropy`); logprobs-based, fail-open (no logprobs → `None`). Used by OpenAI driver; vitals stored on `EpisodicNode` and propagated to persona signals + AINL frame. |
+| Legacy heuristics | **`graph_extractor.rs`** — fallback when `AINL_EXTRACTOR_ENABLED` is set to a falsy value, or when the **`ainl-extractor`** feature is off; also fires when the crate path returns no candidates |
 | Python inbox import | **`openfang_runtime::ainl_inbox_reader::drain_inbox`** — invoked from **`GraphMemoryWriter::drain_python_graph_memory_inbox`**. |
 | Blocking + streaming loops | **`agent_loop.rs`** — writer opened with **`session.agent_id`**; EndTurn graph block + spawned evolution + optional persona hook |
 | In-process delegation | **`tool_runner.rs`** — **`tool_agent_delegate`** graph write after **`send_to_agent_with_context`**. |
 | Outbound A2A | **`tool_runner.rs`** — **`tool_a2a_send`** after **`send_task`**. |
 | HTTP client only | **`a2a.rs`** — **`A2aClient::send_task`** (no graph dependency; keeps crate boundaries clean). |
 
-**Tests:** `cargo test -p openfang-runtime graph_memory_writer` (includes **`test_recall_persona_returns_persona_nodes`**). **`cargo test -p openfang-runtime --test armaraos_graph_export_json_path`** — per-agent export paths under a shared directory + default layout when **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** is unset. With default features, **`cargo test -p openfang-runtime test_persona_strength_increases_after_repeated_tool`** covers the persona turn hook (**`AINL_PERSONA_EVOLUTION=1`** inside the test). Semantic tagger bridge unit tests: **`cargo test -p openfang-runtime --lib --features ainl-tagger test_tag_fact_returns_strings`** (and **`test_tag_episode_from_tool_sequence`**). Extractor bridge integration tests: **`crates/openfang-runtime/src/tests/ainl_graph_extractor_bridge.rs`** when **`ainl-extractor`** is enabled. For **`ainl-runtime`**: **`cargo test -p ainl-runtime`** and **`cargo test -p ainl-runtime --features async`** (see **[ainl-runtime.md](ainl-runtime.md)** and **`crates/ainl-runtime/README.md`**).
+**Tests:** `cargo test -p openfang-runtime graph_memory_writer` (includes **`test_recall_persona_returns_persona_nodes`**). **`cargo test -p openfang-runtime --test armaraos_graph_export_json_path`** — per-agent export paths under a shared directory + default layout when **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** is unset. With default features, **`cargo test -p openfang-runtime test_persona_strength_increases_after_repeated_tool`** covers the persona turn hook (no env var needed — on by default). **`cargo test -p openfang-runtime --test test_persona_evolution`** covers opt-out, mismatch, noop. **`cargo test -p openfang-runtime --test test_graph_extractor`** covers the crate-primary extraction path and fallback. Semantic tagger bridge unit tests: **`cargo test -p openfang-runtime --lib --features ainl-tagger test_tag_fact_returns_strings`** (and **`test_tag_episode_from_tool_sequence`**). Extractor bridge integration tests: **`crates/openfang-runtime/src/tests/ainl_graph_extractor_bridge.rs`** when **`ainl-extractor`** is enabled. For **`ainl-runtime`**: **`cargo test -p ainl-runtime`** and **`cargo test -p ainl-runtime --features async`** (see **[ainl-runtime.md](ainl-runtime.md)** and **`crates/ainl-runtime/README.md`**).
 
 ---
 
