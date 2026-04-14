@@ -49,6 +49,8 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [ainl-runtime + GraphPatch (Rust)](ainl-runtime-graph-patch.md) | Patch **`PatchAdapter`** registry, **`GraphPatchAdapter`** summary JSON, semantic ranking migration, crates.io dependency matrix |
+| [ainl-runtime in OpenFang (optional)](ainl-runtime-integration.md) | Feature **`ainl-runtime-engine`**, bridge behavior, **`TurnOutcome`** mapping, approvals |
 | [Channel Adapters](channel-adapters.md) | 40 messaging channels -- setup, configuration, custom adapters |
 | [LLM Providers](providers.md) | 20 providers, 51 models, 23 aliases -- setup and model routing |
 | [OpenRouter defaults & fallbacks](openrouter.md) | Product default `:free` model, rate-limit fallback chain, chat error banner behavior |
@@ -60,7 +62,8 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | Guide | Description |
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
-| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, vs orchestration traces |
+| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, vs orchestration traces |
+| [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), Tokio `async` feature, verification vs daemon path |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
 | [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
@@ -134,6 +137,7 @@ See **[data-directory.md](data-directory.md)** for overrides and migration from 
 | `~/.armaraos/config.toml` | Main configuration file |
 | `~/.armaraos/data/openfang.db` | Main SQLite database (kernel / memory substrate) |
 | `~/.armaraos/agents/<id>/ainl_memory.db` | Optional per-agent **`ainl-memory`** graph store (episodes, facts, persona for LLM prompt); see [graph-memory.md](graph-memory.md), [data-directory.md](data-directory.md) |
+| `~/.armaraos/agents/<id>/ainl_graph_memory_inbox.json` | Optional Python→Rust graph inbox (drained each agent turn); [graph-memory.md](graph-memory.md), [data-directory.md](data-directory.md) |
 | `~/.armaraos/agents/<id>/bundle.ainlbundle` | Optional **AINL bundle** for scheduled **`ainl run`** round-trip; see [scheduled-ainl.md](scheduled-ainl.md) |
 | `~/.armaraos/skills/` | Installed skills |
 | `~/.armaraos/daemon.json` | Daemon PID and port info |

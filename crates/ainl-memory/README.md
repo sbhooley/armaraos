@@ -11,14 +11,17 @@ ainl-memory implements the AINL unified graph: a single typed, executable, audit
 
 Unlike systems that treat memory as a separate retrieval layer (RAG, vector stores, external graph DBs), ainl-memory makes the execution graph itself the memory substrate — no retrieval boundary, no translation step, no sync problem.
 
-## The four memory types
+## The five memory families
 
-| Type | Node | What it stores |
-|------|------|----------------|
+| Type | Node / category | What it stores |
+|------|-----------------|----------------|
 | Episodic | EpisodicNode | Agent turns, tool calls, outcomes |
 | Semantic | SemanticNode | Facts, beliefs, topic clusters |
 | Procedural | ProceduralNode | Compiled patterns, GraphPatch labels |
 | Persona | PersonaNode | Identity, evolved axis scores, dominant traits |
+| Session (runtime) | `RuntimeStateNode` (`node_type = runtime_state`) | Per-agent **persisted counters**: `turn_count`, `last_extraction_at_turn`, optional **`persona_snapshot_json`** (JSON-encoded compiled persona string), `updated_at` (unix seconds). Upserted by **ainl-runtime** so daemon restarts do not reset extraction cadence or force a cold persona compile on the first post-restart turn. |
+
+`AinlNodeKind::RuntimeState` matches the `runtime_state` SQL / JSON tag; `MemoryCategory::RuntimeState` is the same slice for exports and analytics.
 
 ## Core API
 
@@ -78,15 +81,43 @@ assert!(report.is_valid);
 // counts edges that touch this agent on one side only (informational).
 ```
 
+### Session state (`read_runtime_state` / `write_runtime_state`, v0.1.8+)
+
+Stable **one row per `agent_id`** (deterministic UUIDv5 over the agent id) — use the helpers instead of hand-rolling nodes:
+
+```rust
+use ainl_memory::{GraphMemory, RuntimeStateNode, SqliteGraphStore};
+use std::path::Path;
+
+let store = SqliteGraphStore::open(Path::new("memory.db"))?;
+let memory = GraphMemory::from_sqlite_store(store);
+
+let state = RuntimeStateNode {
+    agent_id: "my-agent".into(),
+    turn_count: 12,
+    last_extraction_at_turn: 10,
+    persona_snapshot_json: serde_json::to_string("compiled persona lines…").ok(),
+    updated_at: chrono::Utc::now().timestamp(),
+};
+memory.write_runtime_state(&state)?;
+let _loaded = memory.read_runtime_state("my-agent")?;
+
+// Scoped query (same connection):
+let q = memory.sqlite_store().query("my-agent");
+let _same = q.read_runtime_state()?;
+```
+
+Legacy rows may still carry JSON keys `last_extraction_turn`, `last_persona_prompt`, or RFC3339 `updated_at` strings; **`RuntimeStateNode`** deserializes them via serde aliases / a tolerant timestamp parser.
+
 ### `GraphMemory` forwards (runtime alignment)
 
-[`GraphMemory`](https://docs.rs/ainl-memory) also exposes `validate_graph`, `export_graph`, `import_graph`, `agent_subgraph_edges`, `write_node_with_edges`, and `insert_graph_edge_checked` so hosts like **ainl-runtime** can checkpoint or boot-gate without reaching past the high-level API.
+[`GraphMemory`](https://docs.rs/ainl-memory) also exposes `validate_graph`, `export_graph`, `import_graph`, `agent_subgraph_edges`, `write_node_with_edges`, `insert_graph_edge_checked`, **`read_runtime_state`**, and **`write_runtime_state`** so hosts like **ainl-runtime** can checkpoint or boot-gate without reaching past the high-level API.
 
 ## Crate ecosystem
 
-- **ainl-memory** — this crate (storage + query)
-- **ainl-runtime** — agent turn execution, depends on ainl-memory
-- **ainl-persona** — persona evolution engine, depends on ainl-memory
+- **ainl-memory** — this crate (storage + query); published **`0.1.8-alpha`** aligns with **`ainl-runtime` 0.3.5-alpha** / **`ainl-graph-extractor` 0.1.5** on crates.io
+- **ainl-runtime** — agent turn execution, depends on ainl-memory (+ persona, extractor, semantic-tagger)
+- **ainl-persona** — persona evolution engine, depends on ainl-memory (**use `0.1.4+`** from crates.io with memory **0.1.8-alpha**)
 - **ainl-graph-extractor** — periodic signal extraction, depends on ainl-memory + ainl-persona
 - **ainl-semantic-tagger** — deterministic text tagging, no ainl-memory dependency
 

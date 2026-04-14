@@ -144,7 +144,7 @@ ArmaraOS is organized as a Cargo workspace with **15** library crates under `cra
 | `openfang-types` | Shared type definitions, taint tracking, manifest signing (Ed25519), model catalog, MCP/A2A config types |
 | `openfang-memory` | SQLite-backed memory substrate with vector embeddings, usage tracking, canonical sessions, JSONL mirroring |
 | `ainl-memory` | Standalone graph-memory SQLite (per-agent `~/.armaraos/agents/<id>/ainl_memory.db`); crates.io package |
-| `ainl-runtime` | Standalone AINL host runtime (depends on `ainl-memory`); workspace packaging / future host wiring |
+| `ainl-runtime` | Standalone AINL host runtime (depends on `ainl-memory`); workspace packaging / future host wiring. Optional **`async`** feature: **`run_turn_async`** + Tokio **`spawn_blocking`** for graph SQLite. Verify: `cargo test -p ainl-runtime` and `cargo test -p ainl-runtime --features async` (see **`docs/ainl-runtime.md`**) |
 | `openfang-runtime` | Agent loop, 3 LLM drivers (Anthropic/Gemini/OpenAI-compat), 38 built-in tools, WASM sandbox, MCP client/server, A2A protocol |
 | `openfang-hands` | Hands system (curated autonomous capability packages), 7 bundled hands |
 | `openfang-extensions` | Integration registry (25 bundled MCP templates), AES-256-GCM credential vault, OAuth2 PKCE |

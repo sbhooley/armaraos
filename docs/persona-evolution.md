@@ -1,5 +1,11 @@
 # Persona evolution (ArmaraOS dashboard agents)
 
+| Concern | Doc / code |
+|---------|----------------|
+| SQLite paths + export file | **[graph-memory.md](graph-memory.md)** |
+| Cargo features + **`AINL_TAGGER_ENABLED`** / **`AINL_EXTRACTOR_ENABLED`** | **`crates/openfang-runtime/README.md`** |
+| This page | Axis snapshot hook (**`AINL_PERSONA_EVOLUTION`**) |
+
 ArmaraOS stores per-agent graph memory in `~/.armaraos/agents/<agent_id>/ainl_memory.db`. Persona-related rows include:
 
 - **Trait rows** — human-facing labels (e.g. `prefers_brevity`) with a scalar `strength`.

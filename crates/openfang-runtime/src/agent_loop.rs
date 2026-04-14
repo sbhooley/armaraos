@@ -1045,7 +1045,7 @@ pub async fn run_agent_loop(
                         session_user_message.len()
                     );
                     match kh
-                        .request_approval(agent_id_str, "ainl_runtime_engine", &summary)
+                        .request_approval(agent_id_str.as_str(), "ainl_runtime_engine", &summary)
                         .await
                     {
                         Ok(true) => {}
@@ -2898,7 +2898,7 @@ pub async fn run_agent_loop_streaming(
                         session_user_message_s.len()
                     );
                     match kh
-                        .request_approval(agent_id_str, "ainl_runtime_engine", &summary)
+                        .request_approval(agent_id_str.as_str(), "ainl_runtime_engine", &summary)
                         .await
                     {
                         Ok(true) => {}

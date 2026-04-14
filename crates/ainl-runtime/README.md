@@ -18,7 +18,10 @@ It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AI
 
 ### Session persistence (`RuntimeStateNode`)
 
-- **Turn counter + cadence** — completed turns persist **`turn_count`**, **`last_extraction_at_turn`**, and an optional **persona prompt cache** hint so cold starts can restore extraction rhythm and skip redundant persona SQL reads when the cache is still valid.
+- **Where it lives** — one upserted graph row per agent in **`ainl_memory.db`** (`node_type = runtime_state`), written through **`GraphMemory::write_runtime_state`** (backed by **`SqliteGraphStore::write_runtime_state`**). **`AinlRuntime::new`** calls **`GraphMemory::read_runtime_state`** before the first turn.
+- **Fields** — **`turn_count`** and **`last_extraction_at_turn`** (`u64`) keep scheduled **`GraphExtractorTask::run_pass`** aligned across process restarts. **`persona_snapshot_json`** holds **`serde_json::to_string`** output of the compiled persona contribution string (restore with **`serde_json::from_str::<String>`**) so the first post-restart turn can reuse the in-memory cache without re-querying persona nodes.
+- **Failures** — SQLite persist errors are **non-fatal**: the turn still completes, but you get **`TurnOutcome::PartialSuccess`** with a **`TurnWarning`** whose **`TurnPhase::RuntimeStatePersist`** explains the error (cadence resets on next cold start if the row never landed).
+- **Tests** — `cargo test -p ainl-runtime --test test_session_persistence` (restart simulation on a shared temp DB).
 
 ### Topic relevance (`MemoryContext::relevant_semantic`)
 
@@ -35,7 +38,7 @@ It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AI
 
 **Limits (honest):** Rust GraphPatch support is **host-dispatch / extraction only**. Python-side GraphPatch (full `memory.patch`, IR promotion, overwrite guards, engine integration) remains the rich path until a future convergence milestone.
 
-ArmaraOS integration story (openfang vs ainl-runtime): see **[`docs/ainl-runtime-graph-patch.md`](../../docs/ainl-runtime-graph-patch.md)** in the repo root.
+ArmaraOS integration docs (repo root): **[`docs/ainl-runtime-graph-patch.md`](../../docs/ainl-runtime-graph-patch.md)** (patch adapters + `MemoryContext`), **[`docs/ainl-runtime-integration.md`](../../docs/ainl-runtime-integration.md)** (optional **`openfang-runtime`** `ainl-runtime-engine` chat shim: manifest / env, build, limits).
 
 ## What v0.2 still provides
 
@@ -106,6 +109,10 @@ let out = rt.run_turn(TurnInput {
 **Target convergence:** `AinlRuntime`’s evolution engine (`EvolutionEngine` + scheduled `GraphExtractorTask::run_pass`) is the intended long-term convergence point for graph-driven persona persistence in the Rust stack.
 
 **Today:** Until ArmaraOS migrates to **ainl-runtime** as its primary execution engine, **openfang-runtime**’s `GraphMemoryWriter::run_persona_evolution_pass` is the **active** evolution write path for dashboard agents (`~/.armaraos/agents/<id>/ainl_memory.db`). Do not call `AinlRuntime::persist_evolution_snapshot` or `AinlRuntime::evolve_persona_from_graph_signals` on that same database concurrently with that pass. If you embed `AinlRuntime` next to openfang while openfang still owns evolution, chain `AinlRuntime::with_evolution_writes_enabled(false)` so those two methods return an error instead of writing.
+
+## crates.io stack (registry consumers)
+
+If you depend on **`ainl-runtime` = "0.3.5-alpha"`** from crates.io, let Cargo pick matching releases: **`ainl-memory` 0.1.8-alpha**, **`ainl-persona` 0.1.4**, **`ainl-graph-extractor` 0.1.5**, **`ainl-semantic-tagger` 0.1.2-alpha**. Older **`ainl-persona` 0.1.3** cannot pair with **`ainl-memory` 0.1.8-alpha** in the same graph (resolver conflict). See **`docs/ainl-runtime-graph-patch.md`** (dependency table).
 
 ## License
 

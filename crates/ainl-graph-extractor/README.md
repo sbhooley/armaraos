@@ -28,7 +28,7 @@ fn main() -> Result<(), String> {
 
 ## Status
 
-**Alpha (`0.1.0-alpha`).** API surface is intentionally small; internal modules may move as extraction rules evolve.
+**Alpha — current crate version `0.1.5` on crates.io** (workspace may match). Registry releases depend on **`ainl-memory` 0.1.8-alpha** and **`ainl-persona` 0.1.4** so they resolve together with **`ainl-runtime` 0.3.5-alpha**. API surface is intentionally small; internal modules may move as extraction rules evolve.
 
 ## License
 

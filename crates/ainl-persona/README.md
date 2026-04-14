@@ -34,7 +34,7 @@ fn main() -> Result<(), String> {
 
 ## Status
 
-**Alpha (`0.1.0-alpha`).** Scope is the evolution pipeline and shared constants for downstream extractors; it is not a full persona DSL.
+**Alpha — current crate version `0.1.4` on crates.io** (workspace may match). Depends on **`ainl-memory` 0.1.8-alpha** when pulled from the registry so it can sit in one resolver graph with **`ainl-graph-extractor` 0.1.5** and **`ainl-runtime` 0.3.5-alpha**. Scope is the evolution pipeline and shared constants for downstream extractors; it is not a full persona DSL.
 
 ## License
 

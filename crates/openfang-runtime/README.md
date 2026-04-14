@@ -44,3 +44,28 @@ Slim build without the crates.io dependency:
 ```bash
 cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution
 ```
+
+## Optional ainl-runtime turn path (`ainl-runtime-engine`)
+
+Cargo feature **`ainl-runtime-engine`** links workspace **`ainl-runtime`** (with crate feature **`async`**) and installs **`AinlRuntimeBridge`**. When **compiled in**, a chat turn can be handled entirely by **`AinlRuntime::run_turn`** (graph memory + extraction orchestration) **instead of** the default LLM + tool loop, if **either**:
+
+- the agent manifest sets **`ainl_runtime_engine = true`**, or
+- the process environment sets **`AINL_RUNTIME_ENGINE=1`**.
+
+Graph memory (`ainl_memory.db`) must open successfully; otherwise the runtime logs a warning and keeps the normal loop. This path does **not** call the LLM, does **not** run approvals, and does **not** emit streaming token events.
+
+**Operator / embedder doc:** **`docs/ainl-runtime-integration.md`** (build, activation, limitations, troubleshooting, roadmap).
+
+**Build:**
+
+```bash
+cargo build -p openfang-runtime --features ainl-runtime-engine
+```
+
+**Tests:**
+
+```bash
+cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime test_agent_loop_uses_openfang_by_default
+```
+
+**Daemon note:** `openfang-kernel` does not enable this feature by default; shipping the shim in production binaries requires forwarding **`features = ["ainl-runtime-engine"]`** on the `openfang-runtime` dependency (or an equivalent workspace feature) in your packaging graph.

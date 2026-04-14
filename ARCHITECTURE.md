@@ -14,7 +14,7 @@ This document describes the architectural layering of ArmaraOS, from upstream Op
 
 - **openfang-types**: Core type definitions for agents, tools, memory, events
 - **openfang-memory**: SQLite-backed memory substrate (episodic, semantic, knowledge graph)
-- **openfang-runtime**: Agent execution engine, tool runner, loop guard
+- **openfang-runtime**: Agent execution engine, tool runner, loop guard; optional Cargo feature **`ainl-runtime-engine`** routes a turn through **`ainl-runtime`** (`AinlRuntime::run_turn`) instead of the LLM loop when enabled per manifest / env — see **`docs/ainl-runtime-integration.md`**
 - **openfang-kernel**: Agent lifecycle, orchestration, kernel handle trait
 - **openfang-api**: HTTP API server (Axum) for dashboard and programmatic access
 - **openfang-cli**: Command-line interface and interactive TUI
@@ -102,7 +102,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 **Date**: April 12, 2026  
 **Integration**: `openfang-runtime` agent loop + `tool_runner` (delegation, A2A, tools, persona)
 
-**Execution engine (Rust):** `openfang-runtime` is the daemon's **current** Rust execution engine—agent loop, tool runner, loop guard, and graph-memory wiring all live here. The separately published **`ainl-runtime`** crate (also in this workspace) is **not** wired into the ArmaraOS daemon today; treating **`openfang-runtime` ↔ `ainl-runtime`** convergence as a single execution stack is a **roadmap** item, not current architecture. **`ainl-runtime`**’s optional **`async`** path (`run_turn_async`) uses **`tokio::task::spawn_blocking`** for SQLite while keeping graph memory under **`Arc<std::sync::Mutex<_>>`** (not **`tokio::sync::Mutex`**) so embedders can construct the runtime and take short store borrows from any thread without Tokio async-mutex **`blocking_lock`** pitfalls—see **`crates/ainl-runtime/README.md`**.
+**Execution engine (Rust):** `openfang-runtime` is the daemon's **current** Rust execution engine—agent loop, tool runner, loop guard, and graph-memory wiring all live here. The separately published **`ainl-runtime`** crate (also in this workspace) is **not** wired into the ArmaraOS daemon today; treating **`openfang-runtime` ↔ `ainl-runtime`** convergence as a single execution stack is a **roadmap** item, not current architecture. **`ainl-runtime`**’s optional **`async`** path (`run_turn_async`) uses **`tokio::task::spawn_blocking`** for SQLite while keeping graph memory under **`Arc<std::sync::Mutex<_>>`** (not **`tokio::sync::Mutex`**) so embedders can construct the runtime and take short store borrows from any thread without Tokio async-mutex **`blocking_lock`** pitfalls—see **`docs/ainl-runtime.md`** and **`crates/ainl-runtime/README.md`**.
 
 ### Vision
 
@@ -128,7 +128,9 @@ SQLite database schema (`~/.armaraos/memory.db`):
   - `tool_runner.rs` — `tool_agent_delegate`: after successful send, `record_turn` with optional serialized `OrchestrationTraceEvent` JSON; `tool_a2a_send`: `record_delegation` after `A2aClient::send_task` (stays in `tool_runner` so `caller_agent_id` exists).
   - **`graph_extractor.rs` (local heuristic):** Post-turn **regex / structural** extraction of semantic facts and tool-sequence patterns into the **Rust** graph (`extract_facts`, `extract_pattern`). This module is **not** the published **`ainl-graph-extractor`** crate; the names are easy to confuse. **Roadmap:** replace the in-tree heuristic extractor with **`ainl-graph-extractor`** + **`ainl-semantic-tagger`** for structured extraction and tagging aligned with the AINL tool chain.
 
-Operator reference: **`docs/graph-memory.md`**.
+- **`ainl-runtime` crate (workspace, optional host):** Turn orchestration over the same **`ainl-memory`** SQLite (`run_turn`, optional **`run_turn_async`** + feature **`async`**). Hub doc: **`docs/ainl-runtime.md`**. GraphPatch / patch adapters: **`docs/ainl-runtime-graph-patch.md`**.
+
+Operator reference: **`docs/graph-memory.md`**, **`docs/ainl-runtime.md`**.
 
 ### Node Types
 
@@ -227,7 +229,7 @@ ArmaraOS maintains API compatibility with OpenFang:
 | ainl-persona | 3 | Persona model + evolution APIs (`EvolutionEngine`, etc.) | **Integrated** — feature `ainl-persona-evolution` (**default ON**); post-turn evolution + prompt merge in `agent_loop.rs` / `graph_memory_writer.rs` |
 | ainl-graph-extractor | 3 | Structured graph extraction (published / workspace crate) | **Integrated** — feature `ainl-extractor` (**default ON**); `ainl_graph_extractor_bridge.rs` + `graph_extractor.rs` fallback; runtime gate `AINL_EXTRACTOR_ENABLED` |
 | ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Integrated** — feature `ainl-tagger` (**default ON**); `ainl_semantic_tagger_bridge.rs`; runtime gate `AINL_TAGGER_ENABLED` |
-| ainl-runtime | 3 | Standalone AINL execution stack (workspace + publish target); reference GraphPatch envelope + host hook (`GraphPatchAdapter`); integration notes in `docs/ainl-runtime-graph-patch.md` | **Optional shim** — feature `ainl-runtime-engine` (**default OFF**); `ainl_runtime_bridge.rs`; approval gate pseudo-tool `ainl_runtime_engine`; step-based `cost_estimate` + kernel metering rollup |
+| ainl-runtime | 3 | Standalone AINL execution stack (workspace + **crates.io**); procedural **`PatchAdapter`** registry + **`GraphPatchAdapter`** fallback JSON (`label`, `patch_version`, `frame_keys`); topic-ranked **`MemoryContext::relevant_semantic`**; **`TurnOutcome`** / **`TurnWarning`** / **`TurnPhase`**; docs in **`docs/ainl-runtime-graph-patch.md`**, **`docs/ainl-runtime-integration.md`**, **`crates/ainl-runtime/README.md`** | **Optional shim** — feature `ainl-runtime-engine` (**default OFF**); `ainl_runtime_bridge.rs`; approval gate pseudo-tool `ainl_runtime_engine`; step-based `cost_estimate` + kernel metering rollup |
 
 ---
 

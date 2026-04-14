@@ -1,7 +1,14 @@
-//! Optional **ainl-runtime** orchestration shim (feature `ainl-runtime-engine`).
+//! Optional **ainl-runtime** orchestration shim (Cargo feature **`ainl-runtime-engine`**).
 //!
-//! Hosts a second SQLite connection to the same `ainl_memory.db` as [`crate::graph_memory_writer::GraphMemoryWriter`].
-//! OpenFang remains the default execution path; see `docs/ainl-runtime-integration.md`.
+//! - Opens a **second** [`ainl_memory::SqliteGraphStore`] handle to the same `ainl_memory.db` as
+//!   [`crate::graph_memory_writer::GraphMemoryWriter`] (see [`GraphMemoryWriter::sqlite_database_path_for_agent`]).
+//! - Wraps [`ainl_runtime::AinlRuntime`] with **`evolution_writes_enabled(false)`** so OpenFang keeps writing the
+//!   evolution persona row; registers [`ainl_runtime::GraphPatchAdapter::with_host`] for patch summary logging.
+//! - Exposes [`AinlRuntimeBridge::run_turn`] / [`AinlRuntimeBridge::run_turn_async`] and maps
+//!   [`ainl_runtime::TurnOutcome`] into this module’s [`TurnOutcome`] for session text + tracing.
+//!
+//! **Operator guide:** `docs/ainl-runtime-integration.md`. Default chat execution stays in [`crate::agent_loop`]
+//! unless manifest **`ainl_runtime_engine`** or **`AINL_RUNTIME_ENGINE=1`** is set (and graph memory opens).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +20,7 @@ use ainl_runtime::{
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::graph_memory_writer::GraphMemoryWriter;
 

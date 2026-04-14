@@ -2,9 +2,11 @@
 
 This document is the **host-facing bridge** between ArmaraOS’s SQLite graph memory (`ainl_memory.db`, written primarily by **openfang-runtime** today) and the standalone **`ainl-runtime`** crate’s procedural patch dispatch.
 
+**Hub doc** (sync vs async API, verification, mutex design): **[ainl-runtime.md](ainl-runtime.md)**.
+
 ## Current architecture (honest)
 
-- **Dashboard / daemon execution** still runs in **`openfang-runtime`**. It does **not** call `AinlRuntime::run_turn` yet.
+- **Dashboard / daemon execution** still runs in **`openfang-runtime`**. The **default** chat path is the OpenFang LLM loop; an **optional** embed can call `AinlRuntime::run_turn` when Cargo feature **`ainl-runtime-engine`** is enabled **and** the agent sets `ainl_runtime_engine = true` or the process sets `AINL_RUNTIME_ENGINE=1` — see **`docs/ainl-runtime-integration.md`**.
 - **`ainl-runtime`** is a **separate** orchestration crate: `run_turn` loads `MemoryContext`, dispatches **active procedural** rows from `GraphQuery::active_patches`, records episodes, optional extraction, etc.
 - **Full Python GraphPatch** (IR promotion, `memory.patch`, compile-time checks in AINL) is **not reimplemented** in Rust. The Rust path is **metadata + small JSON summaries from patch adapters** so a host can decide what to execute.
 
@@ -15,6 +17,25 @@ For Tokio embedders, **`ainl-runtime`** can offload SQLite-heavy work with **`Ai
 ## Where patches come from
 
 `MemoryContext.active_patches` is `Vec<AinlMemoryNode>` where each node is `AinlNodeType::Procedural` with a [`ProceduralNode`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-memory/src/node.rs) payload: `label` / `pattern_name`, `patch_version`, `declared_reads`, `fitness`, `retired`, `compiled_graph` (`Vec<u8>`), `procedure_type`, etc. The same JSON shape is what Python `ainl_graph_memory` uses for procedural / patch-style rows at a higher layer.
+
+## PatchAdapter registry (label dispatch)
+
+- Implement [`PatchAdapter`](https://github.com/sbhooley/armaraos/blob/main/crates/ainl-runtime/src/adapters/mod.rs) (`name`, `execute_patch`) and register with **`AinlRuntime::register_adapter`**.
+- Each active procedural row is dispatched by **procedural `label`**: lookup **`adapter_registry.get(label)`**, else fallback to the built-in **`graph_patch`** adapter when **`register_default_patch_adapters()`** has been called.
+- **`PatchDispatchResult`** records **`adapter_name`** and optional **`adapter_output`** (`serde_json::Value`) on success; **`Err`** from **`execute_patch`** is logged and the turn continues with metadata-only dispatch (fitness update still applies when the node persists).
+
+## crates.io dependency alignment
+
+When consuming **`ainl-runtime`** from the registry (not path deps), Cargo resolves the **exact** versions declared in that release’s `Cargo.toml`. For **`ainl-runtime` 0.3.5-alpha**, use compatible releases:
+
+| Crate | Minimum / matching version on crates.io |
+|-------|----------------------------------------|
+| **ainl-memory** | **0.1.8-alpha** |
+| **ainl-persona** | **0.1.4** (0.1.3 caps `ainl-memory` at ^0.1.7-alpha and conflicts with graph-extractor + memory 0.1.8) |
+| **ainl-graph-extractor** | **0.1.5** |
+| **ainl-semantic-tagger** | **0.1.2-alpha** |
+
+Workspace **path** dependencies sidestep this; **`cargo publish -p ainl-runtime`** validates the tarball against the index.
 
 ## What to register
 
@@ -32,12 +53,12 @@ For Tokio embedders, **`ainl-runtime`** can offload SQLite-heavy work with **`Ai
 
 See **`crates/ainl-runtime/README.md`** and the **`ainl-runtime`** crate rustdoc (`MemoryContext`) for the same note.
 
-## Future: openfang-runtime
+## openfang-runtime embed (shipped)
 
-When **openfang-runtime** embeds `AinlRuntime` for a turn, the intended wiring is:
+**`AinlRuntimeBridge`** (feature **`ainl-runtime-engine`**) implements the first three bullets in a **thin** form:
 
-1. Open the same `SqliteGraphStore` / agent id as the dashboard writer (or a read replica — **not** concurrent writers on the same evolution row; see `AinlRuntime` rustdoc on `evolution_writes_enabled`).
-2. Call `register_default_patch_adapters()` (and any label-specific `PatchAdapter`s).
-3. Consume `TurnOutput.patch_dispatch_results` and/or the host hook envelope to drive tool execution outside the minimal Rust runtime.
+1. Opens a **second** `SqliteGraphStore` connection to the same `ainl_memory.db` path as `GraphMemoryWriter` (see **`docs/ainl-runtime-integration.md`**).
+2. Registers **`GraphPatchAdapter::with_host`** for logging (label / patch_version / frame_keys summaries).
+3. Maps **`TurnOutcome`** to host logging and an assistant reply string; **full** tool execution from patch results is still **not** wired.
 
-Until that wiring lands, treat this path as **library + tests + docs**, not daemon behavior.
+Further work (tool runner from patch dispatch, streaming, dashboard parity) is tracked in **`docs/ainl-runtime-integration.md`** under **Convergence roadmap**.

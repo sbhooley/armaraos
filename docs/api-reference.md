@@ -1026,7 +1026,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 
 ### GET /api/status
 
-Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, and `uptime_seconds`.
+Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, `uptime_seconds`, and **`openfang_runtime_ainl`**: booleans for which **`openfang-runtime`** Cargo features were compiled into this binary (`ainl_extractor`, `ainl_tagger`, `ainl_persona_evolution`, `ainl_runtime_engine`). Use this for cross-version tooling (e.g. Python bridge capability checks without shelling to `rustc`).
 
 **Response** `200 OK`:
 
@@ -1044,6 +1044,12 @@ Detailed kernel status including all agents. Includes `config_schema_version` (e
   "network_enabled": false,
   "config_schema_version": 1,
   "config_schema_version_binary": 1,
+  "openfang_runtime_ainl": {
+    "ainl_extractor": true,
+    "ainl_tagger": true,
+    "ainl_persona_evolution": true,
+    "ainl_runtime_engine": false
+  },
   "agents": [
     {
       "id": "a1b2c3d4-...",
