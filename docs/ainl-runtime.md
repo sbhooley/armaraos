@@ -96,7 +96,7 @@ Full rationale: **`crates/ainl-runtime/README.md`** (*Optional Tokio API*).
 | **[ainl-runtime-integration.md](ainl-runtime-integration.md)** | Feature **`ainl-runtime-engine`**, **`AinlRuntimeBridge`**, **`TurnOutcome`** mapping. |
 | **[graph-memory.md](graph-memory.md)** | **`GraphMemoryWriter`**, **`ainl_memory.db`**, Python inbox, **`runtime_state`**. |
 | **[persona-evolution.md](persona-evolution.md)** | **`AINL_PERSONA_EVOLUTION`**, **`run_persona_evolution_pass`** / **`ExtractionReport`**. |
-| **[architecture.md](architecture.md)** | Workspace crate table (**`ainl-runtime`** row mentions **`async`**). |
+| **[architecture.md](architecture.md)** | Workspace crate table (**`ainl-runtime`** row: **`async`**, delegation depth). |
 | Root **[ARCHITECTURE.md](../ARCHITECTURE.md)** | Layer 3 graph substrate; execution engine vs **`ainl-runtime`** roadmap. |
 
 ---
@@ -116,6 +116,9 @@ cargo clippy -p ainl-runtime --all-targets --features async -- -D warnings
 
 # Session persistence integration test (explicit test target)
 cargo test -p ainl-runtime --test test_session_persistence
+
+# Delegation depth (internal counter, DelegationDepthExceeded, reset paths)
+cargo test -p ainl-runtime --test test_delegation_depth
 
 # ExtractionReport → TurnPhase warning mapping
 cargo test -p ainl-runtime --test test_turn_phase_granularity
