@@ -49,7 +49,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
-| [ainl-runtime doc hub](ainl-runtime.md) | **`AinlRuntime`** overview: sync vs **`run_turn_async`** (**`async`** feature), **`TurnOutcome`** / **`TurnPhase`** (including per-slot **`ExtractionReport`** → **`ExtractionPass`** / **`PatternPersistence`** / **`PersonaEvolution`**), session **`runtime_state`**, mutex / **`spawn_blocking`** design, `cargo test` / clippy matrix |
+| [ainl-runtime doc hub](ainl-runtime.md) | **`AinlRuntime`** overview: sync vs **`run_turn_async`** (**`async`** feature), internal **delegation depth** / **`AinlRuntimeError`**, **`TurnOutcome`** / **`TurnPhase`** (including per-slot **`ExtractionReport`** → **`ExtractionPass`** / **`PatternPersistence`** / **`PersonaEvolution`**), session **`runtime_state`**, mutex / **`spawn_blocking`** design, `cargo test` / clippy matrix |
 | [ainl-runtime + GraphPatch (Rust)](ainl-runtime-graph-patch.md) | Patch **`PatchAdapter`** registry, **`GraphPatchAdapter`** summary JSON, semantic ranking migration, delegation depth / hard errors, crates.io dependency matrix |
 | [ainl-runtime in OpenFang (optional)](ainl-runtime-integration.md) | Feature **`ainl-runtime-engine`**, bridge behavior, **`TurnOutcome`** mapping, approvals |
 | [Channel Adapters](channel-adapters.md) | 40 messaging channels -- setup, configuration, custom adapters |
@@ -65,7 +65,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
 | [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, post-turn **`ExtractionReport`** (per-phase errors + **`warn!`** slots), optional **`runtime_state`** when **`ainl-runtime`** shares the DB; **`AINL_EXTRACTOR_ENABLED`** / **`AINL_TAGGER_ENABLED`** (**tagger: only** `1`) / **`AINL_PERSONA_EVOLUTION`**; vs orchestration traces |
 | [Persona evolution (axis hook)](persona-evolution.md) | **`AINL_PERSONA_EVOLUTION`** (truthy), **`PersonaEvolutionHook`** after **`run_persona_evolution_pass`**, axis snapshot growth/decay |
-| [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), Tokio `async` feature, verification vs daemon path |
+| [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), delegation depth (**`DelegationDepthExceeded`**), Tokio `async` feature, verification vs daemon path |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
 | [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
