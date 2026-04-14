@@ -6,6 +6,11 @@
 //!
 //! This is the wire that makes ainl-memory non-dead-code in the binary and
 //! fulfills the architectural claim: execution IS the memory.
+//!
+//! **Export:** [`GraphMemoryWriter::export_graph_json`] and [`GraphMemoryWriter::export_graph_json_for_agent`]
+//! call into **ainl-memory**’s graph export (same JSON shape as `AgentGraphSnapshot`). CLI:
+//! `openfang memory graph-export <agent> --output path.json`. Python `ainl_graph_memory` can seed reads
+//! from that file via `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang** `docs/adapters/AINL_GRAPH_MEMORY.md`).
 
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
@@ -142,7 +147,15 @@ impl GraphMemoryWriter {
     }
 
     /// Record a procedural pattern node (named tool workflow).
-    pub async fn record_pattern(&self, name: &str, tool_sequence: Vec<String>, confidence: f32) {
+    ///
+    /// When `trace_id` is set, it is stored on [`ainl_memory::ProceduralNode::trace_id`] for export / Python bridge correlation.
+    pub async fn record_pattern(
+        &self,
+        name: &str,
+        tool_sequence: Vec<String>,
+        confidence: f32,
+        trace_id: Option<String>,
+    ) {
         let res = {
             let inner = self.inner.lock().await;
             let mut node = AinlMemoryNode::new_procedural_tools(
@@ -151,6 +164,9 @@ impl GraphMemoryWriter {
                 confidence,
             );
             node.agent_id = self.agent_id.clone();
+            if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+                procedural.trace_id = trace_id;
+            }
             let id = node.id;
             inner.write_node(&node).map(|()| id)
         };
@@ -268,6 +284,13 @@ impl GraphMemoryWriter {
     /// lightweight [`ainl_persona::EvolutionEngine::correction_tick`] on every axis toward `0.5`
     /// and persists **only if** this agent already had at least one [`PersonaNode`] in the store
     /// before this pass — skipping the meaningless neutral bootstrap on a brand-new graph.
+    ///
+    /// **ArmaraOS / openfang-runtime:** this method is the **active** evolution write path for
+    /// agents backed by `~/.armaraos/agents/<id>/ainl_memory.db`. Any other host that persists the
+    /// same [`ainl_persona::EVOLUTION_TRAIT_NAME`] row for that DB (for example the `ainl-runtime`
+    /// crate’s `AinlRuntime::persist_evolution_snapshot` / `evolve_persona_from_graph_signals`) must
+    /// coordinate so those calls are not concurrent with this pass, or disable the other writer
+    /// (see the `ainl-runtime` README).
     ///
     /// Call after episode + fact writes so `GraphExtractor` sees fresh nodes. Intended to be
     /// `tokio::spawn`’d from the agent loop so the user-visible turn is not blocked.
@@ -559,5 +582,32 @@ mod tests {
         } else {
             panic!("wrong node type");
         }
+    }
+
+    #[tokio::test]
+    async fn record_pattern_with_trace_id_stores_trace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("record_pat_trace.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "pat-trace-agent".to_string(),
+            on_write: None,
+        };
+        writer
+            .record_pattern(
+                "demo_pat",
+                vec!["tool_a".into(), "tool_b".into()],
+                0.85,
+                Some("trace-z99".into()),
+            )
+            .await;
+        let v = writer.export_graph_json().await.expect("export");
+        let nodes = v["nodes"].as_array().expect("nodes");
+        let proc_json = nodes
+            .iter()
+            .find(|n| n["node_type"]["type"] == "procedural")
+            .expect("procedural in export");
+        assert_eq!(proc_json["node_type"]["trace_id"], "trace-z99");
     }
 }

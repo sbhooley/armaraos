@@ -2,6 +2,16 @@
 //!
 //! The agent loop handles receiving a user message, recalling relevant memories,
 //! calling the LLM, executing tool calls, and saving the conversation.
+//!
+//! ## AINL graph memory (`GraphMemoryWriter` / `ainl_memory.db`)
+//!
+//! [`run_agent_loop`] and [`run_agent_loop_streaming`] **always** attempt to open
+//! [`crate::graph_memory_writer::GraphMemoryWriter`] for `session.agent_id` at loop start.
+//! The `graph_memory` binding is `None` only when that open fails (permissions, disk, schema,
+//! etc.); there is no alternate code path that skips the writer for “normal” agents.
+//! When open succeeds, post-turn persistence (`record_turn`, `record_fact_with_tags`,
+//! `record_pattern`, spawned `run_persona_evolution_pass`) uses the same handle for both
+//! streaming and non-streaming loops.
 
 use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
@@ -77,6 +87,23 @@ fn graph_memory_trace_fact_tags(
         .filter(|o| !o.trace_id.is_empty())
         .map(|o| vec![format!("trace_id:{}", o.trace_id)])
         .unwrap_or_default()
+}
+
+fn graph_memory_pattern_trace_id(
+    orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+) -> Option<String> {
+    orchestration_ctx
+        .as_ref()
+        .filter(|o| !o.trace_id.is_empty())
+        .map(|o| o.trace_id.clone())
+}
+
+/// Expected per-agent SQLite path (must stay aligned with [`crate::graph_memory_writer::GraphMemoryWriter`]).
+fn graph_memory_expected_db_path(agent_id: &openfang_types::agent::AgentId) -> std::path::PathBuf {
+    openfang_types::config::openfang_home_dir()
+        .join("agents")
+        .join(agent_id.to_string())
+        .join("ainl_memory.db")
 }
 
 /// Maximum retries for rate-limited or overloaded API calls.
@@ -559,10 +586,12 @@ pub async fn run_agent_loop(
                 ) {
                     Ok(gm) => Some(gm),
                     Err(e) => {
+                        let expected_db = graph_memory_expected_db_path(&session.agent_id);
                         warn!(
                             agent_id = %session.agent_id,
                             error = %e,
-                            "AINL graph memory: writer unavailable (episodes/facts will not persist to ainl_memory.db)"
+                            expected_db = %expected_db.display(),
+                            "AINL graph memory: writer unavailable — episodes, facts, patterns, persona prompt hook, and evolution will not run for this agent until the DB opens successfully (check path and permissions)"
                         );
                         None
                     }
@@ -1143,14 +1172,15 @@ pub async fn run_agent_loop(
                     let turn_trace =
                         graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
                     let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
+                    let pattern_trace_id = graph_memory_pattern_trace_id(&orchestration_ctx);
                     if let Some(episode_id) = gm
-                        .record_turn(tools_for_episode, None, turn_trace)
+                        .record_turn(tools_for_episode.clone(), None, turn_trace)
                         .await
                     {
                         let facts = crate::graph_extractor::extract_facts_for_turn(
                             session_user_message,
                             &final_response,
-                            &turn_tool_names,
+                            &tools_for_episode,
                         );
                         for fact in facts {
                             gm.record_fact_with_tags(
@@ -1168,6 +1198,7 @@ pub async fn run_agent_loop(
                                 &pattern.name,
                                 pattern.tool_sequence,
                                 pattern.confidence,
+                                pattern_trace_id.clone(),
                             )
                             .await;
                         }
@@ -2321,10 +2352,12 @@ pub async fn run_agent_loop_streaming(
                 ) {
                     Ok(gm) => Some(gm),
                     Err(e) => {
+                        let expected_db = graph_memory_expected_db_path(&session.agent_id);
                         warn!(
                             agent_id = %session.agent_id,
                             error = %e,
-                            "AINL graph memory: writer unavailable (episodes/facts will not persist to ainl_memory.db)"
+                            expected_db = %expected_db.display(),
+                            "AINL graph memory: writer unavailable — episodes, facts, patterns, persona prompt hook, and evolution will not run for this agent until the DB opens successfully (check path and permissions)"
                         );
                         None
                     }
@@ -2919,14 +2952,15 @@ pub async fn run_agent_loop_streaming(
                     let turn_trace =
                         graph_memory_turn_trace_json(agent_id_str.as_str(), &orchestration_ctx);
                     let trace_tags = graph_memory_trace_fact_tags(&orchestration_ctx);
+                    let pattern_trace_id = graph_memory_pattern_trace_id(&orchestration_ctx);
                     if let Some(episode_id) = gm
-                        .record_turn(tools_for_episode, None, turn_trace)
+                        .record_turn(tools_for_episode.clone(), None, turn_trace)
                         .await
                     {
                         let facts = crate::graph_extractor::extract_facts_for_turn(
                             session_user_message_s,
                             &final_response,
-                            &turn_tool_names,
+                            &tools_for_episode,
                         );
                         for fact in facts {
                             gm.record_fact_with_tags(
@@ -2944,6 +2978,7 @@ pub async fn run_agent_loop_streaming(
                                 &pattern.name,
                                 pattern.tool_sequence,
                                 pattern.confidence,
+                                pattern_trace_id.clone(),
                             )
                             .await;
                         }

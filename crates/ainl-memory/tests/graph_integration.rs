@@ -255,6 +255,7 @@ fn test_metadata_roundtrip_all_categories() {
         procedural.last_invoked_at = 1234;
         procedural.reinforcement_episode_ids = vec!["e1".into()];
         procedural.suppression_episode_ids = vec!["e2".into()];
+        procedural.trace_id = Some("proc-trace-roundtrip".into());
     }
 
     let mut per = AinlMemoryNode::new_persona("trait_x".into(), 0.55, vec![tid]);

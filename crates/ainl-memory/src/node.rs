@@ -286,6 +286,9 @@ pub struct ProceduralNode {
     /// IR label for graph-patch identity (empty → runtimes may fall back to [`Self::pattern_name`]).
     #[serde(default)]
     pub label: String,
+    /// Optional orchestration / turn correlation id (same namespace as episodic `trace_event.trace_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 impl ProceduralNode {
@@ -501,6 +504,7 @@ impl AinlMemoryNode {
             declared_reads: Vec::new(),
             retired: false,
             label: String::new(),
+            trace_id: None,
         };
         procedural.recompute_success_rate();
         Self::base(
@@ -535,6 +539,7 @@ impl AinlMemoryNode {
             declared_reads: Vec::new(),
             retired: false,
             label: String::new(),
+            trace_id: None,
         };
         procedural.recompute_success_rate();
         Self::base(
