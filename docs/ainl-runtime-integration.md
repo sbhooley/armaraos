@@ -2,7 +2,7 @@
 
 This guide covers the **optional** path that routes a **chat turn** through the Rust **`ainl-runtime`** orchestration layer (`run_turn` / `run_turn_async`) instead of the default OpenFang LLM + tool loop. It complements:
 
-- **`docs/ainl-runtime.md`** — hub: what the crate does, **`async`** feature, **`std::sync::Mutex`** vs **`tokio::sync::Mutex`**, verification commands.
+- **`docs/ainl-runtime.md`** — hub: what the crate does, delegation depth / **`AinlRuntimeError`**, **`async`** feature, **`std::sync::Mutex`** vs **`tokio::sync::Mutex`**, verification commands.
 - **`docs/ainl-runtime-graph-patch.md`** — procedural patch adapters, `MemoryContext`, and how **`GraphPatchAdapter`** fits the graph.
 - **`crates/ainl-runtime/README.md`** — crate-level behavior, delegation depth, async SQLite notes.
 

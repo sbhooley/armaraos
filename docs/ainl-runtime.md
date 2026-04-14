@@ -1,6 +1,6 @@
 # ainl-runtime — documentation hub
 
-The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over the same SQLite graph as the daemon (**`ainl-memory`** / **`ainl_memory.db`**). It is **not** the Python AINL `RuntimeEngine`, **not** the MCP server, and **not** the default ArmaraOS chat path today — **`openfang-runtime`** owns live execution. Use **`ainl-runtime`** for tests, tooling, or optional embedding behind feature **`ainl-runtime-engine`** (see **[ainl-runtime-integration.md](ainl-runtime-integration.md)**).
+The **`ainl-runtime`** crate is a **standalone Rust orchestration layer** over the same SQLite graph as the daemon (**`ainl-memory`** / **`ainl_memory.db`**). It is **not** the Python AINL `RuntimeEngine`, **not** the MCP server, and **not** the default ArmaraOS chat path today — **`openfang-runtime`** owns live execution. Use **`ainl-runtime`** for tests, tooling, or optional embedding behind feature **`ainl-runtime-engine`** (see **[ainl-runtime-integration.md](ainl-runtime-integration.md)**). Nested **`run_turn`** / **`run_turn_async`** depth is enforced **inside** the runtime (**`DelegationDepthExceeded`**); **`TurnInput::depth`** is metadata only — see **Delegation depth and `AinlRuntimeError`** below.
 
 ## Where to read next
 
