@@ -25,14 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`crates/openfang-runtime/README.md`** — default features; **`AINL_TAGGER_ENABLED`** (**only** literal **`1`**) vs truthy **`AINL_EXTRACTOR_ENABLED`**; **`run_persona_evolution_pass`** return type with vs without **`ainl-extractor`** (**warn!** per **ExtractionReport** slot, **TurnPhase** parity with **`AinlRuntime::run_turn`**); test commands for **`ainl-tagger`**.
 - **`crates/openfang-runtime/src/graph_memory_writer.rs`** — module doc: post-turn episode + batch semantic/procedural writes.
 - **Root `ARCHITECTURE.md`** — Layer 3 **`openfang-runtime`** wiring and episode / semantic **`tags`** on exported nodes; **`ainl-runtime`** bullets / crate table: internal delegation depth (**`DelegationDepthExceeded`**), **`TurnInput::depth`** metadata.
-- **`CLAUDE.md`** — graph-memory overview: **`ExtractionReport`** per-slot **`warn!`** vs **`ainl-runtime`** **`TurnPhase`** **`TurnWarning`**s; **`ainl-runtime`** sentence adds internal **`max_delegation_depth`** / **`DelegationDepthExceeded`** (**`TurnInput::depth`** metadata only).
+- **`CLAUDE.md`** — graph-memory + **`ainl-runtime`** blurb: **`ExtractionReport`** per-slot **`warn!`** vs **`TurnPhase`** **`TurnWarning`**s; internal **`max_delegation_depth`** / **`DelegationDepthExceeded`**; **`TurnInput::depth`** metadata only.
 - **`crates/ainl-graph-extractor/README.md`** — **`GraphExtractorTask`** vs **`run_extraction_pass`**, **`ExtractionReport`** per-phase error slots, example + test commands.
 - **`crates/ainl-graph-extractor/src/lib.rs`** / **`crates/ainl-memory/src/lib.rs`** — crate-level rustdoc for **`ExtractionReport`** and runtime state nodes.
 - **`.env.example`** — commented graph-memory toggles with cross-links to **`docs/graph-memory.md`**, **`docs/persona-evolution.md`**, **`crates/openfang-runtime/README.md`**.
 - **`crates/ainl-runtime/src/engine.rs`** — **`TurnPhase`** rustdoc: per-variant meaning + mapping from **`ainl_graph_extractor::ExtractionReport`** error slots.
 - **`crates/ainl-runtime/src/lib.rs`** — async paragraph links **`docs/ainl-runtime.md`**; crate-level note on **`ExtractionReport`** → **`TurnWarning`** / **`TurnPhase`** tagging.
 - **`crates/ainl-runtime/tests/test_async_runtime.rs`** — module doc points to hub doc.
-- **`CLAUDE.md`** — graph-memory / **`ainl-runtime`** blurb: internal **`max_delegation_depth`** / **`DelegationDepthExceeded`**, **`TurnInput::depth`** metadata.
 - **`CONTRIBUTING.md`** — **`ainl-runtime`** crate row: delegation depth + **`cargo test -p ainl-runtime --test test_delegation_depth`**.
 
 ### Changed (workspace crates)
