@@ -268,6 +268,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
     // Snapshot catalog once for enrichment
     let catalog = state.kernel.model_catalog.read().ok();
     let dm = &state.kernel.config.default_model;
+    let home_dir = state.kernel.config.home_dir.clone();
 
     let agents: Vec<serde_json::Value> = state
         .kernel
@@ -308,6 +309,17 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
             let ready = matches!(e.state, openfang_types::agent::AgentState::Running)
                 && auth_status != "missing";
 
+            let workspace = e
+                .manifest
+                .workspace
+                .as_ref()
+                .map(|p| p.display().to_string());
+            let workspace_rel_home = e.manifest.workspace.as_ref().and_then(|p| {
+                p.strip_prefix(&home_dir)
+                    .ok()
+                    .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+            });
+
             serde_json::json!({
                 "id": e.id.to_string(),
                 "name": e.name,
@@ -320,6 +332,8 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "model_tier": tier,
                 "auth_status": auth_status,
                 "ready": ready,
+                "workspace": workspace,
+                "workspace_rel_home": workspace_rel_home,
                 "profile": e.manifest.profile,
                 "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
@@ -7472,12 +7486,33 @@ pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
         .list()
         .iter()
         .map(|e| {
-            let (tokens, tool_calls) = state.kernel.scheduler.get_usage(e.id).unwrap_or((0, 0));
+            // Prefer persistent SQLite-backed usage totals so values survive daemon
+            // restarts and desktop upgrades/reinstalls. Fall back to in-memory
+            // scheduler counters only if usage summary lookup fails.
+            let (input_tokens, output_tokens, tool_calls, cost_usd, source) =
+                match state.kernel.metering.get_summary(Some(e.id)) {
+                    Ok(s) => (
+                        s.total_input_tokens,
+                        s.total_output_tokens,
+                        s.total_tool_calls,
+                        s.total_cost_usd,
+                        "persistent",
+                    ),
+                    Err(_) => {
+                        let (tokens, tc) = state.kernel.scheduler.get_usage(e.id).unwrap_or((0, 0));
+                        (tokens, 0, tc, 0.0, "scheduler_fallback")
+                    }
+                };
+            let total_tokens = input_tokens + output_tokens;
             serde_json::json!({
                 "agent_id": e.id.to_string(),
                 "name": e.name,
-                "total_tokens": tokens,
+                "total_tokens": total_tokens,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
                 "tool_calls": tool_calls,
+                "cost_usd": cost_usd,
+                "source": source,
             })
         })
         .collect();

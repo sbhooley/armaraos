@@ -496,6 +496,32 @@ document.addEventListener('alpine:init', function() {
      * Seeded from localStorage for instant display; authoritative copy is server-side
      * in ui-prefs.json so it survives reinstalls and upgrades. */
     pinnedAgentIds: (function() { try { return JSON.parse(localStorage.getItem('armaraos-pinned-agents') || '[]'); } catch(e) { return []; } })(),
+    /** Per-agent eco mode map (`agentId -> off|balanced|aggressive`), persisted in ui-prefs.json. */
+    ecoModesByAgent: (function() { try { return JSON.parse(localStorage.getItem('armaraos-eco-modes-v1') || '{}'); } catch(e) { return {}; } })(),
+    normalizeEcoMode(mode) {
+      return (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
+    },
+
+    getAgentEcoMode(agentId, fallbackMode) {
+      var fallback = this.normalizeEcoMode(fallbackMode || 'off');
+      if (agentId == null || agentId === '') return fallback;
+      var id = String(agentId);
+      var map = this.ecoModesByAgent || {};
+      return this.normalizeEcoMode(map[id] || fallback);
+    },
+
+    setAgentEcoMode(agentId, mode) {
+      if (agentId == null || agentId === '') return;
+      var id = String(agentId);
+      var nextMode = this.normalizeEcoMode(mode);
+      var prev = this.ecoModesByAgent || {};
+      var next = Object.assign({}, prev);
+      next[id] = nextMode;
+      this.ecoModesByAgent = next;
+      try { localStorage.setItem('armaraos-eco-modes-v1', JSON.stringify(next)); } catch(e) { /* ignore */ }
+      this._saveUiPrefs();
+    },
+
     /** When inline chat is open on #agents, the agent id being viewed (null = picker). */
     agentsPageChatAgentId: null,
     /** agentId -> count of unread assistant-side updates (replaced immutably for Alpine). */
@@ -630,12 +656,29 @@ document.addEventListener('alpine:init', function() {
           this.pinnedAgentIds = prefs.pinned_agents;
           try { localStorage.setItem('armaraos-pinned-agents', JSON.stringify(prefs.pinned_agents)); } catch(e) { /* ignore */ }
         }
+        if (prefs && typeof prefs.agent_eco_modes === 'object' && prefs.agent_eco_modes !== null && !Array.isArray(prefs.agent_eco_modes)) {
+          var raw = prefs.agent_eco_modes;
+          var norm = {};
+          Object.keys(raw).forEach(function(agentId) {
+            var v = raw[agentId];
+            if (typeof v === 'string') {
+              var mode = (v === 'off' || v === 'balanced' || v === 'aggressive') ? v : null;
+              if (mode) norm[String(agentId)] = mode;
+            }
+          });
+          this.ecoModesByAgent = norm;
+          try { localStorage.setItem('armaraos-eco-modes-v1', JSON.stringify(norm)); } catch(e2) { /* ignore */ }
+        }
+        try { window.dispatchEvent(new CustomEvent('armaraos-ui-prefs-loaded')); } catch(e3) { /* ignore */ }
       } catch(e) { /* keep localStorage-seeded values on failure */ }
     },
 
     /** Persist current UI prefs to the server (fire-and-forget). */
     _saveUiPrefs() {
-      var prefs = { pinned_agents: this.pinnedAgentIds || [] };
+      var prefs = {
+        pinned_agents: this.pinnedAgentIds || [],
+        agent_eco_modes: this.ecoModesByAgent || {}
+      };
       OpenFangAPI.put('/api/ui-prefs', prefs).catch(function() { /* ignore */ });
     },
 

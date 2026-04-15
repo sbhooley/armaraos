@@ -11,7 +11,7 @@ The embedded dashboard includes a **Home folder** page (`#home-files`) for read-
 
 ## Dashboard UI (View vs Download)
 
-- **View** opens a modal and loads the file through **`/read`** — fine for small text; **large or binary files** (especially **`support/*.zip`**) often hit the **512 KiB** limit and show an error in the modal.
+- **View** opens a **large, near full-viewport** modal (fills the embedded window) and loads the file through **`/read`** — fine for small text; **large or binary files** (especially **`support/*.zip`**) often hit the **512 KiB** limit and show an error in the modal.
 - **Download** (green button on each **file** row, and **symlink** rows that point at files) saves the **full** object via **`/download`** (or on **desktop**, Tauri **`copy_home_file_to_downloads`** with `relativePath`).
 - The modal **header** always includes **Download** once a path is known, even while loading or after a preview error; the error panel repeats **Download file** with a short note about large zips.
 

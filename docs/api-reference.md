@@ -73,6 +73,8 @@ List all running agents.
 
 Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avatar_url`, `color`, `archetype`, `vibe`, `greeting_style`) so dashboards can populate edit forms without a second round-trip. Other fields (`model_tier`, `auth_status`, `ready`, `last_active`, `mode`, `profile`) reflect runtime and catalog state.
 
+When the manifest has a resolved workspace directory, the list also includes **`workspace`** (absolute path string) and **`workspace_rel_home`** (path relative to **`home_dir`**, forward slashes, no leading `..`). The embedded dashboard uses **`workspace_rel_home`** to deep-link **Home folder** (`#home-files?path=…`) from chat. Either field may be omitted or null when no workspace path is configured.
+
 **Response** `200 OK`:
 
 ```json
@@ -89,6 +91,8 @@ Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avat
     "model_tier": "free",
     "auth_status": "configured",
     "ready": true,
+    "workspace": "/Users/me/.armaraos/agents/hello-world",
+    "workspace_rel_home": "agents/hello-world",
     "profile": "full",
     "system_prompt": "You are a helpful assistant.",
     "identity": {
@@ -324,6 +328,8 @@ Update visual / personality identity only. Uses the **same merge rules** as the 
 ### GET /api/agents/{id}/tools
 
 Returns the agent’s explicit tool **allowlist** and **blocklist** (manifest fields). An empty allowlist means “no extra restriction” — effective tools come from the agent’s named **profile** and capabilities.
+
+**Non-empty allowlists (kernel merge):** When an allowlist is **non-empty**, the kernel merges a fixed “just works” set into the in-memory manifest (case-insensitive dedupe) so operators do not have to wire these by hand: **`file_write`**, **`file_read`**, **`shell_exec`**, **`web_search`**, **`channel_send`**, **`event_publish`**, **`web_fetch`**, **`mcp_ainl_ainl_list_ecosystem`**, **`mcp_ainl_ainl_capabilities`**, **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_run`**. An **empty** allowlist skips this merge (profile defaults apply).
 
 **Response** `200 OK`:
 
@@ -2057,47 +2063,46 @@ Security status overview showing the state of all 16 security systems.
 
 ## Usage & Analytics Endpoints
 
-Track token usage, costs, and model utilization across all agents. Powered by the metering engine with cost estimation from the model catalog.
+Track token usage, costs, and model utilization across all agents. Aggregates are read from the **persistent** SQLite usage store under the daemon’s data directory (same backing store as **`GET /api/usage/summary`**). Cost estimation uses the model catalog where applicable.
 
 ### GET /api/usage
 
-Get overall usage statistics.
+Per-agent usage totals for dashboards (e.g. **Analytics → By agent**, which reads this route).
 
-**Query Parameters:**
-- `period` (optional): Time period (`hour`, `day`, `week`, `month`; default: `day`)
+For each agent, the handler **prefers** SQLite-backed metering totals. Each row includes **`source`**: **`"persistent"`** when the SQLite summary succeeded, or **`"scheduler_fallback"`** when metering lookup failed (fallback uses legacy in-memory scheduler counters; token split and USD cost may be partial in that fallback path).
 
 **Response** `200 OK`:
 
 ```json
 {
-  "period": "day",
-  "total_input_tokens": 125000,
-  "total_output_tokens": 87000,
-  "total_cost_usd": 0.42,
-  "request_count": 156,
-  "active_agents": 5
+  "agents": [
+    {
+      "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "hello-world",
+      "total_tokens": 212000,
+      "input_tokens": 125000,
+      "output_tokens": 87000,
+      "tool_calls": 42,
+      "cost_usd": 0.42,
+      "source": "persistent"
+    }
+  ]
 }
 ```
 
 ### GET /api/usage/summary
 
-Get a high-level usage summary with quota information.
+High-level totals across all agents (input/output tokens, estimated USD, call count, tool calls). Used by the **Get started** hero stats and the **Analytics** summary tab.
 
 **Response** `200 OK`:
 
 ```json
 {
-  "today": {
-    "input_tokens": 125000,
-    "output_tokens": 87000,
-    "cost_usd": 0.42,
-    "requests": 156
-  },
-  "quota": {
-    "hourly_token_limit": 1000000,
-    "hourly_tokens_used": 45000,
-    "hourly_reset_at": "2025-01-15T11:00:00Z"
-  }
+  "total_input_tokens": 125000,
+  "total_output_tokens": 87000,
+  "total_cost_usd": 0.42,
+  "call_count": 156,
+  "total_tool_calls": 42
 }
 ```
 
@@ -2391,6 +2396,7 @@ Arbitrary dashboard UI state that must survive **desktop reinstalls** (which can
 | Key | Type | Purpose |
 |-----|------|---------|
 | `pinned_agents` | array of strings (agent IDs) | Order of pinned rows in the sidebar **Quick open** list |
+| `agent_eco_modes` | object (map of agent id → `"off"` \| `"balanced"` \| `"aggressive"`) | Per-agent **Ultra Cost-Efficient Mode** for chat (authoritative across WebView clears); merged with `localStorage` (`armaraos-eco-modes-v1`) on load |
 
 Writes use the same atomic **`.json.tmp` → rename** pattern as slash templates.
 
@@ -2402,7 +2408,10 @@ Load persisted UI preferences. Returns **`{}`** when the file does not exist yet
 
 ```json
 {
-  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"]
+  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"],
+  "agent_eco_modes": {
+    "550e8400-e29b-41d4-a716-446655440000": "balanced"
+  }
 }
 ```
 
@@ -2414,7 +2423,10 @@ Replace the entire preferences object on disk. The body **must** be a JSON **obj
 
 ```json
 {
-  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"]
+  "pinned_agents": ["550e8400-e29b-41d4-a716-446655440000"],
+  "agent_eco_modes": {
+    "550e8400-e29b-41d4-a716-446655440000": "balanced"
+  }
 }
 ```
 
@@ -2424,7 +2436,7 @@ Replace the entire preferences object on disk. The body **must** be a JSON **obj
 { "status": "ok" }
 ```
 
-**Dashboard:** On load, the app merges server `pinned_agents` into `localStorage` (`armaraos-pinned-agents`). Each pin/unpin updates both `localStorage` and `PUT /api/ui-prefs`.
+**Dashboard:** On load, the app merges server `pinned_agents` into `localStorage` (`armaraos-pinned-agents`). Each pin/unpin updates both `localStorage` and `PUT /api/ui-prefs`. **`agent_eco_modes`** is merged into `localStorage` (`armaraos-eco-modes-v1`); changing the chat **⚡ eco** pill updates the map and saves via **`PUT /api/ui-prefs`** (global **`efficient_mode`** is still applied with **`POST /api/config/set`** so the next message uses the selected mode).
 
 ---
 
@@ -3068,11 +3080,11 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/tools` | List available tools |
 | GET | `/api/config` | Configuration (secrets redacted) |
 | POST | `/api/config/reload` | Reload config from disk (hot reload + restart hints) |
-| GET | `/api/ui-prefs` | Dashboard UI preferences (`~/.armaraos/ui-prefs.json`; e.g. pinned agents) |
+| GET | `/api/ui-prefs` | Dashboard UI preferences (`~/.armaraos/ui-prefs.json`; pinned agents, per-agent eco map) |
 | PUT | `/api/ui-prefs` | Save UI preferences (full JSON object replace; atomic write) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
-| GET | `/api/agents` | List agents (includes `system_prompt`, `identity`) |
+| GET | `/api/agents` | List agents (`system_prompt`, `identity`, optional `workspace` / `workspace_rel_home`) |
 | POST | `/api/agents` | Spawn agent |
 | GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
 | PATCH | `/api/agents/{id}` | Partial update (`name`, `description`, `model`, `system_prompt`) |
@@ -3165,8 +3177,8 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/logs/daemon/stream` | SSE: tail daemon/tui tracing log |
 | GET | `/api/events/stream` | SSE: kernel event bus |
 | **Usage & Analytics** | | |
-| GET | `/api/usage` | Usage statistics |
-| GET | `/api/usage/summary` | Usage summary with quota |
+| GET | `/api/usage` | Per-agent usage totals (persistent metering + `source`) |
+| GET | `/api/usage/summary` | Global usage totals (SQLite-backed) |
 | GET | `/api/usage/by-model` | Usage by model breakdown |
 | **Migration** | | |
 | GET | `/api/migrate/detect` | Detect migration sources |

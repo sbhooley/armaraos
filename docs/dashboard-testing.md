@@ -58,6 +58,8 @@ Run the daemon, open the **Dashboard** URL from `openfang start` (default is oft
 
 7b. **Ultra Cost-Efficient Mode (Budget + Chat)** — Open **Settings → Budget** and confirm the **Ultra Cost-Efficient Mode** card and dropdown (Off / Balanced / Aggressive) with helper copy. Change the mode, reload **`GET /api/config`** (or re-open Settings) and confirm **`efficient_mode`** persisted. Open **Chat** with an agent: confirm the **⚡ eco** header pill cycles modes and that after a long user message (≥80 estimated tokens with compression enabled) the response meta can show **`⚡ eco ↓X%`** and the **diff** control opens the Eco Diff modal with **Original** vs **Compressed**. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
 
+   **Per-agent persistence:** With two agents, set **⚡ eco** to different modes on each, navigate to another dashboard page and back, and reload the app — each chat should restore its own mode. Confirm **`GET /api/ui-prefs`** returns **`agent_eco_modes`** with both ids (and that **`PUT /api/ui-prefs`** is sent when cycling the pill). The global **`efficient_mode`** in **`config.toml`** remains the server default for new sessions; chat still calls **`POST /api/config/set`** so the active compression mode matches the open agent.
+
 8. **Settings → System Info → Support** — Use **Generate diagnostics bundle** (same redacted `.zip` as the API). Confirm the UI mentions `.zip`, **README.txt** / **diagnostics_snapshot.json** in the Support copy, and the generated path matches a file on disk. Unzip once and confirm **`README.txt`** and **`diagnostics_snapshot.json`** exist and JSON includes `config_schema_version` / `config_schema_version_binary` under `daemon`. On **desktop**, confirm a copy lands in **Downloads** (or use the fallback download if copy fails). With `api_key` set, confirm the browser/WebView still completes save (loopback GET download + `token` query).
 
 9. **Home folder → `support/`** — Open **Home folder** in the nav, go to **`support`**, find a diagnostics `.zip`. Use row **Download** (green) or **View** then **Download** in the modal header. Large zips may show a preview error; **Download** must still save the full file. On desktop, row **Download** uses Tauri **`copy_home_file_to_downloads`** (`relativePath`).
@@ -98,7 +100,7 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 
 **Full file:** `GET /api/armaraos-home/download?path=<relative path>` streams up to **256 MiB** with attachment headers. Loopback may call without Bearer (embedded dashboard). Use this when diagnostics zips (or other large files) fail preview with “file too large”.
 
-**UI:** The **Home folder** table has **View** (preview) and **Download** (full file). The file modal includes **Download** in the header whenever a path is set, plus **Download file** in the error panel when preview fails — large `.zip` under `support/` should still be saveable.
+**UI:** The **Home folder** table has **View** (preview) and **Download** (full file). **View** opens a **near full-viewport** modal (desktop-sized window) so long text files are easier to read; the modal still includes **Download** in the header whenever a path is set, plus **Download file** in the error panel when preview fails — large `.zip` under `support/` should still be saveable.
 
 ## Kernel SSE (`GET /api/events/stream`)
 
@@ -177,7 +179,9 @@ curl -sS -N "http://127.0.0.1:4200/api/logs/stream?level=info" | head -n 5
 ## Get started page refresh
 
 - On the **Get started** page (`overview` route), lifecycle/system kernel events trigger a **debounced** refresh (~400ms) via `armaraos-kernel-event`. When `kernelEvents.last` is set, the page shows a compact **Live** strip (last event summary + **Timeline**).
-- **Page leave:** The overview component registers `@page-leave.window="stopAutoRefresh()"` so timers and kernel listeners are cleared when navigating away. If you add **Playwright** (or similar) later, assert that after switching to another hash/route, `setInterval`-driven refresh is not still firing (e.g. spy on `/api/usage` or equivalent after leaving the Get started page).
+- **Usage / cost hero:** Token and cost figures load from **`GET /api/usage/summary`** (SQLite-backed totals), not ephemeral scheduler-only counters — values should survive **daemon restarts** and desktop upgrades as long as the data directory is preserved.
+- **Analytics parity:** The **Analytics** page summary tab uses the same **`/api/usage/summary`** store; **By agent** uses **`GET /api/usage`**, which now prefers the same persistent metering totals (see **`source`** per row in [api-reference.md](api-reference.md#get-apiusage)).
+- **Page leave:** The overview component registers `@page-leave.window="stopAutoRefresh()"` so timers and kernel listeners are cleared when navigating away. If you add **Playwright** (or similar) later, assert that after switching to another hash/route, `setInterval`-driven refresh is not still firing (e.g. spy on `/api/usage/summary` or equivalent after leaving the Get started page).
 
 ## Chat unread badges + session digest
 
@@ -198,7 +202,7 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 1. From **Chat** with **no** agent selected (picker / grid): open an agent’s detail (row actions or card), confirm the modal opens; close with **×** or overlay click.
 2. Open an agent’s **inline chat** (conversation view). Click the **gear** (agent settings) in the header — the **same** modal must open (tabs **Info**, **Files**, **Config**).
 3. While **in** inline chat, confirm the modal’s primary **Chat** action is **hidden** (you are already chatting). From the picker-only flow, **Chat** should still be visible and navigate into chat.
-4. Optional: `curl -s http://127.0.0.1:4200/api/ui-prefs` after pinning — expect `pinned_agents` in JSON (see [api-reference.md](api-reference.md#ui-preferences-endpoints)).
+4. Optional: `curl -s http://127.0.0.1:4200/api/ui-prefs` after pinning — expect `pinned_agents` in JSON (see [api-reference.md](api-reference.md#ui-preferences-endpoints)). After toggling **⚡ eco** in chat, the same file may include **`agent_eco_modes`** (map of agent id → mode string).
 
 ## Agents page → Config tab (identity, prompt, tool filters)
 
@@ -208,8 +212,9 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 
 1. Spawn or pick an agent; set **Archetype**, **Vibe**, **System prompt**, and add tools to **Allowlist** / **Blocklist**; save — toast should say **partial — session preserved**.
 2. Close the detail modal and reopen **Config** — fields and lists should match what you saved.
-3. Optional: click **Add messaging tools** — `channel_send` and `event_publish` are added to the allowlist when it is non-empty, or removed from the blocklist when using profile-default tools (empty allowlist).
-4. **Advanced full manifest:** expand **Show advanced — full manifest**, click **Reload from server** (textarea fills), change a harmless line (e.g. `description`), **Apply full manifest** — confirm dialog lists session clear + audit; after success, toast includes server **`note`** and audit hint.
+3. **Default allowlist merge:** When the allowlist is **non-empty**, the kernel merges core file/network/channel tools plus **AINL MCP** helpers (`mcp_ainl_*`) automatically (see [api-reference.md](api-reference.md#get-apiagentsidtools)); you should see those names present after save/reload even if you did not type them manually. **Empty allowlist** still means “profile defaults” (no merge).
+4. Optional: click **Add messaging tools** — `channel_send` and `event_publish` are added to the allowlist when it is non-empty, or removed from the blocklist when using profile-default tools (empty allowlist).
+5. **Advanced full manifest:** expand **Show advanced — full manifest**, click **Reload from server** (textarea fills), change a harmless line (e.g. `description`), **Apply full manifest** — confirm dialog lists session clear + audit; after success, toast includes server **`note`** and audit hint.
 
 **curl (replace `AGENT_ID` and port):**
 
@@ -291,6 +296,12 @@ curl -s http://127.0.0.1:4200/ | grep -c "commandPalette"
 - Type a new name and press **Enter** or click away — the name should update and persist.
 - Press **Esc** to cancel without saving.
 - The renamed session title must appear in the **Sessions** page and survive a daemon restart.
+
+### Open workspace (Home folder)
+
+- With an agent open in **Chat**, when **`GET /api/agents`** includes **`workspace_rel_home`** for that agent, the header shows a **workspace** pill (folder icon; tint follows **`identity.color`**).
+- Click it — the app navigates to **`#home-files?path=<encoded workspace_rel_home>`** (or **`#home-files`** when the relative path is empty) so you can browse that agent’s on-disk workspace under ArmaraOS home.
+- If the pill is missing, the workspace path is not under **`home_dir`** (not browseable via the Home-folder sandbox) — expect a toast instead of navigation.
 
 ### Jump back in (recent agents strip)
 

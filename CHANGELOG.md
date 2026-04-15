@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Documentation
+
+- **`docs/api-reference.md`** — `GET /api/agents` includes **`workspace`** / **`workspace_rel_home`**; correct **`GET /api/usage`** and **`GET /api/usage/summary`** response shapes (persistent metering); **`GET /api/agents/{id}/tools`** documents default merged tool names for non-empty allowlists; **`/api/ui-prefs`** documents **`agent_eco_modes`**.
+- **`docs/dashboard-testing.md`** — eco **7b** per-agent checks; Get started usage hero + Analytics parity; Home folder **full-viewport** preview; Config tab default allowlist merge; **Open workspace** QA; **`ui-prefs`** curl note.
+- **`docs/dashboard-home-folder.md`**, **`docs/dashboard-overview-ui.md`**, **`docs/dashboard-settings-runtime-ui.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/README.md`**, **`CLAUDE.md`** — dashboard copy aligned with persistent usage, **`ui-prefs`** eco map, workspace pill → **Home folder**, and full-screen file preview.
+
 ## [0.7.4] - 2026-04-14
 
 ### Documentation

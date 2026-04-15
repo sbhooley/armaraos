@@ -95,6 +95,7 @@ After the guided **Setup Wizard** completes, the dashboard sets `localStorage` *
 
 - **Auto-refresh:** `silentRefresh()` on a 30s interval; debounced refresh on `armaraos-kernel-event` for lifecycle/system events (`overviewShouldRefreshOnKernelEvent` in `overview.js`).
 - **Teardown:** `@page-leave.window="stopAutoRefresh()"` clears the interval and kernel listener.
+- **Usage + cost hero:** `loadUsage()` in `overview.js` reads **`GET /api/usage/summary`** (SQLite-backed totals) so headline token and USD figures stay meaningful across **daemon restarts** and desktop upgrades when the ArmaraOS data directory is intact.
 - **Implementation** of titles, progress, and `showSetupChecklist` is in `overview.js` getters; keep **`docs/dashboard-testing.md`** (*Get started page — setup checklist*) in sync when that logic changes. Manual QA steps (hashes, `localStorage`, removed onboarding keys) live there. First-run **Setup Wizard** contract: [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
 
 ## Sidebar navigation

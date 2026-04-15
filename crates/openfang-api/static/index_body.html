@@ -1049,6 +1049,16 @@
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>
                   <span x-text="efficientMode === 'off' ? 'eco' : efficientMode === 'balanced' ? 'eco bal' : 'eco agg'"></span>
                 </button>
+                <button
+                  class="workspace-pill"
+                  x-show="currentAgent && currentAgent.workspace_rel_home"
+                  @click="openAgentWorkspace()"
+                  :style="workspacePillStyle()"
+                  :title="currentAgent && currentAgent.workspace ? ('Open workspace in Home folder: ' + currentAgent.workspace) : 'Open workspace in Home folder'"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 7V5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2"/></svg>
+                  <span class="workspace-pill-label">workspace</span>
+                </button>
                 <!-- Session switcher -->
                 <div style="position:relative">
                   <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
@@ -6789,8 +6799,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <p class="text-xs text-dim mt-3" x-show="!entries.length">This folder is empty.</p>
           </div>
         </div>
-        <div x-show="fileModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeFileModal()">
-          <div class="card" style="max-width:720px;width:92%;max-height:85vh;overflow:auto;display:flex;flex-direction:column;gap:12px" @click.stop>
+        <div x-show="fileModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:stretch;justify-content:stretch;padding:12px;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeFileModal()">
+          <div class="card" style="width:100%;height:100%;max-width:none;max-height:none;overflow:hidden;display:flex;flex-direction:column;gap:12px" @click.stop>
             <div class="flex justify-between items-start gap-2 flex-wrap">
               <div class="min-w-0 flex-1">
                 <div class="font-bold" style="font-size:15px">File preview</div>
@@ -6810,16 +6820,16 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <button type="button" class="btn btn-success btn-sm self-start" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy">Download file</button>
               </div>
             </div>
-            <div x-show="!fileLoading && !fileError">
+            <div x-show="!fileLoading && !fileError" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px">
               <div class="text-xs text-dim mb-1">
                 <span x-text="fileEncoding"></span>
                 <span x-show="fileSize"> · </span>
                 <span x-text="fileSize + ' bytes'" x-show="fileSize"></span>
                 <span x-show="fileEditable" class="badge badge-warn" style="margin-left:8px">Editable</span>
               </div>
-              <textarea class="input font-mono text-xs" style="width:100%;min-height:240px;resize:vertical" :readonly="!fileEditable || fileEncoding !== 'utf8'" x-model="fileContent" x-show="fileEncoding === 'utf8'"></textarea>
-              <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;max-height:360px;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
-              <div class="flex gap-2 flex-wrap items-center">
+              <textarea class="input font-mono text-xs" style="width:100%;flex:1;min-height:0;resize:none" :readonly="!fileEditable || fileEncoding !== 'utf8'" x-model="fileContent" x-show="fileEncoding === 'utf8'"></textarea>
+              <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;flex:1;min-height:0;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
+              <div class="flex gap-2 flex-wrap items-center" style="flex-shrink:0">
                 <button type="button" class="btn btn-primary btn-sm" x-show="fileEditable && fileEncoding === 'utf8'" @click="saveFile()" :disabled="saveBusy" x-text="saveBusy ? 'Saving…' : 'Save'"></button>
                 <button type="button" class="btn btn-success btn-sm" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy" title="Save full file (not limited to preview size)">Download full file</button>
                 <button type="button" class="btn btn-ghost btn-sm" x-show="fileEncoding === 'utf8' && fileContent" @click="copyFileContent()">Copy contents</button>

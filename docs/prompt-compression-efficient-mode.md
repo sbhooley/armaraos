@@ -68,7 +68,7 @@ If the agent manifest includes **`metadata.efficient_mode`**, it **wins** over t
 ### Dashboard
 
 - **Settings → Budget** — card **Ultra Cost-Efficient Mode** with a dropdown and short guidance on typical savings ranges and dense-technical prompts.
-- **Chat (agent open)** — header button cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode`); persists via **`POST /api/config/set`** so the next message uses the new mode.
+- **Chat (agent open)** — header **⚡ eco** pill cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`). The **authoritative per-agent map** is stored in **`~/.armaraos/ui-prefs.json`** under **`agent_eco_modes`** (merged into `localStorage` **`armaraos-eco-modes-v1`** on load) so each agent remembers its own mode across navigation and **desktop reinstalls** that wipe WebView storage. The UI still calls **`POST /api/config/set`** with **`path: "efficient_mode"`** so the running kernel applies the mode for the **currently open** agent’s next message. Global default remains **`efficient_mode`** in **`config.toml`** / **`GET /api/config`** for new installs and for agents without an entry in **`agent_eco_modes`**.
 
 ### AINL CLI (host signal only)
 

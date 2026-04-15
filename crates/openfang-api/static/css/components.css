@@ -2179,6 +2179,52 @@ tr:hover td { background: var(--surface2); }
   background: rgba(245,158,11,0.08);
 }
 
+/* Workspace quick-open pill (chat header) */
+.workspace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 550;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: rgba(59, 130, 246, 0.08);
+  cursor: pointer;
+  transition: all 0.16s ease;
+  white-space: nowrap;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  --workspace-pill-accent: #3b82f6;
+  background: color-mix(in srgb, var(--workspace-pill-accent) 12%, transparent);
+}
+.workspace-pill:hover {
+  border-color: color-mix(in srgb, var(--workspace-pill-accent) 55%, var(--border));
+  color: color-mix(in srgb, var(--workspace-pill-accent) 72%, white);
+  background: color-mix(in srgb, var(--workspace-pill-accent) 20%, transparent);
+  transform: translateY(-1px);
+}
+.workspace-pill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--workspace-pill-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+.workspace-pill svg {
+  flex-shrink: 0;
+}
+.workspace-pill-label {
+  display: inline-block;
+}
+@media (max-width: 1240px) {
+  .workspace-pill-label {
+    display: none;
+  }
+  .workspace-pill {
+    padding: 4px 8px;
+  }
+}
+
 /* ── Chat telemetry strip (below header, above messages) ── */
 .chat-telemetry-strip {
   display: flex;

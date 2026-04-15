@@ -63,6 +63,13 @@ Below the Settings tab bar (visible on **every** Settings tab once load succeeds
 
 - **Where:** Inline **Chat** with an agent open — header row beside session cost / session switcher (`index_body.html` + `chatPage` Alpine data).
 - **Behavior:** Pill button cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`), persists with **`POST /api/config/set`** (`path: efficient_mode`). Label: `⚡ eco` / `⚡ eco bal` / `⚡ eco agg`.
+- **Per-agent storage:** Each change also updates **`agent_eco_modes`** in **`~/.armaraos/ui-prefs.json`** via **`PUT /api/ui-prefs`** (see [api-reference.md](api-reference.md#ui-preferences-endpoints)) so modes survive **WebView storage clears**; `localStorage` keys **`armaraos-eco-modes-v1`** / **`armaraos-eco-mode`** remain for fast UI and backward compatibility.
+
+### Chat header — open workspace
+
+- **Where:** Same header row when **`GET /api/agents`** includes **`workspace_rel_home`** for the active agent.
+- **Control:** **workspace** pill (`.workspace-pill` in `components.css`) with folder icon; accent uses **`identity.color`** when it is a safe `#RGB` / `#RRGGBB` value.
+- **Action:** Sets `location.hash` to **`#home-files?path=…`** so **Home folder** opens scoped to that agent’s workspace under ArmaraOS home.
 
 ## Runtime
 

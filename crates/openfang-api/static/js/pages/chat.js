@@ -163,6 +163,8 @@ function chatPage() {
       var stored = localStorage.getItem('armaraos-eco-mode');
       return (stored === 'off' || stored === 'balanced' || stored === 'aggressive') ? stored : 'off';
     }()),
+    /** Global config default used as fallback when an agent has no explicit eco mode yet. */
+    globalEfficientMode: 'off',
     /** Rolling average compression saving % for this session (0 when none). */
     sessionEcoSavedPct: 0,
     _sessionEcoSavedSum: 0,
@@ -363,6 +365,33 @@ function chatPage() {
       this.sessionEcoSavedPct = Math.round(this._sessionEcoSavedSum / this._sessionEcoSavedCount);
     },
 
+    _syncEcoModeToConfig: async function(mode) {
+      var normalized = (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
+      // Skip redundant writes when we already synced this mode.
+      if (this._lastSyncedEcoMode === normalized) return;
+      this._lastSyncedEcoMode = normalized;
+      try {
+        await fetch('/api/config/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: 'efficient_mode', value: normalized })
+        });
+      } catch(e) {
+        // Non-fatal: UI remains responsive; we re-attempt on next switch/toggle.
+      }
+    },
+
+    _applyAgentEcoMode: function(agent) {
+      if (!agent || !agent.id) return;
+      var st = Alpine.store('app');
+      var mode = st.getAgentEcoMode(agent.id, this.globalEfficientMode || this.efficientMode || 'off');
+      this.efficientMode = mode;
+      // Ensure first-time fallback becomes an explicit per-agent persisted value.
+      st.setAgentEcoMode(agent.id, mode);
+      localStorage.setItem('armaraos-eco-mode', mode);
+      this._syncEcoModeToConfig(mode);
+    },
+
     formatTokenShort: function(n) {
       n = Number(n) || 0;
       if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
@@ -375,6 +404,19 @@ function chatPage() {
       if (ms == null || ms === '') return '';
       var s = Number(ms) / 1000;
       return (s >= 100 ? Math.round(s) : s.toFixed(1)) + 's';
+    },
+
+    workspacePillStyle() {
+      var fallback = '#3b82f6';
+      var color = fallback;
+      try {
+        var c = this.currentAgent && this.currentAgent.identity && this.currentAgent.identity.color
+          ? String(this.currentAgent.identity.color).trim()
+          : '';
+        // Keep styling safe/predictable: only allow #RGB/#RRGGBB values.
+        if (/^#(?:[0-9a-fA-F]{3}){1,2}$/.test(c)) color = c;
+      } catch (e) { /* fallback */ }
+      return '--workspace-pill-accent:' + color;
     },
 
     get showChatNetworkBanner() {
@@ -445,11 +487,12 @@ function chatPage() {
       // Fetch dynamic commands from server
       this.fetchCommands();
 
-      // Load efficient mode from server config — authoritative source.
-      // localStorage gives us the instant initial value while this resolves.
+      // Load global efficient mode from server config (fallback for agents that
+      // have never had an explicit per-agent mode selected).
       OpenFangAPI.get('/api/config').then(function(cfg) {
         if (cfg && typeof cfg.efficient_mode === 'string' && cfg.efficient_mode) {
-          self.efficientMode = cfg.efficient_mode;
+          self.globalEfficientMode = cfg.efficient_mode;
+          if (!self.currentAgent) self.efficientMode = cfg.efficient_mode;
           localStorage.setItem('armaraos-eco-mode', cfg.efficient_mode);
         }
       }).catch(function() {});
@@ -484,6 +527,7 @@ function chatPage() {
           }
         } catch (e) { /* ignore */ }
         if (agent) {
+          self._applyAgentEcoMode(agent);
           self.loadSession(agent.id);
           self.loadSessions(agent.id);
           // Load per-agent input history
@@ -508,6 +552,14 @@ function chatPage() {
         if (agent) {
           self.selectAgent(agent);
           Alpine.store('app').pendingAgent = null;
+        }
+      });
+
+      // When server-side UI prefs arrive after chat mounted, re-apply current
+      // agent mode so upgrades/reinstalls pick up persisted per-agent settings.
+      window.addEventListener('armaraos-ui-prefs-loaded', function() {
+        if (self.currentAgent && self.currentAgent.id) {
+          self._applyAgentEcoMode(self.currentAgent);
         }
       });
 
@@ -2100,6 +2152,19 @@ function chatPage() {
       });
     },
 
+    openAgentWorkspace() {
+      if (!this.currentAgent) return;
+      var rel = String(this.currentAgent.workspace_rel_home || '').trim();
+      if (!rel) {
+        OpenFangToast.warn('Workspace path is not browseable from Home folder.');
+        return;
+      }
+      if (rel === '.') rel = '';
+      window.location.hash = rel
+        ? ('home-files?path=' + encodeURIComponent(rel))
+        : 'home-files';
+    },
+
     _latexTimer: null,
 
     onMessagesScroll() {
@@ -2327,7 +2392,8 @@ function chatPage() {
     escapeHtml: escapeHtml,
 
     // Cycle eco mode: Off → Balanced → Aggressive → Off.
-    // Persists the new value to /api/config/set so it survives page reload.
+    // Persists per-agent via ui-prefs and syncs the runtime global config so
+    // the active chat always executes with the selected mode.
     cycleEcoMode: async function() {
       var next = this.efficientMode === 'off' ? 'balanced'
                : this.efficientMode === 'balanced' ? 'aggressive'
@@ -2337,12 +2403,11 @@ function chatPage() {
       // without waiting for the async config fetch on next init.
       try { localStorage.setItem('armaraos-eco-mode', next); } catch(e) {}
       try {
-        await fetch('/api/config/set', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: 'efficient_mode', value: next })
-        });
-      } catch(e) { /* non-fatal — mode is already updated in memory and localStorage */ }
+        if (this.currentAgent && this.currentAgent.id) {
+          Alpine.store('app').setAgentEcoMode(this.currentAgent.id, next);
+        }
+      } catch(e2) { /* non-fatal */ }
+      await this._syncEcoModeToConfig(next);
     },
 
     // Open the eco diff modal for a message that has compressedInput set.

@@ -46,6 +46,33 @@ use tracing::{debug, info, trace, warn};
 /// `AINL_HOST_ADAPTER_ALLOWLIST` when intersecting IR policy with a host grant.
 const AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST: &str = "core,ext,http,bridge,sqlite,postgres,mysql,redis,dynamodb,airtable,supabase,fs,tools,db,api,cache,queue,txn,auth,wasm,memory,vector_memory,embedding_memory,code_context,tool_registry,langchain_tool,llm,llm_query,fanout,web,tiktok";
 
+/// Default "just works" tools that are always merged into non-empty per-agent
+/// tool allowlists so users don't need to manually add core AINL MCP utilities.
+const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
+    "file_write",
+    "file_read",
+    "shell_exec",
+    "web_search",
+    "channel_send",
+    "event_publish",
+    "web_fetch",
+    "mcp_ainl_ainl_list_ecosystem",
+    "mcp_ainl_ainl_capabilities",
+    "mcp_ainl_ainl_validate",
+    "mcp_ainl_ainl_run",
+];
+
+fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
+    if allowlist.is_empty() {
+        return;
+    }
+    for required in DEFAULT_AGENT_ALLOWLIST_TOOLS {
+        if !allowlist.iter().any(|t| t.eq_ignore_ascii_case(required)) {
+            allowlist.push((*required).to_string());
+        }
+    }
+}
+
 /// Applies `capabilities.shell` patterns from a manifest into its effective exec policy.
 ///
 /// When agents declare `shell = ["python *", "cargo *"]` in their manifest, those
@@ -1725,6 +1752,7 @@ impl OpenFangKernel {
         // Track whether it was explicit so apply_shell_caps_to_exec_policy can decide
         // whether to upgrade Allowlist → Full for shell_exec agents.
         let mut manifest = manifest;
+        merge_default_agent_allowlist_tools(&mut manifest.tool_allowlist);
         let manifest_had_explicit_exec_policy = manifest.exec_policy.is_some();
         if manifest.exec_policy.is_none() {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
@@ -3859,8 +3887,12 @@ impl OpenFangKernel {
         allowlist: Option<Vec<String>>,
         blocklist: Option<Vec<String>>,
     ) -> KernelResult<()> {
+        let mut normalized_allowlist = allowlist.clone();
+        if let Some(ref mut al) = normalized_allowlist {
+            merge_default_agent_allowlist_tools(al);
+        }
         self.registry
-            .update_tool_filters(agent_id, allowlist.clone(), blocklist.clone())
+            .update_tool_filters(agent_id, normalized_allowlist.clone(), blocklist.clone())
             .map_err(KernelError::OpenFang)?;
 
         if let Some(entry) = self.registry.get(agent_id) {
@@ -3869,7 +3901,7 @@ impl OpenFangKernel {
 
         info!(
             agent_id = %agent_id,
-            allowlist = ?allowlist,
+            allowlist = ?normalized_allowlist,
             blocklist = ?blocklist,
             "Agent tool filters updated"
         );
@@ -3908,6 +3940,7 @@ impl OpenFangKernel {
         if manifest.workspace.is_none() {
             manifest.workspace = entry.manifest.workspace.clone();
         }
+        merge_default_agent_allowlist_tools(&mut manifest.tool_allowlist);
         apply_budget_defaults(&self.config.budget, &mut manifest.resources);
         apply_shell_caps_to_exec_policy(&mut manifest);
 
@@ -6563,7 +6596,7 @@ impl OpenFangKernel {
 
         // Step 4: Apply per-agent tool_allowlist/tool_blocklist overrides.
         // These are separate from capabilities.tools and act as additional filters.
-        let (tool_allowlist, tool_blocklist) = entry
+        let (mut tool_allowlist, tool_blocklist) = entry
             .as_ref()
             .map(|e| {
                 (
@@ -6572,6 +6605,7 @@ impl OpenFangKernel {
                 )
             })
             .unwrap_or_default();
+        merge_default_agent_allowlist_tools(&mut tool_allowlist);
 
         if !tool_allowlist.is_empty() {
             all_tools.retain(|t| {
@@ -9351,5 +9385,56 @@ mod tests {
         );
 
         kernel.shutdown();
+    }
+
+    #[test]
+    fn test_merge_default_agent_allowlist_tools_noop_for_empty_allowlist() {
+        let mut allowlist: Vec<String> = vec![];
+        merge_default_agent_allowlist_tools(&mut allowlist);
+        assert!(
+            allowlist.is_empty(),
+            "empty allowlist should remain empty (means unrestricted tool set)"
+        );
+    }
+
+    #[test]
+    fn test_merge_default_agent_allowlist_tools_adds_required_defaults() {
+        let mut allowlist = vec!["file_read".to_string()];
+        merge_default_agent_allowlist_tools(&mut allowlist);
+
+        for required in DEFAULT_AGENT_ALLOWLIST_TOOLS {
+            assert!(
+                allowlist.iter().any(|t| t.eq_ignore_ascii_case(required)),
+                "required default tool missing from allowlist: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_default_agent_allowlist_tools_dedupes_case_insensitive() {
+        let mut allowlist = vec![
+            "FILE_READ".to_string(),
+            "mcp_ainl_ainl_validate".to_string(),
+            "custom_tool".to_string(),
+        ];
+        merge_default_agent_allowlist_tools(&mut allowlist);
+
+        let file_read_count = allowlist
+            .iter()
+            .filter(|t| t.eq_ignore_ascii_case("file_read"))
+            .count();
+        assert_eq!(
+            file_read_count, 1,
+            "file_read should not be duplicated when already present with different case"
+        );
+
+        let validate_count = allowlist
+            .iter()
+            .filter(|t| t.eq_ignore_ascii_case("mcp_ainl_ainl_validate"))
+            .count();
+        assert_eq!(
+            validate_count, 1,
+            "mcp_ainl_ainl_validate should not be duplicated when already present"
+        );
     }
 }
