@@ -538,6 +538,49 @@ async fn test_status_endpoint() {
         Some(false),
         "tests do not set ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE"
     );
+    assert_eq!(
+        ainl.get("ainl_runtime_engine_forced_by_env")
+            .and_then(|v| v.as_bool()),
+        Some(false),
+        "tests do not set AINL_RUNTIME_ENGINE=1"
+    );
+}
+
+#[tokio::test]
+async fn test_agents_runtime_effective_state_fields_present() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/agents", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let agents: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(!agents.is_empty(), "default assistant should exist");
+    let first = &agents[0];
+
+    let manifest_flag = first["ainl_runtime_engine"]
+        .as_bool()
+        .expect("manifest ainl_runtime_engine should be bool");
+    let effective = first["ainl_runtime_engine_effective"]
+        .as_bool()
+        .expect("ainl_runtime_engine_effective should be bool");
+    let forced = first["ainl_runtime_engine_forced_by_env"]
+        .as_bool()
+        .expect("ainl_runtime_engine_forced_by_env should be bool");
+    let disabled = first["ainl_runtime_engine_env_disabled"]
+        .as_bool()
+        .expect("ainl_runtime_engine_env_disabled should be bool");
+    let compiled = first["ainl_runtime_engine_compiled"]
+        .as_bool()
+        .expect("ainl_runtime_engine_compiled should be bool");
+
+    assert!(!forced, "tests should not force AINL runtime via env");
+    assert!(!disabled, "tests should not disable AINL runtime via env");
+    assert!(compiled, "openfang-runtime default features should compile runtime");
+    assert_eq!(effective, compiled && !disabled && (manifest_flag || forced));
 }
 
 #[tokio::test]

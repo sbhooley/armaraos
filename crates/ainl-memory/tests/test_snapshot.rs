@@ -1,6 +1,7 @@
 //! export_graph / import_graph tests.
 
 use ainl_memory::{AinlMemoryNode, GraphStore, SqliteGraphStore};
+use std::borrow::Cow;
 use uuid::Uuid;
 
 fn agent(i: u8) -> String {
@@ -108,4 +109,28 @@ fn test_graph_memory_forwards_validate_and_edges() {
     assert!(r.is_valid);
     let edges = mem.agent_subgraph_edges(ag).unwrap();
     assert!(edges.is_empty());
+}
+
+#[test]
+fn test_import_rejects_unknown_snapshot_schema_version() {
+    let path = std::env::temp_dir().join(format!("ainl_snap_schema_{}.db", Uuid::new_v4()));
+    let _ = std::fs::remove_file(&path);
+    let store = SqliteGraphStore::open(&path).unwrap();
+    let ag = agent(6);
+
+    let mut n = AinlMemoryNode::new_episode(Uuid::new_v4(), 2_200_000_300, vec![], None, None);
+    n.agent_id = ag.clone();
+    store.write_node(&n).unwrap();
+
+    let mut snap = store.export_graph(&ag).unwrap();
+    snap.schema_version = Cow::Owned("999.0".to_string());
+
+    let path2 = std::env::temp_dir().join(format!("ainl_snap_schema_import_{}.db", Uuid::new_v4()));
+    let _ = std::fs::remove_file(&path2);
+    let mut store2 = SqliteGraphStore::open(&path2).unwrap();
+
+    let err = store2
+        .import_graph(&snap, false)
+        .expect_err("unknown schema version must fail import");
+    assert!(err.contains("schema_version"), "unexpected error: {err}");
 }

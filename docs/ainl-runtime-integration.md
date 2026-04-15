@@ -1,12 +1,12 @@
 # ainl-runtime integration (OpenFang / ArmaraOS)
 
-This guide covers the **optional** path that routes a **chat turn** through the Rust **`ainl-runtime`** orchestration layer (`run_turn` / `run_turn_async`) instead of the default OpenFang LLM + tool loop. It complements:
+This guide covers the embedded path that can route a **chat turn** through the Rust **`ainl-runtime`** orchestration layer (`run_turn` / `run_turn_async`) instead of the default OpenFang LLM + tool loop. It complements:
 
 - **`docs/ainl-runtime.md`** — hub: what the crate does, delegation depth / **`AinlRuntimeError`**, **`async`** feature, **`std::sync::Mutex`** vs **`tokio::sync::Mutex`**, verification commands.
 - **`docs/ainl-runtime-graph-patch.md`** — procedural patch adapters, `MemoryContext`, and how **`GraphPatchAdapter`** fits the graph.
 - **`crates/ainl-runtime/README.md`** — crate-level behavior, delegation depth, async SQLite notes.
 
-The built-in OpenFang agent loop remains the **default**. Unless the Cargo feature **and** a runtime switch are enabled, behavior is unchanged.
+In current builds, `openfang-runtime` compiles with `ainl-runtime-engine` enabled by default and `AgentManifest.ainl_runtime_engine` defaults to `true`. Effective routing still depends on runtime/env state (`AINL_RUNTIME_ENGINE`, `ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE`) and graph-memory availability.
 
 ---
 
@@ -18,9 +18,10 @@ The built-in OpenFang agent loop remains the **default**. Unless the Cargo featu
 | **Rust bridge** | `crates/openfang-runtime/src/ainl_runtime_bridge.rs` (`AinlRuntimeBridge`) |
 | **Manifest** | Top-level `ainl_runtime_engine = true` (TOML / JSON on `AgentManifest`) |
 | **Environment** | `AINL_RUNTIME_ENGINE=1` (process-wide; OR with manifest flag) |
+| **Emergency off switch** | `ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE=1|true|yes|on` forces the path off globally (wins over manifest + `AINL_RUNTIME_ENGINE=1`) |
 | **Graph DB** | Same per-agent `ainl_memory.db` as `GraphMemoryWriter` (second SQLite connection; WAL-safe). **`AinlRuntime`** may upsert a **`runtime_state`** node (session counters + optional persona snapshot JSON) on each completed turn — see **`crates/ainl-runtime/README.md`** (*Session persistence*). |
 | **Default agent loop graph toggles** | Unrelated to **`ainl-runtime-engine`** — the built-in loop uses **`AINL_EXTRACTOR_ENABLED`** (opt-out; default on), **`AINL_TAGGER_ENABLED`** (opt-in; must be `1`), **`AINL_PERSONA_EVOLUTION`** (opt-out; default on), and export path **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** as documented in **[graph-memory.md](graph-memory.md)** and **`crates/openfang-runtime/README.md`**. |
-| **Evolution writes** | Bridge uses `AinlRuntime::with_evolution_writes_enabled(false)` so OpenFang keeps owning evolution row writes |
+| **Evolution writes** | Bridge enforces `AinlRuntime::with_evolution_writes_enabled(false)` so OpenFang remains the sole evolution-row writer (constructor fails if this invariant is violated) |
 | **Delegation cap** | `AinlRuntimeBridge::with_delegation_cap(..., runtime_limits.max_agent_call_depth)` wires **`RuntimeConfig::max_delegation_depth`**. Enforcement is **internal** on each nested **`run_turn`** / **`run_turn_async`**; **`TurnInput::depth`** does not raise the cap. Over limit → **`Err(AinlRuntimeError::DelegationDepthExceeded)`** (see **`crates/ainl-runtime/README.md`**, **[ainl-runtime.md](ainl-runtime.md)**). |
 | **Tests** | `cargo test -p openfang-runtime --features ainl-runtime-engine test_agent_loop_uses_openfang_by_default` (single `cargo test` filter; alternatively `… ainl_runtime` to match bridge tests) |
 
@@ -43,7 +44,7 @@ cargo build -p openfang-runtime --features ainl-runtime-engine
 cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime
 ```
 
-**Daemon (`openfang-kernel` → `openfang-runtime`):** `openfang-runtime` now includes **`ainl-runtime-engine`** in its default feature set, so standard production builds include the shim. Runtime activation is still controlled per agent (`ainl_runtime_engine`) or via `AINL_RUNTIME_ENGINE=1`.
+**Daemon (`openfang-kernel` → `openfang-runtime`):** `openfang-runtime` includes **`ainl-runtime-engine`** in its default feature set, so standard production builds include the shim. Routing is active when `(manifest.ainl_runtime_engine || AINL_RUNTIME_ENGINE=1) && !ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE` and graph memory opens.
 
 **Clippy:**
 
@@ -55,7 +56,7 @@ cargo clippy -p openfang-runtime --features ainl-runtime-engine --all-targets --
 
 ## Activation rules
 
-Either condition can turn the path on (when the feature is compiled in):
+Activation (when the feature is compiled in):
 
 1. **`manifest.ainl_runtime_engine == true`**  
    Example TOML fragment:
@@ -65,7 +66,9 @@ Either condition can turn the path on (when the feature is compiled in):
    ainl_runtime_engine = true
    ```
 
-2. **`AINL_RUNTIME_ENGINE=1`** in the daemon environment (applies to agents that would otherwise use the normal loop; still requires graph memory — see below).
+2. **`AINL_RUNTIME_ENGINE=1`** in the daemon environment (applies process-wide; still requires graph memory — see below).
+
+**Kill switch precedence:** if **`ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE`** is truthy (`1` / `true` / `yes` / `on`), the path is forced off regardless of manifest/env opt-ins.
 
 **AND** graph memory must open successfully (`GraphMemoryWriter` for `~/.armaraos/agents/<id>/ainl_memory.db` or equivalent under `ARMARAOS_HOME` / `OPENFANG_HOME`). If the writer is missing, the loop logs a warning and **continues with the normal OpenFang LLM path**.
 
@@ -78,6 +81,7 @@ Rough order (non-streaming and streaming share the same early exit):
 1. The usual preamble runs: memories, hooks, system prompt, efficient-mode compression, user message appended to the session, `llm_messages` / repair, trim, loop guard setup, **`loop_t0`**.
 2. **Before** the first `for iteration in 0..max_iterations`, if the switch is active and `graph_memory` is `Some`, **`try_consume_turn_via_ainl_runtime`** runs.
 3. It builds **`AinlRuntimeBridge::with_delegation_cap(Arc<Mutex<GraphMemoryWriter>>, max_agent_call_depth)`**, calls **`run_turn`** with `TurnInput` built from the (possibly compressed) user text and optional trace JSON from orchestration — so **`compile_memory_context_for`** inside **`run_turn`** receives that same text and **`MemoryContext::relevant_semantic`** is **topic-ranked** for this turn (see semantic ranking migration in **`docs/ainl-runtime-graph-patch.md`**; avoid assuming episode inheritance when calling **`compile_memory_context_for(None)`** elsewhere).
+   The host reuses a cached bridge per `(agent_id, max_agent_call_depth)` to avoid per-turn SQLite bridge construction churn.
 4. **`map_ainl_turn_outcome`** produces host **`TurnOutcome`**: `output`, `tool_calls`, `delegation_to`, `cost_estimate` (see below). **`log_mapped_end_turn_fields`** emits a structured **info** line.
 5. Assistant message is appended, session saved, **`HookEvent::AgentLoopEnd`** fired, **`AgentLoopResult`** returned with **no LLM token usage** and **`iterations: 1`**.
 
@@ -101,14 +105,15 @@ flowchart TD
 
 ## EndTurn-shaped mapping and logs
 
-The bridge does **not** emit the same internal events as an LLM **`StopReason::EndTurn`**. It **does** map **ainl-runtime** `TurnOutcome` into a small struct for logging and future dashboard parity:
+The bridge does **not** emit the same internal events as an LLM **`StopReason::EndTurn`**. It maps **ainl-runtime** `TurnOutcome` into host output plus structured telemetry included in hook payloads and logs:
 
 | Field | Source (today) |
 |--------|----------------|
 | **`output`** | Persona prompt contribution text, or a synthesized status line (`episode_id`, `TurnStatus`, `steps_executed`) |
 | **`tool_calls`** | `TurnInput.tools_invoked` plus patch adapter names from `patch_dispatch_results` |
 | **`delegation_to`** | From host **`TurnContext`** (episode rows from **ainl-runtime** still use `delegation_to: None` internally) |
-| **`cost_estimate`** | Always **`None`** — no token meter on this path |
+| **`cost_estimate`** | Synthetic host estimate (`steps_executed` as `f64`) to keep telemetry shape stable on this path |
+| **Telemetry fields** | `turn_status`, `partial_success`, warning count, extraction-report presence, memory-context counts, patch-dispatch counts, `steps_executed` |
 
 **Warnings:** `map_ainl_turn_outcome` **`warn!`**s for **MemoryContext** slices, **`extraction_report`**, each **`TurnWarning`** (including **granular** extractor phases: **`TurnPhase::ExtractionPass`**, **`PatternPersistence`**, **`PersonaEvolution`** — one warning per populated **`ExtractionReport`** slot), non-OK **`TurnStatus`** (e.g. **`StepLimitExceeded`**, **`GraphMemoryDisabled`** — **not** delegation depth; depth over the cap fails **`run_turn`** earlier as **`AinlRuntimeError::DelegationDepthExceeded`**), and patch **`adapter_output`** blobs that do not yet have OpenFang equivalents.
 

@@ -205,6 +205,14 @@ impl AinlRuntime {
         self
     }
 
+    /// Current evolution-write mode for this runtime instance.
+    ///
+    /// Hosts embedding `AinlRuntime` alongside OpenFang should keep this `false`
+    /// so only one writer owns the evolution persona row in SQLite.
+    pub fn evolution_writes_enabled(&self) -> bool {
+        self.evolution_writes_enabled
+    }
+
     fn require_evolution_writes_enabled(&self) -> Result<(), String> {
         if self.evolution_writes_enabled {
             Ok(())

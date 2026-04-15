@@ -269,6 +269,14 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
     let catalog = state.kernel.model_catalog.read().ok();
     let dm = &state.kernel.config.default_model;
     let home_dir = state.kernel.config.home_dir.clone();
+    let ainl_runtime_compile_flags = openfang_runtime::ainl_integration_compile_flags();
+    let ainl_runtime_engine_compiled = ainl_runtime_compile_flags
+        .get("ainl_runtime_engine")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ainl_runtime_engine_forced_by_env =
+        std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1");
+    let ainl_runtime_engine_env_disabled = openfang_runtime::ainl_runtime_engine_env_disabled();
 
     let agents: Vec<serde_json::Value> = state
         .kernel
@@ -319,6 +327,9 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                     .ok()
                     .map(|rel| rel.to_string_lossy().replace('\\', "/"))
             });
+            let ainl_runtime_engine_effective = ainl_runtime_engine_compiled
+                && !ainl_runtime_engine_env_disabled
+                && (e.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
 
             serde_json::json!({
                 "id": e.id.to_string(),
@@ -335,6 +346,10 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "workspace": workspace,
                 "workspace_rel_home": workspace_rel_home,
                 "ainl_runtime_engine": e.manifest.ainl_runtime_engine,
+                "ainl_runtime_engine_effective": ainl_runtime_engine_effective,
+                "ainl_runtime_engine_forced_by_env": ainl_runtime_engine_forced_by_env,
+                "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
+                "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
                 "profile": e.manifest.profile,
                 "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
@@ -1153,6 +1168,12 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
     let mut openfang_runtime_ainl = openfang_runtime::ainl_integration_compile_flags();
     if let serde_json::Value::Object(ref mut m) = openfang_runtime_ainl {
+        m.insert(
+            "ainl_runtime_engine_forced_by_env".to_string(),
+            serde_json::Value::Bool(
+                std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1"),
+            ),
+        );
         m.insert(
             "ainl_runtime_engine_env_disabled".to_string(),
             serde_json::Value::Bool(openfang_runtime::ainl_runtime_engine_env_disabled()),
@@ -2072,6 +2093,18 @@ pub async fn get_agent(
     };
 
     let turn_total = entry.turn_stats.turns_ok + entry.turn_stats.turns_err;
+    let ainl_runtime_compile_flags = openfang_runtime::ainl_integration_compile_flags();
+    let ainl_runtime_engine_compiled = ainl_runtime_compile_flags
+        .get("ainl_runtime_engine")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ainl_runtime_engine_forced_by_env =
+        std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1");
+    let ainl_runtime_engine_env_disabled = openfang_runtime::ainl_runtime_engine_env_disabled();
+    let ainl_runtime_engine_effective = ainl_runtime_engine_compiled
+        && !ainl_runtime_engine_env_disabled
+        && (entry.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
+
     let turn_error_rate: serde_json::Value = if turn_total == 0 {
         serde_json::Value::Null
     } else {
@@ -2116,6 +2149,10 @@ pub async fn get_agent(
         "tool_allowlist": entry.manifest.tool_allowlist,
         "tool_blocklist": entry.manifest.tool_blocklist,
         "ainl_runtime_engine": entry.manifest.ainl_runtime_engine,
+        "ainl_runtime_engine_effective": ainl_runtime_engine_effective,
+        "ainl_runtime_engine_forced_by_env": ainl_runtime_engine_forced_by_env,
+        "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
+        "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
         "skills": entry.manifest.skills,
         "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
         "mcp_servers": entry.manifest.mcp_servers,
@@ -12491,7 +12528,7 @@ pub struct PatchAgentConfigRequest {
     pub fallback_models: Option<Vec<openfang_types::agent::FallbackModel>>,
     /// Override the agent's autonomous loop step limit (maps to [autonomous] max_iterations).
     pub max_iterations: Option<u32>,
-    /// Enable the optional ainl-runtime-engine shim (experimental). Maps to manifest `ainl_runtime_engine`.
+    /// Toggle the embedded ainl-runtime-engine path. Maps to manifest `ainl_runtime_engine`.
     pub ainl_runtime_engine: Option<bool>,
 }
 

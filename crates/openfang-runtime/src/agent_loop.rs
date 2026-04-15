@@ -100,12 +100,62 @@ fn graph_memory_pattern_trace_id(
 }
 
 #[cfg(feature = "ainl-runtime-engine")]
-fn ainl_runtime_engine_switch_active(manifest: &AgentManifest) -> bool {
-    if crate::ainl_runtime_engine_env_disabled() {
+fn ainl_runtime_engine_switch_active_with_env(
+    manifest_enabled: bool,
+    ainl_runtime_engine_env: Option<&str>,
+    env_disabled: bool,
+) -> bool {
+    if env_disabled {
         return false;
     }
-    manifest.ainl_runtime_engine
-        || std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1")
+    manifest_enabled || ainl_runtime_engine_env == Some("1")
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_engine_switch_active(manifest: &AgentManifest) -> bool {
+    ainl_runtime_engine_switch_active_with_env(
+        manifest.ainl_runtime_engine,
+        std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref(),
+        crate::ainl_runtime_engine_env_disabled(),
+    )
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_cache(
+) -> &'static dashmap::DashMap<String, std::sync::Arc<crate::ainl_runtime_bridge::AinlRuntimeBridge>>
+{
+    static CACHE: std::sync::OnceLock<
+        dashmap::DashMap<String, std::sync::Arc<crate::ainl_runtime_bridge::AinlRuntimeBridge>>,
+    > = std::sync::OnceLock::new();
+    CACHE.get_or_init(dashmap::DashMap::new)
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_cache_key(agent_id: &str, max_delegation_depth: u32) -> String {
+    format!("{agent_id}:{max_delegation_depth}")
+}
+
+#[cfg(all(feature = "ainl-runtime-engine", test))]
+fn ainl_runtime_bridge_cache_clear_for_tests() {
+    ainl_runtime_bridge_cache().clear();
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn get_or_create_ainl_runtime_bridge(
+    agent_id: &str,
+    gm: &crate::graph_memory_writer::GraphMemoryWriter,
+    max_delegation_depth: u32,
+) -> Result<std::sync::Arc<crate::ainl_runtime_bridge::AinlRuntimeBridge>, String> {
+    let key = ainl_runtime_bridge_cache_key(agent_id, max_delegation_depth);
+    if let Some(existing) = ainl_runtime_bridge_cache().get(&key) {
+        return Ok(std::sync::Arc::clone(existing.value()));
+    }
+    let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
+    let bridge = std::sync::Arc::new(
+        crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(gw, max_delegation_depth)?,
+    );
+    ainl_runtime_bridge_cache().insert(key, std::sync::Arc::clone(&bridge));
+    Ok(bridge)
 }
 
 #[cfg(feature = "ainl-runtime-engine")]
@@ -134,9 +184,9 @@ async fn try_consume_turn_via_ainl_runtime(
         );
         return None;
     };
-    let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
-    let bridge = match crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(
-        gw,
+    let bridge = match get_or_create_ainl_runtime_bridge(
+        agent_id_str,
+        gm,
         runtime_limits.max_agent_call_depth,
     ) {
         Ok(b) => b,
@@ -188,6 +238,17 @@ async fn try_consume_turn_via_ainl_runtime(
                 "engine": "ainl-runtime",
                 "tool_calls": mapped.tool_calls,
                 "delegation_to": mapped.delegation_to,
+                "turn_status": format!("{:?}", mapped.telemetry.turn_status),
+                "partial_success": mapped.telemetry.partial_success,
+                "warning_count": mapped.telemetry.warning_count,
+                "has_extraction_report": mapped.telemetry.has_extraction_report,
+                "memory_context_recent_episodes": mapped.telemetry.memory_context_recent_episodes,
+                "memory_context_relevant_semantic": mapped.telemetry.memory_context_relevant_semantic,
+                "memory_context_active_patches": mapped.telemetry.memory_context_active_patches,
+                "memory_context_has_persona_snapshot": mapped.telemetry.memory_context_has_persona_snapshot,
+                "patch_dispatch_count": mapped.telemetry.patch_dispatch_count,
+                "patch_dispatch_adapter_output_count": mapped.telemetry.patch_dispatch_adapter_output_count,
+                "steps_executed": mapped.telemetry.steps_executed,
             }),
         };
         let _ = hook_reg.fire(&ctx);
@@ -4853,6 +4914,42 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
+    #[cfg(feature = "ainl-runtime-engine")]
+    fn test_ainl_runtime_engine_switch_matrix_manifest_and_env() {
+        assert!(ainl_runtime_engine_switch_active_with_env(
+            true, None, false
+        ));
+        assert!(ainl_runtime_engine_switch_active_with_env(
+            false,
+            Some("1"),
+            false
+        ));
+        assert!(!ainl_runtime_engine_switch_active_with_env(
+            false,
+            Some("true"),
+            false
+        ));
+        assert!(!ainl_runtime_engine_switch_active_with_env(
+            false, None, false
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "ainl-runtime-engine")]
+    fn test_ainl_runtime_engine_switch_kill_switch_wins() {
+        assert!(!ainl_runtime_engine_switch_active_with_env(
+            true,
+            Some("1"),
+            true
+        ));
+        assert!(!ainl_runtime_engine_switch_active_with_env(
+            false,
+            Some("1"),
+            true
+        ));
+    }
+
+    #[test]
     #[cfg(feature = "ainl-extractor")]
     fn canonicalize_turn_tool_names_shell_aliases_to_single_bash() {
         let raw = vec![
@@ -5119,6 +5216,32 @@ mod tests {
 
         assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 0);
         assert!(DRIVER_USED.load(Ordering::SeqCst));
+    }
+
+    #[cfg(feature = "ainl-runtime-engine")]
+    #[tokio::test]
+    async fn test_ainl_runtime_bridge_cache_reuses_instance() {
+        crate::ainl_runtime_bridge::test_hooks::reset_bridge_new_count();
+        ainl_runtime_bridge_cache_clear_for_tests();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var("ARMARAOS_HOME").ok();
+        std::env::set_var("ARMARAOS_HOME", dir.path().as_os_str());
+
+        let agent = format!("bridge-cache-{}", uuid::Uuid::new_v4());
+        let writer = crate::graph_memory_writer::GraphMemoryWriter::open(&agent).expect("writer");
+        let depth = 7u32;
+        let b1 = get_or_create_ainl_runtime_bridge(&agent, &writer, depth).expect("bridge 1");
+        let b2 = get_or_create_ainl_runtime_bridge(&agent, &writer, depth).expect("bridge 2");
+
+        assert!(std::sync::Arc::ptr_eq(&b1, &b2));
+        assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 1);
+
+        if let Some(p) = prev {
+            std::env::set_var("ARMARAOS_HOME", p);
+        } else {
+            std::env::remove_var("ARMARAOS_HOME");
+        }
     }
 
     /// Mock driver that simulates: first call returns ToolUse with no text,

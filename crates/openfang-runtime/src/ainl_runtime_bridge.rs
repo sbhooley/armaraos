@@ -43,11 +43,28 @@ pub struct TurnContext {
 
 /// OpenFang-facing summary of an **ainl-runtime** turn (mirrors fields we surface on an EndTurn-style event).
 #[derive(Debug, Clone)]
+pub struct AinlBridgeTelemetry {
+    pub turn_status: TurnStatus,
+    pub partial_success: bool,
+    pub warning_count: usize,
+    pub has_extraction_report: bool,
+    pub memory_context_recent_episodes: usize,
+    pub memory_context_relevant_semantic: usize,
+    pub memory_context_active_patches: usize,
+    pub memory_context_has_persona_snapshot: bool,
+    pub patch_dispatch_count: usize,
+    pub patch_dispatch_adapter_output_count: usize,
+    pub steps_executed: u64,
+}
+
+/// OpenFang-facing summary of an **ainl-runtime** turn (mirrors fields we surface on an EndTurn-style event).
+#[derive(Debug, Clone)]
 pub struct TurnOutcome {
     pub output: String,
     pub tool_calls: Vec<String>,
     pub delegation_to: Option<String>,
     pub cost_estimate: Option<f64>,
+    pub telemetry: AinlBridgeTelemetry,
 }
 
 /// Structured log line for observability: EndTurn-shaped fields after an **ainl-runtime** turn.
@@ -58,6 +75,17 @@ pub fn log_mapped_end_turn_fields(agent_name: &str, mapped: &TurnOutcome) {
         tool_calls = ?mapped.tool_calls,
         delegation_to = ?mapped.delegation_to,
         cost_estimate = ?mapped.cost_estimate,
+        turn_status = ?mapped.telemetry.turn_status,
+        partial_success = mapped.telemetry.partial_success,
+        warning_count = mapped.telemetry.warning_count,
+        has_extraction_report = mapped.telemetry.has_extraction_report,
+        memory_context_recent_episodes = mapped.telemetry.memory_context_recent_episodes,
+        memory_context_relevant_semantic = mapped.telemetry.memory_context_relevant_semantic,
+        memory_context_active_patches = mapped.telemetry.memory_context_active_patches,
+        memory_context_has_persona_snapshot = mapped.telemetry.memory_context_has_persona_snapshot,
+        patch_dispatch_count = mapped.telemetry.patch_dispatch_count,
+        patch_dispatch_adapter_output_count = mapped.telemetry.patch_dispatch_adapter_output_count,
+        steps_executed = mapped.telemetry.steps_executed,
         "ainl-runtime-engine: EndTurn-shaped summary (no LLM stop_reason in ainl-runtime)"
     );
 }
@@ -81,7 +109,8 @@ pub fn map_ainl_turn_outcome(
         tool_calls.push("turn".to_string());
     }
 
-    warn_on_unmapped_ainl_fields(ainl, r);
+    let telemetry = collect_ainl_bridge_telemetry(ainl, r);
+    log_ainl_bridge_telemetry(ainl, &telemetry);
 
     // ainl-runtime does not emit token-metered USD; surface a tiny deterministic host estimate so
     // budget / usage_footer paths can attribute non-zero work when LLM usage is zero.
@@ -93,6 +122,7 @@ pub fn map_ainl_turn_outcome(
         tool_calls,
         delegation_to: turn_ctx.delegation_to.clone(),
         cost_estimate,
+        telemetry,
     }
 }
 
@@ -112,42 +142,51 @@ fn build_output_text(r: &AinlTurnResult) -> String {
     parts.join("\n\n")
 }
 
-fn warn_on_unmapped_ainl_fields(ainl: &AinlTurnOutcome, r: &AinlTurnResult) {
-    if ainl.is_partial_success() {
+fn collect_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, r: &AinlTurnResult) -> AinlBridgeTelemetry {
+    let patch_dispatch_adapter_output_count = r
+        .patch_dispatch_results
+        .iter()
+        .filter(|p| p.adapter_output.is_some())
+        .count();
+    AinlBridgeTelemetry {
+        turn_status: r.status,
+        partial_success: ainl.is_partial_success(),
+        warning_count: ainl.warnings().len(),
+        has_extraction_report: r.extraction_report.is_some(),
+        memory_context_recent_episodes: r.memory_context.recent_episodes.len(),
+        memory_context_relevant_semantic: r.memory_context.relevant_semantic.len(),
+        memory_context_active_patches: r.memory_context.active_patches.len(),
+        memory_context_has_persona_snapshot: r.memory_context.persona_snapshot.is_some(),
+        patch_dispatch_count: r.patch_dispatch_results.len(),
+        patch_dispatch_adapter_output_count,
+        steps_executed: r.steps_executed as u64,
+    }
+}
+
+fn log_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, telemetry: &AinlBridgeTelemetry) {
+    if telemetry.turn_status != TurnStatus::Ok {
+        warn!(
+            status = ?telemetry.turn_status,
+            partial_success = telemetry.partial_success,
+            warning_count = telemetry.warning_count,
+            "ainl-runtime: non-OK turn status"
+        );
+    } else if telemetry.partial_success {
         warn!(
             warnings = ?ainl.warnings(),
-            "ainl-runtime: partial success — TurnWarning entries have no OpenFang EndTurn equivalent yet"
+            "ainl-runtime: partial success"
         );
-    }
-    if r.extraction_report.is_some() {
-        warn!("ainl-runtime: extraction_report is not mapped to OpenFang EndTurn telemetry yet");
-    }
-    let mc = &r.memory_context;
-    if !mc.recent_episodes.is_empty()
-        || !mc.relevant_semantic.is_empty()
-        || !mc.active_patches.is_empty()
-        || mc.persona_snapshot.is_some()
-    {
-        warn!(
-            recent_episodes = mc.recent_episodes.len(),
-            relevant_semantic = mc.relevant_semantic.len(),
-            active_patches = mc.active_patches.len(),
-            has_persona_snapshot = mc.persona_snapshot.is_some(),
-            "ainl-runtime: MemoryContext slices are summarized in output text only; no structured EndTurn mapping yet"
+    } else {
+        debug!(
+            warning_count = telemetry.warning_count,
+            has_extraction_report = telemetry.has_extraction_report,
+            memory_context_recent_episodes = telemetry.memory_context_recent_episodes,
+            memory_context_relevant_semantic = telemetry.memory_context_relevant_semantic,
+            memory_context_active_patches = telemetry.memory_context_active_patches,
+            patch_dispatch_count = telemetry.patch_dispatch_count,
+            patch_dispatch_adapter_output_count = telemetry.patch_dispatch_adapter_output_count,
+            "ainl-runtime: structured bridge telemetry captured"
         );
-    }
-    if !r.patch_dispatch_results.is_empty() {
-        for p in &r.patch_dispatch_results {
-            if p.adapter_output.is_some() {
-                warn!(
-                    label = %p.label,
-                    "ainl-runtime: patch_dispatch_results.adapter_output not mapped to OpenFang tool_calls payload"
-                );
-            }
-        }
-    }
-    if r.status != TurnStatus::Ok {
-        warn!(status = ?r.status, "ainl-runtime: TurnStatus is reflected in output text only");
     }
     debug!(
         "ainl-runtime: token-level LLM cost is unavailable — host maps steps_executed to a micro-USD estimate"
@@ -228,6 +267,12 @@ impl AinlRuntimeBridge {
             ..Default::default()
         };
         let mut runtime = AinlRuntime::new(cfg, store).with_evolution_writes_enabled(false);
+        if runtime.evolution_writes_enabled() {
+            return Err(
+                "ainl_runtime_bridge: evolution writes must stay disabled to avoid dual-writer persona races with openfang-runtime"
+                    .to_string(),
+            );
+        }
         runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(GraphPatchLogHost {
             agent_id,
         })));
@@ -330,6 +375,28 @@ mod tests {
             )
             .expect("run_turn");
         assert!(!out.output.trim().is_empty(), "output: {:?}", out.output);
+        if let Some(p) = prev {
+            std::env::set_var("ARMARAOS_HOME", p);
+        } else {
+            std::env::remove_var("ARMARAOS_HOME");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bridge_constructor_keeps_evolution_writes_disabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var("ARMARAOS_HOME").ok();
+        std::env::set_var("ARMARAOS_HOME", dir.path().as_os_str());
+        let agent = format!("bridge-evo-{}", uuid::Uuid::new_v4());
+        let writer = GraphMemoryWriter::open(&agent).expect("open graph memory");
+        let bridge = AinlRuntimeBridge::new(Arc::new(Mutex::new(writer))).expect("bridge");
+        let out = bridge
+            .run_turn(&agent, "evolution write guard check", TurnContext::default())
+            .expect("run_turn");
+        assert!(
+            !out.output.trim().is_empty(),
+            "bridge should still run with evolution writes disabled"
+        );
         if let Some(p) = prev {
             std::env::set_var("ARMARAOS_HOME", p);
         } else {

@@ -75,7 +75,13 @@ Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avat
 
 When the manifest has a resolved workspace directory, the list also includes **`workspace`** (absolute path string) and **`workspace_rel_home`** (path relative to **`home_dir`**, forward slashes, no leading `..`). The embedded dashboard uses **`workspace_rel_home`** to deep-link **Home folder** (`#home-files?path=…`) from chat. Either field may be omitted or null when no workspace path is configured.
 
-**`ainl_runtime_engine`** (boolean) mirrors the manifest’s optional **ainl-runtime** shim toggle so the Agents UI can show the correct checkbox before **`GET /api/agents/{id}`** returns.
+AINL runtime fields include:
+
+- **`ainl_runtime_engine`**: manifest toggle
+- **`ainl_runtime_engine_effective`**: actual routing decision input for this process (`compiled && !env_disabled && (manifest || forced_by_env)`)
+- **`ainl_runtime_engine_forced_by_env`**: whether `AINL_RUNTIME_ENGINE=1` is set
+- **`ainl_runtime_engine_env_disabled`**: whether `ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE` is truthy
+- **`ainl_runtime_engine_compiled`**: whether the running binary compiled `openfang-runtime` with `ainl-runtime-engine`
 
 **Response** `200 OK`:
 
@@ -96,6 +102,10 @@ When the manifest has a resolved workspace directory, the list also includes **`
     "workspace": "/Users/me/.armaraos/agents/hello-world",
     "workspace_rel_home": "agents/hello-world",
     "ainl_runtime_engine": false,
+    "ainl_runtime_engine_effective": false,
+    "ainl_runtime_engine_forced_by_env": false,
+    "ainl_runtime_engine_env_disabled": false,
+    "ainl_runtime_engine_compiled": true,
     "profile": "full",
     "system_prompt": "You are a helpful assistant.",
     "identity": {
@@ -120,7 +130,7 @@ Returns detailed information about a single agent.
 |-----------|-------------|
 | `omit` | Optional. Comma-separated list of top-level JSON fields to omit from the response. Use **`omit=manifest_toml`** to skip the large canonical TOML string when you only need metadata (name, model, capabilities, etc.). |
 
-Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / **`tool_blocklist`**, **`fallback_models`**, **`manifest_toml`** (canonical TOML serialization of the in-memory manifest for dashboards and tooling, unless omitted via **`?omit=manifest_toml`**), and related fields on top of the list payload shape (without `model_tier` / `ready` enrichment).
+Adds **`system_prompt`**, full **`identity`**, per-agent **`tool_allowlist`** / **`tool_blocklist`**, **`fallback_models`**, **`manifest_toml`** (canonical TOML serialization of the in-memory manifest for dashboards and tooling, unless omitted via **`?omit=manifest_toml`**), and related fields on top of the list payload shape (without `model_tier` / `ready` enrichment), including AINL runtime effective-state booleans.
 
 **Response** `200 OK`:
 
@@ -1035,7 +1045,7 @@ Full health check with all dependency status. Requires authentication. Unlike th
 
 ### GET /api/status
 
-Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, `uptime_seconds`, and **`openfang_runtime_ainl`**: booleans for which **`openfang-runtime`** Cargo features were compiled into this binary (`ainl_extractor`, `ainl_tagger`, `ainl_persona_evolution`, `ainl_runtime_engine`). Use this for cross-version tooling (e.g. Python bridge capability checks without shelling to `rustc`).
+Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, `uptime_seconds`, and **`openfang_runtime_ainl`**: compile flags plus runtime env state for AINL integration (`ainl_extractor`, `ainl_tagger`, `ainl_persona_evolution`, `ainl_runtime_engine`, `ainl_runtime_engine_forced_by_env`, `ainl_runtime_engine_env_disabled`). Use this for cross-version tooling and operator diagnostics.
 
 **Response** `200 OK`:
 
@@ -1057,7 +1067,9 @@ Detailed kernel status including all agents. Includes `config_schema_version` (e
     "ainl_extractor": true,
     "ainl_tagger": true,
     "ainl_persona_evolution": true,
-    "ainl_runtime_engine": false
+    "ainl_runtime_engine": true,
+    "ainl_runtime_engine_forced_by_env": false,
+    "ainl_runtime_engine_env_disabled": false
   },
   "agents": [
     {
@@ -3087,7 +3099,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | PUT | `/api/ui-prefs` | Save UI preferences (full JSON object replace; atomic write) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
-| GET | `/api/agents` | List agents (`system_prompt`, `identity`, `ainl_runtime_engine`, optional `workspace` / `workspace_rel_home`) |
+| GET | `/api/agents` | List agents (`system_prompt`, `identity`, `ainl_runtime_engine` + effective/runtime-state booleans, optional `workspace` / `workspace_rel_home`) |
 | POST | `/api/agents` | Spawn agent |
 | GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
 | PATCH | `/api/agents/{id}` | Partial update (`name`, `description`, `model`, `system_prompt`) |

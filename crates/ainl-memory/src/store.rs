@@ -710,6 +710,13 @@ impl SqliteGraphStore {
         snapshot: &AgentGraphSnapshot,
         allow_dangling_edges: bool,
     ) -> Result<(), String> {
+        if snapshot.schema_version.as_ref() != SNAPSHOT_SCHEMA_VERSION {
+            return Err(format!(
+                "unsupported snapshot schema_version '{}'; expected '{}'",
+                snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION
+            ));
+        }
+
         if allow_dangling_edges {
             self.conn
                 .execute_batch("PRAGMA foreign_keys = OFF;")
