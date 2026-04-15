@@ -32,6 +32,12 @@ struct GraphMemoryNodeOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     strength: Option<f32>,
     created_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vitals_gate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vitals_phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vitals_trust: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -60,7 +66,8 @@ fn id_prefix(id: impl std::fmt::Display) -> String {
         .collect()
 }
 
-fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
+/// Returns `(label, strength, vitals_gate, vitals_phase, vitals_trust)`.
+fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>, Option<String>, Option<String>, Option<f32>) {
     let id_short = id_prefix(node.id);
     match &node.node_type {
         AinlNodeType::Episode { episodic } => {
@@ -79,31 +86,45 @@ fn label_for_node(node: &AinlMemoryNode) -> (String, Option<f32>) {
             } else {
                 s
             };
-            (s, None)
+            (
+                s,
+                None,
+                episodic.vitals_gate.clone(),
+                episodic.vitals_phase.clone(),
+                episodic.vitals_trust,
+            )
         }
         AinlNodeType::Semantic { semantic } => {
-            if semantic.fact.is_empty() {
-                (format!("Fact {id_short}"), None)
+            let label = if semantic.fact.is_empty() {
+                format!("Fact {id_short}")
             } else {
-                (semantic.fact.clone(), None)
-            }
+                semantic.fact.clone()
+            };
+            (label, None, None, None, None)
         }
         AinlNodeType::Procedural { procedural } => {
-            if procedural.pattern_name.is_empty() {
-                (format!("Pattern {id_short}"), None)
+            let label = if procedural.pattern_name.is_empty() {
+                format!("Pattern {id_short}")
             } else {
-                (procedural.pattern_name.clone(), None)
-            }
+                procedural.pattern_name.clone()
+            };
+            (label, None, None, None, None)
         }
         AinlNodeType::Persona { persona } => (
             format!("{} ({:.2})", persona.trait_name, persona.strength),
             Some(persona.strength),
+            None,
+            None,
+            None,
         ),
         AinlNodeType::RuntimeState { runtime_state } => (
             format!(
                 "Runtime state · turns {} · last extract {}",
                 runtime_state.turn_count, runtime_state.last_extraction_at_turn
             ),
+            None,
+            None,
+            None,
             None,
         ),
     }
@@ -164,7 +185,7 @@ pub async fn get_graph_memory(Query(q): Query<GraphMemoryQuery>) -> Json<Value> 
         let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) else {
             continue;
         };
-        let (label, strength) = label_for_node(&node);
+        let (label, strength, vitals_gate, vitals_phase, vitals_trust) = label_for_node(&node);
         id_set.insert(id.clone());
         nodes_out.push(GraphMemoryNodeOut {
             id,
@@ -172,6 +193,9 @@ pub async fn get_graph_memory(Query(q): Query<GraphMemoryQuery>) -> Json<Value> 
             label,
             strength,
             created_at: ts,
+            vitals_gate,
+            vitals_phase,
+            vitals_trust,
         });
     }
 

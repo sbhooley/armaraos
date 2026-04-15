@@ -418,7 +418,8 @@ function agentsPage() {
         color: idn.color || '#FF5C00',
         archetype: this.normalizeArchetypeForUi(idn.archetype),
         vibe: idn.vibe || '',
-        max_iterations: (agent && agent.max_iterations) || null
+        max_iterations: (agent && agent.max_iterations) || null,
+        ainl_runtime_engine: (agent && agent.ainl_runtime_engine) === true
       };
       this.fullManifestToml = '';
       this.toolFilters = { tool_allowlist: [], tool_blocklist: [] };
@@ -450,7 +451,8 @@ function agentsPage() {
         color: idn.color || '#FF5C00',
         archetype: this.normalizeArchetypeForUi(idn.archetype),
         vibe: idn.vibe || '',
-        max_iterations: full.max_iterations != null ? full.max_iterations : null
+        max_iterations: full.max_iterations != null ? full.max_iterations : null,
+        ainl_runtime_engine: full.ainl_runtime_engine === true
       };
       this.toolFilters = {
         tool_allowlist: (full.tool_allowlist || []).slice(),

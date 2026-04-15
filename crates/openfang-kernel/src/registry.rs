@@ -273,6 +273,17 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Toggle the optional ainl-runtime-engine shim for a single agent.
+    pub fn update_ainl_runtime_engine(&self, id: AgentId, enabled: bool) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        entry.manifest.ainl_runtime_engine = enabled;
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
     /// Update an agent's skill allowlist.
     pub fn update_skills(&self, id: AgentId, skills: Vec<String>) -> OpenFangResult<()> {
         let mut entry = self

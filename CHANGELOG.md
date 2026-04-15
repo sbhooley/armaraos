@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+## [0.7.4] - 2026-04-14
+
 ### Documentation
 
 - **`crates/ainl-memory/README.md`** — fifth memory family (**`RuntimeStateNode`** / `runtime_state`), **`read_runtime_state` / `write_runtime_state`** on **`GraphMemory`** + **`GraphQuery`**, legacy JSON key compatibility; episodic / semantic **`tags`** on exported nodes.
@@ -41,6 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ainl-runtime` 0.3.5-alpha** (crates.io / git): **Turn pipeline** — `run_turn` / `run_turn_async` return **`Result<TurnOutcome, AinlRuntimeError>`** (`Complete` vs `PartialSuccess` + **`TurnWarning`** list with **`TurnPhase`**). **Delegation** — nested `run_turn` past **`max_delegation_depth`** is a hard **`AinlRuntimeError::DelegationDepthExceeded`** (default **8**); `TurnInput::depth` is metadata only. **Session** — **`RuntimeStateNode`** persists turn count, extraction cadence, and persona cache hints across restarts. **Semantic ranking** — **`MemoryContext::relevant_semantic`** uses **`infer_topic_tags`** when a non-empty user message is supplied; **`compile_memory_context_for(None)`** no longer falls back to the latest episode’s text for ranking (pass **`Some(message)`** for topic-aware order, or use **`run_turn`** which always passes the current turn text). **Patches** — **`PatchAdapter`** registry + **`GraphPatchAdapter`** fallback JSON summary (`label`, `patch_version`, `frame_keys`); **`PatchDispatchResult`** gains **`adapter_name` / `adapter_output`**. **`sqlite_store()`** returns **`SqliteStoreRef<'_>`** (short-lived guard). Re-export **`infer_topic_tags`**. Workspace **`scopeguard`** pin. See **`crates/ainl-runtime/README.md`** and **`docs/ainl-runtime-graph-patch.md`**.
 
 - **`ainl-runtime` 0.3.2-alpha:** `AinlRuntimeError` is now an enum (`Message`, `DelegationDepthExceeded`). Nested `run_turn` beyond `RuntimeConfig::max_delegation_depth` returns `Err(DelegationDepthExceeded { depth, max })` instead of a completed turn with `TurnStatus::DepthLimitExceeded` (that status variant was removed). Migration: use `AinlRuntimeError::from(s)` / `?` for string errors; match or use `is_delegation_depth_exceeded`, `delegation_depth_exceeded`, and `message_str` helpers. Default `max_delegation_depth` is **8**. See **`crates/ainl-runtime/README.md`**.
+
+- **AINL crate chain bumped to integration-verified versions:** **`ainl-memory` 0.1.9-alpha**, **`ainl-persona` 0.1.6**, **`ainl-graph-extractor` 0.1.6**, **`ainl-semantic-tagger` 0.1.6**, **`ainl-runtime` 0.3.6-alpha** — all published to crates.io and workspace-pinned in **`openfang-runtime`**.
+
+### Added
+
+- **Cognitive vitals on streaming path:** `crates/openfang-runtime/src/agent_loop.rs` — streaming turns now call `vitals_classifier::classify_from_text` on the final response text after the stream completes, so `vitals_gate`/`vitals_phase`/`vitals_trust` are populated in `ainl_memory.db` episode rows for dashboard chat (previously hardcoded `None`).
+
+- **`GET /api/graph-memory` exposes vitals fields:** `crates/openfang-api/src/graph_memory.rs` — `GraphMemoryNodeOut` now includes `vitals_gate`, `vitals_phase`, and `vitals_trust` (skipped when null) for episode nodes, enabling the dashboard graph panel to colour-code and filter by cognitive vitals.
+
+- **App Store Hand schema warning badges:** `crates/openfang-api/src/routes.rs` + `static/index_body.html` — `GET /api/hands` response includes `schema_version` and `schema_warning` (`"legacy"` when `schema_version` is absent, `"mismatch"` when it doesn't match the expected value, `null` when correct). The dashboard renders a `⚠ Legacy format` or `⚠ Schema mismatch` badge on affected hand cards in the App Store.
+
+- **`ainl_runtime_engine` toggle in Agents → Config:** `PATCH /api/agents/{id}/config` accepts `ainl_runtime_engine: bool`; `GET /api/agents/{id}` returns it; `AgentRegistry::update_ainl_runtime_engine` applies it live. The Config tab shows a labelled checkbox with an "experimental" badge and inline doc link.
+
+### Fixed
+
+- **`AgentManifest` test initializers:** `crates/openfang-kernel/src/heartbeat.rs`, `kernel.rs` (×2), `registry.rs` — four struct literal initializers were missing the `ainl_runtime_engine: false` field added to `AgentManifest`. `cargo test --workspace` now compiles and passes cleanly.
 
 ## [0.7.3] - 2026-04-12
 
@@ -498,6 +516,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.4
 [0.7.3]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.3
 [0.7.2]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.2
 [0.7.1]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.1

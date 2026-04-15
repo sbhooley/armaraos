@@ -10,6 +10,7 @@ use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use openfang_channels::bridge::channel_command_specs;
+use openfang_hands;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
     AggregationStrategy, ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
@@ -2091,6 +2092,7 @@ pub async fn get_agent(
         },
         "tool_allowlist": entry.manifest.tool_allowlist,
         "tool_blocklist": entry.manifest.tool_blocklist,
+        "ainl_runtime_engine": entry.manifest.ainl_runtime_engine,
         "skills": entry.manifest.skills,
         "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
         "mcp_servers": entry.manifest.mcp_servers,
@@ -4980,6 +4982,11 @@ pub async fn list_hands(State(state): State<Arc<AppState>>) -> impl IntoResponse
                 .unwrap_or(false);
             let active = readiness.as_ref().map(|r| r.active).unwrap_or(false);
             let degraded = readiness.as_ref().map(|r| r.degraded).unwrap_or(false);
+            let schema_warning: Option<&str> = match d.schema_version.as_deref() {
+                None => Some("legacy"),
+                Some(v) if v != openfang_hands::HAND_SCHEMA_VERSION => Some("mismatch"),
+                _ => None,
+            };
             serde_json::json!({
                 "id": d.id,
                 "name": d.name,
@@ -4999,6 +5006,8 @@ pub async fn list_hands(State(state): State<Arc<AppState>>) -> impl IntoResponse
                 "dashboard_metrics": d.dashboard.metrics.len(),
                 "has_settings": !d.settings.is_empty(),
                 "settings_count": d.settings.len(),
+                "schema_version": d.schema_version,
+                "schema_warning": schema_warning,
             })
         })
         .collect();
@@ -12438,6 +12447,8 @@ pub struct PatchAgentConfigRequest {
     pub fallback_models: Option<Vec<openfang_types::agent::FallbackModel>>,
     /// Override the agent's autonomous loop step limit (maps to [autonomous] max_iterations).
     pub max_iterations: Option<u32>,
+    /// Enable the optional ainl-runtime-engine shim (experimental). Maps to manifest `ainl_runtime_engine`.
+    pub ainl_runtime_engine: Option<bool>,
 }
 
 /// PATCH /api/agents/{id}/config — Hot-update agent name, description, system prompt, and identity.
@@ -12726,6 +12737,25 @@ pub async fn patch_agent_config(
             .kernel
             .registry
             .update_max_iterations(agent_id, max_iter)
+            .is_err()
+        {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
+            );
+        }
+    }
+
+    // Toggle ainl-runtime-engine shim
+    if let Some(enabled) = req.ainl_runtime_engine {
+        if state
+            .kernel
+            .registry
+            .update_ainl_runtime_engine(agent_id, enabled)
             .is_err()
         {
             return api_json_error(

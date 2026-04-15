@@ -3265,15 +3265,22 @@ pub async fn run_agent_loop_streaming(
                     let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
                         &tools_for_episode,
                     );
+                    let stream_vitals = crate::vitals_classifier::classify_from_text(
+                        &final_response,
+                        turn_tool_names.len(),
+                    );
+                    let (sv_gate, sv_phase, sv_trust) = stream_vitals
+                        .map(|v| (Some(v.gate.as_str().to_string()), Some(v.phase.clone()), Some(v.trust)))
+                        .unwrap_or((None, None, None));
                     if let Some(episode_id) = gm
                         .record_turn(
                             tools_for_episode.clone(),
                             None,
                             turn_trace,
                             &episode_tags,
-                            None, // vitals not available in streaming path yet
-                            None,
-                            None,
+                            sv_gate,
+                            sv_phase,
+                            sv_trust,
                         )
                         .await
                     {

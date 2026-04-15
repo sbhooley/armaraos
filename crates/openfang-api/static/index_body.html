@@ -1681,6 +1681,16 @@
                       min="1" max="10000" style="width:120px"
                       :placeholder="'default (' + (configForm.max_iterations || 80) + ')'">
                   </div>
+                  <div class="form-group mt-3" style="border:1px solid var(--border);border-radius:6px;padding:10px 14px;background:rgba(255,92,0,0.04)">
+                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
+                      <input type="checkbox" x-model="configForm.ainl_runtime_engine" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)">
+                      <span>
+                        <span style="font-size:13px;font-weight:500">AINL Runtime Engine</span>
+                        <span class="badge badge-warn" style="font-size:0.6rem;margin-left:6px;vertical-align:middle">experimental</span>
+                      </span>
+                    </label>
+                    <p class="text-xs text-dim" style="margin:6px 0 0 26px;line-height:1.4">Routes turns through the optional <code style="font-size:10px">ainl-runtime</code> graph shim instead of the built-in loop. Requires graph memory (<code style="font-size:10px">ainl_memory.db</code>) to be healthy. See <strong>docs/ainl-runtime-integration.md</strong>.</p>
+                  </div>
                   <button class="btn btn-primary mt-4" @click="saveConfig()" :disabled="configSaving">
                     <span x-show="!configSaving">Save Config</span><span x-show="configSaving">Saving...</span>
                   </button>
@@ -3568,6 +3578,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       <span class="badge" :class="hand.requirements_met ? 'badge-success' : 'badge-dim'" x-text="hand.requirements_met ? 'Ready' : 'Setup needed'"></span>
                     </div>
                     <div class="card-meta" x-text="hand.description"></div>
+
+                    <!-- Schema warning badge -->
+                    <div class="mt-2" x-show="hand.schema_warning">
+                      <span class="badge badge-warn" style="font-size:0.65rem" x-show="hand.schema_warning === 'legacy'" title="This Hand was built before schema_version was required. Regenerate with `ainl emit --target armaraos` to remove this warning.">&#9888; Legacy format</span>
+                      <span class="badge badge-warn" style="font-size:0.65rem" x-show="hand.schema_warning === 'mismatch'" :title="'schema_version ' + hand.schema_version + ' does not match expected. Regenerate with `ainl emit --target armaraos`.'">&#9888; Schema mismatch</span>
+                    </div>
 
                     <!-- Requirements -->
                     <div class="mt-3" x-show="hand.requirements && hand.requirements.length">
