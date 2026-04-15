@@ -44,6 +44,15 @@ The entire system compiles to a **single ~32MB binary**. One install, one comman
 
 **Implementation language (programs & apps):** [**AI Native Language (AINL)**](docs/ainl-first-language.md) is the **default, first-class** language for new automation, workflows, extensions, and apps in this ecosystem. Use another modern language (Rust, Python, TypeScript, …) only when **explicitly** requested or when constraints require it; the kernel and core services remain Rust. See the linked doc for the full policy.
 
+### Unified graph execution engine (AINL ↔ ArmaraOS)
+
+ArmaraOS tracks the unified graph execution engine direction where one typed graph substrate carries execution, memory, persona, and tool-routing semantics across Python AINL and Rust runtime layers.
+
+- **Graph-as-memory core:** episodic, semantic, procedural, and persona memory are treated as graph-native structures, not an external retrieval silo.
+- **GraphPatch + patch registry contract:** Python `memory.patch` behavior and Rust `PatchAdapter`/`GraphPatchAdapter` dispatch are designed to converge on a shared cross-runtime patch model.
+- **Compile-once, run-many + memory evolution:** procedural patterns can be promoted as reusable graph behavior while persona/extractor/tagger passes keep memory state evolving in-place.
+- **Lineage references:** [`PRIOR_ART.md`](PRIOR_ART.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/graph-memory.md`](docs/graph-memory.md), and AINL’s design articulation in [`sbhooley/ainativelang/LATE_NIGHT_CONVO_WITH_AI.md`](https://github.com/sbhooley/ainativelang/blob/main/LATE_NIGHT_CONVO_WITH_AI.md).
+
 ```bash
 # From GitHub directly (recommended until you host a vanity domain):
 curl -fsSL https://raw.githubusercontent.com/sbhooley/armaraos/main/scripts/install.sh | bash
