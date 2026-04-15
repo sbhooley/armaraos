@@ -173,6 +173,10 @@ async fn start_test_server_with_provider_patch(
             "/api/approvals",
             axum::routing::get(routes::list_approvals).post(routes::create_approval),
         )
+        .route(
+            "/api/ui-prefs",
+            axum::routing::get(routes::get_ui_prefs).put(routes::put_ui_prefs),
+        )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route(
             "/api/armaraos-home/list",
@@ -519,6 +523,105 @@ async fn test_status_endpoint() {
     assert!(body["uptime_seconds"].is_number());
     assert_eq!(body["default_provider"], "ollama");
     assert_eq!(body["agents"].as_array().unwrap().len(), 1);
+
+    let ainl = body
+        .get("openfang_runtime_ainl")
+        .expect("status should include openfang_runtime_ainl");
+    assert_eq!(
+        ainl.get("ainl_runtime_engine").and_then(|v| v.as_bool()),
+        Some(true),
+        "release builds must compile openfang-runtime with default feature ainl-runtime-engine"
+    );
+    assert_eq!(
+        ainl.get("ainl_runtime_engine_env_disabled")
+            .and_then(|v| v.as_bool()),
+        Some(false),
+        "tests do not set ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE"
+    );
+}
+
+#[tokio::test]
+async fn test_ui_prefs_get_empty_when_missing() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/ui-prefs", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+    assert!(body.as_object().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_ui_prefs_put_get_roundtrip_agent_eco_modes() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let put_body = serde_json::json!({
+        "pinned_agents": ["00000000-0000-0000-0000-000000000042"],
+        "agent_eco_modes": {
+            "00000000-0000-0000-0000-000000000042": "aggressive"
+        },
+        "overview_checklist_dismissed": true
+    });
+
+    let resp = client
+        .put(format!("{}/api/ui-prefs", server.base_url))
+        .json(&put_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{}/api/ui-prefs", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["pinned_agents"], put_body["pinned_agents"]);
+    assert_eq!(body["agent_eco_modes"], put_body["agent_eco_modes"]);
+    assert_eq!(
+        body["overview_checklist_dismissed"],
+        put_body["overview_checklist_dismissed"]
+    );
+
+    // Full overwrite: omitting keys should drop them.
+    let resp = client
+        .put(format!("{}/api/ui-prefs", server.base_url))
+        .json(&serde_json::json!({ "agent_eco_modes": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{}/api/ui-prefs", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body, serde_json::json!({ "agent_eco_modes": {} }));
+}
+
+#[tokio::test]
+async fn test_ui_prefs_put_rejects_non_object_body() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .put(format!("{}/api/ui-prefs", server.base_url))
+        .json(&serde_json::json!([]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
 }
 
 #[tokio::test]

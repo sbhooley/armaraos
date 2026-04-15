@@ -38,8 +38,33 @@ curl -sS -f -m 5 "$BASE/api/approvals" | head -c 500
 echo ""
 
 echo "-- GET /api/status"
-curl -sS -f "$BASE/api/status" | head -c 600
+STATUS_JSON="$(curl -sS -f "$BASE/api/status")"
+printf '%s' "$STATUS_JSON" | head -c 600
 echo ""
+
+echo "-- GET /api/status (assert ainl_runtime_engine compile flag)"
+export STATUS_JSON
+python3 - <<'PY'
+import json, os, sys
+
+raw = os.environ.get("STATUS_JSON", "")
+try:
+    d = json.loads(raw)
+except json.JSONDecodeError as e:
+    print("ERROR: /api/status is not valid JSON:", e, file=sys.stderr)
+    sys.exit(1)
+
+ainl = d.get("openfang_runtime_ainl") or {}
+if ainl.get("ainl_runtime_engine") is not True:
+    print(
+        "ERROR: openfang_runtime_ainl.ainl_runtime_engine must be true in release builds "
+        "(openfang-runtime default feature ainl-runtime-engine). Got:",
+        ainl,
+        file=sys.stderr,
+    )
+    sys.exit(1)
+print("OK (ainl_runtime_engine compile flag true)")
+PY
 
 echo "-- GET /api/schedules (expect 200 JSON)"
 curl -sS -f "$BASE/api/schedules" | head -c 400

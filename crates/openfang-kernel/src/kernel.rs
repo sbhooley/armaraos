@@ -1502,9 +1502,10 @@ impl OpenFangKernel {
                     // ainl_runtime_engine key in agent.toml and thus stay on the old default.
                     // Promote those legacy manifests to the new default (true) while preserving
                     // explicit operator choices (true/false) written on disk.
-                    if !entry.manifest.ainl_runtime_engine
-                        && disk_explicit_ainl_runtime_engine.is_none()
-                    {
+                    if legacy_ainl_runtime_engine_should_promote_to_true(
+                        entry.manifest.ainl_runtime_engine,
+                        disk_explicit_ainl_runtime_engine,
+                    ) {
                         entry.manifest.ainl_runtime_engine = true;
                         if let Err(e) = kernel.memory.save_agent(&entry) {
                             warn!(
@@ -7427,6 +7428,18 @@ fn manifest_toml_explicit_ainl_runtime_engine(raw_toml: &str) -> Option<bool> {
     doc.get("ainl_runtime_engine").and_then(|v| v.as_bool())
 }
 
+/// Whether a persisted agent should be promoted to `ainl_runtime_engine = true` on boot.
+///
+/// Legacy installs often omitted the key entirely (implicit old default `false` in SQLite) while
+/// also omitting it from `agent.toml`. Explicit on-disk booleans must be preserved.
+#[must_use]
+fn legacy_ainl_runtime_engine_should_promote_to_true(
+    current_manifest_flag: bool,
+    disk_explicit: Option<bool>,
+) -> bool {
+    !current_manifest_flag && disk_explicit.is_none()
+}
+
 /// Convert a manifest's capability declarations into Capability enums.
 ///
 /// If a `profile` is set and the manifest has no explicit tools, the profile's
@@ -9491,5 +9504,16 @@ provider = "openrouter"
 model = "x"
 "#;
         assert_eq!(manifest_toml_explicit_ainl_runtime_engine(raw), None);
+    }
+
+    #[test]
+    fn test_legacy_ainl_runtime_engine_should_promote_to_true_only_when_implicit() {
+        assert!(legacy_ainl_runtime_engine_should_promote_to_true(false, None));
+        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(true, None));
+        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(
+            false,
+            Some(false)
+        ));
+        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(false, Some(true)));
     }
 }

@@ -101,6 +101,9 @@ fn graph_memory_pattern_trace_id(
 
 #[cfg(feature = "ainl-runtime-engine")]
 fn ainl_runtime_engine_switch_active(manifest: &AgentManifest) -> bool {
+    if crate::ainl_runtime_engine_env_disabled() {
+        return false;
+    }
     manifest.ainl_runtime_engine
         || std::env::var("AINL_RUNTIME_ENGINE").ok().as_deref() == Some("1")
 }

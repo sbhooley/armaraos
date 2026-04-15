@@ -14,6 +14,21 @@ pub fn ainl_integration_compile_flags() -> serde_json::Value {
     })
 }
 
+/// When `ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE` is set to a truthy value (`1`, `true`, `yes`, `on`),
+/// the embedded AINL runtime engine path is forced off for every agent, even if manifests opt in
+/// or `AINL_RUNTIME_ENGINE=1` is set. Intended for emergency rollback without rebuilding.
+#[must_use]
+pub fn ainl_runtime_engine_env_disabled() -> bool {
+    std::env::var("ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE")
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// Default User-Agent header sent with all outgoing HTTP requests.
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
 pub const USER_AGENT: &str = "openfang/0.3.48";

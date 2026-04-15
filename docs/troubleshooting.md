@@ -326,6 +326,14 @@ RUST_LOG=openfang_channels=debug openfang start
 
 ## Agent Issues
 
+### Emergency: disable the embedded AINL runtime engine path (no rebuild)
+
+If you need every agent to use the classic OpenFang loop without editing manifests, set this **before** starting the daemon (same idea for desktop: ensure the env reaches the daemon process):
+
+- **`ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE`**: `1`, `true`, `yes`, or `on` (case-insensitive) forces the ainl-runtime-engine path **off** for all agents. This overrides `AINL_RUNTIME_ENGINE=1` and per-agent `ainl_runtime_engine` toggles.
+
+`GET /api/status` → **`openfang_runtime_ainl.ainl_runtime_engine_env_disabled`** reflects whether the running process currently sees this switch (and **`ainl_runtime_engine`** still reports the compile-time feature flag).
+
 ### `file_write` / `shell_exec`: "Missing 'path'" or "Missing 'command'"
 
 **Cause:** The model issued the tool with an **empty** `{}` input or without required fields. This is a **malformed tool call**, not a filesystem denial.

@@ -1151,6 +1151,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.started_at.elapsed().as_secs();
     let agent_count = agents.len();
 
+    let mut openfang_runtime_ainl = openfang_runtime::ainl_integration_compile_flags();
+    if let serde_json::Value::Object(ref mut m) = openfang_runtime_ainl {
+        m.insert(
+            "ainl_runtime_engine_env_disabled".to_string(),
+            serde_json::Value::Bool(openfang_runtime::ainl_runtime_engine_env_disabled()),
+        );
+    }
+
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1165,7 +1173,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "config_schema_version": state.kernel.config.config_schema_version,
         "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
         "agents": agents,
-        "openfang_runtime_ainl": openfang_runtime::ainl_integration_compile_flags(),
+        "openfang_runtime_ainl": openfang_runtime_ainl,
     }))
 }
 
