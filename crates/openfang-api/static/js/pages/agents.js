@@ -439,7 +439,8 @@ function agentsPage() {
         model_name: m.model,
         profile: full.profile,
         identity: full.identity,
-        system_prompt: full.system_prompt
+        system_prompt: full.system_prompt,
+        ainl_runtime_engine: full.ainl_runtime_engine === true
       });
       this.detailAgent._fallbacks = full.fallback_models || [];
       this.detailAgent.turn_stats = full.turn_stats || null;

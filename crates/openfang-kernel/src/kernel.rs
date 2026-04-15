@@ -1442,6 +1442,8 @@ impl OpenFangKernel {
                                             || disk_manifest.tags != entry.manifest.tags
                                             || disk_manifest.generate_identity_files
                                                 != entry.manifest.generate_identity_files
+                                            || disk_manifest.ainl_runtime_engine
+                                                != entry.manifest.ainl_runtime_engine
                                             || disk_manifest.workspace != entry.manifest.workspace
                                             || disk_manifest.priority != entry.manifest.priority;
                                         if changed {
@@ -7384,6 +7386,7 @@ fn apply_disk_template_merge_retain_dashboard_state(dst: &mut AgentManifest, pre
     dst.metadata.clone_from(&prev.metadata);
     dst.workspace.clone_from(&prev.workspace);
     dst.generate_identity_files = prev.generate_identity_files;
+    dst.ainl_runtime_engine = prev.ainl_runtime_engine;
     dst.profile.clone_from(&prev.profile);
     dst.priority = prev.priority;
     dst.tags.clone_from(&prev.tags);

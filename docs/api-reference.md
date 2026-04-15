@@ -75,6 +75,8 @@ Each object includes **`system_prompt`** and full **`identity`** (`emoji`, `avat
 
 When the manifest has a resolved workspace directory, the list also includes **`workspace`** (absolute path string) and **`workspace_rel_home`** (path relative to **`home_dir`**, forward slashes, no leading `..`). The embedded dashboard uses **`workspace_rel_home`** to deep-link **Home folder** (`#home-files?path=…`) from chat. Either field may be omitted or null when no workspace path is configured.
 
+**`ainl_runtime_engine`** (boolean) mirrors the manifest’s optional **ainl-runtime** shim toggle so the Agents UI can show the correct checkbox before **`GET /api/agents/{id}`** returns.
+
 **Response** `200 OK`:
 
 ```json
@@ -93,6 +95,7 @@ When the manifest has a resolved workspace directory, the list also includes **`
     "ready": true,
     "workspace": "/Users/me/.armaraos/agents/hello-world",
     "workspace_rel_home": "agents/hello-world",
+    "ainl_runtime_engine": false,
     "profile": "full",
     "system_prompt": "You are a helpful assistant.",
     "identity": {
@@ -3084,7 +3087,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | PUT | `/api/ui-prefs` | Save UI preferences (full JSON object replace; atomic write) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
-| GET | `/api/agents` | List agents (`system_prompt`, `identity`, optional `workspace` / `workspace_rel_home`) |
+| GET | `/api/agents` | List agents (`system_prompt`, `identity`, `ainl_runtime_engine`, optional `workspace` / `workspace_rel_home`) |
 | POST | `/api/agents` | Spawn agent |
 | GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
 | PATCH | `/api/agents/{id}` | Partial update (`name`, `description`, `model`, `system_prompt`) |

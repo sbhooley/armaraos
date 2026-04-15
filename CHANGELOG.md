@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Fixed
+
+- **Agent Config → AINL runtime engine toggle:** `PATCH /api/agents/{id}/config` now writes **`ainl_runtime_engine`** into **`agent.toml`** (the TOML patch path previously omitted it), restores the flag from SQLite when merging a newer on-disk template at daemon boot, and includes the boolean on **`GET /api/agents`** so the dashboard does not reset the checkbox from list payloads.
+
 ### Documentation
 
 - **`docs/api-reference.md`** — `GET /api/agents` includes **`workspace`** / **`workspace_rel_home`**; correct **`GET /api/usage`** and **`GET /api/usage/summary`** response shapes (persistent metering); **`GET /api/agents/{id}/tools`** documents default merged tool names for non-empty allowlists; **`/api/ui-prefs`** documents **`agent_eco_modes`**.

@@ -334,6 +334,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "ready": ready,
                 "workspace": workspace,
                 "workspace_rel_home": workspace_rel_home,
+                "ainl_runtime_engine": e.manifest.ainl_runtime_engine,
                 "profile": e.manifest.profile,
                 "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
@@ -13060,6 +13061,13 @@ fn patch_agent_toml_on_disk(path: &std::path::Path, entry: &openfang_types::agen
     root.insert(
         "generate_identity_files".to_string(),
         Value::Boolean(entry.manifest.generate_identity_files),
+    );
+
+    // Dashboard / API toggle — must stay in sync with SQLite so restarts and
+    // disk-vs-DB merge logic do not drop the experimental ainl-runtime shim flag.
+    root.insert(
+        "ainl_runtime_engine".to_string(),
+        Value::Boolean(entry.manifest.ainl_runtime_engine),
     );
 
     match &entry.manifest.workspace {
