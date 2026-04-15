@@ -144,42 +144,50 @@ impl AinlRuntime {
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_turn_count(&self) -> u64 {
         self.turn_count
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_persona_cache(&self) -> Option<&str> {
         self.persona_cache.as_deref()
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_delegation_depth(&self) -> u32 {
         self.current_depth.load(Ordering::SeqCst)
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_set_delegation_depth(&mut self, depth: u32) {
         self.current_depth.store(depth, Ordering::SeqCst);
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_set_force_extraction_failure(&mut self, fail: bool) {
         self.test_force_extraction_failure = fail;
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_set_force_fitness_write_failure(&mut self, fail: bool) {
         self.test_force_fitness_write_failure = fail;
     }
 
     /// Test hook: access the graph extractor task for per-phase error injection.
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_extractor_mut(&mut self) -> &mut GraphExtractorTask {
         &mut self.extractor
     }
 
     #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
     pub fn test_set_force_runtime_state_write_failure(&mut self, fail: bool) {
         self.test_force_runtime_state_write_failure = fail;
     }

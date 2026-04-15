@@ -24,6 +24,32 @@ use tracing::{debug, info, warn};
 
 use crate::graph_memory_writer::GraphMemoryWriter;
 
+/// Typed bridge-construction failures for host routing setup.
+#[derive(Debug, Clone)]
+pub enum AinlRuntimeBridgeInitError {
+    GraphWriterBusy,
+    GraphPathResolve(String),
+    SqliteOpen(String),
+    EvolutionWriteInvariant,
+}
+
+impl std::fmt::Display for AinlRuntimeBridgeInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GraphWriterBusy => write!(
+                f,
+                "GraphMemoryWriter mutex is held; cannot construct bridge synchronously"
+            ),
+            Self::GraphPathResolve(e) => write!(f, "failed to resolve graph sqlite path: {e}"),
+            Self::SqliteOpen(e) => write!(f, "failed to open graph sqlite store: {e}"),
+            Self::EvolutionWriteInvariant => write!(
+                f,
+                "evolution writes must stay disabled to avoid dual-writer persona races with openfang-runtime"
+            ),
+        }
+    }
+}
+
 /// Per-turn inputs supplied by the host (OpenFang) alongside the user message.
 #[derive(Debug, Clone, Default)]
 pub struct TurnContext {
@@ -237,7 +263,7 @@ impl AinlRuntimeBridge {
     /// Opens **ainl-runtime** on the same SQLite file as `graph_writer` (second connection).
     /// Delegation cap defaults to `8`; prefer [`Self::with_delegation_cap`] from the agent loop so it
     /// matches `[runtime_limits].max_agent_call_depth`.
-    pub fn new(graph_writer: Arc<Mutex<GraphMemoryWriter>>) -> Result<Self, String> {
+    pub fn new(graph_writer: Arc<Mutex<GraphMemoryWriter>>) -> Result<Self, AinlRuntimeBridgeInitError> {
         Self::with_delegation_cap(graph_writer, 8)
     }
 
@@ -245,20 +271,19 @@ impl AinlRuntimeBridge {
     pub fn with_delegation_cap(
         graph_writer: Arc<Mutex<GraphMemoryWriter>>,
         max_delegation_depth: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AinlRuntimeBridgeInitError> {
         #[cfg(test)]
         test_hooks::record_bridge_new();
 
         let agent_id = graph_writer
             .try_lock()
-            .map_err(|_| {
-                "ainl_runtime_bridge: GraphMemoryWriter mutex is held; cannot construct bridge synchronously"
-                    .to_string()
-            })?
+            .map_err(|_| AinlRuntimeBridgeInitError::GraphWriterBusy)?
             .agent_id()
             .to_string();
-        let path = GraphMemoryWriter::sqlite_database_path_for_agent(&agent_id)?;
-        let store = SqliteGraphStore::open(&path).map_err(|e| e.to_string())?;
+        let path = GraphMemoryWriter::sqlite_database_path_for_agent(&agent_id)
+            .map_err(AinlRuntimeBridgeInitError::GraphPathResolve)?;
+        let store =
+            SqliteGraphStore::open(&path).map_err(|e| AinlRuntimeBridgeInitError::SqliteOpen(e.to_string()))?;
         let max_delegation_depth = max_delegation_depth.max(1);
         let cfg = RuntimeConfig {
             agent_id: agent_id.clone(),
@@ -268,10 +293,7 @@ impl AinlRuntimeBridge {
         };
         let mut runtime = AinlRuntime::new(cfg, store).with_evolution_writes_enabled(false);
         if runtime.evolution_writes_enabled() {
-            return Err(
-                "ainl_runtime_bridge: evolution writes must stay disabled to avoid dual-writer persona races with openfang-runtime"
-                    .to_string(),
-            );
+            return Err(AinlRuntimeBridgeInitError::EvolutionWriteInvariant);
         }
         runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(GraphPatchLogHost {
             agent_id,

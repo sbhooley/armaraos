@@ -152,7 +152,8 @@ fn get_or_create_ainl_runtime_bridge(
     }
     let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
     let bridge = std::sync::Arc::new(
-        crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(gw, max_delegation_depth)?,
+        crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(gw, max_delegation_depth)
+            .map_err(|e| e.to_string())?,
     );
     ainl_runtime_bridge_cache().insert(key, std::sync::Arc::clone(&bridge));
     Ok(bridge)

@@ -24,7 +24,7 @@
 | **`persona_error`** | Evolution persona row write failure (or test injection). |
 | **`has_errors()`** | `true` if any of the three `*_error` options are set. |
 
-Hidden **`test_inject_*`** fields on [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html) exist for deterministic tests; do not use in production.
+Hidden **`test_inject_*_once(...)`** hooks on [`GraphExtractorTask`](https://docs.rs/ainl-graph-extractor/latest/ainl_graph_extractor/struct.GraphExtractorTask.html) exist for deterministic tests; do not use in production.
 
 ## Where it fits
 

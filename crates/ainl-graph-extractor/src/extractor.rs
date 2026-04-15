@@ -41,13 +41,13 @@ pub struct GraphExtractorTask {
     pub signal_state: PersonaSignalExtractorState,
     /// Test-only: force [`ExtractionReport::extract_error`] without running the extract pipeline.
     #[doc(hidden)]
-    pub test_inject_extract_error: Option<String>,
+    test_inject_extract_error: Option<String>,
     /// Test-only: force [`ExtractionReport::pattern_error`] after a successful collect phase.
     #[doc(hidden)]
-    pub test_inject_pattern_error: Option<String>,
+    test_inject_pattern_error: Option<String>,
     /// Test-only: force [`ExtractionReport::persona_error`] instead of a real persona write outcome.
     #[doc(hidden)]
-    pub test_inject_persona_error: Option<String>,
+    test_inject_persona_error: Option<String>,
 }
 
 /// Result of [`GraphExtractorTask::run_pass`]. Errors are carried per phase; the pass does not
@@ -182,5 +182,26 @@ impl GraphExtractorTask {
         }
 
         report
+    }
+
+    /// Test hook: inject an extract-phase error on the next [`run_pass`](Self::run_pass).
+    #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
+    pub fn test_inject_extract_error_once(&mut self, message: impl Into<String>) {
+        self.test_inject_extract_error = Some(message.into());
+    }
+
+    /// Test hook: inject a pattern-phase error on the next [`run_pass`](Self::run_pass).
+    #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
+    pub fn test_inject_pattern_error_once(&mut self, message: impl Into<String>) {
+        self.test_inject_pattern_error = Some(message.into());
+    }
+
+    /// Test hook: inject a persona-phase error on the next [`run_pass`](Self::run_pass).
+    #[doc(hidden)]
+    #[cfg(any(test, debug_assertions))]
+    pub fn test_inject_persona_error_once(&mut self, message: impl Into<String>) {
+        self.test_inject_persona_error = Some(message.into());
     }
 }

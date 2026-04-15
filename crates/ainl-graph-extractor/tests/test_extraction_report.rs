@@ -16,7 +16,7 @@ fn open_store() -> (tempfile::TempDir, SqliteGraphStore) {
 fn test_extract_error_populates_extract_error_field() {
     let (_d, store) = open_store();
     let mut task = GraphExtractorTask::new("agent-x");
-    task.test_inject_extract_error = Some("injected extract".into());
+    task.test_inject_extract_error_once("injected extract");
     let report = task.run_pass(&store);
     assert_eq!(
         report.extract_error.as_deref(),
@@ -31,7 +31,7 @@ fn test_extract_error_populates_extract_error_field() {
 fn test_pattern_write_failure_populates_pattern_error_only() {
     let (_d, store) = open_store();
     let mut task = GraphExtractorTask::new("agent-pat");
-    task.test_inject_pattern_error = Some("injected pattern".into());
+    task.test_inject_pattern_error_once("injected pattern");
     let report = task.run_pass(&store);
     assert!(report.extract_error.is_none(), "{report:?}");
     assert_eq!(
@@ -57,7 +57,7 @@ fn test_persona_write_failure_populates_persona_error_only() {
     store.write_node(&ep).expect("write");
 
     let mut task = GraphExtractorTask::new("agent-per");
-    task.test_inject_persona_error = Some("injected persona".into());
+    task.test_inject_persona_error_once("injected persona");
     let report = task.run_pass(&store);
     assert!(report.extract_error.is_none(), "{report:?}");
     assert!(report.pattern_error.is_none(), "{report:?}");

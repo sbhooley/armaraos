@@ -55,6 +55,7 @@ SQLite enforces **basic referential integrity** on the graph edge table:
 **Repair / forensic import**
 
 - [`import_graph(snapshot, allow_dangling_edges)`](https://docs.rs/ainl-memory/latest/ainl_memory/struct.SqliteGraphStore.html#method.import_graph): use **`false`** everywhere in production (strict). Import rejects snapshots whose `schema_version` does not match `SNAPSHOT_SCHEMA_VERSION`. Use **`true`** only to load snapshots that **violate** referential integrity: FK checks are disabled **only for that import**, then restored. Always follow with **`validate_graph`** and fix data before resuming normal writes on the same connection.
+- [`import_graph_checked(snapshot, allow_dangling_edges)`](https://docs.rs/ainl-memory/latest/ainl_memory/struct.SqliteGraphStore.html#method.import_graph_checked): typed error variant returning `SnapshotImportError` for callers that need structured handling instead of string matching.
 
 **Higher-level validation** (orthogonal to FK row existence)
 

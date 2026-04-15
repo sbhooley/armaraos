@@ -36,6 +36,25 @@ use rusqlite::OptionalExtension;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+/// Typed failures for snapshot import.
+#[derive(Debug, Clone)]
+pub enum SnapshotImportError {
+    UnsupportedSchemaVersion { got: String, expected: &'static str },
+    Sqlite(String),
+}
+
+impl std::fmt::Display for SnapshotImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedSchemaVersion { got, expected } => write!(
+                f,
+                "unsupported snapshot schema_version '{got}'; expected '{expected}'"
+            ),
+            Self::Sqlite(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// Graph memory storage trait - swappable backends
 pub trait GraphStore {
     /// Write a node to storage
@@ -710,35 +729,51 @@ impl SqliteGraphStore {
         snapshot: &AgentGraphSnapshot,
         allow_dangling_edges: bool,
     ) -> Result<(), String> {
+        self.import_graph_checked(snapshot, allow_dangling_edges)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Typed import variant for callers that want structured error handling.
+    pub fn import_graph_checked(
+        &mut self,
+        snapshot: &AgentGraphSnapshot,
+        allow_dangling_edges: bool,
+    ) -> Result<(), SnapshotImportError> {
         if snapshot.schema_version.as_ref() != SNAPSHOT_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported snapshot schema_version '{}'; expected '{}'",
-                snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION
-            ));
+            return Err(SnapshotImportError::UnsupportedSchemaVersion {
+                got: snapshot.schema_version.to_string(),
+                expected: SNAPSHOT_SCHEMA_VERSION,
+            });
         }
 
         if allow_dangling_edges {
             self.conn
                 .execute_batch("PRAGMA foreign_keys = OFF;")
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;
         }
 
-        let result: Result<(), String> = (|| {
-            let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        let result: Result<(), SnapshotImportError> = (|| {
+            let tx = self
+                .conn
+                .transaction()
+                .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;
             for node in &snapshot.nodes {
-                try_insert_node_ignore(&tx, node)?;
+                try_insert_node_ignore(&tx, node)
+                    .map_err(SnapshotImportError::Sqlite)?;
             }
             for edge in &snapshot.edges {
-                try_insert_edge_ignore(&tx, edge)?;
+                try_insert_edge_ignore(&tx, edge)
+                    .map_err(SnapshotImportError::Sqlite)?;
             }
-            tx.commit().map_err(|e| e.to_string())?;
+            tx.commit()
+                .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;
             Ok(())
         })();
 
         if allow_dangling_edges {
             self.conn
                 .execute_batch("PRAGMA foreign_keys = ON;")
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;
         }
 
         result
