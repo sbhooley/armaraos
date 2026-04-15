@@ -488,6 +488,9 @@ impl super::AinlRuntime {
             steps_executed: dispatched_count,
             patch_dispatch_results,
             status: TurnStatus::Ok,
+            vitals_gate: input.vitals_gate.clone(),
+            vitals_phase: input.vitals_phase.clone(),
+            vitals_trust: input.vitals_trust,
         };
 
         let outcome = if turn_warnings.is_empty() {

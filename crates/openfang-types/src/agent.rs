@@ -570,7 +570,7 @@ impl Default for AgentManifest {
             exec_policy: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
-            ainl_runtime_engine: false,
+            ainl_runtime_engine: true,
         }
     }
 }

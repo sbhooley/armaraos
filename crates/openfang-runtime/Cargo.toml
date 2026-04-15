@@ -6,7 +6,7 @@ license.workspace = true
 description = "Agent runtime and execution environment for OpenFang"
 
 [features]
-default = ["ainl-persona-evolution", "ainl-extractor", "ainl-tagger"]
+default = ["ainl-persona-evolution", "ainl-extractor", "ainl-tagger", "ainl-runtime-engine"]
 ainl-persona-evolution = ["dep:ainl-persona"]
 ainl-tagger = ["dep:ainl-semantic-tagger"]
 ainl-extractor = ["dep:ainl-graph-extractor"]

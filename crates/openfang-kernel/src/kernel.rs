@@ -1403,6 +1403,7 @@ impl OpenFangKernel {
 
                     // Check if TOML on disk is newer/different — if so, update from file
                     let mut entry = entry;
+                    let mut disk_explicit_ainl_runtime_engine: Option<bool> = None;
                     let toml_path = kernel
                         .config
                         .home_dir
@@ -1412,6 +1413,8 @@ impl OpenFangKernel {
                     if toml_path.exists() {
                         match std::fs::read_to_string(&toml_path) {
                             Ok(toml_str) => {
+                                disk_explicit_ainl_runtime_engine =
+                                    manifest_toml_explicit_ainl_runtime_engine(&toml_str);
                                 match toml::from_str::<openfang_types::agent::AgentManifest>(
                                     &toml_str,
                                 ) {
@@ -1492,6 +1495,28 @@ impl OpenFangKernel {
                                     "Failed to read agent TOML: {e}"
                                 );
                             }
+                        }
+                    }
+
+                    // Production-safe migration: pre-0.7.4 agents often have no explicit
+                    // ainl_runtime_engine key in agent.toml and thus stay on the old default.
+                    // Promote those legacy manifests to the new default (true) while preserving
+                    // explicit operator choices (true/false) written on disk.
+                    if !entry.manifest.ainl_runtime_engine
+                        && disk_explicit_ainl_runtime_engine.is_none()
+                    {
+                        entry.manifest.ainl_runtime_engine = true;
+                        if let Err(e) = kernel.memory.save_agent(&entry) {
+                            warn!(
+                                agent = %name,
+                                "Failed to persist ainl_runtime_engine legacy migration: {e}"
+                            );
+                        } else {
+                            info!(
+                                agent = %name,
+                                "Migrated legacy agent to ainl_runtime_engine=true (no explicit \
+                                 on-disk setting found)"
+                            );
                         }
                     }
 
@@ -7395,6 +7420,13 @@ fn apply_disk_template_merge_retain_dashboard_state(dst: &mut AgentManifest, pre
     }
 }
 
+/// Returns `Some(true|false)` when `ainl_runtime_engine` is explicitly present
+/// and boolean in an `agent.toml`; otherwise returns `None`.
+fn manifest_toml_explicit_ainl_runtime_engine(raw_toml: &str) -> Option<bool> {
+    let doc = toml::from_str::<toml::Value>(raw_toml).ok()?;
+    doc.get("ainl_runtime_engine").and_then(|v| v.as_bool())
+}
+
 /// Convert a manifest's capability declarations into Capability enums.
 ///
 /// If a `profile` is set and the manifest has no explicit tools, the profile's
@@ -9439,5 +9471,25 @@ mod tests {
             validate_count, 1,
             "mcp_ainl_ainl_validate should not be duplicated when already present"
         );
+    }
+
+    #[test]
+    fn test_manifest_toml_explicit_ainl_runtime_engine_detects_boolean() {
+        let raw = r#"
+name = "demo"
+ainl_runtime_engine = true
+"#;
+        assert_eq!(manifest_toml_explicit_ainl_runtime_engine(raw), Some(true));
+    }
+
+    #[test]
+    fn test_manifest_toml_explicit_ainl_runtime_engine_none_when_missing() {
+        let raw = r#"
+name = "demo"
+[model]
+provider = "openrouter"
+model = "x"
+"#;
+        assert_eq!(manifest_toml_explicit_ainl_runtime_engine(raw), None);
     }
 }

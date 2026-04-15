@@ -154,6 +154,9 @@ async fn try_consume_turn_via_ainl_runtime(
         frame: HashMap::new(),
         emit_targets: vec![],
         delegation_to: None,
+        vitals_gate: None,
+        vitals_phase: None,
+        vitals_trust: None,
     };
     let mapped = match bridge.run_turn(agent_id_str, session_user_message, ctx) {
         Ok(m) => m,

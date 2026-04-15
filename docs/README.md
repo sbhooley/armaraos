@@ -51,7 +51,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [ainl-runtime doc hub](ainl-runtime.md) | **`AinlRuntime`** overview: **Orientation FAQ** (public API, workspace deps, MCP/CLI vs this crate, Python `RuntimeEngine` overlap); sync vs **`run_turn_async`** (**`async`** feature), internal **delegation depth** / **`AinlRuntimeError`**, **`TurnOutcome`** / **`TurnPhase`** (including per-slot **`ExtractionReport`** → **`ExtractionPass`** / **`PatternPersistence`** / **`PersonaEvolution`**), session **`runtime_state`**, mutex / **`spawn_blocking`** design; **episodic tool canonicalization**, **episode node id** vs **`turn_id`**, **direct `EvolutionEngine`** vs extractor; `cargo test` / clippy matrix |
 | [ainl-runtime + GraphPatch (Rust)](ainl-runtime-graph-patch.md) | Patch **`PatchAdapter`** registry, **`GraphPatchAdapter`** summary JSON, semantic ranking migration, delegation depth / hard errors, crates.io dependency matrix |
-| [ainl-runtime in OpenFang (optional)](ainl-runtime-integration.md) | Feature **`ainl-runtime-engine`**, bridge behavior, **`TurnOutcome`** mapping, approvals |
+| [ainl-runtime in OpenFang](ainl-runtime-integration.md) | Default-built **`ainl-runtime-engine`** bridge, runtime activation rules, **`TurnOutcome`** mapping, approvals |
 | [Channel Adapters](channel-adapters.md) | 40 messaging channels -- setup, configuration, custom adapters |
 | [LLM Providers](providers.md) | 20 providers, 51 models, 23 aliases -- setup and model routing |
 | [OpenRouter defaults & fallbacks](openrouter.md) | Product default `:free` model, rate-limit fallback chain, chat error banner behavior |

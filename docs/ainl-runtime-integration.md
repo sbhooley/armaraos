@@ -43,7 +43,7 @@ cargo build -p openfang-runtime --features ainl-runtime-engine
 cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime
 ```
 
-**Daemon (`openfang-kernel` → `openfang-runtime`):** the kernel depends on `openfang-runtime` **without** listing `ainl-runtime-engine` today, so **release binaries do not** include the shim unless you change that dependency (e.g. `openfang-runtime = { path = "...", features = ["ainl-runtime-engine"] }`) or use a workspace feature that forwards it. Treat **`ainl-runtime-engine`** as **opt-in** for custom builds until product decides to enable it by default.
+**Daemon (`openfang-kernel` → `openfang-runtime`):** `openfang-runtime` now includes **`ainl-runtime-engine`** in its default feature set, so standard production builds include the shim. Runtime activation is still controlled per agent (`ainl_runtime_engine`) or via `AINL_RUNTIME_ENGINE=1`.
 
 **Clippy:**
 

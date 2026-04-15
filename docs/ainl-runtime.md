@@ -25,7 +25,7 @@ For a **minimal** path without the full engine, **`RuntimeContext`** plus **`rec
 
 ### What depends on `ainl-runtime` in this workspace?
 
-Only **`openfang-runtime`**, as an **optional** `path` dependency behind Cargo feature **`ainl-runtime-engine`** (see **[ainl-runtime-integration.md](ainl-runtime-integration.md)**). Stock **`openfang-kernel`** builds do **not** enable that feature, so release daemons omit the bridge unless packaging opts in. Other crates (including the live chat loop) talk to the graph via **`ainl-memory`** directly — e.g. **`GraphMemoryWriter`**.
+Only **`openfang-runtime`**, via Cargo feature **`ainl-runtime-engine`** (see **[ainl-runtime-integration.md](ainl-runtime-integration.md)**). The feature is enabled in default production builds; runtime activation remains per agent (`ainl_runtime_engine`) or env (`AINL_RUNTIME_ENGINE=1`). Other crates (including the live chat loop fallback) talk to the graph via **`ainl-memory`** directly — e.g. **`GraphMemoryWriter`**.
 
 ### Does this crate call MCP, the AINL CLI, or `ainl serve`?
 

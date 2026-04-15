@@ -116,4 +116,4 @@ cargo test -p openfang-runtime --features ainl-runtime-engine test_agent_loop_us
 # Or: cargo test -p openfang-runtime --features ainl-runtime-engine ainl_runtime
 ```
 
-**Daemon note:** `openfang-kernel` does not enable this feature by default; shipping the shim in production binaries requires forwarding **`features = ["ainl-runtime-engine"]`** on the `openfang-runtime` dependency (or an equivalent workspace feature) in your packaging graph.
+**Daemon note:** `openfang-runtime` includes this feature in default builds. Activation still follows runtime switches (`manifest.ainl_runtime_engine` or `AINL_RUNTIME_ENGINE=1`) and falls back to the normal loop when graph memory is unavailable.

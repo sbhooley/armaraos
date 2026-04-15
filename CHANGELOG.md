@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Changed
+
+- **ainl-runtime-engine defaults:** `openfang-runtime` now includes **`ainl-runtime-engine`** in default Cargo features, and new `AgentManifest` defaults (including wizard-created manifests) set **`ainl_runtime_engine = true`** by default.
+- **Legacy agent migration:** On daemon boot, agents with no explicit `ainl_runtime_engine` key in on-disk `agent.toml` are safely migrated to `true` and persisted to SQLite, while explicit on-disk `true`/`false` values remain untouched.
+
 ### Fixed
 
 - **Agent Config → AINL runtime engine toggle:** `PATCH /api/agents/{id}/config` now writes **`ainl_runtime_engine`** into **`agent.toml`** (the TOML patch path previously omitted it), restores the flag from SQLite when merging a newer on-disk template at daemon boot, and includes the boolean on **`GET /api/agents`** so the dashboard does not reset the checkbox from list payloads.

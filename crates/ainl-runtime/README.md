@@ -8,7 +8,7 @@
 
 It is **not** the Python `RuntimeEngine`, **not** the MCP server, **not** the AINL CLI, and **not** an LLM or IR parser.
 
-**Inside this repo:** the only Cargo consumer is **`openfang-runtime`**, behind optional feature **`ainl-runtime-engine`** (see **`docs/ainl-runtime-integration.md`**). Default daemon builds omit that feature; the live chat path still uses **`GraphMemoryWriter`** + **`ainl-memory`** directly.
+**Inside this repo:** the only Cargo consumer is **`openfang-runtime`**, via feature **`ainl-runtime-engine`** (see **`docs/ainl-runtime-integration.md`**). Default daemon builds now include that feature; runtime path selection is still controlled per agent (`ainl_runtime_engine`) / env (`AINL_RUNTIME_ENGINE=1`), and fallback chat paths continue using **`GraphMemoryWriter`** + **`ainl-memory`** directly.
 
 ## What v0.3 provides (beyond v0.2)
 

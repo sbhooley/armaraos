@@ -182,7 +182,7 @@ impl SetupWizard {
             exec_policy: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
-            ainl_runtime_engine: false,
+            ainl_runtime_engine: true,
         };
 
         let skills_to_install: Vec<String> = intent
