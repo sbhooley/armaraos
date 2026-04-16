@@ -11,6 +11,7 @@ use axum::Router;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::ws;
+use openfang_api::graph_memory;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::net::SocketAddr;
@@ -170,6 +171,38 @@ async fn start_test_server_with_provider_patch(
             axum::routing::get(routes::kernel_events_stream),
         )
         .route(
+            "/api/graph-memory",
+            axum::routing::get(graph_memory::get_graph_memory),
+        )
+        .route(
+            "/api/graph-memory/snapshots",
+            axum::routing::get(graph_memory::get_graph_memory_snapshots),
+        )
+        .route(
+            "/api/graph-memory/snapshot-graph",
+            axum::routing::get(graph_memory::get_graph_memory_snapshot_graph),
+        )
+        .route(
+            "/api/graph-memory/audit",
+            axum::routing::get(graph_memory::get_graph_memory_audit),
+        )
+        .route(
+            "/api/graph-memory/snapshot",
+            axum::routing::post(graph_memory::post_graph_memory_snapshot),
+        )
+        .route(
+            "/api/graph-memory/rollback",
+            axum::routing::post(graph_memory::post_graph_memory_rollback),
+        )
+        .route(
+            "/api/graph-memory/reset",
+            axum::routing::post(graph_memory::post_graph_memory_reset),
+        )
+        .route(
+            "/api/graph-memory/delete-node",
+            axum::routing::post(graph_memory::post_graph_memory_delete_node),
+        )
+        .route(
             "/api/budget",
             axum::routing::get(routes::budget_status).put(routes::update_budget),
         )
@@ -258,6 +291,31 @@ tools = ["file_read"]
 memory_read = ["*"]
 memory_write = ["self.*"]
 "#;
+
+fn graph_db_path_for(server: &TestServer, agent_id: &str) -> std::path::PathBuf {
+    server
+        .state
+        .kernel
+        .config
+        .home_dir
+        .join("agents")
+        .join(agent_id)
+        .join("ainl_memory.db")
+}
+
+fn seed_graph_memory(server: &TestServer, agent_id: &str) {
+    let db = graph_db_path_for(server, agent_id);
+    if let Some(parent) = db.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    let gm = ainl_memory::GraphMemory::new(&db).expect("graph memory open");
+    let episode = gm
+        .write_episode(vec!["file_read".to_string()], None, None)
+        .expect("write episode");
+    let _ = gm
+        .write_fact("user prefers concise answers".to_string(), 0.92, episode)
+        .expect("write fact");
+}
 
 /// Manifest that does not match the spawned agent name (must be rejected by PUT /update).
 const WRONG_NAME_MANIFEST: &str = r#"
@@ -1607,6 +1665,205 @@ async fn test_get_approvals_list_json_shape() {
         "expected approvals array: {v}"
     );
     assert!(v.get("total").is_some(), "expected total: {v}");
+}
+
+#[tokio::test]
+async fn test_graph_memory_snapshot_reset_and_rollback_flow() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let agent_id = "graph-memory-it-1";
+    seed_graph_memory(&server, agent_id);
+
+    let graph_before: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let before_nodes = graph_before["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(before_nodes > 0, "expected seeded graph nodes");
+
+    let snap_resp: serde_json::Value = client
+        .post(format!("{}/api/graph-memory/snapshot", server.base_url))
+        .json(&serde_json::json!({
+            "agent_id": agent_id,
+            "label": "it_snapshot"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snap_resp["ok"].as_bool(), Some(true), "{snap_resp}");
+    let snapshot_id = snap_resp["snapshot_id"]
+        .as_str()
+        .expect("snapshot id")
+        .to_string();
+
+    let preview_graph: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory/snapshot-graph?agent_id={}&snapshot_id={}",
+            server.base_url, agent_id, snapshot_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let preview_nodes = preview_graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(
+        preview_nodes >= before_nodes,
+        "expected preview snapshot nodes >= before nodes"
+    );
+
+    let reset_resp: serde_json::Value = client
+        .post(format!("{}/api/graph-memory/reset", server.base_url))
+        .json(&serde_json::json!({
+            "agent_id": agent_id,
+            "reason": "integration test",
+            "create_snapshot": false
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reset_resp["ok"].as_bool(), Some(true), "{reset_resp}");
+
+    let graph_after_reset: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let reset_nodes = graph_after_reset["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert_eq!(reset_nodes, 0, "expected reset to clear nodes");
+
+    let rollback_resp: serde_json::Value = client
+        .post(format!("{}/api/graph-memory/rollback", server.base_url))
+        .json(&serde_json::json!({
+            "agent_id": agent_id,
+            "snapshot_id": snapshot_id,
+            "reason": "integration rollback"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rollback_resp["ok"].as_bool(), Some(true), "{rollback_resp}");
+
+    let graph_after_rollback: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rollback_nodes = graph_after_rollback["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    assert!(
+        rollback_nodes >= before_nodes,
+        "expected rollback nodes >= initial nodes"
+    );
+}
+
+#[tokio::test]
+async fn test_graph_memory_delete_node_and_audit() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let agent_id = "graph-memory-it-2";
+    seed_graph_memory(&server, agent_id);
+
+    let graph_before: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let before_nodes = graph_before["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(before_nodes > 0, "expected nodes before deletion");
+    let target_node_id = graph_before["nodes"][0]["id"]
+        .as_str()
+        .expect("node id")
+        .to_string();
+
+    let delete_resp: serde_json::Value = client
+        .post(format!("{}/api/graph-memory/delete-node", server.base_url))
+        .json(&serde_json::json!({
+            "agent_id": agent_id,
+            "node_id": target_node_id,
+            "reason": "integration delete"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(delete_resp["ok"].as_bool(), Some(true), "{delete_resp}");
+
+    let graph_after: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let after_nodes = graph_after["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert!(
+        after_nodes < before_nodes,
+        "expected fewer nodes after delete (before={before_nodes}, after={after_nodes})"
+    );
+
+    let audit: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory/audit?agent_id={}&limit=20",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let entries = audit["entries"].as_array().cloned().unwrap_or_default();
+    let has_delete = entries
+        .iter()
+        .any(|e| e["action"].as_str() == Some("node_deleted"));
+    assert!(has_delete, "expected node_deleted audit entry: {audit}");
 }
 
 // ---------------------------------------------------------------------------

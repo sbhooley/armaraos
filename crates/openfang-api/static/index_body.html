@@ -7153,14 +7153,16 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div style="display:flex;align-items:center;gap:12px">
             <h2 class="page-header" style="margin:0;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Graph Memory</h2>
             <span x-text="agentId" style="font-size:0.75rem;color:var(--text-dim);font-family:monospace;background:var(--surface2);padding:2px 8px;border-radius:4px"></span>
+            <span class="text-xs" :style="'padding:2px 8px;border-radius:999px;background:' + (viewMode === 'live' ? 'rgba(107,232,160,0.12)' : 'rgba(245,199,90,0.12)') + ';color:' + (viewMode === 'live' ? '#6be8a0' : '#f5c75a')" x-text="viewMode === 'live' ? 'Live' : 'Snapshot preview'"></span>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <template x-for="kind in ['episode','semantic','procedural','persona']" :key="kind">
               <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind"></button>
             </template>
-            <select id="gm-agent-select" x-model="agentId" @change="fetchGraph()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%);min-width:12rem" aria-label="Agent for graph memory">
+            <select id="gm-agent-select" x-model="agentId" @change="onAgentChange()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%);min-width:12rem" aria-label="Agent for graph memory">
             </select>
             <button type="button" class="btn btn-primary btn-sm" @click="refreshPanel()">Refresh</button>
+            <button type="button" class="btn btn-ghost btn-sm" x-show="viewMode === 'snapshot'" @click="returnToLiveGraph()">Return to live</button>
           </div>
         </div>
         <div id="graph-memory-canvas" style="width:100%;height:calc(100vh - 220px);min-height:480px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
@@ -7212,6 +7214,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
             </template>
           </div>
+          <div style="margin-top:10px;display:flex;justify-content:flex-end">
+            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" :disabled="governanceBusy" @click="deleteSelectedNode()">Delete node</button>
+          </div>
         </div>
         <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap">
           <template x-for="kind in ['episode','semantic','procedural','persona']" :key="'stat-' + kind">
@@ -7223,6 +7228,115 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </template>
           <div style="font-size:0.78rem;color:var(--text-dim);margin-left:auto">
             <span x-text="edges.length"></span> edges
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px;padding:12px 14px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <p style="margin:0;font-size:0.86rem;font-weight:600">Live memory write timeline</p>
+              <p class="text-dim text-xs" style="margin:3px 0 0">Shows what is being added to graph memory, and which agent wrote it.</p>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <button type="button" @click="timelineScope = 'all'" :class="timelineScope === 'all' ? 'pill pill-active' : 'pill'" style="font-size:0.7rem;padding:2px 7px">All agents</button>
+              <button type="button" @click="timelineScope = 'current'" :class="timelineScope === 'current' ? 'pill pill-active' : 'pill'" style="font-size:0.7rem;padding:2px 7px">Current agent</button>
+              <span class="text-xs text-dim" x-text="filteredTimeline().length ? (filteredTimeline().length + ' recent writes') : 'Waiting for writes…'"></span>
+              <span class="text-xs text-dim" x-text="'~' + writesPerSecond().toFixed(2) + '/s (1m)'"></span>
+            </div>
+          </div>
+          <div style="margin-top:10px;max-height:240px;overflow:auto;display:flex;flex-direction:column;gap:8px">
+            <template x-if="filteredTimeline().length === 0">
+              <div class="text-xs text-dim" style="padding:10px 12px;border:1px dashed var(--border);border-radius:8px">
+                No live writes yet. Run an agent turn to see events flow in.
+              </div>
+            </template>
+            <template x-for="e in filteredTimeline()" :key="e.id">
+              <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+                <span :class="'node-dot node-dot-' + (e.nodeKind || 'semantic')" style="margin-top:4px;flex:0 0 auto"></span>
+                <div style="min-width:0;flex:1 1 auto">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:0.74rem;color:var(--text-dim)">
+                      <span x-text="new Date(e.atMs).toLocaleTimeString()"></span>
+                      <span style="opacity:0.7">·</span>
+                      <span x-text="e.writeKind"></span>
+                    </span>
+                    <span class="text-xs" style="font-family:monospace;color:var(--text-dim)" x-text="e.agentName"></span>
+                  </div>
+                  <p style="margin:4px 0 0;font-size:0.8rem;line-height:1.35;word-break:break-word" x-text="e.nodeLabel"></p>
+                  <div x-show="e.nodeId" style="margin:4px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                    <code style="font-size:0.68rem;color:var(--text-dim)" x-text="e.nodeId"></code>
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:0.65rem" @click="copyNodeId(e.nodeId)">Copy</button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px;padding:12px 14px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <p style="margin:0;font-size:0.86rem;font-weight:600">Graph memory operations</p>
+            <button type="button" class="btn btn-ghost btn-sm" @click="refreshGovernanceData()">Refresh data</button>
+          </div>
+          <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Snapshots & rollback</p>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <input class="form-input text-xs" style="padding:4px 8px;max-width:160px" placeholder="snapshot label" x-model="snapshotLabel" />
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy" @click="createSnapshot()">Snapshot</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" :disabled="governanceBusy" @click="resetGraphMemory()">Reset</button>
+              </div>
+              <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <select class="form-input text-xs" style="padding:4px 8px;max-width:200px" x-model="selectedSnapshotId">
+                  <option value="">Select snapshot</option>
+                  <template x-for="s in snapshots" :key="s.id">
+                    <option :value="s.id" x-text="s.id"></option>
+                  </template>
+                </select>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy || !selectedSnapshotId" @click="previewSelectedSnapshot()">Preview</button>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy || !selectedSnapshotId" @click="rollbackSnapshot()">Rollback</button>
+              </div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Run comparison</p>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button type="button" class="btn btn-ghost btn-sm" @click="startRunCapture('A')">Set baseline (start)</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="endRunCapture('A')">Set baseline (end)</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="startRunCapture('B')">Set candidate (start)</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="endRunCapture('B')">Set candidate (end)</button>
+              </div>
+              <p class="text-xs text-dim" style="margin:8px 0 0" x-show="determinismSummary()">
+                Determinism:
+                <span x-text="determinismSummary() ? (determinismSummary().exactEpisodeMatch ? 'episode signatures match' : 'episode signatures differ') : ''"></span>
+                (<span x-text="determinismSummary() ? determinismSummary().aEpisodeCount : 0"></span> vs <span x-text="determinismSummary() ? determinismSummary().bEpisodeCount : 0"></span>)
+              </p>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Continuity (latest run)</p>
+              <p class="text-xs" style="margin:0" x-show="runResults.B">
+                Procedural overlap:
+                <span x-text="runResults.B ? runResults.B.continuity.procedural_overlap : 0"></span> /
+                <span x-text="runResults.B ? runResults.B.continuity.procedural_before : 0"></span>
+              </p>
+              <p class="text-xs" style="margin:3px 0 0" x-show="runResults.B">
+                Persona overlap:
+                <span x-text="runResults.B ? runResults.B.continuity.persona_overlap : 0"></span> /
+                <span x-text="runResults.B ? runResults.B.continuity.persona_before : 0"></span>
+              </p>
+              <p class="text-xs text-dim" style="margin:3px 0 0" x-show="!runResults.B">Capture run B to show continuity metrics.</p>
+            </div>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+            <p class="text-xs text-dim" style="margin:0 0 6px">Governance audit trail</p>
+            <div style="max-height:120px;overflow:auto;display:flex;flex-direction:column;gap:4px">
+              <template x-if="auditEntries.length === 0">
+                <p class="text-xs text-dim" style="margin:0">No governance audit entries yet.</p>
+              </template>
+              <template x-for="e in auditEntries" :key="(e.ts_ms || 0) + '-' + (e.action || '')">
+                <div class="text-xs" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
+                  <span class="text-dim" x-text="new Date((e.ts_ms || 0)).toLocaleString()"></span>
+                  <span style="margin-left:6px" x-text="e.action"></span>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </div>

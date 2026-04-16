@@ -159,6 +159,34 @@ pub async fn build_router(
             axum::routing::get(crate::graph_memory::get_graph_memory),
         )
         .route(
+            "/api/graph-memory/snapshots",
+            axum::routing::get(crate::graph_memory::get_graph_memory_snapshots),
+        )
+        .route(
+            "/api/graph-memory/snapshot-graph",
+            axum::routing::get(crate::graph_memory::get_graph_memory_snapshot_graph),
+        )
+        .route(
+            "/api/graph-memory/audit",
+            axum::routing::get(crate::graph_memory::get_graph_memory_audit),
+        )
+        .route(
+            "/api/graph-memory/snapshot",
+            axum::routing::post(crate::graph_memory::post_graph_memory_snapshot),
+        )
+        .route(
+            "/api/graph-memory/rollback",
+            axum::routing::post(crate::graph_memory::post_graph_memory_rollback),
+        )
+        .route(
+            "/api/graph-memory/reset",
+            axum::routing::post(crate::graph_memory::post_graph_memory_reset),
+        )
+        .route(
+            "/api/graph-memory/delete-node",
+            axum::routing::post(crate::graph_memory::post_graph_memory_delete_node),
+        )
+        .route(
             "/api/agents",
             axum::routing::get(routes::list_agents).post(routes::spawn_agent),
         )
