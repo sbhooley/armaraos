@@ -1,25 +1,18 @@
 //! Real HTTP integration tests for the OpenFang API.
 //!
-//! These tests boot a real kernel, start a real axum HTTP server on a random
-//! port, and hit actual endpoints with reqwest.  No mocking.
+//! These tests boot a real kernel, serve the **production** app from
+//! [`openfang_api::server::build_router`] on a random port, and hit endpoints
+//! with `reqwest` (no hand-maintained route tables).
 //!
 //! Tests that require an LLM API call are gated behind GROQ_API_KEY.
 //!
 //! Run: cargo test -p openfang-api --test api_integration_test -- --nocapture
 
-use axum::Router;
-use openfang_api::daemon_resources::DaemonResources;
-use openfang_api::middleware;
-use openfang_api::routes::{self, AppState};
-use openfang_api::ws;
-use openfang_api::graph_memory;
+use openfang_api::routes::AppState;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
-use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -34,6 +27,34 @@ struct TestServer {
 impl Drop for TestServer {
     fn drop(&mut self) {
         self.state.kernel.shutdown();
+    }
+}
+
+/// Serve the **production** Axum app (`server::build_router`) on a random port.
+async fn spawn_test_server_with_kernel(
+    kernel: Arc<OpenFangKernel>,
+    tmp: tempfile::TempDir,
+) -> TestServer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test server");
+    let addr = listener.local_addr().expect("local_addr");
+
+    let (app, state) = openfang_api::server::build_router(kernel, addr).await;
+
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("test server exited with error");
+    });
+
+    TestServer {
+        base_url: format!("http://{}", addr),
+        state,
+        _tmp: tmp,
     }
 }
 
@@ -82,199 +103,7 @@ async fn start_test_server_with_provider_patch(
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
 
-    let state = Arc::new(AppState {
-        kernel,
-        started_at: Instant::now(),
-        peer_registry: None,
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
-        shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
-        provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
-        budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
-        ainl_register_hits: dashmap::DashMap::new(),
-        daemon_resources: DaemonResources::spawn_collector(),
-    });
-
-    let app = Router::new()
-        .route("/api/health", axum::routing::get(routes::health))
-        .route(
-            "/api/system/daemon-resources",
-            axum::routing::get(routes::daemon_resources),
-        )
-        .route(
-            "/api/system/network-hints",
-            axum::routing::get(routes::system_network_hints),
-        )
-        .route("/api/status", axum::routing::get(routes::status))
-        .route("/api/version", axum::routing::get(routes::version))
-        .route(
-            "/api/version/github-latest",
-            axum::routing::get(routes::version_github_latest_release),
-        )
-        .route(
-            "/api/ainl/runtime-version",
-            axum::routing::get(routes::get_ainl_runtime_version),
-        )
-        .route(
-            "/api/agents",
-            axum::routing::get(routes::list_agents).post(routes::spawn_agent),
-        )
-        .route(
-            "/api/agents/{id}/message",
-            axum::routing::post(routes::send_message),
-        )
-        .route(
-            "/api/agents/{id}/message/stream",
-            axum::routing::post(routes::send_message_stream),
-        )
-        .route(
-            "/api/agents/{id}/session",
-            axum::routing::get(routes::get_agent_session),
-        )
-        .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
-        .route(
-            "/api/agents/{id}",
-            axum::routing::get(routes::get_agent).delete(routes::kill_agent),
-        )
-        .route(
-            "/api/agents/{id}/update",
-            axum::routing::put(routes::update_agent),
-        )
-        .route(
-            "/api/triggers",
-            axum::routing::get(routes::list_triggers).post(routes::create_trigger),
-        )
-        .route(
-            "/api/triggers/{id}",
-            axum::routing::delete(routes::delete_trigger),
-        )
-        .route(
-            "/api/schedules",
-            axum::routing::get(routes::list_schedules).post(routes::create_schedule),
-        )
-        .route(
-            "/api/schedules/{id}",
-            axum::routing::delete(routes::delete_schedule).put(routes::update_schedule),
-        )
-        .route(
-            "/api/schedules/{id}/run",
-            axum::routing::post(routes::run_schedule),
-        )
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
-        )
-        .route(
-            "/api/ainl/library/register-curated",
-            axum::routing::post(routes::post_ainl_register_curated),
-        )
-        .route(
-            "/api/events/stream",
-            axum::routing::get(routes::kernel_events_stream),
-        )
-        .route(
-            "/api/graph-memory",
-            axum::routing::get(graph_memory::get_graph_memory),
-        )
-        .route(
-            "/api/graph-memory/snapshots",
-            axum::routing::get(graph_memory::get_graph_memory_snapshots),
-        )
-        .route(
-            "/api/graph-memory/snapshot-graph",
-            axum::routing::get(graph_memory::get_graph_memory_snapshot_graph),
-        )
-        .route(
-            "/api/graph-memory/audit",
-            axum::routing::get(graph_memory::get_graph_memory_audit),
-        )
-        .route(
-            "/api/graph-memory/snapshot",
-            axum::routing::post(graph_memory::post_graph_memory_snapshot),
-        )
-        .route(
-            "/api/graph-memory/rollback",
-            axum::routing::post(graph_memory::post_graph_memory_rollback),
-        )
-        .route(
-            "/api/graph-memory/reset",
-            axum::routing::post(graph_memory::post_graph_memory_reset),
-        )
-        .route(
-            "/api/graph-memory/delete-node",
-            axum::routing::post(graph_memory::post_graph_memory_delete_node),
-        )
-        .route(
-            "/api/budget",
-            axum::routing::get(routes::budget_status).put(routes::update_budget),
-        )
-        .route(
-            "/api/usage/compression",
-            axum::routing::get(routes::usage_compression),
-        )
-        .route(
-            "/api/usage/adaptive-eco",
-            axum::routing::get(routes::usage_adaptive_eco),
-        )
-        .route(
-            "/api/usage/adaptive-eco/replay",
-            axum::routing::get(routes::usage_adaptive_eco_replay),
-        )
-        .route(
-            "/api/approvals",
-            axum::routing::get(routes::list_approvals).post(routes::create_approval),
-        )
-        .route("/api/metrics", axum::routing::get(routes::prometheus_metrics))
-        .route(
-            "/api/ui-prefs",
-            axum::routing::get(routes::get_ui_prefs).put(routes::put_ui_prefs),
-        )
-        .route("/api/shutdown", axum::routing::post(routes::shutdown))
-        .route(
-            "/api/armaraos-home/list",
-            axum::routing::get(routes::armaraos_home_list),
-        )
-        .route(
-            "/api/armaraos-home/read",
-            axum::routing::get(routes::armaraos_home_read),
-        )
-        .route(
-            "/api/armaraos-home/write",
-            axum::routing::post(routes::armaraos_home_write),
-        )
-        .layer(axum::middleware::from_fn(middleware::request_logging))
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone());
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind test server");
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-
-    TestServer {
-        base_url: format!("http://{}", addr),
-        state,
-        _tmp: tmp,
-    }
+    spawn_test_server_with_kernel(kernel, tmp).await
 }
 
 /// Manifest that uses ollama (no API key required, won't make real LLM calls).
@@ -1772,6 +1601,107 @@ async fn test_get_approvals_list_json_shape() {
     assert!(v.get("total").is_some(), "expected total: {v}");
 }
 
+/// GET /api/agents/{id}/session/digest — unread / sync counts for dashboard polling.
+#[tokio::test]
+async fn test_session_digest_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}/session/digest",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert!(v.get("session_id").is_some(), "expected session_id: {v}");
+    assert!(v.get("agent_id").is_some(), "expected agent_id: {v}");
+    assert!(v.get("message_count").is_some(), "expected message_count: {v}");
+    assert!(
+        v.get("assistant_message_count").is_some(),
+        "expected assistant_message_count: {v}"
+    );
+}
+
+/// GET /api/usage/compression — SQLite-backed eco compression aggregates.
+#[tokio::test]
+async fn test_usage_compression_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{}/api/usage/compression?window=7d",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v.get("window").and_then(|x| x.as_str()), Some("7d"));
+    assert!(v.get("modes").is_some(), "expected modes: {v}");
+    assert!(v.get("agents").is_some(), "expected agents: {v}");
+}
+
+/// GET /api/orchestration/traces — recent trace summaries (empty vec is valid).
+#[tokio::test]
+async fn test_orchestration_traces_list_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{}/api/orchestration/traces?limit=10",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let summaries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(summaries.len() <= 10);
+}
+
+/// POST /api/agents/{id}/btw — 409 when no agent loop is active (idle after spawn).
+#[tokio::test]
+async fn test_btw_returns_409_when_agent_idle() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let resp = client
+        .post(format!(
+            "{}/api/agents/{}/btw",
+            server.base_url, agent_id
+        ))
+        .json(&serde_json::json!({"text": "injected context"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409);
+}
+
 #[tokio::test]
 async fn test_graph_memory_snapshot_reset_and_rollback_flow() {
     let server = start_test_server().await;
@@ -1996,126 +1926,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
 
-    let state = Arc::new(AppState {
-        kernel,
-        started_at: Instant::now(),
-        peer_registry: None,
-        bridge_manager: tokio::sync::Mutex::new(None),
-        channels_config: tokio::sync::RwLock::new(Default::default()),
-        shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        clawhub_cache: dashmap::DashMap::new(),
-        provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
-        budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
-        ainl_register_hits: dashmap::DashMap::new(),
-        daemon_resources: DaemonResources::spawn_collector(),
-    });
-
-    let api_key = state.kernel.config.api_key.trim().to_string();
-    let auth_state = middleware::AuthState {
-        api_key: api_key.clone(),
-        auth_enabled: state.kernel.config.auth.enabled,
-        session_secret: if !api_key.is_empty() {
-            api_key.clone()
-        } else if state.kernel.config.auth.enabled {
-            state.kernel.config.auth.password_hash.clone()
-        } else {
-            String::new()
-        },
-    };
-
-    let app = Router::new()
-        .route("/api/health", axum::routing::get(routes::health))
-        .route(
-            "/api/system/daemon-resources",
-            axum::routing::get(routes::daemon_resources),
-        )
-        .route(
-            "/api/system/network-hints",
-            axum::routing::get(routes::system_network_hints),
-        )
-        .route("/api/status", axum::routing::get(routes::status))
-        .route(
-            "/api/agents",
-            axum::routing::get(routes::list_agents).post(routes::spawn_agent),
-        )
-        .route(
-            "/api/agents/{id}/message",
-            axum::routing::post(routes::send_message),
-        )
-        .route(
-            "/api/agents/{id}/session",
-            axum::routing::get(routes::get_agent_session),
-        )
-        .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
-        .route(
-            "/api/agents/{id}",
-            axum::routing::get(routes::get_agent).delete(routes::kill_agent),
-        )
-        .route(
-            "/api/agents/{id}/update",
-            axum::routing::put(routes::update_agent),
-        )
-        .route(
-            "/api/triggers",
-            axum::routing::get(routes::list_triggers).post(routes::create_trigger),
-        )
-        .route(
-            "/api/triggers/{id}",
-            axum::routing::delete(routes::delete_trigger),
-        )
-        .route(
-            "/api/schedules",
-            axum::routing::get(routes::list_schedules).post(routes::create_schedule),
-        )
-        .route(
-            "/api/schedules/{id}",
-            axum::routing::delete(routes::delete_schedule).put(routes::update_schedule),
-        )
-        .route(
-            "/api/schedules/{id}/run",
-            axum::routing::post(routes::run_schedule),
-        )
-        .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
-        )
-        .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
-        )
-        .route("/api/shutdown", axum::routing::post(routes::shutdown))
-        .layer(axum::middleware::from_fn_with_state(
-            auth_state,
-            middleware::auth,
-        ))
-        .layer(axum::middleware::from_fn(middleware::request_logging))
-        .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone());
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind test server");
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    });
-
-    TestServer {
-        base_url: format!("http://{}", addr),
-        state,
-        _tmp: tmp,
-    }
+    spawn_test_server_with_kernel(kernel, tmp).await
 }
 
 #[tokio::test]

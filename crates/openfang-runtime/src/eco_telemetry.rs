@@ -48,6 +48,8 @@ fn approx_tok(s: &str) -> u64 {
     (s.len() / 4 + 1) as u64
 }
 
+// Used by `snapshot_json` (tests + future metrics/status wiring).
+#[allow(dead_code)]
 fn pct(v: u64, total: u64) -> u64 {
     if total == 0 {
         0
@@ -56,6 +58,7 @@ fn pct(v: u64, total: u64) -> u64 {
     }
 }
 
+#[allow(dead_code)]
 fn sample_percentile(mut vals: Vec<u8>, p: f64) -> u8 {
     if vals.is_empty() {
         return 0;
@@ -65,6 +68,7 @@ fn sample_percentile(mut vals: Vec<u8>, p: f64) -> u8 {
     vals[idx.min(vals.len().saturating_sub(1))]
 }
 
+#[allow(dead_code)]
 fn stats_to_json(s: &CompressionStats) -> serde_json::Value {
     let sample_vec: Vec<u8> = s.savings_pct_samples.iter().copied().collect();
     let mean = if sample_vec.is_empty() {
@@ -112,6 +116,7 @@ pub fn record_turn(agent_id: &str, mode: &str, original_text: &str, compressed_t
 }
 
 /// Snapshot aggregate eco-mode compression metrics.
+#[allow(dead_code)]
 pub fn snapshot_json() -> serde_json::Value {
     let mut modes: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for kv in mode_totals().iter() {
@@ -142,5 +147,54 @@ pub fn snapshot_json() -> serde_json::Value {
         "modes": modes,
         "agents": agents,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_turn_and_snapshot_json_shape() {
+        mode_totals().clear();
+        agent_mode_totals().clear();
+
+        record_turn(
+            "00000000-0000-0000-0000-0000000000aa",
+            "balanced",
+            "hello world from test",
+            "hi",
+            35,
+        );
+
+        let j = snapshot_json();
+        assert!(j.get("modes").is_some());
+        assert!(j.get("agents").is_some());
+        let modes = j["modes"].as_object().expect("modes object");
+        let balanced = modes.get("balanced").expect("balanced key");
+        assert_eq!(balanced["turns"], 1);
+        assert!(
+            balanced["compressed_turns"].as_u64().unwrap_or(0) >= 1,
+            "{balanced:?}"
+        );
+
+        let agents = j["agents"].as_array().expect("agents array");
+        assert!(
+            agents.iter().any(|a| a["agent_id"] == "00000000-0000-0000-0000-0000000000aa"),
+            "expected agent row: {agents:?}"
+        );
+    }
+
+    #[test]
+    fn sample_percentile_edges() {
+        assert_eq!(super::sample_percentile(vec![], 0.5), 0);
+        assert_eq!(super::sample_percentile(vec![7], 0.5), 7);
+        let v: Vec<u8> = (0u8..=10).collect();
+        assert_eq!(super::sample_percentile(v.clone(), 0.0), 0);
+        assert_eq!(super::sample_percentile(v.clone(), 1.0), 10);
+        assert_eq!(super::sample_percentile(v.clone(), 0.5), 5);
+        let mut v2: Vec<u8> = v;
+        v2.push(20);
+        assert_eq!(super::sample_percentile(v2, 0.5), 6);
+    }
 }
 

@@ -12,6 +12,14 @@ With the daemon running, pass the **Dashboard** base URL from `openfang start` (
 
 This hits `/api/health`, `/api/status`, `/api/schedules`, **`GET /api/version/github-latest`**, **`GET /api/logs/daemon/recent?lines=5`** (may return empty `lines` until `logs/daemon.log` exists), `POST /api/support/diagnostics` (writes a zip under `~/.armaraos/support/` on success), **`GET /api/support/diagnostics/download`** for that zip’s `bundle_filename`, **`GET /api/armaraos-home/download`** for the same file under `support/…`, a sample `POST /api/agents` to verify auth/error JSON when a key is configured, and (when agents exist) `GET /api/agents/:id/session/digest`.
 
+### CI: temp daemon + same smoke script
+
+GitHub Actions (Linux) runs an optional job **`dashboard-smoke`** that builds **`openfang`** release, uses a throwaway **`ARMARAOS_HOME`**, runs **`openfang init --quick`**, starts the daemon, then invokes **`./scripts/verify-dashboard-smoke.sh`**. Wrapper: **`scripts/ci-dashboard-smoke.sh`** (set **`OPENFANG_BIN`** if the binary lives somewhere other than **`target/release/openfang`**). The job is **`continue-on-error: true`** so a flaky boot does not block merges.
+
+### Rust: HTTP integration tests use the production router
+
+**`cargo test -p openfang-api`** integration tests (**`tests/api_integration_test.rs`**, **`tests/load_test.rs`**, and lifecycle tests in **`tests/daemon_lifecycle_test.rs`**) bind a random port and serve **`openfang_api::server::build_router`** — the same Axum route table, auth middleware, rate limiting, and layers as **`run_daemon`**, not a hand-maintained parallel router. Add new endpoint coverage there when you change **`crates/openfang-api/src/server.rs`**.
+
 ## PUT full manifest + on-disk `agent.toml` (optional API QA)
 
 Verifies **`PUT /api/agents/{id}/update`** applies **`AgentManifest`** TOML to the running kernel and syncs **`agents/<name>/agent.toml`** under the configured home (see [api-reference.md](api-reference.md)). **Auth:** when `api_key` is set, send **`Authorization: Bearer <key>`** (same as other write routes).

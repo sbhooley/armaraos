@@ -7,6 +7,7 @@
 # (host AINL + PyPI latest for bell), GET /api/logs/daemon/recent
 # (empty lines OK until daemon.log exists), GET / (embedded dashboard HTML includes notification bell),
 # GET /api/budget, GET /api/approvals, GET /api/system/daemon-resources.
+# CI wrapper (temp home + daemon): scripts/ci-dashboard-smoke.sh
 # Usage: ./scripts/verify-dashboard-smoke.sh [BASE_URL]
 set -euo pipefail
 

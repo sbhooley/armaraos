@@ -53,6 +53,8 @@ cargo clippy --workspace --all-targets -- -D warnings  # Zero warnings
 
 CI already runs `cargo check`, `cargo test --workspace`, `cargo clippy -D warnings`, and `cargo fmt --check` on push/PR.
 
+**API HTTP integration tests** (`crates/openfang-api/tests/api_integration_test.rs`, `load_test.rs`, `daemon_lifecycle_test.rs`) use **`openfang_api::server::build_router`** so they exercise the same routes and middleware stack as the real daemon. An optional Linux job **`dashboard-smoke`** runs **`scripts/ci-dashboard-smoke.sh`** (temp **`ARMARAOS_HOME`**, **`openfang init --quick`**, start daemon, then **`scripts/verify-dashboard-smoke.sh`**); it is **`continue-on-error: true`**.
+
 ## MANDATORY: Live Integration Testing
 **After implementing any new endpoint, feature, or wiring change, you MUST run live integration tests.** Unit tests alone are not enough — they can pass while the feature is actually dead code. Live tests catch:
 - Missing route registrations in server.rs

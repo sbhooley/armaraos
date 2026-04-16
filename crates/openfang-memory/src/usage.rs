@@ -1389,6 +1389,29 @@ mod tests {
     }
 
     #[test]
+    fn test_query_compression_summary_window_label() {
+        let store = setup();
+        let a1 = AgentId::new();
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: a1,
+                mode: "balanced".to_string(),
+                original_tokens_est: 50,
+                compressed_tokens_est: 40,
+                savings_pct: 20,
+                semantic_preservation_score: None,
+            })
+            .unwrap();
+
+        let s7 = store.query_compression_summary(Some(7)).unwrap();
+        assert_eq!(s7.window, "7d");
+        assert!(s7.modes.contains_key("balanced"));
+
+        let s_all = store.query_compression_summary(None).unwrap();
+        assert_eq!(s_all.window, "all");
+    }
+
+    #[test]
     fn test_adaptive_eco_roundtrip_and_summary() {
         let store = setup();
         let aid = AgentId::new();
