@@ -6,6 +6,7 @@
 //! Run: cargo test -p openfang-api --test load_test -- --nocapture
 
 use axum::Router;
+use openfang_api::daemon_resources::DaemonResources;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_kernel::OpenFangKernel;
@@ -61,6 +62,7 @@ async fn start_test_server() -> TestServer {
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: DaemonResources::spawn_collector(),
     });
 
     let app = Router::new()

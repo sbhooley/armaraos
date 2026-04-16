@@ -173,6 +173,9 @@ openssl = { version = "0.10", features = ["vendored"] }
 tokio-test = "0.4"
 tempfile = "3"
 
+# Host + process stats for the dashboard (CPU / RSS)
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

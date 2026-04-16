@@ -58,6 +58,8 @@ pub struct AppState {
     pub budget_config: Arc<tokio::sync::RwLock<openfang_types::config::BudgetConfig>>,
     /// Timestamps (unix ms) of recent `POST /api/ainl/library/register-curated` calls per client IP.
     pub ainl_register_hits: DashMap<std::net::IpAddr, Vec<u64>>,
+    /// Background sampler for `GET /api/system/daemon-resources` (dashboard footprint strip).
+    pub daemon_resources: Arc<crate::daemon_resources::DaemonResources>,
 }
 
 #[inline]
@@ -6768,6 +6770,11 @@ pub async fn network_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         "connected_peers": connected_peers,
         "total_peers": total_peers,
     }))
+}
+
+/// GET /api/system/daemon-resources — Live CPU + RSS memory for the daemon process.
+pub async fn daemon_resources(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    Json(state.daemon_resources.snapshot())
 }
 
 /// GET /api/system/network-hints — VPN/proxy/tunnel hints from host network interfaces.

@@ -49,6 +49,7 @@ walkdir = { workspace = true }
 zip = { workspace = true }
 globset = { workspace = true }
 if-addrs = { workspace = true }
+sysinfo = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

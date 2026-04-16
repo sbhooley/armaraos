@@ -367,6 +367,49 @@ function armaraosNotifyPersistKernelDismiss(id) {
   } catch (e) { /* ignore */ }
 }
 
+var NOTIFY_RELEASE_DISMISS_KEY = 'armaraos-notify-dismissed-release-tag';
+
+function armaraosNotifyReleaseDismissedTag() {
+  try {
+    return String(localStorage.getItem(NOTIFY_RELEASE_DISMISS_KEY) || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function armaraosNotifyPersistReleaseDismiss(tag) {
+  if (!tag) return;
+  try {
+    localStorage.setItem(NOTIFY_RELEASE_DISMISS_KEY, String(tag));
+  } catch (e) { /* ignore */ }
+}
+
+function armaraosSemverTuple(s) {
+  if (!s) return null;
+  var t = String(s).trim();
+  if (t.charAt(0) === 'v' || t.charAt(0) === 'V') t = t.slice(1);
+  var core = t.split(/[-+]/)[0];
+  var parts = core.split('.');
+  var out = [];
+  for (var i = 0; i < 3; i++) {
+    var n = parseInt(parts[i], 10);
+    out.push(isNaN(n) ? 0 : n);
+  }
+  return out;
+}
+
+/** True when `a` is strictly newer than `b` (core x.y.z only; ignores pre-release suffix on tag). */
+function armaraosSemverGreater(a, b) {
+  var ta = armaraosSemverTuple(a);
+  var tb = armaraosSemverTuple(b);
+  if (!ta || !tb) return false;
+  for (var i = 0; i < 3; i++) {
+    if (ta[i] > tb[i]) return true;
+    if (ta[i] < tb[i]) return false;
+  }
+  return false;
+}
+
 var _armaraosNotifyTrapHandler = null;
 
 function armaraosNotifyFocusableSelector() {
@@ -480,6 +523,8 @@ document.addEventListener('alpine:init', function() {
     lastErrorRequestId: '',
     version: '0.1.0',
     agentCount: 0,
+    /** Latest `GET /api/system/daemon-resources` payload for the header footprint strip. */
+    daemonResources: null,
     pendingApprovalCount: 0,
     lastPendingApprovalSignature: '',
     pendingAgent: null,
@@ -789,6 +834,69 @@ document.addEventListener('alpine:init', function() {
       } catch(e) { /* silent */ }
     },
 
+    _formatDaemonBytes(bytes) {
+      var u = typeof bytes === 'number' && !isNaN(bytes) ? bytes : 0;
+      if (u <= 0) return '0 B';
+      if (u < 1024) return u + ' B';
+      if (u < 1024 * 1024) return (u / 1024).toFixed(1) + ' KB';
+      if (u < 1024 * 1024 * 1024) return (u / (1024 * 1024)).toFixed(1) + ' MB';
+      return (u / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    },
+
+    daemonResourcesCpuText() {
+      var dr = this.daemonResources;
+      if (!dr) return '\u2026';
+      if (dr.supported === false) return 'n/a';
+      var v = typeof dr.cpu_percent === 'number' ? dr.cpu_percent : 0;
+      return (Math.round(v * 10) / 10).toFixed(1) + '%';
+    },
+
+    daemonResourcesCpuBar() {
+      var dr = this.daemonResources;
+      if (!dr || dr.supported === false) return 0;
+      var v = typeof dr.cpu_percent === 'number' ? dr.cpu_percent : 0;
+      return Math.max(0, Math.min(100, v));
+    },
+
+    daemonResourcesMemText() {
+      var dr = this.daemonResources;
+      if (!dr) return '\u2026';
+      if (dr.supported === false) return 'n/a';
+      var v = typeof dr.memory_percent === 'number' ? dr.memory_percent : 0;
+      return (Math.round(v * 10) / 10).toFixed(1) + '%';
+    },
+
+    daemonResourcesMemBar() {
+      var dr = this.daemonResources;
+      if (!dr || dr.supported === false) return 0;
+      var v = typeof dr.memory_percent === 'number' ? dr.memory_percent : 0;
+      return Math.max(0, Math.min(100, v));
+    },
+
+    daemonResourcesTooltipCpu() {
+      var dr = this.daemonResources;
+      if (!dr) return 'Daemon CPU usage';
+      if (dr.supported === false) {
+        return 'CPU usage is not available on this platform build.';
+      }
+      var pct = (typeof dr.cpu_percent === 'number' ? dr.cpu_percent : 0).toFixed(1);
+      var cores = (typeof dr.cpu_cores_equivalent === 'number' ? dr.cpu_cores_equivalent : 0).toFixed(2);
+      var n = dr.logical_cpus != null ? String(dr.logical_cpus) : '?';
+      return 'Daemon CPU (average): ' + pct + '% of total CPU (' + cores + ' core-eq, ' + n + ' logical CPUs).';
+    },
+
+    daemonResourcesTooltipMem() {
+      var dr = this.daemonResources;
+      if (!dr) return 'Daemon memory usage';
+      if (dr.supported === false) {
+        return 'Memory usage is not available on this platform build.';
+      }
+      var rss = this._formatDaemonBytes(dr.memory_rss_bytes || 0);
+      var tot = this._formatDaemonBytes(dr.memory_total_bytes || 0);
+      var pct = (typeof dr.memory_percent === 'number' ? dr.memory_percent : 0).toFixed(1);
+      return 'Daemon RSS: ' + rss + ' / ' + tot + ' RAM (' + pct + '%).';
+    },
+
     async checkStatus() {
       try {
         var s = await OpenFangAPI.get('/api/status');
@@ -802,8 +910,15 @@ document.addEventListener('alpine:init', function() {
         this.lastErrorRequestId = '';
         this.version = s.version || '0.1.0';
         this.agentCount = s.agent_count || 0;
+        var self = this;
+        OpenFangAPI.get('/api/system/daemon-resources')
+          .then(function(dr) {
+            self.daemonResources = dr;
+          })
+          .catch(function() { /* ignore */ });
       } catch(e) {
         this.connected = false;
+        this.daemonResources = null;
         this.lastError = e.message || 'Unknown error';
         this.lastErrorHint = e.hint || '';
         this.lastErrorDetail = e.detail || '';
@@ -1038,6 +1153,9 @@ document.addEventListener('alpine:init', function() {
       if (String(id).indexOf('k-') === 0) {
         armaraosNotifyPersistKernelDismiss(id);
       }
+      if (String(id).indexOf('release-') === 0) {
+        armaraosNotifyPersistReleaseDismiss(id.slice('release-'.length));
+      }
       if (id === 'approval-pending') {
         try {
           this.approvalDismissSig = Alpine.store('app').lastPendingApprovalSignature || '';
@@ -1082,6 +1200,36 @@ document.addEventListener('alpine:init', function() {
         detail: 'A sensitive tool call needs your review.',
         href: '#approvals',
         severity: 'warn',
+        ts: Date.now()
+      });
+    },
+    syncAppReleaseUpdate(daemonVersion, latestTag, htmlUrl) {
+      if (!daemonVersion || !latestTag) return;
+      var dismissed = armaraosNotifyReleaseDismissedTag();
+      if (dismissed && dismissed === String(latestTag)) {
+        this.items = (this.items || []).filter(function(x) {
+          return !(x && x.id && String(x.id).indexOf('release-') === 0);
+        });
+        return;
+      }
+      if (!armaraosSemverGreater(latestTag, daemonVersion)) {
+        this.items = (this.items || []).filter(function(x) {
+          return !(x && x.id && String(x.id).indexOf('release-') === 0);
+        });
+        return;
+      }
+      this._prepend({
+        id: 'release-' + String(latestTag),
+        kind: 'update',
+        title: 'ArmaraOS update available',
+        detail:
+          'This daemon is v' +
+          String(daemonVersion) +
+          ' · GitHub latest is ' +
+          String(latestTag) +
+          '.',
+        href: htmlUrl || '#settings',
+        severity: 'info',
         ts: Date.now()
       });
     },
@@ -1179,18 +1327,71 @@ document.addEventListener('alpine:init', function() {
             });
             return;
           }
+          if (d.event === 'WorkflowRunFinished') {
+            var wfn = d.workflow_name || 'Workflow';
+            var okwf = !!d.ok;
+            this._prepend({
+              id: kid,
+              kind: 'workflow',
+              title: okwf ? ('Workflow finished: ' + wfn) : ('Workflow failed: ' + wfn),
+              detail: String(d.summary || '').slice(0, 320),
+              href: '#workflows',
+              severity: okwf ? 'info' : 'error',
+              ts: Date.now()
+            });
+            return;
+          }
+          if (d.event === 'AgentAssistantReply') {
+            var an = d.agent_name || 'Agent';
+            var pr = (d.message_preview || '').slice(0, 260);
+            var aidAr = String(d.agent_id || '');
+            this._prepend({
+              id: aidAr ? ('agent-reply-' + aidAr) : kid,
+              kind: 'agent_message',
+              title: an + ' replied',
+              detail: pr,
+              href: '#agents',
+              severity: 'info',
+              ts: Date.now()
+            });
+            return;
+          }
+          if (d.event === 'CronJobCompleted') {
+            var nmOk = d.job_name || 'Scheduled job';
+            var outOk = (d.output_preview || '').slice(0, 220);
+            var kindOk = d.action_kind ? String(d.action_kind) : '';
+            var titleOk = nmOk + ' finished';
+            if (kindOk === 'ainl_run') titleOk = 'AINL program finished';
+            else if (kindOk === 'agent_turn') titleOk = 'Scheduled agent turn finished';
+            this._prepend({
+              id: kid,
+              kind: 'scheduler',
+              title: titleOk,
+              detail: outOk,
+              href: '#scheduler',
+              severity: 'info',
+              ts: Date.now()
+            });
+            return;
+          }
           if (d.event === 'CronJobFailed') {
             var nm = d.job_name || 'Scheduled job';
             var er = (d.error || '').slice(0, 220);
+            var kindFail = d.action_kind ? String(d.action_kind) : '';
+            var titleFail = nm + ' failed';
+            if (kindFail === 'ainl_run') titleFail = 'AINL program run failed';
+            else if (kindFail === 'agent_turn') titleFail = 'Scheduled agent turn failed';
+            else if (kindFail === 'workflow_run') titleFail = 'Scheduled workflow failed';
             this._prepend({
               id: kid,
               kind: 'agent_error',
-              title: nm + ' failed',
+              title: titleFail,
               detail: er,
               href: '#scheduler',
               severity: 'error',
               ts: Date.now()
             });
+            return;
           }
         }
       } catch (e) { /* ignore */ }
@@ -1230,6 +1431,13 @@ document.addEventListener('alpine:init', function() {
         var name = p.data.job_name || 'Scheduled job';
         var out = (p.data.output_preview || '').slice(0, 180);
         OpenFangToast.info(name + ': ' + out, 7000);
+      } else if (p.type === 'System' && p.data && p.data.event === 'WorkflowRunFinished') {
+        var wn = p.data.workflow_name || 'Workflow';
+        if (p.data.ok) {
+          OpenFangToast.info('Workflow finished: ' + wn, 6000);
+        } else {
+          OpenFangToast.error('Workflow failed: ' + wn, 8000);
+        }
       } else if (p.type === 'System' && p.data && p.data.event === 'CronJobFailed') {
         var name2 = p.data.job_name || 'Scheduled job';
         var err2 = (p.data.error || '').slice(0, 180);
@@ -1450,6 +1658,26 @@ function app() {
           } catch (eB) { /* ignore */ }
         })
         .catch(function() { /* ignore */ });
+      function armaraosPollDaemonReleaseUpdate() {
+        if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) return;
+        Promise.all([
+          OpenFangAPI.get('/api/version').catch(function() {
+            return null;
+          }),
+          OpenFangAPI.get('/api/version/github-latest').catch(function() {
+            return null;
+          }),
+        ]).then(function(pair) {
+          var v = pair[0];
+          var gh = pair[1];
+          if (!v || !v.version || !gh || !gh.tag_name) return;
+          try {
+            Alpine.store('notifyCenter').syncAppReleaseUpdate(v.version, gh.tag_name, gh.html_url);
+          } catch (eR) { /* ignore */ }
+        });
+      }
+      armaraosPollDaemonReleaseUpdate();
+      setInterval(armaraosPollDaemonReleaseUpdate, 6 * 60 * 60 * 1000);
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       Alpine.store('app').loadUiPrefs();

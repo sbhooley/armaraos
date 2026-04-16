@@ -4,6 +4,7 @@
 //! and graceful shutdown sequence.
 
 use axum::Router;
+use openfang_api::daemon_resources::DaemonResources;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::server::{read_daemon_info, DaemonInfo};
@@ -117,10 +118,15 @@ async fn test_full_daemon_lifecycle() {
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: DaemonResources::spawn_collector(),
     });
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
+        .route(
+            "/api/system/daemon-resources",
+            axum::routing::get(routes::daemon_resources),
+        )
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
@@ -244,6 +250,7 @@ async fn test_server_immediate_responsiveness() {
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: DaemonResources::spawn_collector(),
     });
 
     let app = Router::new()

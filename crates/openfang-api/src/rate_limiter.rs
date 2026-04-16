@@ -16,6 +16,7 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
     match (method, path) {
         (_, "/api/health") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/status") => NonZeroU32::new(1).unwrap(),
+        ("GET", "/api/system/daemon-resources") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version/github-latest") => NonZeroU32::new(8).unwrap(),
         ("GET", "/api/tools") => NonZeroU32::new(1).unwrap(),
@@ -105,6 +106,10 @@ mod tests {
     #[test]
     fn test_costs() {
         assert_eq!(operation_cost("GET", "/api/health").get(), 1);
+        assert_eq!(
+            operation_cost("GET", "/api/system/daemon-resources").get(),
+            1
+        );
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);
         assert_eq!(operation_cost("POST", "/api/agents").get(), 50);

@@ -186,7 +186,7 @@
   background: var(--accent);
   color: var(--bg-primary);
   font-weight: 600;
-  box-shadow: var(--shadow-sm), 0 2px 8px rgba(255, 92, 0, 0.2);
+  box-shadow: var(--shadow-sm), 0 2px 8px rgba(245, 158, 11, 0.22);
 }
 
 .nav-unread-badge {
@@ -240,7 +240,8 @@
 
 /* Horizontal space for fixed notification bell (viewport top-right) so page headers and actions never sit underneath it */
 :root {
-  --notify-bell-reserve: 56px;
+  /* Notification bell + daemon CPU/MEM strip (fixed top-right cluster) */
+  --notify-bell-reserve: 168px;
 }
 
 /* Main content area */
@@ -315,6 +316,74 @@
 }
 .notify-center-root > * {
   pointer-events: auto;
+}
+.notify-center-cluster {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: auto;
+}
+.notify-bell-wrap {
+  position: relative;
+  display: inline-block;
+}
+.daemon-resource-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  min-width: 104px;
+  max-width: 120px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-primary, rgba(15, 15, 20, 0.92));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm, 0 2px 10px rgba(0, 0, 0, 0.25));
+}
+.daemon-resource-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.daemon-resource-meter-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  line-height: 1;
+}
+.daemon-resource-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--text-dim, rgba(255, 255, 255, 0.45));
+}
+.daemon-resource-pct {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.78));
+}
+.daemon-resource-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+.daemon-resource-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  width: 0%;
+  background: var(--accent, #6366f1);
+  transition: width 0.35s var(--ease-spring, ease-out);
+}
+.daemon-resource-meter--ok .daemon-resource-bar-fill {
+  background: var(--success, #22c55e);
+}
+.daemon-resource-meter--warm .daemon-resource-bar-fill {
+  background: var(--warning, #f59e0b);
+}
+.daemon-resource-meter--high .daemon-resource-bar-fill {
+  background: var(--error, #ef4444);
 }
 .notify-center-backdrop {
   position: fixed;
@@ -465,6 +534,14 @@
 
 /* Mobile small screen */
 @media (max-width: 480px) {
+  .daemon-resource-label {
+    display: none;
+  }
+  .daemon-resource-strip {
+    min-width: 86px;
+    max-width: 92px;
+    padding: 5px 6px;
+  }
   .page-header {
     gap: 8px;
     padding: 12px 16px;

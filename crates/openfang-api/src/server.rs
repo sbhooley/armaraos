@@ -53,6 +53,7 @@ pub async fn build_router(
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(kernel.config.budget.clone())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: crate::daemon_resources::DaemonResources::spawn_collector(),
     });
 
     // CORS: allow localhost origins by default. If API key is set, the API
@@ -563,6 +564,10 @@ pub async fn build_router(
         .route(
             "/api/system/network-hints",
             axum::routing::get(routes::system_network_hints),
+        )
+        .route(
+            "/api/system/daemon-resources",
+            axum::routing::get(routes::daemon_resources),
         )
         // Agent communication (Comms) endpoints
         .route(

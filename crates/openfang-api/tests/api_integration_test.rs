@@ -8,6 +8,7 @@
 //! Run: cargo test -p openfang-api --test api_integration_test -- --nocapture
 
 use axum::Router;
+use openfang_api::daemon_resources::DaemonResources;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::ws;
@@ -92,10 +93,15 @@ async fn start_test_server_with_provider_patch(
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: DaemonResources::spawn_collector(),
     });
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
+        .route(
+            "/api/system/daemon-resources",
+            axum::routing::get(routes::daemon_resources),
+        )
         .route(
             "/api/system/network-hints",
             axum::routing::get(routes::system_network_hints),
@@ -1648,6 +1654,33 @@ async fn test_get_budget_status_json_shape() {
     );
 }
 
+/// GET /api/system/daemon-resources returns JSON for the dashboard footprint strip.
+#[tokio::test]
+async fn test_get_daemon_resources_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{}/api/system/daemon-resources",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert!(v.get("cpu_percent").is_some(), "expected cpu_percent: {v}");
+    assert!(
+        v.get("memory_percent").is_some(),
+        "expected memory_percent: {v}"
+    );
+    assert!(
+        v.get("logical_cpus").is_some(),
+        "expected logical_cpus: {v}"
+    );
+    assert!(v.get("supported").is_some(), "expected supported: {v}");
+}
+
 /// GET /api/approvals returns `{ approvals, total }` for the dashboard queue.
 #[tokio::test]
 async fn test_get_approvals_list_json_shape() {
@@ -1902,6 +1935,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
         ainl_register_hits: dashmap::DashMap::new(),
+        daemon_resources: DaemonResources::spawn_collector(),
     });
 
     let api_key = state.kernel.config.api_key.trim().to_string();
@@ -1919,6 +1953,10 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
+        .route(
+            "/api/system/daemon-resources",
+            axum::routing::get(routes::daemon_resources),
+        )
         .route(
             "/api/system/network-hints",
             axum::routing::get(routes::system_network_hints),
