@@ -107,9 +107,14 @@ async fn start_test_server_with_provider_patch(
             axum::routing::get(routes::system_network_hints),
         )
         .route("/api/status", axum::routing::get(routes::status))
+        .route("/api/version", axum::routing::get(routes::version))
         .route(
             "/api/version/github-latest",
             axum::routing::get(routes::version_github_latest_release),
+        )
+        .route(
+            "/api/ainl/runtime-version",
+            axum::routing::get(routes::get_ainl_runtime_version),
         )
         .route(
             "/api/agents",
@@ -434,6 +439,33 @@ async fn test_github_latest_release_endpoint() {
     assert!(
         url.contains("github.com"),
         "html_url should be a GitHub URL: {body:?}"
+    );
+}
+
+/// GET /api/ainl/runtime-version — host toolchain + optional PyPI latest (dashboard bell).
+#[tokio::test]
+async fn test_get_ainl_runtime_version_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{}/api/ainl/runtime-version",
+            server.base_url
+        ))
+        .timeout(std::time::Duration::from_secs(45))
+        .send()
+        .await
+        .expect("GET ainl runtime-version");
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.expect("json body");
+    assert!(
+        v.get("ainl_cli_line").is_some(),
+        "expected ainl_cli_line: {v}"
+    );
+    assert!(v.get("pip_excerpt").is_some(), "expected pip_excerpt: {v}");
+    assert!(
+        v.get("pypi_latest_version").is_some() || v.get("pypi_error").is_some(),
+        "expected pypi_latest_version or pypi_error: {v}"
     );
 }
 
@@ -840,6 +872,34 @@ async fn test_ui_prefs_put_rejects_non_object_body() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_ui_prefs_notify_chat_replies_roundtrip() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let put_body = serde_json::json!({
+        "notify_chat_replies": "hidden",
+        "pinned_agents": []
+    });
+
+    let resp = client
+        .put(format!("{}/api/ui-prefs", server.base_url))
+        .json(&put_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{}/api/ui-prefs", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["notify_chat_replies"], "hidden");
 }
 
 #[tokio::test]

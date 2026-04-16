@@ -4626,6 +4626,23 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
 
             <div class="card mt-4">
+              <div class="card-header">Notification center</div>
+              <div class="card-meta text-dim" style="margin-top:6px;line-height:1.5">
+                Kernel <strong>AgentAssistantReply</strong> events can add a bell row when an agent finishes a turn. Choose how noisy that should be. Saved to <code style="font-size:11px">ui-prefs.json</code> as <code style="font-size:11px">notify_chat_replies</code> (with a localStorage mirror for instant UI).
+              </div>
+              <div class="form-group" style="margin-top:12px;max-width:420px">
+                <label class="text-xs text-dim">Agent assistant replies (bell)</label>
+                <select class="form-select" style="margin-top:6px;font-size:13px"
+                  :value="$store.app.notifyChatReplies"
+                  @change="$store.app.setNotifyChatReplies($event.target.value)">
+                  <option value="all">Always</option>
+                  <option value="hidden">Hide while that agent’s chat is open</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="card mt-4">
               <div class="card-header">Support</div>
               <div class="card-meta text-dim" style="margin-top:6px">
                 Generate a redacted diagnostics bundle (.zip). Each bundle includes <code style="font-size:11px">README.txt</code> and <code style="font-size:11px">diagnostics_snapshot.json</code> so support can see config schema, paths, and runtime at a glance. On desktop we copy it to your <strong>Downloads</strong> folder and keep a copy under <code style="font-size:11px">support/</code> in your ArmaraOS home. In a browser, your download folder is used when the save prompt appears.

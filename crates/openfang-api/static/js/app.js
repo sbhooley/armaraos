@@ -384,6 +384,24 @@ function armaraosNotifyPersistReleaseDismiss(tag) {
   } catch (e) { /* ignore */ }
 }
 
+/** Dismissed PyPI `ainativelang` version for the “AINL update on PyPI” bell row — `armaraos-notify-dismissed-ainl-pypi`. */
+var NOTIFY_AINL_PYPI_DISMISS_KEY = 'armaraos-notify-dismissed-ainl-pypi';
+
+function armaraosNotifyAinlDismissedVersion() {
+  try {
+    return String(localStorage.getItem(NOTIFY_AINL_PYPI_DISMISS_KEY) || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+function armaraosNotifyPersistAinlDismiss(version) {
+  if (!version) return;
+  try {
+    localStorage.setItem(NOTIFY_AINL_PYPI_DISMISS_KEY, String(version));
+  } catch (e) { /* ignore */ }
+}
+
 function armaraosSemverTuple(s) {
   if (!s) return null;
   var t = String(s).trim();
@@ -543,8 +561,30 @@ document.addEventListener('alpine:init', function() {
     pinnedAgentIds: (function() { try { return JSON.parse(localStorage.getItem('armaraos-pinned-agents') || '[]'); } catch(e) { return []; } })(),
     /** Per-agent eco mode map (`agentId -> off|balanced|aggressive`), persisted in ui-prefs.json. */
     ecoModesByAgent: (function() { try { return JSON.parse(localStorage.getItem('armaraos-eco-modes-v1') || '{}'); } catch(e) { return {}; } })(),
+    /**
+     * Bell rows for kernel **AgentAssistantReply**: `all` (always), `hidden` (skip while that agent’s chat is open + visible), `off`.
+     * Persisted in ui-prefs.json as **notify_chat_replies** (+ localStorage for instant UI).
+     */
+    notifyChatReplies: (function() {
+      try {
+        var m = localStorage.getItem('armaraos-notify-chat-replies');
+        if (m === 'off' || m === 'hidden' || m === 'all') return m;
+      } catch (e) { /* ignore */ }
+      return 'all';
+    })(),
     normalizeEcoMode(mode) {
       return (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
+    },
+    normalizeNotifyChatReplies(mode) {
+      var m = mode != null ? String(mode) : '';
+      return (m === 'off' || m === 'hidden' || m === 'all') ? m : 'all';
+    },
+    setNotifyChatReplies(mode) {
+      var next = this.normalizeNotifyChatReplies(mode);
+      if (next === this.notifyChatReplies) return;
+      this.notifyChatReplies = next;
+      try { localStorage.setItem('armaraos-notify-chat-replies', next); } catch (e) { /* ignore */ }
+      this._saveUiPrefs();
     },
 
     getAgentEcoMode(agentId, fallbackMode) {
@@ -714,6 +754,11 @@ document.addEventListener('alpine:init', function() {
           this.ecoModesByAgent = norm;
           try { localStorage.setItem('armaraos-eco-modes-v1', JSON.stringify(norm)); } catch(e2) { /* ignore */ }
         }
+        if (prefs && prefs.notify_chat_replies != null) {
+          var ncr = this.normalizeNotifyChatReplies(prefs.notify_chat_replies);
+          this.notifyChatReplies = ncr;
+          try { localStorage.setItem('armaraos-notify-chat-replies', ncr); } catch (e4) { /* ignore */ }
+        }
         try { window.dispatchEvent(new CustomEvent('armaraos-ui-prefs-loaded')); } catch(e3) { /* ignore */ }
       } catch(e) { /* keep localStorage-seeded values on failure */ }
     },
@@ -722,7 +767,8 @@ document.addEventListener('alpine:init', function() {
     _saveUiPrefs() {
       var prefs = {
         pinned_agents: this.pinnedAgentIds || [],
-        agent_eco_modes: this.ecoModesByAgent || {}
+        agent_eco_modes: this.ecoModesByAgent || {},
+        notify_chat_replies: this.normalizeNotifyChatReplies(this.notifyChatReplies)
       };
       OpenFangAPI.put('/api/ui-prefs', prefs).catch(function() { /* ignore */ });
     },
@@ -1156,6 +1202,9 @@ document.addEventListener('alpine:init', function() {
       if (String(id).indexOf('release-') === 0) {
         armaraosNotifyPersistReleaseDismiss(id.slice('release-'.length));
       }
+      if (String(id).indexOf('ainl-pypi-') === 0) {
+        armaraosNotifyPersistAinlDismiss(id.slice('ainl-pypi-'.length));
+      }
       if (id === 'approval-pending') {
         try {
           this.approvalDismissSig = Alpine.store('app').lastPendingApprovalSignature || '';
@@ -1229,6 +1278,51 @@ document.addEventListener('alpine:init', function() {
           String(latestTag) +
           '.',
         href: htmlUrl || '#settings',
+        severity: 'info',
+        ts: Date.now()
+      });
+    },
+    /** Host `pip show` version vs PyPI **ainativelang** latest (6h poll + System tab check). */
+    syncAinlPypiUpdate(pipVersion, pypiLatest) {
+      var strip = function() {
+        this.items = (this.items || []).filter(function(x) {
+          return !(x && x.id && String(x.id).indexOf('ainl-pypi-') === 0);
+        });
+      }.bind(this);
+      if (!pypiLatest) {
+        strip();
+        return;
+      }
+      var pv = String(pypiLatest).trim();
+      if (!pv) {
+        strip();
+        return;
+      }
+      var dismissed = armaraosNotifyAinlDismissedVersion();
+      if (dismissed && dismissed === pv) {
+        strip();
+        return;
+      }
+      var installed = pipVersion != null && pipVersion !== '' ? String(pipVersion).trim() : '';
+      if (!installed) {
+        strip();
+        return;
+      }
+      if (!armaraosSemverGreater(pv, installed)) {
+        strip();
+        return;
+      }
+      this._prepend({
+        id: 'ainl-pypi-' + pv,
+        kind: 'update',
+        title: 'AINL package update on PyPI',
+        detail:
+          'Installed `ainativelang` ' +
+          installed +
+          ' · PyPI latest is ' +
+          pv +
+          '.',
+        href: '#settings',
         severity: 'info',
         ts: Date.now()
       });
@@ -1342,9 +1436,21 @@ document.addEventListener('alpine:init', function() {
             return;
           }
           if (d.event === 'AgentAssistantReply') {
+            var aidAr = String(d.agent_id || '');
+            var replyMode = 'all';
+            try {
+              replyMode = Alpine.store('app').normalizeNotifyChatReplies(Alpine.store('app').notifyChatReplies);
+            } catch (eRm) { replyMode = 'all'; }
+            if (replyMode === 'off') {
+              return;
+            }
+            if (replyMode === 'hidden' && aidAr) {
+              try {
+                if (Alpine.store('app').isChatSurfaceActiveForAgent(aidAr)) return;
+              } catch (eHid) { /* ignore */ }
+            }
             var an = d.agent_name || 'Agent';
             var pr = (d.message_preview || '').slice(0, 260);
-            var aidAr = String(d.agent_id || '');
             this._prepend({
               id: aidAr ? ('agent-reply-' + aidAr) : kid,
               kind: 'agent_message',
@@ -1667,13 +1773,23 @@ function app() {
           OpenFangAPI.get('/api/version/github-latest').catch(function() {
             return null;
           }),
-        ]).then(function(pair) {
-          var v = pair[0];
-          var gh = pair[1];
-          if (!v || !v.version || !gh || !gh.tag_name) return;
-          try {
-            Alpine.store('notifyCenter').syncAppReleaseUpdate(v.version, gh.tag_name, gh.html_url);
-          } catch (eR) { /* ignore */ }
+          OpenFangAPI.get('/api/ainl/runtime-version').catch(function() {
+            return null;
+          }),
+        ]).then(function(triple) {
+          var v = triple[0];
+          var gh = triple[1];
+          var ar = triple[2];
+          if (v && v.version && gh && gh.tag_name) {
+            try {
+              Alpine.store('notifyCenter').syncAppReleaseUpdate(v.version, gh.tag_name, gh.html_url);
+            } catch (eR) { /* ignore */ }
+          }
+          if (ar) {
+            try {
+              Alpine.store('notifyCenter').syncAinlPypiUpdate(ar.pip_version, ar.pypi_latest_version);
+            } catch (eA) { /* ignore */ }
+          }
         });
       }
       armaraosPollDaemonReleaseUpdate();

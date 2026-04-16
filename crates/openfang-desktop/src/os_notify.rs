@@ -5,8 +5,8 @@
 //! to miss. We always use the app identifier from [`tauri::Config`] (e.g. `ai.armaraos.desktop`).
 //!
 //! **macOS:** `notify-rust` does not apply [`Notification::icon`](notify_rust::Notification::icon);
-//! Notification Center shows the **app bundle icon** (`icon.icns` from the Tauri build). Keep those
-//! assets in sync with `public/assets/armaraos-logo.png` (see `scripts/regen_icons_from_logo.py`).
+//! Notification Center shows the **app bundle icon** (`icon.icns` from the Tauri build). Regenerate
+//! bundle + web icons from `public/assets/armaraos-logo.png` via `crates/openfang-desktop/scripts/regen_icons_from_logo.py`.
 
 use tauri::{AppHandle, Runtime};
 

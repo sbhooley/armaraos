@@ -2091,6 +2091,8 @@ impl OpenFangKernel {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
         })?;
 
+        let orchestration_ctx_for_notify = orchestration_ctx.clone();
+
         // Dispatch based on module type
         let result = if entry.manifest.module.starts_with("wasm:") {
             self.execute_wasm_agent(&entry, message, kernel_handle)
@@ -2140,6 +2142,14 @@ impl OpenFangKernel {
                     ),
                     "ok",
                 );
+
+                self.maybe_emit_agent_assistant_reply_notification(
+                    agent_id,
+                    &entry.name,
+                    &result.response,
+                    orchestration_ctx_for_notify.as_ref(),
+                )
+                .await;
 
                 Ok(result)
             }
@@ -2203,6 +2213,7 @@ impl OpenFangKernel {
             let message_owned = message.to_string();
             let entry_clone = entry.clone();
             let bill_id = llm_billing_id;
+            let orch_ctx_notify = orchestration_ctx.clone();
 
             let handle = tokio::spawn(async move {
                 let result = if is_wasm {
@@ -2251,6 +2262,14 @@ impl OpenFangKernel {
                             ),
                             "ok",
                         );
+                        kernel_clone
+                            .maybe_emit_agent_assistant_reply_notification(
+                                agent_id,
+                                &entry_clone.name,
+                                &result.response,
+                                orch_ctx_notify.as_ref(),
+                            )
+                            .await;
                         Ok(result)
                     }
                     Err(e) => {
@@ -2550,6 +2569,7 @@ impl OpenFangKernel {
                     .remove(&agent_id)
                     .map(|(_, v)| v);
             }
+            let orch_reply_ctx = orchestration_for_turn.clone();
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
@@ -2709,6 +2729,15 @@ impl OpenFangKernel {
                         ),
                         "ok",
                     );
+
+                    kernel_clone
+                        .maybe_emit_agent_assistant_reply_notification(
+                            agent_id,
+                            &manifest.name,
+                            &result.response,
+                            orch_reply_ctx.as_ref(),
+                        )
+                        .await;
 
                     // Post-loop compaction check: if session now exceeds token threshold,
                     // trigger compaction in background for the next call.
@@ -4787,6 +4816,67 @@ impl OpenFangKernel {
         }
     }
 
+    fn should_emit_assistant_reply_notification(
+        orchestration_ctx: Option<&openfang_types::orchestration::OrchestrationContext>,
+    ) -> bool {
+        !matches!(
+            orchestration_ctx.map(|c| &c.pattern),
+            Some(openfang_types::orchestration::OrchestrationPattern::Workflow { .. })
+        )
+    }
+
+    async fn emit_workflow_run_finished_notification(
+        &self,
+        run_id: WorkflowRunId,
+        ok: bool,
+        detail: &str,
+    ) {
+        let Some(run) = self.workflows.get_run(run_id).await else {
+            return;
+        };
+        let summary = openfang_types::truncate_str(detail.trim(), 260).to_string();
+        let evt = Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::WorkflowRunFinished {
+                workflow_id: run.workflow_id.0.to_string(),
+                workflow_name: run.workflow_name.clone(),
+                run_id: run.id.0.to_string(),
+                ok,
+                summary,
+            }),
+        );
+        // Publish directly (no trigger fanout): avoids non-`Send` `publish_event` awaits on
+        // agent message paths that must stay `Send` for `tokio::spawn` trigger dispatch.
+        self.event_bus.publish(evt).await;
+    }
+
+    async fn maybe_emit_agent_assistant_reply_notification(
+        &self,
+        agent_id: AgentId,
+        agent_name: &str,
+        response: &str,
+        orchestration_ctx: Option<&openfang_types::orchestration::OrchestrationContext>,
+    ) {
+        if !Self::should_emit_assistant_reply_notification(orchestration_ctx) {
+            return;
+        }
+        let preview = openfang_types::truncate_str(response.trim(), 220).to_string();
+        if preview.is_empty() {
+            return;
+        }
+        let evt = Event::new(
+            agent_id,
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::AgentAssistantReply {
+                agent_id,
+                agent_name: agent_name.to_string(),
+                message_preview: preview,
+            }),
+        );
+        self.event_bus.publish(evt).await;
+    }
+
     /// Publish an event to the bus and evaluate triggers.
     ///
     /// Any matching triggers will dispatch messages to the subscribing agents.
@@ -5002,21 +5092,32 @@ impl OpenFangKernel {
         // SECURITY: Global workflow timeout to prevent runaway execution.
         const MAX_WORKFLOW_SECS: u64 = 3600; // 1 hour
 
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(MAX_WORKFLOW_SECS),
+        let wf_timeout = std::time::Duration::from_secs(MAX_WORKFLOW_SECS);
+        let exec_result = tokio::time::timeout(
+            wf_timeout,
             self.workflows.execute_run(run_id, resolver, send_message),
         )
-        .await
-        .map_err(|_| {
-            KernelError::OpenFang(OpenFangError::Internal(format!(
-                "Workflow timed out after {MAX_WORKFLOW_SECS}s"
-            )))
-        })?
-        .map_err(|e| {
-            KernelError::OpenFang(OpenFangError::Internal(format!("Workflow failed: {e}")))
-        })?;
+        .await;
 
-        Ok((run_id, output))
+        match exec_result {
+            Ok(Ok(output)) => {
+                self.emit_workflow_run_finished_notification(run_id, true, output.as_str())
+                    .await;
+                Ok((run_id, output))
+            }
+            Ok(Err(e)) => {
+                let msg = format!("Workflow failed: {e}");
+                self.emit_workflow_run_finished_notification(run_id, false, &msg)
+                    .await;
+                Err(KernelError::OpenFang(OpenFangError::Internal(msg)))
+            }
+            Err(_) => {
+                let msg = format!("Workflow timed out after {MAX_WORKFLOW_SECS}s");
+                self.emit_workflow_run_finished_notification(run_id, false, &msg)
+                    .await;
+                Err(KernelError::OpenFang(OpenFangError::Internal(msg)))
+            }
+        }
     }
 
     /// Walks `inherit_parent_quota` metadata to the agent whose rolling token/cost bucket applies.
@@ -6968,6 +7069,18 @@ impl OpenFangKernel {
                                     format!("job={job_name}, id={job_id}"),
                                     openfang_types::truncate_str(&e, 400),
                                 );
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobFailed {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        error: openfang_types::truncate_str(&e, 220).to_string(),
+                                        action_kind: Some("agent_turn".to_string()),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
                                 Err(e)
                             }
                         }
@@ -6981,6 +7094,18 @@ impl OpenFangKernel {
                             format!("job={job_name}, id={job_id}"),
                             openfang_types::truncate_str(&err_msg, 400),
                         );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("agent_turn".to_string()),
+                            }),
+                        );
+                        self.publish_event(evt).await;
                         Err(err_msg)
                     }
                     Err(_) => {
@@ -6992,6 +7117,18 @@ impl OpenFangKernel {
                             format!("job={job_name}, id={job_id}"),
                             openfang_types::truncate_str(&err_msg, 400),
                         );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("agent_turn".to_string()),
+                            }),
+                        );
+                        self.publish_event(evt).await;
                         Err(err_msg)
                     }
                 }
@@ -7015,6 +7152,18 @@ impl OpenFangKernel {
                         } else {
                             let err_msg = format!("workflow not found: {workflow_id}");
                             self.cron_scheduler.record_failure(job_id, &err_msg);
+                            let evt = Event::new(
+                                AgentId::new(),
+                                EventTarget::Broadcast,
+                                EventPayload::System(SystemEvent::CronJobFailed {
+                                    job_id: job_id.to_string(),
+                                    job_name: job_name.clone(),
+                                    agent_id,
+                                    error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                    action_kind: Some("workflow_run".to_string()),
+                                }),
+                            );
+                            self.publish_event(evt).await;
                             return Err(err_msg);
                         }
                     }
@@ -7041,6 +7190,18 @@ impl OpenFangKernel {
                                     format!("job={job_name}, id={job_id}"),
                                     openfang_types::truncate_str(&e, 400),
                                 );
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobFailed {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        error: openfang_types::truncate_str(&e, 220).to_string(),
+                                        action_kind: Some("workflow_run".to_string()),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
                                 Err(e)
                             }
                         }
@@ -7065,6 +7226,18 @@ impl OpenFangKernel {
                             format!("job={job_name}, id={job_id}"),
                             openfang_types::truncate_str(&err_msg, 400),
                         );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("workflow_run".to_string()),
+                            }),
+                        );
+                        self.publish_event(evt).await;
                         Err(err_msg)
                     }
                 }
@@ -7199,6 +7372,7 @@ impl OpenFangKernel {
                                     job_name: job_name.clone(),
                                     agent_id,
                                     error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                    action_kind: Some("ainl_run".to_string()),
                                 }),
                             );
                             self.publish_event(evt).await;
@@ -7248,6 +7422,7 @@ impl OpenFangKernel {
                                             220,
                                         )
                                         .to_string(),
+                                        action_kind: Some("ainl_run".to_string()),
                                     }),
                                 );
                                 self.publish_event(evt).await;
@@ -7270,6 +7445,7 @@ impl OpenFangKernel {
                                         job_name: job_name.clone(),
                                         agent_id,
                                         error: openfang_types::truncate_str(&e, 220).to_string(),
+                                        action_kind: Some("ainl_run".to_string()),
                                     }),
                                 );
                                 self.publish_event(evt).await;
@@ -7299,6 +7475,7 @@ impl OpenFangKernel {
                                 job_name: job_name.clone(),
                                 agent_id,
                                 error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("ainl_run".to_string()),
                             }),
                         );
                         self.publish_event(evt).await;
@@ -7321,6 +7498,7 @@ impl OpenFangKernel {
                                 job_name: job_name.clone(),
                                 agent_id,
                                 error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("ainl_run".to_string()),
                             }),
                         );
                         self.publish_event(evt).await;

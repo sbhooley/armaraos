@@ -2,17 +2,18 @@
 
 /* Font imports in index_head.html: Montserrat (body) + Geist Mono (code) */
 
-/* Shared palette — red + orange accent system (light/dark map below) */
+/* Brand gold — aligned with ainativelang.com (app/globals.css amber tokens) */
 [data-theme="light"],
 :root {
-  --color-red-200: #ffcaca;
-  --color-red-300: #ffa3a3;
-  --color-red-400: #ef5350;
-  --color-red-500: #e53935;
-  --color-red-600: #c62828;
-  --color-red-900: #82181a;
-  --color-orange-400: #ff6d40;
-  --color-orange-500: #f4511e;
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
+  --color-amber-900: #78350f;
+  /* Warm secondary (legacy names — same gold ramp) */
+  --color-orange-400: #fbbf24;
+  --color-orange-500: #f59e0b;
 }
 
 [data-theme="light"] {
@@ -33,12 +34,12 @@
   --text-dim: #6B6560;
   --text-muted: #9A958F;
 
-  /* Brand — red-forward (primary = red-400) */
-  --accent: var(--color-red-400);
-  --accent-light: var(--color-red-300);
-  --accent-dim: var(--color-red-600);
-  --accent-glow: rgba(239, 83, 80, 0.12);
-  --accent-subtle: rgba(239, 83, 80, 0.07);
+  /* Brand — gold (primary = amber-500, ainativelang.com) */
+  --accent: var(--color-amber-500);
+  --accent-light: var(--color-amber-400);
+  --accent-dim: var(--color-amber-600);
+  --accent-glow: rgba(245, 158, 11, 0.15);
+  --accent-subtle: rgba(245, 158, 11, 0.08);
 
   /* Status colors */
   --success: #22C55E;
@@ -62,7 +63,7 @@
 
   /* Chat-specific */
   --agent-bg: #F5F4F2;
-  --user-bg: #fff0ed;
+  --user-bg: #fffbeb;
 
   /* Layout */
   --sidebar-width: 240px;
@@ -83,7 +84,7 @@
   --shadow-lg: 0 12px 28px rgba(0,0,0,0.08), 0 4px 10px rgba(0,0,0,0.05);
   --shadow-xl: 0 20px 40px rgba(0,0,0,0.1), 0 8px 16px rgba(0,0,0,0.06);
   --shadow-glow: 0 0 40px rgba(0,0,0,0.05);
-  --shadow-accent: 0 4px 16px rgba(229, 57, 53, 0.12);
+  --shadow-accent: 0 4px 16px rgba(245, 158, 11, 0.14);
   --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.5);
 
   /* Typography — dual font system */
@@ -114,11 +115,11 @@
   --text-secondary: #C4C0BC;
   --text-dim: #8A8380;
   --text-muted: #5C5754;
-  --accent: var(--color-red-400);
-  --accent-light: var(--color-red-300);
-  --accent-dim: var(--color-red-500);
-  --accent-glow: rgba(239, 83, 80, 0.16);
-  --accent-subtle: rgba(239, 83, 80, 0.10);
+  --accent: var(--color-amber-500);
+  --accent-light: var(--color-amber-400);
+  --accent-dim: var(--color-amber-600);
+  --accent-glow: rgba(245, 158, 11, 0.18);
+  --accent-subtle: rgba(245, 158, 11, 0.12);
   --success: #4ADE80;
   --success-dim: #22C55E;
   --success-subtle: rgba(74, 222, 128, 0.1);
@@ -138,14 +139,14 @@
   --border-strong: #4A4644;
   --card-highlight: rgba(255, 255, 255, 0.04);
   --agent-bg: #1A1817;
-  --user-bg: #2a1816;
+  --user-bg: #2a2418;
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.3);
   --shadow-lg: 0 12px 28px rgba(0,0,0,0.35), 0 4px 10px rgba(0,0,0,0.3);
   --shadow-xl: 0 20px 40px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.3);
   --shadow-glow: 0 0 80px rgba(0,0,0,0.6);
-  --shadow-accent: 0 4px 18px rgba(130, 24, 26, 0.35);
+  --shadow-accent: 0 4px 18px rgba(245, 158, 11, 0.28);
   --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.03);
 
   /* Typography — default (dark) theme; light theme overrides in [data-theme="light"] */
@@ -192,7 +193,7 @@ body {
 
 ::selection {
   background: var(--accent);
-  color: var(--bg-primary);
+  color: #12100e;
 }
 
 /* Theme transition — smooth switch between light/dark */

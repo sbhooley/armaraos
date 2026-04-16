@@ -173,6 +173,7 @@ pub async fn auth(
         || path == "/api/status"
         || path == "/api/version"
         || path == "/api/version/github-latest"
+        || path == "/api/ainl/runtime-version"
         || (path == "/api/agents" && is_get)
         || (path == "/api/profiles" && is_get)
         || (path == "/api/config" && is_get)

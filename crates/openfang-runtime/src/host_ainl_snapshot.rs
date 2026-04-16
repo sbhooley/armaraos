@@ -3,6 +3,7 @@
 //! Runs `ainl --version` and `pip show ainativelang` (best-effort) with a short TTL so
 //! agents get factual host numbers without a web round-trip or per-message shell spam.
 
+use serde::Serialize;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -38,6 +39,64 @@ fn build_snapshot() -> String {
     )
 }
 
+/// Local `ainl` CLI + pip package snapshot for dashboards (`GET /api/ainl/runtime-version`).
+#[derive(Debug, Clone, Serialize)]
+pub struct HostAinlToolchainProbe {
+    /// Raw `ainl --version` stdout (or error text).
+    pub ainl_cli_line: String,
+    /// Parsed `Version:` from `pip show ainativelang`, when available.
+    pub pip_version: Option<String>,
+    /// Filtered `pip show` excerpt for display.
+    pub pip_excerpt: String,
+}
+
+/// Best-effort probe of the host AINL toolchain (blocking: runs subprocesses).
+#[must_use]
+pub fn probe_host_ainl_toolchain() -> HostAinlToolchainProbe {
+    let pip_stdout = pip_show_ainativelang_stdout();
+    let pip_version = pip_stdout
+        .as_deref()
+        .and_then(parse_pip_version_line);
+    let pip_excerpt = pip_stdout
+        .as_ref()
+        .map(|raw| cap_str(&filter_pip_show(raw), 900))
+        .unwrap_or_else(|| "not installed or pip not found (try: python3 -m pip show ainativelang)".into());
+    HostAinlToolchainProbe {
+        ainl_cli_line: ainl_cli_version(),
+        pip_version,
+        pip_excerpt,
+    }
+}
+
+fn parse_pip_version_line(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        if let Some(rest) = line.trim().strip_prefix("Version:") {
+            let v = rest.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn pip_show_ainativelang_stdout() -> Option<String> {
+    let attempts: &[(&str, &[&str])] = &[
+        ("python3", &["-m", "pip", "show", "ainativelang"]),
+        ("python", &["-m", "pip", "show", "ainativelang"]),
+        ("pip3", &["show", "ainativelang"]),
+        ("pip", &["show", "ainativelang"]),
+    ];
+    for (cmd, args) in attempts {
+        if let Ok(o) = Command::new(cmd).args(*args).output() {
+            if o.status.success() {
+                return Some(String::from_utf8_lossy(&o.stdout).to_string());
+            }
+        }
+    }
+    None
+}
+
 fn ainl_cli_version() -> String {
     match Command::new("ainl").arg("--version").output() {
         Ok(o) if o.status.success() => {
@@ -61,21 +120,9 @@ fn ainl_cli_version() -> String {
 }
 
 fn pip_show_ainativelang() -> String {
-    let attempts: &[(&str, &[&str])] = &[
-        ("python3", &["-m", "pip", "show", "ainativelang"]),
-        ("python", &["-m", "pip", "show", "ainativelang"]),
-        ("pip3", &["show", "ainativelang"]),
-        ("pip", &["show", "ainativelang"]),
-    ];
-    for (cmd, args) in attempts {
-        if let Ok(o) = Command::new(cmd).args(*args).output() {
-            if o.status.success() {
-                let raw = String::from_utf8_lossy(&o.stdout).to_string();
-                return cap_str(&filter_pip_show(&raw), 900);
-            }
-        }
-    }
-    "not installed or pip not found (try: python3 -m pip show ainativelang)".into()
+    pip_show_ainativelang_stdout()
+        .map(|raw| cap_str(&filter_pip_show(&raw), 900))
+        .unwrap_or_else(|| "not installed or pip not found (try: python3 -m pip show ainativelang)".into())
 }
 
 fn filter_pip_show(stdout: &str) -> String {

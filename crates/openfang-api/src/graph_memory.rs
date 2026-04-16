@@ -297,17 +297,17 @@ fn count_nodes_by_kind(conn: &rusqlite::Connection) -> Value {
     out
 }
 
-/// Returns `(label, strength, vitals_gate, vitals_phase, vitals_trust, meta)`.
-fn label_for_node(
-    node: &AinlMemoryNode,
-) -> (
+type NodeLabelTuple = (
     String,
     Option<f32>,
     Option<String>,
     Option<String>,
     Option<f32>,
     Option<Value>,
-) {
+);
+
+/// Returns `(label, strength, vitals_gate, vitals_phase, vitals_trust, meta)`.
+fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
     let id_short = id_prefix(node.id);
     match &node.node_type {
         AinlNodeType::Episode { episodic } => {
@@ -436,7 +436,7 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
     if !path.exists() {
         return json!({ "nodes": [], "edges": [] });
     }
-    let Ok(conn) = rusqlite::Connection::open(&path) else {
+    let Ok(conn) = rusqlite::Connection::open(path) else {
         return json!({ "nodes": [], "edges": [] });
     };
     let since_ts = chrono::Utc::now().timestamp() - since_seconds;

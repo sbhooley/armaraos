@@ -747,6 +747,10 @@ pub async fn build_router(
             axum::routing::get(routes::get_ainl_library),
         )
         .route(
+            "/api/ainl/runtime-version",
+            axum::routing::get(routes::get_ainl_runtime_version),
+        )
+        .route(
             "/api/ainl/library/curated",
             axum::routing::get(routes::get_ainl_library_curated),
         )

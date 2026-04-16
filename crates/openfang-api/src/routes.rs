@@ -16825,6 +16825,80 @@ pub async fn get_orchestration_quota_tree(
 // AINL library (synced programs under ~/.armaraos/ainl-library)
 // ---------------------------------------------------------------------------
 
+const PYPI_AINATIVELANG_JSON: &str = "https://pypi.org/pypi/ainativelang/json";
+
+/// GET /api/ainl/runtime-version — Host `ainl` CLI + `pip show ainativelang` and PyPI latest (best-effort).
+///
+/// Always returns HTTP 200 when the subprocess probe runs; PyPI failures populate `pypi_error`.
+pub async fn get_ainl_runtime_version() -> impl IntoResponse {
+    let probe = match tokio::task::spawn_blocking(|| {
+        openfang_runtime::host_ainl_snapshot::probe_host_ainl_toolchain()
+    })
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("join: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .user_agent(concat!(
+            "ArmaraOS/",
+            env!("CARGO_PKG_VERSION"),
+            " (daemon; +https://github.com/sbhooley/armaraos)"
+        ))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("HTTP client: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut pypi_latest_version: Option<String> = None;
+    let mut pypi_error: Option<String> = None;
+    match client.get(PYPI_AINATIVELANG_JSON).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if !status.is_success() {
+                pypi_error = Some(format!("PyPI HTTP {}", status.as_u16()));
+            } else {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(v) => {
+                        pypi_latest_version = v["info"]["version"]
+                            .as_str()
+                            .map(std::string::ToString::to_string);
+                        if pypi_latest_version.is_none() {
+                            pypi_error = Some("PyPI response missing info.version".into());
+                        }
+                    }
+                    Err(e) => pypi_error = Some(format!("PyPI JSON: {e}")),
+                }
+            }
+        }
+        Err(e) => pypi_error = Some(format!("PyPI request: {e}")),
+    }
+
+    Json(serde_json::json!({
+        "ainl_cli_line": probe.ainl_cli_line,
+        "pip_version": probe.pip_version,
+        "pip_excerpt": probe.pip_excerpt,
+        "pypi_latest_version": pypi_latest_version,
+        "pypi_error": pypi_error,
+    }))
+    .into_response()
+}
+
 fn ainl_library_query_hints_enabled(params: &HashMap<String, String>) -> bool {
     params.get("hints").is_some_and(|s| {
         let t = s.trim();

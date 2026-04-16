@@ -445,6 +445,7 @@ pub fn spawn_daemon_stream(
             llm_fallback_note: None,
             compression_savings_pct: 0,
             compressed_input: None,
+            ainl_runtime_telemetry: None,
         })));
     });
 }
@@ -486,6 +487,7 @@ fn daemon_fallback(
             compressed_input: body["compressed_input"].as_str().map(|s| s.to_string()),
             latency_ms: body["latency_ms"].as_u64(),
             llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
+            ainl_runtime_telemetry: None,
         })
     } else {
         Err(body["error"]

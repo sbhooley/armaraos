@@ -290,6 +290,9 @@ pub enum SystemEvent {
         agent_id: AgentId,
         /// Short preview of the output (truncated).
         output_preview: String,
+        /// High-level action classifier for dashboards (`ainl_run`, `agent_turn`, …).
+        #[serde(default)]
+        action_kind: Option<String>,
     },
     /// A scheduled cron job failed.
     CronJobFailed {
@@ -301,6 +304,9 @@ pub enum SystemEvent {
         agent_id: AgentId,
         /// Error message (truncated).
         error: String,
+        /// High-level action classifier for dashboards (`ainl_run`, `agent_turn`, …).
+        #[serde(default)]
+        action_kind: Option<String>,
     },
     /// High-level agent loop progress (thinking, tool use, etc.) for dashboards.
     AgentActivity {
@@ -326,6 +332,31 @@ pub enum SystemEvent {
         agent_id: AgentId,
         /// High-level write kind: `episode`, `fact`, or `delegation`.
         kind: String,
+    },
+    /// Multi-step workflow run finished (API or scheduler).
+    WorkflowRunFinished {
+        /// Workflow definition id (UUID string).
+        workflow_id: String,
+        /// Registered workflow name.
+        workflow_name: String,
+        /// Workflow run id (UUID string).
+        run_id: String,
+        /// Whether the run completed successfully.
+        ok: bool,
+        /// Output preview on success, or error / timeout text on failure.
+        summary: String,
+    },
+    /// Agent produced an assistant reply visible to the user (chat, channels, etc.).
+    ///
+    /// Emitted once per completed turn for non-workflow-step turns so workflow runs
+    /// surface as [`SystemEvent::WorkflowRunFinished`] instead of per-step noise.
+    AgentAssistantReply {
+        /// Agent that authored the reply.
+        agent_id: AgentId,
+        /// Human-readable agent name.
+        agent_name: String,
+        /// Truncated assistant text.
+        message_preview: String,
     },
 }
 
@@ -437,5 +468,55 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.ttl, Some(Duration::from_millis(60_000)));
+    }
+
+    #[test]
+    fn test_system_event_notification_payloads_roundtrip() {
+        let agent_id = AgentId::new();
+        let evt = Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::CronJobCompleted {
+                job_id: "j1".into(),
+                job_name: "nightly".into(),
+                agent_id,
+                output_preview: "ok".into(),
+                action_kind: Some("ainl_run".into()),
+            }),
+        );
+        let json = serde_json::to_string(&evt).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        match back.payload {
+            EventPayload::System(SystemEvent::CronJobCompleted {
+                action_kind,
+                job_name,
+                ..
+            }) => {
+                assert_eq!(job_name, "nightly");
+                assert_eq!(action_kind.as_deref(), Some("ainl_run"));
+            }
+            _ => panic!("expected CronJobCompleted"),
+        }
+
+        let wf = Event::new(
+            AgentId::new(),
+            EventTarget::Broadcast,
+            EventPayload::System(SystemEvent::WorkflowRunFinished {
+                workflow_id: "wf-uuid".into(),
+                workflow_name: "Demo WF".into(),
+                run_id: "run-uuid".into(),
+                ok: true,
+                summary: "done".into(),
+            }),
+        );
+        let j2 = serde_json::to_string(&wf).unwrap();
+        let wf2: Event = serde_json::from_str(&j2).unwrap();
+        match wf2.payload {
+            EventPayload::System(SystemEvent::WorkflowRunFinished { ok, summary, .. }) => {
+                assert!(ok);
+                assert_eq!(summary, "done");
+            }
+            _ => panic!("expected WorkflowRunFinished"),
+        }
     }
 }

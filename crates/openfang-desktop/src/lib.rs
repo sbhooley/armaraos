@@ -294,8 +294,30 @@ pub fn run() {
                                     error,
                                     ..
                                 }) => ("Scheduled job failed".to_string(), format!("{job_name}: {error}")),
+                                EventPayload::System(SystemEvent::WorkflowRunFinished {
+                                    workflow_name,
+                                    ok,
+                                    summary,
+                                    ..
+                                }) => {
+                                    if *ok {
+                                        (
+                                            "Workflow finished".to_string(),
+                                            format!("{workflow_name}: {}", summary.as_str()),
+                                        )
+                                    } else {
+                                        (
+                                            "Workflow failed".to_string(),
+                                            format!("{workflow_name}: {}", summary.as_str()),
+                                        )
+                                    }
+                                },
                                 // Health check failures are too noisy for OS toasts; use logs / WebUI.
                                 EventPayload::System(SystemEvent::HealthCheckFailed { .. }) => {
+                                    continue;
+                                }
+                                // Assistant replies are surfaced in the dashboard bell; OS toasts would be noisy.
+                                EventPayload::System(SystemEvent::AgentAssistantReply { .. }) => {
                                     continue;
                                 }
                                 EventPayload::System(SystemEvent::ApprovalPending {

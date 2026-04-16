@@ -3,7 +3,8 @@
 # Default base URL is http://127.0.0.1:4200 — use the URL printed by `openfang start`
 # (e.g. http://127.0.0.1:50051) if your config binds a different port.
 # Covers health, status, schedules, support zip + downloads, spawn error shape, session digest,
-# GET /api/version/github-latest (dashboard “vs GitHub” compare), GET /api/logs/daemon/recent
+# GET /api/version/github-latest (dashboard “vs GitHub” compare), GET /api/ainl/runtime-version
+# (host AINL + PyPI latest for bell), GET /api/logs/daemon/recent
 # (empty lines OK until daemon.log exists), GET / (embedded dashboard HTML includes notification bell),
 # GET /api/budget, GET /api/approvals, GET /api/system/daemon-resources.
 # Usage: ./scripts/verify-dashboard-smoke.sh [BASE_URL]
@@ -81,6 +82,29 @@ echo ""
 echo "-- GET /api/version/github-latest (200 JSON; server-side GitHub fetch for dashboard)"
 curl -sS -f -m 15 "$BASE/api/version/github-latest" | head -c 500
 echo ""
+
+echo "-- GET /api/ainl/runtime-version (200 JSON; host toolchain + optional PyPI latest)"
+AINL_RT_JSON="$(curl -sS -f -m 25 "$BASE/api/ainl/runtime-version")"
+printf '%s' "$AINL_RT_JSON" | head -c 500
+echo ""
+export AINL_RT_JSON
+python3 - <<'PY'
+import json, os, sys
+raw = os.environ.get("AINL_RT_JSON", "")
+try:
+    d = json.loads(raw)
+except json.JSONDecodeError as e:
+    print("ERROR: /api/ainl/runtime-version is not valid JSON:", e, file=sys.stderr)
+    sys.exit(1)
+for k in ("ainl_cli_line", "pip_excerpt"):
+    if k not in d:
+        print("ERROR: missing key", k, file=sys.stderr)
+        sys.exit(1)
+if "pypi_latest_version" not in d and "pypi_error" not in d:
+    print("ERROR: expected pypi_latest_version or pypi_error", file=sys.stderr)
+    sys.exit(1)
+print("OK (ainl runtime-version keys)")
+PY
 
 echo "-- GET /api/logs/daemon/recent?lines=5 (200 JSON; lines may be empty if no log file yet)"
 curl -sS -f -m 5 "$BASE/api/logs/daemon/recent?lines=5" | head -c 400

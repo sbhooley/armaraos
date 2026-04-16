@@ -758,8 +758,8 @@ function handsPage() {
           // Determine gradient
           var eqCtx = eqCanvas.getContext('2d');
           var gradient = eqCtx.createLinearGradient(0, 0, 0, eqCanvas.parentElement.clientHeight || 180);
-          gradient.addColorStop(0, isDark ? 'rgba(255, 92, 0, 0.25)' : 'rgba(255, 92, 0, 0.15)');
-          gradient.addColorStop(1, 'rgba(255, 92, 0, 0)');
+          gradient.addColorStop(0, isDark ? 'rgba(245, 158, 11, 0.25)' : 'rgba(245, 158, 11, 0.15)');
+          gradient.addColorStop(1, 'rgba(245, 158, 11, 0)');
 
           this._chartEquity = new Chart(eqCtx, {
             type: 'line',
@@ -902,7 +902,7 @@ function handsPage() {
               datasets: [{
                 data: radarValues,
                 borderColor: accentColor,
-                backgroundColor: isDark ? 'rgba(255, 92, 0, 0.2)' : 'rgba(255, 92, 0, 0.12)',
+                backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : 'rgba(245, 158, 11, 0.12)',
                 borderWidth: 2,
                 pointBackgroundColor: accentColor,
                 pointRadius: 4,

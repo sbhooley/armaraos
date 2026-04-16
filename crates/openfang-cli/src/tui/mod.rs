@@ -1190,6 +1190,9 @@ impl App {
             StreamEvent::CompressionStats { .. } => {
                 // Prompt-compression telemetry — TUI displays nothing for this event.
             }
+            StreamEvent::AinlRuntimeTelemetry { .. } => {
+                // ainl-runtime-engine path — TUI displays nothing for this event.
+            }
         }
     }
 

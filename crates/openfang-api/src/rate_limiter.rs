@@ -19,6 +19,7 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("GET", "/api/system/daemon-resources") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/version/github-latest") => NonZeroU32::new(8).unwrap(),
+        ("GET", "/api/ainl/runtime-version") => NonZeroU32::new(8).unwrap(),
         ("GET", "/api/tools") => NonZeroU32::new(1).unwrap(),
         ("GET", "/api/agents") => NonZeroU32::new(2).unwrap(),
         ("GET", "/api/skills") => NonZeroU32::new(2).unwrap(),

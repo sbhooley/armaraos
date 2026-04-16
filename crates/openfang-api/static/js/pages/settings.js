@@ -287,6 +287,10 @@ function settingsPage() {
           url: rel.html_url || 'https://github.com/sbhooley/armaraos/releases',
           upToDate: cmp >= 0
         };
+        try {
+          var ar = await OpenFangAPI.get('/api/ainl/runtime-version');
+          Alpine.store('notifyCenter').syncAinlPypiUpdate(ar.pip_version, ar.pypi_latest_version);
+        } catch (eAinl) { /* ignore */ }
       } catch(e) {
         err = e.message || String(e);
         this.daemonUpdateInfo = { error: err };

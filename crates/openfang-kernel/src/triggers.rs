@@ -610,17 +610,33 @@ fn describe_event(event: &Event) -> String {
                 job_name,
                 agent_id,
                 output_preview,
-            } => format!(
-                "Cron job completed: {job_name} ({job_id}) for agent {agent_id}: {output_preview}"
-            ),
+                action_kind,
+            } => {
+                let kind = action_kind
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|k| format!(" ({k})"))
+                    .unwrap_or_default();
+                format!(
+                    "Cron job completed{kind}: {job_name} ({job_id}) for agent {agent_id}: {output_preview}"
+                )
+            },
             SystemEvent::CronJobFailed {
                 job_id,
                 job_name,
                 agent_id,
                 error,
-            } => format!(
-                "Cron job failed: {job_name} ({job_id}) for agent {agent_id}: {error}"
-            ),
+                action_kind,
+            } => {
+                let kind = action_kind
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|k| format!(" ({k})"))
+                    .unwrap_or_default();
+                format!(
+                    "Cron job failed{kind}: {job_name} ({job_id}) for agent {agent_id}: {error}"
+                )
+            },
             SystemEvent::AgentActivity { phase, detail } => {
                 if let Some(d) = detail {
                     format!("Agent activity: {phase} ({d})")
@@ -638,6 +654,23 @@ fn describe_event(event: &Event) -> String {
             ),
             SystemEvent::GraphMemoryWrite { agent_id, kind } => {
                 format!("Graph memory write: agent {agent_id}, kind={kind}")
+            }
+            SystemEvent::WorkflowRunFinished {
+                workflow_name,
+                run_id,
+                ok,
+                summary,
+                ..
+            } => {
+                let status = if *ok { "completed" } else { "failed" };
+                format!("Workflow {workflow_name} run {run_id} {status}: {summary}")
+            }
+            SystemEvent::AgentAssistantReply {
+                agent_id,
+                agent_name,
+                message_preview,
+            } => {
+                format!("Agent '{agent_name}' ({agent_id}) replied: {message_preview}")
             }
         },
         EventPayload::OrchestrationTrace(ev) => {

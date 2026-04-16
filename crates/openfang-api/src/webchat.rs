@@ -27,13 +27,13 @@ const ETAG: &str = concat!("\"openfang-", env!("CARGO_PKG_VERSION"), "\"");
 /// Embedded logo PNG for single-binary deployment.
 const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
 
-/// ArmaraOS mascot / wordmark (chat avatars, branding).
+/// ArmaraOS mark (chat avatars, branding).
 const ARMARAOS_LOGO_PNG: &[u8] = include_bytes!("../static/assets/armaraos-logo.png");
 
 /// Embedded favicon ICO for browser tabs.
 const FAVICON_ICO: &[u8] = include_bytes!("../static/favicon.ico");
 
-/// GET /assets/armaraos-logo.png — ArmaraOS mascot + wordmark for chat UI.
+/// GET /assets/armaraos-logo.png — ArmaraOS mark for chat UI.
 pub async fn armaraos_logo_png() -> impl IntoResponse {
     (
         [
@@ -44,7 +44,7 @@ pub async fn armaraos_logo_png() -> impl IntoResponse {
     )
 }
 
-/// GET /logo.png — Serve the OpenFang logo.
+/// GET /logo.png — App header / PWA icon.
 pub async fn logo_png() -> impl IntoResponse {
     (
         [
