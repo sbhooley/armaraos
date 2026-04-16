@@ -1227,8 +1227,12 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "adaptive_eco": {
             "enabled": state.kernel.config.adaptive_eco.enabled,
             "enforce": state.kernel.config.adaptive_eco.enforce,
+            "enforce_min_consecutive_turns": state.kernel.config.adaptive_eco.enforce_min_consecutive_turns,
             "allow_aggressive_on_structured": state.kernel.config.adaptive_eco.allow_aggressive_on_structured,
             "semantic_floor": state.kernel.config.adaptive_eco.semantic_floor,
+            "circuit_breaker_enabled": state.kernel.config.adaptive_eco.circuit_breaker_enabled,
+            "circuit_breaker_window": state.kernel.config.adaptive_eco.circuit_breaker_window,
+            "circuit_breaker_min_below_floor": state.kernel.config.adaptive_eco.circuit_breaker_min_below_floor,
         },
     }))
 }
@@ -7756,6 +7760,36 @@ pub async fn usage_compression(
             "estimated_cache_cost_saved_usd": 0.0,
             "estimated_compression_cost_saved_usd": 0.0,
             "estimated_total_cost_saved_usd": 0.0
+        })),
+    }
+}
+
+/// GET /api/usage/adaptive-eco — Durable adaptive eco telemetry (shadow mismatches, breaker trips).
+pub async fn usage_adaptive_eco(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let window_days = query
+        .get("window")
+        .map(|w| w.trim().to_ascii_lowercase())
+        .and_then(|w| {
+            if w.is_empty() || w == "all" {
+                return None;
+            }
+            if let Some(stripped) = w.strip_suffix('d') {
+                stripped.parse::<u32>().ok()
+            } else {
+                w.parse::<u32>().ok()
+            }
+        });
+    match state.kernel.metering.get_adaptive_eco_summary(window_days) {
+        Ok(summary) => Json(serde_json::to_value(summary).unwrap_or_default()),
+        Err(_) => Json(serde_json::json!({
+            "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),
+            "events": 0,
+            "shadow_mismatch_turns": 0,
+            "circuit_breaker_trips": 0,
+            "hysteresis_blocks": 0
         })),
     }
 }

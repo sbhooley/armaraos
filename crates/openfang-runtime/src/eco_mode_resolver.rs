@@ -2,12 +2,16 @@
 //!
 //! Default Milestone 2 behavior is **shadow-only** — see [`openfang_types::adaptive_eco::AdaptiveEcoConfig::enforce`].
 
-use openfang_types::adaptive_eco::{AdaptiveEcoConfig, AdaptiveEcoTurnSnapshot};
+use openfang_types::adaptive_eco::{
+    AdaptiveEcoConfig, AdaptiveEcoHysteresisState, AdaptiveEcoTurnSnapshot,
+};
 use openfang_types::agent::AgentManifest;
 
 use crate::model_catalog::ModelCatalog;
 
-fn normalize_mode(raw: &str) -> &'static str {
+/// Normalize user/config eco strings to `off` | `balanced` | `aggressive`.
+#[must_use]
+pub fn normalize_efficient_mode(raw: &str) -> &'static str {
     let s = raw.trim().to_ascii_lowercase();
     if s.contains("aggressive") {
         "aggressive"
@@ -30,6 +34,47 @@ fn cache_capability_label(provider: &str) -> &'static str {
         "openrouter" => "routed_provider_dependent",
         _ => "unknown",
     }
+}
+
+/// Step down one compression tier: aggressive → balanced → off.
+#[must_use]
+pub fn step_down_efficient_mode(mode: &str) -> &'static str {
+    let s = mode.trim().to_ascii_lowercase();
+    if s.contains("aggressive") {
+        "balanced"
+    } else {
+        "off"
+    }
+}
+
+/// If enough recent semantic scores fall below `cfg.semantic_floor`, return a more conservative mode.
+#[must_use]
+pub fn circuit_breaker_adjust_base(
+    base_mode: &str,
+    cfg: &AdaptiveEcoConfig,
+    recent_scores_newest_first: &[f32],
+) -> (String, bool) {
+    if !cfg.circuit_breaker_enabled {
+        return (base_mode.to_string(), false);
+    }
+    let window = cfg.circuit_breaker_window.max(1) as usize;
+    let slice = if recent_scores_newest_first.len() > window {
+        &recent_scores_newest_first[..window]
+    } else {
+        recent_scores_newest_first
+    };
+    if slice.is_empty() {
+        return (base_mode.to_string(), false);
+    }
+    let floor = cfg.semantic_floor;
+    let need = cfg.circuit_breaker_min_below_floor.max(1) as usize;
+    let below = slice.iter().filter(|&&s| s < floor).count();
+    if below < need {
+        return (base_mode.to_string(), false);
+    }
+    let stepped = step_down_efficient_mode(base_mode);
+    let tripped = stepped != normalize_efficient_mode(base_mode);
+    (stepped.to_string(), tripped)
 }
 
 fn structured_payload_heavy(message: &str) -> bool {
@@ -57,7 +102,7 @@ pub fn resolve_adaptive_eco_turn(
 
     let input_price_per_million = catalog.pricing(&model).map(|(inp, _)| inp);
 
-    let base = normalize_mode(
+    let base = normalize_efficient_mode(
         manifest
             .metadata
             .get("efficient_mode")
@@ -83,11 +128,9 @@ pub fn resolve_adaptive_eco_turn(
         reason_codes.push("structured_payload_guard:cap_aggressive".to_string());
     }
 
-    let effective_mode = if cfg.enforce {
-        recommended.clone()
-    } else {
-        base.to_string()
-    };
+    // Effective mode for this turn starts at the working base; the kernel applies
+    // enforcement + hysteresis when `cfg.enforce` is true.
+    let effective_mode = base.to_string();
 
     if !cfg.enforce {
         reason_codes.push("shadow_only:enforce_off".to_string());
@@ -100,6 +143,9 @@ pub fn resolve_adaptive_eco_turn(
     AdaptiveEcoTurnSnapshot {
         effective_mode,
         recommended_mode: recommended,
+        base_mode_before_circuit: None,
+        circuit_breaker_tripped: false,
+        hysteresis_blocked: false,
         reason_codes,
         provider,
         model,
@@ -108,6 +154,52 @@ pub fn resolve_adaptive_eco_turn(
         shadow_only,
         enforce: cfg.enforce,
     }
+}
+
+/// When [`AdaptiveEcoConfig::enforce`] is true, require `min_n` consecutive matching recommendations
+/// before switching modes. Uses `billing_id` as the stable key (matches usage rows).
+pub fn hysteresis_resolve_adaptive_effective(
+    map: &dashmap::DashMap<openfang_types::agent::AgentId, AdaptiveEcoHysteresisState>,
+    billing_id: openfang_types::agent::AgentId,
+    current_mode: &str,
+    recommended: &str,
+    min_n: u32,
+) -> (String, bool) {
+    let min_n = min_n.max(1);
+    let cur = normalize_efficient_mode(current_mode);
+    let rec = normalize_efficient_mode(recommended);
+    if rec == cur {
+        map.remove(&billing_id);
+        return (cur.to_string(), false);
+    }
+    let rec_owned = rec.to_string();
+    if let Some(mut existing) = map.get_mut(&billing_id) {
+        if existing.pending_target.as_ref() == Some(&rec_owned) {
+            existing.streak = existing.streak.saturating_add(1);
+        } else {
+            existing.pending_target = Some(rec_owned.clone());
+            existing.streak = 1;
+        }
+        let streak = existing.streak;
+        drop(existing);
+        if streak >= min_n {
+            map.remove(&billing_id);
+            return (rec_owned, false);
+        }
+        return (cur.to_string(), true);
+    }
+    map.insert(
+        billing_id,
+        AdaptiveEcoHysteresisState {
+            pending_target: Some(rec_owned.clone()),
+            streak: 1,
+        },
+    );
+    if 1 >= min_n {
+        map.remove(&billing_id);
+        return (rec_owned, false);
+    }
+    (cur.to_string(), true)
 }
 
 #[cfg(test)]
@@ -138,6 +230,32 @@ mod tests {
         assert_eq!(snap.effective_mode, "balanced");
         assert!(snap.shadow_only);
         assert!(snap.reason_codes.iter().any(|s| s.contains("shadow_only")));
+    }
+
+    #[test]
+    fn circuit_breaker_steps_down_when_semantics_bad() {
+        let mut cfg = AdaptiveEcoConfig::default();
+        cfg.circuit_breaker_enabled = true;
+        cfg.circuit_breaker_window = 8;
+        cfg.circuit_breaker_min_below_floor = 2;
+        cfg.semantic_floor = 0.9;
+        let scores = vec![0.5_f32, 0.4_f32];
+        let (m, trip) = circuit_breaker_adjust_base("aggressive", &cfg, &scores);
+        assert_eq!(m, "balanced");
+        assert!(trip);
+    }
+
+    #[test]
+    fn hysteresis_requires_streak() {
+        let map = dashmap::DashMap::new();
+        let id = openfang_types::agent::AgentId::new();
+        let (m1, b1) = hysteresis_resolve_adaptive_effective(&map, id, "balanced", "off", 2);
+        assert_eq!(m1, "balanced");
+        assert!(b1);
+        let (m2, b2) = hysteresis_resolve_adaptive_effective(&map, id, "balanced", "off", 2);
+        assert_eq!(m2, "off");
+        assert!(!b2);
+        assert!(map.is_empty());
     }
 
     #[test]

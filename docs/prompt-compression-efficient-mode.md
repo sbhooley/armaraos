@@ -57,7 +57,20 @@ The exact lists live in source; tune there for your deployment vocabulary.
 ```toml
 # balanced (default) | aggressive | off
 efficient_mode = "balanced"   # default is "off"; set here to enable
+
+# Optional — adaptive eco (shadow by default; uses model catalog + durable semantic scores)
+[adaptive_eco]
+enabled = false
+enforce = false                      # when true, hysteresis + recommendations can change efficient_mode
+enforce_min_consecutive_turns = 2    # streak before applying a new mode under enforce
+allow_aggressive_on_structured = false
+semantic_floor = 0.82
+circuit_breaker_enabled = true
+circuit_breaker_window = 12
+circuit_breaker_min_below_floor = 3
 ```
+
+**Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns` / circuit breaker fields. See [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
 
 Hot-reload: use **`POST /api/config/set`** with `path: "efficient_mode"` (full contract: [api-reference.md](api-reference.md#post-apiconfigset)) or edit the file and **`POST /api/config/reload`** where applicable.
 

@@ -400,6 +400,9 @@ pub struct OpenFangKernel {
     agent_pool_workers: dashmap::DashMap<String, Vec<AgentId>>,
     /// In-flight agent-loop phase per agent (Thinking / tool / stream) for turn watchdog.
     pub agent_loop_phases: dashmap::DashMap<AgentId, crate::heartbeat::AgentLoopPhaseState>,
+    /// Per billing agent: adaptive eco enforcement hysteresis (consecutive recommendation streak).
+    adaptive_eco_hysteresis:
+        dashmap::DashMap<AgentId, openfang_types::adaptive_eco::AdaptiveEcoHysteresisState>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
     pub heartbeat_failure_gate: Arc<crate::heartbeat::FailureNotifyGate>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
@@ -750,6 +753,143 @@ fn gethostname() -> Option<String> {
 }
 
 impl OpenFangKernel {
+    /// Inject `efficient_mode` and optional adaptive eco policy (circuit breaker, resolver, hysteresis).
+    fn apply_efficient_mode_and_adaptive_eco(
+        &self,
+        manifest: &mut openfang_types::agent::AgentManifest,
+        message: &str,
+        orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+        llm_billing_id: AgentId,
+    ) {
+        use openfang_runtime::eco_mode_resolver::{
+            circuit_breaker_adjust_base, hysteresis_resolve_adaptive_effective,
+            resolve_adaptive_eco_turn,
+        };
+        manifest
+            .metadata
+            .entry("efficient_mode".to_string())
+            .or_insert_with(|| {
+                if let Some(ref octx) = orchestration_ctx {
+                    if let Some(ref mode) = octx.efficient_mode {
+                        return serde_json::Value::String(mode.clone());
+                    }
+                }
+                serde_json::Value::String(self.config.efficient_mode.clone())
+            });
+
+        if !self.config.adaptive_eco.enabled {
+            return;
+        }
+
+        let base_mode = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("off")
+            .to_string();
+
+        let mut mode_after_circuit = base_mode.clone();
+        let mut circuit_tripped = false;
+        if self.config.adaptive_eco.circuit_breaker_enabled {
+            let w = self.config.adaptive_eco.circuit_breaker_window.max(1) as usize;
+            let scores = self
+                .memory
+                .usage()
+                .query_recent_semantic_scores(llm_billing_id, w)
+                .unwrap_or_default();
+            let (m, trip) =
+                circuit_breaker_adjust_base(&base_mode, &self.config.adaptive_eco, &scores);
+            mode_after_circuit = m;
+            circuit_tripped = trip;
+        }
+
+        manifest.metadata.insert(
+            "efficient_mode".to_string(),
+            serde_json::Value::String(mode_after_circuit.clone()),
+        );
+
+        let catalog = self
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut snap = resolve_adaptive_eco_turn(
+            &self.config.adaptive_eco,
+            manifest,
+            message,
+            &catalog,
+        );
+        drop(catalog);
+
+        snap.base_mode_before_circuit = Some(base_mode.clone());
+        snap.circuit_breaker_tripped = circuit_tripped;
+        if circuit_tripped {
+            snap
+                .reason_codes
+                .push("circuit_breaker:semantic_floor".to_string());
+        }
+
+        if self.config.adaptive_eco.enforce {
+            let min_n = self.config.adaptive_eco.enforce_min_consecutive_turns;
+            let (eff, blocked) = hysteresis_resolve_adaptive_effective(
+                &self.adaptive_eco_hysteresis,
+                llm_billing_id,
+                &mode_after_circuit,
+                &snap.recommended_mode,
+                min_n,
+            );
+            snap.effective_mode = eff.clone();
+            snap.hysteresis_blocked = blocked;
+            manifest.metadata.insert(
+                "efficient_mode".to_string(),
+                serde_json::Value::String(eff),
+            );
+        } else {
+            snap.effective_mode = mode_after_circuit.clone();
+            snap.hysteresis_blocked = false;
+        }
+
+        if let Ok(v) = serde_json::to_value(&snap) {
+            manifest.metadata.insert("adaptive_eco".to_string(), v);
+        }
+    }
+
+    /// Best-effort durable row in `adaptive_eco_events` after compression metrics are known.
+    fn persist_adaptive_eco_telemetry(
+        &self,
+        billing_id: AgentId,
+        manifest: &openfang_types::agent::AgentManifest,
+        semantic: Option<f32>,
+    ) {
+        if !self.config.adaptive_eco.enabled {
+            return;
+        }
+        let Some(v) = manifest.metadata.get("adaptive_eco") else {
+            return;
+        };
+        let Ok(snap) =
+            serde_json::from_value::<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot>(v.clone())
+        else {
+            return;
+        };
+        let rec = openfang_types::adaptive_eco::AdaptiveEcoUsageRecord {
+            agent_id: billing_id,
+            effective_mode: snap.effective_mode,
+            recommended_mode: snap.recommended_mode,
+            base_mode_before_circuit: snap.base_mode_before_circuit,
+            circuit_breaker_tripped: snap.circuit_breaker_tripped,
+            hysteresis_blocked: snap.hysteresis_blocked,
+            shadow_only: snap.shadow_only,
+            enforce: snap.enforce,
+            provider: snap.provider,
+            model: snap.model,
+            cache_capability: snap.cache_capability,
+            input_price_per_million: snap.input_price_per_million,
+            reason_codes: snap.reason_codes,
+            semantic_preservation_score: semantic,
+        };
+        let _ = self.metering.record_adaptive_eco(&rec);
+    }
+
     /// Boot the kernel with configuration from the given path.
     pub fn boot(config_path: Option<&Path>) -> KernelResult<Self> {
         let config = load_config(config_path);
@@ -1386,6 +1526,7 @@ impl OpenFangKernel {
             agent_turn_inflight: dashmap::DashMap::new(),
             agent_pool_workers: dashmap::DashMap::new(),
             agent_loop_phases: dashmap::DashMap::new(),
+            adaptive_eco_hysteresis: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
             ),
@@ -2514,47 +2655,12 @@ impl OpenFangKernel {
             }
         }
 
-        // Inject Ultra Cost-Efficient Mode:
-        // Priority: per-agent metadata > orchestration context > global config
-        // This ensures subagents/swarms inherit parent's eco settings to prevent cost overruns.
-        manifest
-            .metadata
-            .entry("efficient_mode".to_string())
-            .or_insert_with(|| {
-                // Check if orchestration context has an efficient_mode to inherit
-                if let Some(ref octx) = orchestration_ctx {
-                    if let Some(ref mode) = octx.efficient_mode {
-                        return serde_json::Value::String(mode.clone());
-                    }
-                }
-                // Fall back to global config
-                serde_json::Value::String(self.config.efficient_mode.clone())
-            });
-
-        // Adaptive eco policy (Milestone 2): model-catalog pricing + provider capability matrix.
-        // Default: shadow-only (`adaptive_eco.enforce = false`) — attaches `adaptive_eco` metadata for telemetry.
-        if self.config.adaptive_eco.enabled {
-            let catalog = self
-                .model_catalog
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
-            let snap = openfang_runtime::eco_mode_resolver::resolve_adaptive_eco_turn(
-                &self.config.adaptive_eco,
-                &manifest,
-                message,
-                &catalog,
-            );
-            drop(catalog);
-            if self.config.adaptive_eco.enforce {
-                manifest.metadata.insert(
-                    "efficient_mode".to_string(),
-                    serde_json::Value::String(snap.effective_mode.clone()),
-                );
-            }
-            if let Ok(v) = serde_json::to_value(&snap) {
-                manifest.metadata.insert("adaptive_eco".to_string(), v);
-            }
-        }
+        self.apply_efficient_mode_and_adaptive_eco(
+            &mut manifest,
+            message,
+            &orchestration_ctx,
+            llm_billing_id,
+        );
 
         let memory = Arc::clone(&self.memory);
         // Build link context from user message (auto-extract URLs for the agent)
@@ -2758,6 +2864,11 @@ impl OpenFangKernel {
                             savings_pct: result.compression_savings_pct,
                             semantic_preservation_score: result.compression_semantic_score,
                         },
+                    );
+                    kernel_clone.persist_adaptive_eco_telemetry(
+                        bill_id,
+                        &manifest,
+                        result.compression_semantic_score,
                     );
 
                     let _ = kernel_clone
@@ -3377,6 +3488,13 @@ impl OpenFangKernel {
             }
         }
 
+        self.apply_efficient_mode_and_adaptive_eco(
+            &mut manifest,
+            message,
+            &orchestration_for_turn,
+            llm_billing_id,
+        );
+
         let driver = self.resolve_driver(&manifest)?;
 
         // Look up model's actual context window from the catalog
@@ -3543,6 +3661,11 @@ impl OpenFangKernel {
                 savings_pct: result.compression_savings_pct,
                 semantic_preservation_score: result.compression_semantic_score,
             });
+        self.persist_adaptive_eco_telemetry(
+            llm_billing_id,
+            &manifest,
+            result.compression_semantic_score,
+        );
 
         // Populate cost on the result based on usage_footer mode
         let mut result = result;

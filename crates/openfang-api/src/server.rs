@@ -640,6 +640,10 @@ pub async fn build_router(
             "/api/usage/compression",
             axum::routing::get(routes::usage_compression),
         )
+        .route(
+            "/api/usage/adaptive-eco",
+            axum::routing::get(routes::usage_adaptive_eco),
+        )
         // Budget endpoints
         .route(
             "/api/budget",

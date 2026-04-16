@@ -2183,6 +2183,28 @@ Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Use
 }
 ```
 
+### GET /api/usage/adaptive-eco
+
+Durable **adaptive eco** telemetry (SQLite `adaptive_eco_events`): counts shadow turns where recommendation differed from the effective mode, circuit-breaker step-downs, and hysteresis deferrals when enforcement is on.
+
+**Query params**:
+
+| Param | Description |
+|-------|-------------|
+| `window` | Optional: `7d`, `30d`, or `all` (omit for all time). |
+
+**Response** `200 OK`:
+
+```json
+{
+  "window": "7d",
+  "events": 120,
+  "shadow_mismatch_turns": 15,
+  "circuit_breaker_trips": 3,
+  "hysteresis_blocks": 8
+}
+```
+
 ### GET /api/usage/by-model
 
 Get usage breakdown by model.
@@ -3260,6 +3282,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/usage` | Per-agent usage totals (persistent metering + `source`) |
 | GET | `/api/usage/summary` | Global usage totals (SQLite-backed) |
 | GET | `/api/usage/compression` | Compression analytics by window/mode/agent (includes savings + semantic p50/p95) |
+| GET | `/api/usage/adaptive-eco` | Adaptive eco telemetry (shadow mismatches, breaker trips, hysteresis blocks) |
 | GET | `/api/usage/by-model` | Usage by model breakdown |
 | **Migration** | | |
 | GET | `/api/migrate/detect` | Detect migration sources |

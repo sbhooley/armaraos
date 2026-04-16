@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -48,6 +48,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if current_version < 10 {
         migrate_v10(conn)?;
+    }
+    if current_version < 11 {
+        migrate_v11(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -402,6 +405,38 @@ fn migrate_v10(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 11: Adaptive eco shadow / enforcement telemetry (per turn).
+fn migrate_v11(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS adaptive_eco_events (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            effective_mode TEXT NOT NULL,
+            recommended_mode TEXT NOT NULL,
+            base_mode_before_circuit TEXT,
+            circuit_breaker_tripped INTEGER NOT NULL DEFAULT 0,
+            hysteresis_blocked INTEGER NOT NULL DEFAULT 0,
+            shadow_only INTEGER NOT NULL DEFAULT 1,
+            enforce INTEGER NOT NULL DEFAULT 0,
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            cache_capability TEXT NOT NULL DEFAULT '',
+            input_price_per_million REAL,
+            reason_codes_json TEXT NOT NULL DEFAULT '[]',
+            semantic_preservation_score REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_adaptive_eco_timestamp ON adaptive_eco_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_adaptive_eco_agent_time ON adaptive_eco_events(agent_id, timestamp);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (11, datetime('now'), 'Add adaptive_eco_events for adaptive eco telemetry');
+        ",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +462,7 @@ mod tests {
         assert!(tables.contains(&"entities".to_string()));
         assert!(tables.contains(&"relations".to_string()));
         assert!(tables.contains(&"eco_compression_events".to_string()));
+        assert!(tables.contains(&"adaptive_eco_events".to_string()));
     }
 
     #[test]

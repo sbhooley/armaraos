@@ -4045,6 +4045,24 @@ impl KernelConfig {
 
         self.runtime_limits.clamp_bounds();
         self.llm.clamp_bounds();
+
+        // Adaptive eco
+        self.adaptive_eco.semantic_floor = self.adaptive_eco.semantic_floor.clamp(0.0, 1.0);
+        if self.adaptive_eco.enforce_min_consecutive_turns == 0 {
+            self.adaptive_eco.enforce_min_consecutive_turns = 1;
+        } else if self.adaptive_eco.enforce_min_consecutive_turns > 64 {
+            self.adaptive_eco.enforce_min_consecutive_turns = 64;
+        }
+        if self.adaptive_eco.circuit_breaker_window == 0 {
+            self.adaptive_eco.circuit_breaker_window = 12;
+        } else if self.adaptive_eco.circuit_breaker_window > 256 {
+            self.adaptive_eco.circuit_breaker_window = 256;
+        }
+        if self.adaptive_eco.circuit_breaker_min_below_floor == 0 {
+            self.adaptive_eco.circuit_breaker_min_below_floor = 1;
+        } else if self.adaptive_eco.circuit_breaker_min_below_floor > 256 {
+            self.adaptive_eco.circuit_breaker_min_below_floor = 256;
+        }
     }
 }
 
