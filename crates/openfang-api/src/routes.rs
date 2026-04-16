@@ -732,6 +732,8 @@ pub async fn send_message(
                     compression_savings_pct: result.compression_savings_pct,
                     compressed_input: result.compressed_input.clone(),
                     compression_semantic_score: result.compression_semantic_score,
+                    adaptive_confidence: result.adaptive_confidence,
+                    eco_counterfactual: result.eco_counterfactual.clone(),
                     tools: Vec::new(),
                     ainl_runtime_telemetry,
                 })),
@@ -7790,6 +7792,41 @@ pub async fn usage_adaptive_eco(
             "shadow_mismatch_turns": 0,
             "circuit_breaker_trips": 0,
             "hysteresis_blocks": 0
+        })),
+    }
+}
+
+/// GET /api/usage/adaptive-eco/replay — Aggregated replay report (shadow mismatch rate, semantic percentiles).
+pub async fn usage_adaptive_eco_replay(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let window_days = query
+        .get("window")
+        .map(|w| w.trim().to_ascii_lowercase())
+        .and_then(|w| {
+            if w.is_empty() || w == "all" {
+                return None;
+            }
+            if let Some(stripped) = w.strip_suffix('d') {
+                stripped.parse::<u32>().ok()
+            } else {
+                w.parse::<u32>().ok()
+            }
+        });
+    match state.kernel.metering.get_adaptive_eco_replay_report(window_days) {
+        Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()),
+        Err(_) => Json(serde_json::json!({
+            "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),
+            "adaptive_eco_events": 0,
+            "shadow_mismatch_turns": 0,
+            "shadow_mismatch_rate": 0.0,
+            "circuit_breaker_trips": 0,
+            "hysteresis_blocks": 0,
+            "eco_compression_turns": 0,
+            "compression_semantic_p50": null,
+            "compression_semantic_p95": null,
+            "compression_semantic_mean": null
         })),
     }
 }

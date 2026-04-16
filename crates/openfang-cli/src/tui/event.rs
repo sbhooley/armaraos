@@ -39,6 +39,7 @@ pub enum BackendRef {
 // ── AppEvent ────────────────────────────────────────────────────────────────
 
 /// Unified application event.
+#[allow(clippy::large_enum_variant)] // StreamDone carries full AgentLoopResult (compression + eco telemetry).
 pub enum AppEvent {
     /// A crossterm key press event (filtered to Press only).
     Key(KeyEvent),
@@ -446,6 +447,8 @@ pub fn spawn_daemon_stream(
             compression_savings_pct: 0,
             compressed_input: None,
             compression_semantic_score: None,
+            adaptive_confidence: None,
+            eco_counterfactual: None,
             ainl_runtime_telemetry: None,
         })));
     });
@@ -487,6 +490,11 @@ fn daemon_fallback(
             compression_savings_pct: body["compression_savings_pct"].as_u64().unwrap_or(0) as u8,
             compressed_input: body["compressed_input"].as_str().map(|s| s.to_string()),
             compression_semantic_score: body["compression_semantic_score"].as_f64().map(|v| v as f32),
+            adaptive_confidence: body["adaptive_confidence"].as_f64().map(|v| v as f32),
+            eco_counterfactual: body
+                .get("eco_counterfactual")
+                .filter(|v| !v.is_null())
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
             latency_ms: body["latency_ms"].as_u64(),
             llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
             ainl_runtime_telemetry: None,

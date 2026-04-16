@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 12;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -51,6 +51,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if current_version < 11 {
         migrate_v11(conn)?;
+    }
+    if current_version < 12 {
+        migrate_v12(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -433,6 +436,28 @@ fn migrate_v11(conn: &Connection) -> Result<(), rusqlite::Error> {
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (11, datetime('now'), 'Add adaptive_eco_events for adaptive eco telemetry');
         ",
+    )?;
+    Ok(())
+}
+
+/// Version 12: Adaptive eco confidence + counterfactual JSON on `adaptive_eco_events`.
+fn migrate_v12(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "adaptive_eco_events", "adaptive_confidence") {
+        conn.execute(
+            "ALTER TABLE adaptive_eco_events ADD COLUMN adaptive_confidence REAL",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "adaptive_eco_events", "counterfactual_json") {
+        conn.execute(
+            "ALTER TABLE adaptive_eco_events ADD COLUMN counterfactual_json TEXT",
+            [],
+        )?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description)
+         VALUES (12, datetime('now'), 'Adaptive eco confidence + counterfactual JSON')",
+        [],
     )?;
     Ok(())
 }

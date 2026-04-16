@@ -644,6 +644,10 @@ pub async fn build_router(
             "/api/usage/adaptive-eco",
             axum::routing::get(routes::usage_adaptive_eco),
         )
+        .route(
+            "/api/usage/adaptive-eco/replay",
+            axum::routing::get(routes::usage_adaptive_eco_replay),
+        )
         // Budget endpoints
         .route(
             "/api/budget",

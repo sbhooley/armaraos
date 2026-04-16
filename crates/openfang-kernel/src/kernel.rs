@@ -859,6 +859,8 @@ impl OpenFangKernel {
         billing_id: AgentId,
         manifest: &openfang_types::agent::AgentManifest,
         semantic: Option<f32>,
+        adaptive_confidence: Option<f32>,
+        counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     ) {
         if !self.config.adaptive_eco.enabled {
             return;
@@ -886,6 +888,8 @@ impl OpenFangKernel {
             input_price_per_million: snap.input_price_per_million,
             reason_codes: snap.reason_codes,
             semantic_preservation_score: semantic,
+            adaptive_confidence,
+            counterfactual,
         };
         let _ = self.metering.record_adaptive_eco(&rec);
     }
@@ -2869,6 +2873,8 @@ impl OpenFangKernel {
                         bill_id,
                         &manifest,
                         result.compression_semantic_score,
+                        result.adaptive_confidence,
+                        result.eco_counterfactual.clone(),
                     );
 
                     let _ = kernel_clone
@@ -3035,6 +3041,8 @@ impl OpenFangKernel {
                     compression_savings_pct: 0,
                     compressed_input: None,
                     compression_semantic_score: None,
+                    adaptive_confidence: None,
+                    eco_counterfactual: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -3117,6 +3125,8 @@ impl OpenFangKernel {
                     compression_savings_pct: 0,
                     compressed_input: None,
                     compression_semantic_score: None,
+                    adaptive_confidence: None,
+                    eco_counterfactual: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -3665,6 +3675,8 @@ impl OpenFangKernel {
             llm_billing_id,
             &manifest,
             result.compression_semantic_score,
+            result.adaptive_confidence,
+            result.eco_counterfactual.clone(),
         );
 
         // Populate cost on the result based on usage_footer mode

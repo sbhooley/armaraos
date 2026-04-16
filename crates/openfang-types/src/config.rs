@@ -4063,6 +4063,12 @@ impl KernelConfig {
         } else if self.adaptive_eco.circuit_breaker_min_below_floor > 256 {
             self.adaptive_eco.circuit_breaker_min_below_floor = 256;
         }
+        if self.adaptive_eco.post_circuit_cooldown_secs > 86_400 * 30 {
+            self.adaptive_eco.post_circuit_cooldown_secs = 86_400 * 30;
+        }
+        if self.adaptive_eco.min_secs_between_enforced_changes > 86_400 * 30 {
+            self.adaptive_eco.min_secs_between_enforced_changes = 86_400 * 30;
+        }
     }
 }
 

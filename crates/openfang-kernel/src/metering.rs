@@ -3,7 +3,9 @@
 use openfang_memory::usage::{
     CompressionSummary, CompressionUsageRecord, ModelUsage, UsageRecord, UsageStore, UsageSummary,
 };
-use openfang_types::adaptive_eco::{AdaptiveEcoUsageRecord, AdaptiveEcoUsageSummary};
+use openfang_types::adaptive_eco::{
+    AdaptiveEcoReplayReport, AdaptiveEcoUsageRecord, AdaptiveEcoUsageSummary,
+};
 use openfang_types::agent::{AgentId, ResourceQuota};
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use std::sync::Arc;
@@ -41,6 +43,14 @@ impl MeteringEngine {
         window_days: Option<u32>,
     ) -> OpenFangResult<AdaptiveEcoUsageSummary> {
         self.store.query_adaptive_eco_summary(window_days)
+    }
+
+    /// Replay-style aggregates (adaptive eco + compression semantics) for audits.
+    pub fn get_adaptive_eco_replay_report(
+        &self,
+        window_days: Option<u32>,
+    ) -> OpenFangResult<AdaptiveEcoReplayReport> {
+        self.store.query_adaptive_eco_replay_report(window_days)
     }
 
     /// Check if an agent is within its spending quotas (hourly, daily, monthly).

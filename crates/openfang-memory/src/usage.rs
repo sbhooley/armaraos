@@ -2,7 +2,9 @@
 
 use crate::MemorySqlitePool;
 use chrono::Utc;
-use openfang_types::adaptive_eco::{AdaptiveEcoUsageRecord, AdaptiveEcoUsageSummary};
+use openfang_types::adaptive_eco::{
+    AdaptiveEcoReplayReport, AdaptiveEcoUsageRecord, AdaptiveEcoUsageSummary,
+};
 use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use serde::{Deserialize, Serialize};
@@ -216,6 +218,10 @@ impl UsageStore {
         let now = Utc::now().to_rfc3339();
         let codes = serde_json::to_string(&record.reason_codes)
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let counterfactual_json = record
+            .counterfactual
+            .as_ref()
+            .and_then(|c| serde_json::to_string(c).ok());
         conn.execute(
             "INSERT INTO adaptive_eco_events (
                 id, agent_id, timestamp,
@@ -223,8 +229,8 @@ impl UsageStore {
                 circuit_breaker_tripped, hysteresis_blocked,
                 shadow_only, enforce,
                 provider, model, cache_capability, input_price_per_million,
-                reason_codes_json, semantic_preservation_score
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                reason_codes_json, semantic_preservation_score, adaptive_confidence, counterfactual_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 id,
                 record.agent_id.0.to_string(),
@@ -242,6 +248,8 @@ impl UsageStore {
                 record.input_price_per_million,
                 codes,
                 record.semantic_preservation_score.map(|v| v as f64),
+                record.adaptive_confidence.map(|v| v as f64),
+                counterfactual_json,
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -310,6 +318,120 @@ impl UsageStore {
             shadow_mismatch_turns: mismatch,
             circuit_breaker_trips: trips,
             hysteresis_blocks: blocks,
+        })
+    }
+
+    /// Aggregate adaptive eco + compression semantics for policy replay / audits (`GET .../replay`).
+    pub fn query_adaptive_eco_replay_report(
+        &self,
+        window_days: Option<u32>,
+    ) -> OpenFangResult<AdaptiveEcoReplayReport> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let time_filter = window_days
+            .map(|d| format!("timestamp > datetime('now', '-{} days')", d))
+            .unwrap_or_else(|| "1=1".to_string());
+
+        let window_str = window_days
+            .map(|d| format!("{d}d"))
+            .unwrap_or_else(|| "all".to_string());
+
+        let adaptive_eco_events: u64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let shadow_mismatch_turns: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
+                     AND shadow_only = 1 AND recommended_mode != effective_mode"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let circuit_breaker_trips: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
+                     AND circuit_breaker_tripped = 1"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let hysteresis_blocks: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
+                     AND hysteresis_blocked = 1"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let eco_compression_turns: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM eco_compression_events WHERE {time_filter}
+                     AND savings_pct > 0"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT semantic_preservation_score FROM eco_compression_events
+                 WHERE {time_filter} AND semantic_preservation_score IS NOT NULL
+                 ORDER BY semantic_preservation_score"
+            ))
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let scores: Vec<f64> = stmt
+            .query_map([], |row| row.get::<_, f64>(0))
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let n = scores.len();
+        let (compression_semantic_p50, compression_semantic_p95, compression_semantic_mean) =
+            if n == 0 {
+                (None, None, None)
+            } else {
+                let mean = Some(scores.iter().sum::<f64>() / n as f64);
+                let p50 = Some(scores[n / 2]);
+                let p95_idx = (((n.saturating_sub(1)) as f64 * 0.95).round() as usize).min(n - 1);
+                let p95 = Some(scores[p95_idx]);
+                (p50, p95, mean)
+            };
+
+        let shadow_mismatch_rate = if adaptive_eco_events > 0 {
+            shadow_mismatch_turns as f64 / adaptive_eco_events as f64
+        } else {
+            0.0
+        };
+
+        Ok(AdaptiveEcoReplayReport {
+            window: window_str,
+            adaptive_eco_events,
+            shadow_mismatch_turns,
+            shadow_mismatch_rate,
+            circuit_breaker_trips,
+            hysteresis_blocks,
+            eco_compression_turns,
+            compression_semantic_p50,
+            compression_semantic_p95,
+            compression_semantic_mean,
         })
     }
 
@@ -1176,6 +1298,8 @@ mod tests {
                 input_price_per_million: None,
                 reason_codes: vec!["shadow_only:enforce_off".to_string()],
                 semantic_preservation_score: Some(0.91),
+                adaptive_confidence: Some(0.77),
+                counterfactual: None,
             })
             .unwrap();
         let s = store.query_adaptive_eco_summary(None).unwrap();

@@ -83,6 +83,12 @@ pub struct MessageResponse {
     /// Optional semantic preservation score for compressed input (0.0..1.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_semantic_score: Option<f32>,
+    /// Optional adaptive eco policy confidence (0.0–1.0) when adaptive metadata is present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_confidence: Option<f32>,
+    /// Optional counterfactual compression receipt (applied vs recommendation / baselines).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     /// Tool calls from this turn (HTTP clients without WebSocket tool events).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolTurnRecord>,

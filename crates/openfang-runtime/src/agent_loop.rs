@@ -233,6 +233,8 @@ async fn try_consume_turn_via_ainl_runtime(
     compression_savings_pct: u8,
     compressed_input: Option<String>,
     compression_semantic_score: Option<f32>,
+    adaptive_confidence: Option<f32>,
+    eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     loop_t0: std::time::Instant,
     runtime_limits: &EffectiveRuntimeLimits,
     orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
@@ -332,6 +334,8 @@ async fn try_consume_turn_via_ainl_runtime(
         compression_savings_pct,
         compressed_input,
         compression_semantic_score,
+        adaptive_confidence,
+        eco_counterfactual,
         ainl_runtime_telemetry: Some(mapped.telemetry.clone()),
     }))
 }
@@ -757,6 +761,10 @@ pub struct AgentLoopResult {
     pub compressed_input: Option<String>,
     /// Optional semantic preservation score for the compressed input.
     pub compression_semantic_score: Option<f32>,
+    /// Heuristic 0.0–1.0 confidence for adaptive eco policy this turn (when adaptive metadata exists).
+    pub adaptive_confidence: Option<f32>,
+    /// Counterfactual compression comparison (applied vs baselines / recommendation).
+    pub eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     /// Structured telemetry from ainl-runtime-engine, when that path handled the turn.
     pub ainl_runtime_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry>,
 }
@@ -1033,32 +1041,28 @@ pub async fn run_agent_loop(
         .and_then(|v| v.as_str())
         .map(crate::prompt_compressor::EfficientMode::parse_natural_language)
         .unwrap_or_default();
-    let (_compressed_msg, compression_metrics): (
-        Option<String>,
-        crate::prompt_compressor::CompressionMetrics,
-    ) = {
-        let (r, m) = crate::prompt_compressor::compress_with_metrics(user_message, mode, None);
-        if r.tokens_saved() > 0 {
-            let ratio_pct = 100u64.saturating_sub(
-                (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
-            );
-            compression_savings_pct = ratio_pct.min(100) as u8;
-            // $3/M input is the Claude Sonnet 4.6 list price; actual savings vary by model.
-            let est_savings_usd = r.tokens_saved() as f64 / 1_000_000.0 * 3.0;
-            info!(
-                orig_tok = r.original_tokens,
-                compressed_tok = r.compressed_tokens,
-                saved_tok = r.tokens_saved(),
-                savings_pct = ratio_pct,
-                est_savings_usd = format!("{est_savings_usd:.6}"),
-                "prompt:compressed"
-            );
-        }
-        if mode != crate::prompt_compressor::EfficientMode::Off {
-            (Some(r.text), m)
-        } else {
-            (None, m)
-        }
+    let (r, compression_metrics) =
+        crate::prompt_compressor::compress_with_metrics(user_message, mode, None);
+    if r.tokens_saved() > 0 {
+        let ratio_pct = 100u64.saturating_sub(
+            (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
+        );
+        compression_savings_pct = ratio_pct.min(100) as u8;
+        // $3/M input is the Claude Sonnet 4.6 list price; actual savings vary by model.
+        let est_savings_usd = r.tokens_saved() as f64 / 1_000_000.0 * 3.0;
+        info!(
+            orig_tok = r.original_tokens,
+            compressed_tok = r.compressed_tokens,
+            saved_tok = r.tokens_saved(),
+            savings_pct = ratio_pct,
+            est_savings_usd = format!("{est_savings_usd:.6}"),
+            "prompt:compressed"
+        );
+    }
+    let _compressed_msg = if mode != crate::prompt_compressor::EfficientMode::Off {
+        Some(r.text.clone())
+    } else {
+        None
     };
     // Keep the compressed text for diff UI (returned in AgentLoopResult for dashboard).
     let compressed_input: Option<String> = if compression_savings_pct > 0 {
@@ -1067,6 +1071,20 @@ pub async fn run_agent_loop(
         None
     };
     let compression_semantic_score = compression_metrics.semantic_preservation_score;
+    let adaptive_snap: Option<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot> = manifest
+        .metadata
+        .get("adaptive_eco")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let adaptive_confidence = adaptive_snap.as_ref().map(|s| {
+        openfang_types::adaptive_eco::compute_adaptive_confidence(s, compression_semantic_score)
+    });
+    let eco_counterfactual = crate::eco_counterfactual::build_eco_counterfactual_receipt(
+        user_message,
+        mode,
+        &r,
+        compression_savings_pct,
+        adaptive_snap.as_ref(),
+    );
     let session_user_message: &str = _compressed_msg.as_deref().unwrap_or(user_message);
 
     // Add the user message to session history.
@@ -1224,6 +1242,8 @@ pub async fn run_agent_loop(
                 compression_savings_pct,
                 compressed_input.clone(),
                 compression_semantic_score,
+                adaptive_confidence,
+                eco_counterfactual.clone(),
                 loop_t0,
                 &runtime_limits,
                 &orchestration_ctx,
@@ -1410,6 +1430,8 @@ pub async fn run_agent_loop(
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
+                        adaptive_confidence,
+                        eco_counterfactual,
                         ainl_runtime_telemetry: None,
                     });
                 }
@@ -1713,6 +1735,8 @@ pub async fn run_agent_loop(
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
                     compression_semantic_score,
+                    adaptive_confidence,
+                    eco_counterfactual,
                     ainl_runtime_telemetry: None,
                 });
             }
@@ -2006,6 +2030,8 @@ pub async fn run_agent_loop(
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
                             compression_semantic_score,
+                            adaptive_confidence,
+                            eco_counterfactual,
                             ainl_runtime_telemetry: None,
                         });
                     }
@@ -2120,6 +2146,8 @@ pub async fn run_agent_loop(
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
+                        adaptive_confidence,
+                        eco_counterfactual,
                         ainl_runtime_telemetry: None,
                     });
                 }
@@ -2178,6 +2206,8 @@ pub async fn run_agent_loop(
         compression_savings_pct,
         compressed_input,
         compression_semantic_score,
+        adaptive_confidence,
+        eco_counterfactual,
         ainl_runtime_telemetry: None,
     })
             }
@@ -2912,28 +2942,24 @@ pub async fn run_agent_loop_streaming(
         .and_then(|v| v.as_str())
         .map(crate::prompt_compressor::EfficientMode::parse_natural_language)
         .unwrap_or_default();
-    let (_compressed_msg_s, compression_metrics): (
-        Option<String>,
-        crate::prompt_compressor::CompressionMetrics,
-    ) = {
-        let (r, m) = crate::prompt_compressor::compress_with_metrics(user_message, mode, None);
-        if r.tokens_saved() > 0 {
-            let ratio_pct = 100u64.saturating_sub(
-                (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
-            );
-            compression_savings_pct = ratio_pct.min(100) as u8;
-            info!(
-                orig_tok = r.original_tokens,
-                compressed_tok = r.compressed_tokens,
-                savings_pct = ratio_pct,
-                "prompt:compressed (streaming)"
-            );
-        }
-        if mode != crate::prompt_compressor::EfficientMode::Off {
-            (Some(r.text), m)
-        } else {
-            (None, m)
-        }
+    let (r, compression_metrics) =
+        crate::prompt_compressor::compress_with_metrics(user_message, mode, None);
+    if r.tokens_saved() > 0 {
+        let ratio_pct = 100u64.saturating_sub(
+            (r.compressed_tokens as u64 * 100) / r.original_tokens.max(1) as u64,
+        );
+        compression_savings_pct = ratio_pct.min(100) as u8;
+        info!(
+            orig_tok = r.original_tokens,
+            compressed_tok = r.compressed_tokens,
+            savings_pct = ratio_pct,
+            "prompt:compressed (streaming)"
+        );
+    }
+    let _compressed_msg_s = if mode != crate::prompt_compressor::EfficientMode::Off {
+        Some(r.text.clone())
+    } else {
+        None
     };
     let compressed_input: Option<String> = if compression_savings_pct > 0 {
         _compressed_msg_s.clone()
@@ -2941,17 +2967,33 @@ pub async fn run_agent_loop_streaming(
         None
     };
     let compression_semantic_score = compression_metrics.semantic_preservation_score;
+    let adaptive_snap_s: Option<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot> = manifest
+        .metadata
+        .get("adaptive_eco")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let adaptive_confidence = adaptive_snap_s.as_ref().map(|s| {
+        openfang_types::adaptive_eco::compute_adaptive_confidence(s, compression_semantic_score)
+    });
+    let eco_counterfactual = crate::eco_counterfactual::build_eco_counterfactual_receipt(
+        user_message,
+        mode,
+        &r,
+        compression_savings_pct,
+        adaptive_snap_s.as_ref(),
+    );
     let session_user_message_s: &str = _compressed_msg_s.as_deref().unwrap_or(user_message);
 
     // Emit compression stats as the first stream event so the client can display
     // the reduction percentage and diff button before the response arrives.
-    if compression_savings_pct > 0 {
+    if compression_savings_pct > 0 || adaptive_snap_s.is_some() {
         let compressed_text_for_event = compressed_input.clone().unwrap_or_default();
         let _ = stream_tx
             .send(StreamEvent::CompressionStats {
                 savings_pct: compression_savings_pct,
                 compressed_text: compressed_text_for_event,
                 semantic_score: compression_semantic_score,
+                adaptive_confidence,
+                counterfactual: eco_counterfactual.clone(),
             })
             .await;
     }
@@ -3105,6 +3147,8 @@ pub async fn run_agent_loop_streaming(
                 compression_savings_pct,
                 compressed_input.clone(),
                 compression_semantic_score,
+                adaptive_confidence,
+                eco_counterfactual.clone(),
                 loop_t0,
                 &runtime_limits,
                 &orchestration_ctx,
@@ -3347,6 +3391,8 @@ pub async fn run_agent_loop_streaming(
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
+                        adaptive_confidence,
+                        eco_counterfactual,
                         ainl_runtime_telemetry: None,
                     });
                 }
@@ -3643,6 +3689,8 @@ pub async fn run_agent_loop_streaming(
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
                     compression_semantic_score,
+                    adaptive_confidence,
+                    eco_counterfactual,
                     ainl_runtime_telemetry: None,
                 });
             }
@@ -3972,6 +4020,8 @@ pub async fn run_agent_loop_streaming(
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
                             compression_semantic_score,
+                            adaptive_confidence,
+                            eco_counterfactual,
                             ainl_runtime_telemetry: None,
                         });
                     }
@@ -4082,6 +4132,8 @@ pub async fn run_agent_loop_streaming(
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
+                        adaptive_confidence,
+                        eco_counterfactual,
                         ainl_runtime_telemetry: None,
                     });
                 }
@@ -4145,6 +4197,8 @@ pub async fn run_agent_loop_streaming(
         compression_savings_pct,
         compressed_input,
         compression_semantic_score,
+        adaptive_confidence,
+        eco_counterfactual,
         ainl_runtime_telemetry: None,
     })
             }

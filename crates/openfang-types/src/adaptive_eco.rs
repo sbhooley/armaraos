@@ -36,6 +36,12 @@ pub struct AdaptiveEcoConfig {
     /// Trip the breaker when at least this many samples in the window are strictly below [`Self::semantic_floor`].
     #[serde(default = "default_circuit_breaker_min_below_floor")]
     pub circuit_breaker_min_below_floor: u32,
+    /// After a circuit-breaker step-down, block raising compression again for this many seconds (0 = disabled).
+    #[serde(default)]
+    pub post_circuit_cooldown_secs: u64,
+    /// Minimum wall time between enforced mode changes per billing agent (0 = disabled).
+    #[serde(default)]
+    pub min_secs_between_enforced_changes: u64,
 }
 
 fn default_enforce_min_consecutive_turns() -> u32 {
@@ -65,8 +71,71 @@ impl Default for AdaptiveEcoConfig {
             circuit_breaker_enabled: default_true(),
             circuit_breaker_window: default_circuit_breaker_window(),
             circuit_breaker_min_below_floor: default_circuit_breaker_min_below_floor(),
+            post_circuit_cooldown_secs: 0,
+            min_secs_between_enforced_changes: 0,
         }
     }
+}
+
+/// Per-turn counterfactual compression comparison (actual applied mode vs baselines / recommendation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EcoCounterfactualReceipt {
+    pub applied_mode: String,
+    pub original_tokens_est: u64,
+    pub applied_compressed_tokens_est: u64,
+    pub vs_off_tokens_saved: u64,
+    pub vs_off_savings_pct: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_compressed_tokens_est: Option<u64>,
+    /// Positive when the recommended mode would save **more** tokens than applied (shadow mismatch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_saved_delta_recommended_minus_applied: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balanced_compressed_tokens_est: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggressive_extra_tokens_saved_vs_balanced: Option<u64>,
+}
+
+/// Pre-enforcement replay report (`GET /api/usage/adaptive-eco/replay`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveEcoReplayReport {
+    pub window: String,
+    pub adaptive_eco_events: u64,
+    pub shadow_mismatch_turns: u64,
+    pub shadow_mismatch_rate: f64,
+    pub circuit_breaker_trips: u64,
+    pub hysteresis_blocks: u64,
+    pub eco_compression_turns: u64,
+    pub compression_semantic_p50: Option<f64>,
+    pub compression_semantic_p95: Option<f64>,
+    pub compression_semantic_mean: Option<f64>,
+}
+
+/// Heuristic 0.0–1.0 confidence for adaptive policy for this turn (dashboard / receipts).
+#[must_use]
+pub fn compute_adaptive_confidence(
+    snap: &AdaptiveEcoTurnSnapshot,
+    semantic_preservation: Option<f32>,
+) -> f32 {
+    let sem = semantic_preservation.unwrap_or(0.88).clamp(0.0, 1.0);
+    let mut score = 0.58 * sem;
+    if snap.circuit_breaker_tripped {
+        score -= 0.12;
+    }
+    if snap.hysteresis_blocked {
+        score -= 0.06;
+    }
+    if snap.shadow_only && snap.recommended_mode != snap.effective_mode {
+        score -= 0.07;
+    }
+    match snap.cache_capability.as_str() {
+        "explicit_prompt_cache" | "implicit_automatic" => score += 0.08,
+        "routed_provider_dependent" => score += 0.02,
+        _ => {}
+    }
+    score.clamp(0.0, 1.0)
 }
 
 /// Serializable snapshot attached to manifest metadata (`adaptive_eco`) for telemetry and graph traces.
@@ -129,6 +198,10 @@ pub struct AdaptiveEcoUsageRecord {
     pub reason_codes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_preservation_score: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counterfactual: Option<EcoCounterfactualReceipt>,
 }
 
 /// Lightweight aggregates for dashboards / `GET /api/usage/adaptive-eco`.

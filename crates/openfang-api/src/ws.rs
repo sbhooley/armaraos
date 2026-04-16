@@ -583,6 +583,10 @@ async fn handle_text_message(
                         let mut compression_savings_pct: u8 = 0;
                         let mut compressed_input: Option<String> = None;
                         let mut compression_semantic_score: Option<f32> = None;
+                        let mut adaptive_confidence_ws: Option<f32> = None;
+                        let mut eco_counterfactual_ws: Option<
+                            openfang_types::adaptive_eco::EcoCounterfactualReceipt,
+                        > = None;
                         let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
                         let mut flush_deadline = far_future;
 
@@ -613,12 +617,21 @@ async fn handle_text_message(
                                                 continue;
                                             }
                                             // Capture compression stats (emitted once before any LLM call)
-                                            if let StreamEvent::CompressionStats { savings_pct, compressed_text, semantic_score } = &ev {
+                                            if let StreamEvent::CompressionStats {
+                                                savings_pct,
+                                                compressed_text,
+                                                semantic_score,
+                                                adaptive_confidence,
+                                                counterfactual,
+                                            } = &ev
+                                            {
                                                 compression_savings_pct = *savings_pct;
                                                 if !compressed_text.is_empty() {
                                                     compressed_input = Some(compressed_text.clone());
                                                 }
                                                 compression_semantic_score = *semantic_score;
+                                                adaptive_confidence_ws = *adaptive_confidence;
+                                                eco_counterfactual_ws = counterfactual.clone();
                                                 continue;
                                             }
 
@@ -705,6 +718,8 @@ async fn handle_text_message(
                             compression_savings_pct,
                             compressed_input,
                             compression_semantic_score,
+                            adaptive_confidence_ws,
+                            eco_counterfactual_ws,
                         )
                     });
 
@@ -757,6 +772,8 @@ async fn handle_text_message(
                             compression_savings_pct,
                             compressed_input,
                             compression_semantic_score,
+                            adaptive_confidence_ws,
+                            eco_counterfactual_ws,
                         )) => {
                             let user_message = content.clone();
                             let agent_id_str = agent_id.to_string();
@@ -801,6 +818,12 @@ async fn handle_text_message(
                                 }
                                 if let Some(score) = compression_semantic_score {
                                     silent_payload["compression_semantic_score"] = serde_json::json!(score);
+                                }
+                                if let Some(ac) = adaptive_confidence_ws {
+                                    silent_payload["adaptive_confidence"] = serde_json::json!(ac);
+                                }
+                                if let Some(ref cf) = eco_counterfactual_ws {
+                                    silent_payload["eco_counterfactual"] = serde_json::json!(cf);
                                 }
                                 let _ = send_json(sender, &silent_payload).await;
                                 return;
@@ -865,6 +888,12 @@ async fn handle_text_message(
                             }
                             if let Some(score) = compression_semantic_score {
                                 response_payload["compression_semantic_score"] = serde_json::json!(score);
+                            }
+                            if let Some(ac) = adaptive_confidence_ws {
+                                response_payload["adaptive_confidence"] = serde_json::json!(ac);
+                            }
+                            if let Some(ref cf) = eco_counterfactual_ws {
+                                response_payload["eco_counterfactual"] = serde_json::json!(cf);
                             }
                             let _ = send_json(sender, &response_payload).await;
                         }

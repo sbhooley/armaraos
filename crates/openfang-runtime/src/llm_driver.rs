@@ -153,6 +153,10 @@ pub enum StreamEvent {
         compressed_text: String,
         /// Optional semantic preservation score for the compressed input.
         semantic_score: Option<f32>,
+        /// Optional adaptive eco policy confidence (0.0–1.0).
+        adaptive_confidence: Option<f32>,
+        /// Optional counterfactual receipt (applied vs recommendation / baselines).
+        counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     },
     /// Structured telemetry emitted when a turn is handled by the embedded ainl-runtime path.
     AinlRuntimeTelemetry {
