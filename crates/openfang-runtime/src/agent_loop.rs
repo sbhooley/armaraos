@@ -220,25 +220,17 @@ fn get_or_create_ainl_runtime_bridge(
     Ok(bridge)
 }
 
+/// Runs **ainl-runtime** graph-memory bookkeeping for this turn, then lets the normal OpenFang
+/// LLM loop produce the assistant reply. Does not append assistant messages or end the loop early.
 #[cfg(feature = "ainl-runtime-engine")]
-#[allow(clippy::too_many_arguments)] // Thin early-exit shim: mirrors run_agent_loop pre-loop context.
-async fn try_consume_turn_via_ainl_runtime(
+async fn run_ainl_runtime_engine_prelude(
     manifest: &AgentManifest,
     graph_memory: &Option<crate::graph_memory_writer::GraphMemoryWriter>,
-    session: &mut Session,
-    memory: &MemorySubstrate,
     session_user_message: &str,
-    hooks: Option<&crate::hooks::HookRegistry>,
     agent_id_str: &str,
-    compression_savings_pct: u8,
-    compressed_input: Option<String>,
-    compression_semantic_score: Option<f32>,
-    adaptive_confidence: Option<f32>,
-    eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
-    loop_t0: std::time::Instant,
     runtime_limits: &EffectiveRuntimeLimits,
     orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
-) -> Option<OpenFangResult<AgentLoopResult>> {
+) -> Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> {
     if !ainl_runtime_engine_switch_active(manifest) {
         return None;
     }
@@ -292,52 +284,7 @@ async fn try_consume_turn_via_ainl_runtime(
         }
     };
     crate::ainl_runtime_bridge::log_mapped_end_turn_fields(&manifest.name, &mapped);
-    session
-        .messages
-        .push(Message::assistant(mapped.output.as_str()));
-    if let Err(e) = memory.save_session_async(session).await {
-        warn!("Failed to save session after ainl-runtime-engine turn: {e}");
-    }
-    if let Some(hook_reg) = hooks {
-        let ctx = crate::hooks::HookContext {
-            agent_name: &manifest.name,
-            agent_id: agent_id_str,
-            event: openfang_types::agent::HookEvent::AgentLoopEnd,
-            data: serde_json::json!({
-                "engine": "ainl-runtime",
-                "tool_calls": mapped.tool_calls,
-                "delegation_to": mapped.delegation_to,
-                "turn_status": format!("{:?}", mapped.telemetry.turn_status),
-                "partial_success": mapped.telemetry.partial_success,
-                "warning_count": mapped.telemetry.warning_count,
-                "has_extraction_report": mapped.telemetry.has_extraction_report,
-                "memory_context_recent_episodes": mapped.telemetry.memory_context_recent_episodes,
-                "memory_context_relevant_semantic": mapped.telemetry.memory_context_relevant_semantic,
-                "memory_context_active_patches": mapped.telemetry.memory_context_active_patches,
-                "memory_context_has_persona_snapshot": mapped.telemetry.memory_context_has_persona_snapshot,
-                "patch_dispatch_count": mapped.telemetry.patch_dispatch_count,
-                "patch_dispatch_adapter_output_count": mapped.telemetry.patch_dispatch_adapter_output_count,
-                "steps_executed": mapped.telemetry.steps_executed,
-            }),
-        };
-        let _ = hook_reg.fire(&ctx);
-    }
-    Some(Ok(AgentLoopResult {
-        response: mapped.output,
-        total_usage: TokenUsage::default(),
-        iterations: 1,
-        cost_usd: mapped.cost_estimate,
-        silent: false,
-        directives: Default::default(),
-        latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
-        llm_fallback_note: None,
-        compression_savings_pct,
-        compressed_input,
-        compression_semantic_score,
-        adaptive_confidence,
-        eco_counterfactual,
-        ainl_runtime_telemetry: Some(mapped.telemetry.clone()),
-    }))
+    Some(mapped.telemetry.clone())
 }
 
 /// Expected per-agent SQLite path (must stay aligned with [`crate::graph_memory_writer::GraphMemoryWriter`]).
@@ -1059,6 +1006,18 @@ pub async fn run_agent_loop(
             "prompt:compressed"
         );
     }
+    let eco_mode_label = match mode {
+        crate::prompt_compressor::EfficientMode::Off => "off",
+        crate::prompt_compressor::EfficientMode::Balanced => "balanced",
+        crate::prompt_compressor::EfficientMode::Aggressive => "aggressive",
+    };
+    crate::eco_telemetry::record_turn(
+        &session.agent_id.0.to_string(),
+        eco_mode_label,
+        user_message,
+        &r.text,
+        compression_savings_pct,
+    );
     let _compressed_msg = if mode != crate::prompt_compressor::EfficientMode::Off {
         Some(r.text.clone())
     } else {
@@ -1196,7 +1155,7 @@ pub async fn run_agent_loop(
     let mut llm_fallback_note: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    {
+    let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
         let mut ainl_runtime_turn_allowed = true;
         if ainl_runtime_engine_switch_active(manifest) {
             if let Some(ref kh) = kernel {
@@ -1231,29 +1190,19 @@ pub async fn run_agent_loop(
             }
         }
         if ainl_runtime_turn_allowed {
-            if let Some(res) = try_consume_turn_via_ainl_runtime(
+            run_ainl_runtime_engine_prelude(
                 manifest,
                 &graph_memory,
-                session,
-                memory,
                 session_user_message,
-                hooks,
                 agent_id_str.as_str(),
-                compression_savings_pct,
-                compressed_input.clone(),
-                compression_semantic_score,
-                adaptive_confidence,
-                eco_counterfactual.clone(),
-                loop_t0,
                 &runtime_limits,
                 &orchestration_ctx,
             )
             .await
-            {
-                return res;
-            }
+        } else {
+            None
         }
-    }
+    };
 
     let mut btw_rx = btw_rx;
     let mut redirect_rx = redirect_rx;
@@ -1432,7 +1381,16 @@ pub async fn run_agent_loop(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
-                        ainl_runtime_telemetry: None,
+                        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                     });
                 }
 
@@ -1737,7 +1695,16 @@ pub async fn run_agent_loop(
                     compression_semantic_score,
                     adaptive_confidence,
                     eco_counterfactual,
-                    ainl_runtime_telemetry: None,
+                    ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                 });
             }
             StopReason::ToolUse => {
@@ -2032,7 +1999,16 @@ pub async fn run_agent_loop(
                             compression_semantic_score,
                             adaptive_confidence,
                             eco_counterfactual,
-                            ainl_runtime_telemetry: None,
+                            ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                         });
                     }
                 }
@@ -2148,7 +2124,16 @@ pub async fn run_agent_loop(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
-                        ainl_runtime_telemetry: None,
+                        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                     });
                 }
                 // Model hit token limit — add partial response and continue
@@ -2208,7 +2193,16 @@ pub async fn run_agent_loop(
         compression_semantic_score,
         adaptive_confidence,
         eco_counterfactual,
-        ainl_runtime_telemetry: None,
+        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
     })
             }
         )
@@ -2956,6 +2950,18 @@ pub async fn run_agent_loop_streaming(
             "prompt:compressed (streaming)"
         );
     }
+    let eco_mode_label_s = match mode {
+        crate::prompt_compressor::EfficientMode::Off => "off",
+        crate::prompt_compressor::EfficientMode::Balanced => "balanced",
+        crate::prompt_compressor::EfficientMode::Aggressive => "aggressive",
+    };
+    crate::eco_telemetry::record_turn(
+        &session.agent_id.0.to_string(),
+        eco_mode_label_s,
+        user_message,
+        &r.text,
+        compression_savings_pct,
+    );
     let _compressed_msg_s = if mode != crate::prompt_compressor::EfficientMode::Off {
         Some(r.text.clone())
     } else {
@@ -3101,7 +3107,7 @@ pub async fn run_agent_loop_streaming(
     let mut llm_fallback_note: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    {
+    let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
         let mut ainl_runtime_turn_allowed = true;
         if ainl_runtime_engine_switch_active(manifest) {
             if let Some(ref kh) = kernel {
@@ -3136,61 +3142,38 @@ pub async fn run_agent_loop_streaming(
             }
         }
         if ainl_runtime_turn_allowed {
-            if let Some(res) = try_consume_turn_via_ainl_runtime(
+            run_ainl_runtime_engine_prelude(
                 manifest,
                 &graph_memory,
-                session,
-                memory,
                 session_user_message_s,
-                hooks,
                 agent_id_str.as_str(),
-                compression_savings_pct,
-                compressed_input.clone(),
-                compression_semantic_score,
-                adaptive_confidence,
-                eco_counterfactual.clone(),
-                loop_t0,
                 &runtime_limits,
                 &orchestration_ctx,
             )
             .await
-            {
-                if let Ok(ref result) = res {
-                    if let Some(ref t) = result.ainl_runtime_telemetry {
-                        let payload = serde_json::json!({
-                            "turn_status": format!("{:?}", t.turn_status),
-                            "partial_success": t.partial_success,
-                            "warning_count": t.warning_count,
-                            "has_extraction_report": t.has_extraction_report,
-                            "memory_context_recent_episodes": t.memory_context_recent_episodes,
-                            "memory_context_relevant_semantic": t.memory_context_relevant_semantic,
-                            "memory_context_active_patches": t.memory_context_active_patches,
-                            "memory_context_has_persona_snapshot": t.memory_context_has_persona_snapshot,
-                            "patch_dispatch_count": t.patch_dispatch_count,
-                            "patch_dispatch_adapter_output_count": t.patch_dispatch_adapter_output_count,
-                            "steps_executed": t.steps_executed,
-                        });
-                        let _ = stream_tx
-                            .send(StreamEvent::AinlRuntimeTelemetry { payload })
-                            .await;
-                    }
-                    if !result.response.is_empty() {
-                        let _ = stream_tx
-                            .send(StreamEvent::TextDelta {
-                                text: result.response.clone(),
-                            })
-                            .await;
-                    }
-                    let _ = stream_tx
-                        .send(StreamEvent::ContentComplete {
-                            stop_reason: StopReason::EndTurn,
-                            usage: result.total_usage,
-                        })
-                        .await;
-                }
-                return res;
-            }
+        } else {
+            None
         }
+    };
+
+    #[cfg(feature = "ainl-runtime-engine")]
+    if let Some(ref t) = ainl_prelude_telemetry {
+        let payload = serde_json::json!({
+            "turn_status": format!("{:?}", t.turn_status),
+            "partial_success": t.partial_success,
+            "warning_count": t.warning_count,
+            "has_extraction_report": t.has_extraction_report,
+            "memory_context_recent_episodes": t.memory_context_recent_episodes,
+            "memory_context_relevant_semantic": t.memory_context_relevant_semantic,
+            "memory_context_active_patches": t.memory_context_active_patches,
+            "memory_context_has_persona_snapshot": t.memory_context_has_persona_snapshot,
+            "patch_dispatch_count": t.patch_dispatch_count,
+            "patch_dispatch_adapter_output_count": t.patch_dispatch_adapter_output_count,
+            "steps_executed": t.steps_executed,
+        });
+        let _ = stream_tx
+            .send(StreamEvent::AinlRuntimeTelemetry { payload })
+            .await;
     }
 
     let mut btw_rx = btw_rx;
@@ -3393,7 +3376,16 @@ pub async fn run_agent_loop_streaming(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
-                        ainl_runtime_telemetry: None,
+                        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                     });
                 }
 
@@ -3691,7 +3683,16 @@ pub async fn run_agent_loop_streaming(
                     compression_semantic_score,
                     adaptive_confidence,
                     eco_counterfactual,
-                    ainl_runtime_telemetry: None,
+                    ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                 });
             }
             StopReason::ToolUse => {
@@ -4022,7 +4023,16 @@ pub async fn run_agent_loop_streaming(
                             compression_semantic_score,
                             adaptive_confidence,
                             eco_counterfactual,
-                            ainl_runtime_telemetry: None,
+                            ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                         });
                     }
                 }
@@ -4134,7 +4144,16 @@ pub async fn run_agent_loop_streaming(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
-                        ainl_runtime_telemetry: None,
+                        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
                     });
                 }
                 let text = response.text();
@@ -4199,7 +4218,16 @@ pub async fn run_agent_loop_streaming(
         compression_semantic_score,
         adaptive_confidence,
         eco_counterfactual,
-        ainl_runtime_telemetry: None,
+        ainl_runtime_telemetry: {
+                        #[cfg(feature = "ainl-runtime-engine")]
+                        {
+                            ainl_prelude_telemetry.clone()
+                        }
+                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                        {
+                            None
+                        }
+                    },
     })
             }
         )

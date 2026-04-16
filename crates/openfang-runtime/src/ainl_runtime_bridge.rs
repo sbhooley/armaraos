@@ -153,19 +153,12 @@ pub fn map_ainl_turn_outcome(
 }
 
 fn build_output_text(r: &AinlTurnResult) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(p) = &r.persona_prompt_contribution {
-        if !p.trim().is_empty() {
-            parts.push(p.trim().to_string());
-        }
-    }
-    if parts.is_empty() {
-        parts.push(format!(
-            "[ainl-runtime] turn finished (episode_id={}, status={:?}, steps={})",
-            r.episode_id, r.status, r.steps_executed
-        ));
-    }
-    parts.join("\n\n")
+    // `persona_prompt_contribution` is compiled persona traits for system-prompt hooks only
+    // (e.g. internal `axis_evolution_snapshot`). It must never be shown as assistant chat text.
+    format!(
+        "[ainl-runtime] turn finished (episode_id={}, status={:?}, steps={})",
+        r.episode_id, r.status, r.steps_executed
+    )
 }
 
 fn collect_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, r: &AinlTurnResult) -> AinlBridgeTelemetry {
