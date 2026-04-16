@@ -28,8 +28,8 @@ if ! curl -sS -f -m 8 "$BASE/" | grep -qE 'notify-bell-btn|notify-center-root'; 
   echo "ERROR: Dashboard HTML missing notification center (expected notify-bell-btn or notify-center-root)."
   exit 1
 fi
-if ! curl -sS -f -m 8 "$BASE/" | grep -q 'daemon-resource-strip'; then
-  echo "ERROR: Dashboard HTML missing daemon resource strip (expected daemon-resource-strip)."
+if ! curl -sS -f -m 8 "$BASE/" | grep -q 'conn-res-badge'; then
+  echo "ERROR: Dashboard HTML missing sidebar daemon resource badges (expected conn-res-badge)."
   exit 1
 fi
 echo "OK"
@@ -42,7 +42,7 @@ echo "-- GET /api/approvals (execution approval queue)"
 curl -sS -f -m 5 "$BASE/api/approvals" | head -c 500
 echo ""
 
-echo "-- GET /api/system/daemon-resources (dashboard CPU/MEM footprint strip)"
+echo "-- GET /api/system/daemon-resources (sidebar CPU/MEM badges)"
 curl -sS -f -m 5 "$BASE/api/system/daemon-resources" | head -c 500
 echo ""
 

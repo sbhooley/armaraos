@@ -1,6 +1,6 @@
 # Ultra Cost-Efficient Mode (prompt compression)
 
-ArmaraOS compresses **user input** before each LLM call using a pure-Rust heuristic in `crates/openfang-runtime/src/prompt_compressor.rs`. Compression is **transparent**: users type normally; only the text sent to the model is shortened. Vector memory and session history can still use the original wording where the pipeline preserves it.
+ArmaraOS compresses **user input** before each LLM call using the standalone `ainl-compression` crate (`crates/ainl-compression`). Compression is **transparent**: users type normally; only the text sent to the model is shortened. Vector memory and session history can still use the original wording where the pipeline preserves it.
 
 **Latency:** Target **under 30 ms** end-to-end on typical hardware (often much less for short prompts).  
 **Token estimate:** `chars / 4 + 1` per segment (same heuristic as elsewhere in telemetry).
@@ -36,7 +36,7 @@ For a shorter product overview and benchmarks, see the root [README.md](../READM
 9. If the result is not shorter than the original, the **original** is returned (no-op).
 
 Debug logging (optional):  
-`RUST_LOG=openfang_runtime::prompt_compressor=debug` logs full before/after text per call.
+`RUST_LOG=ainl_compression=debug` logs full before/after text per call.
 
 ---
 

@@ -2312,6 +2312,63 @@ tr:hover td { background: var(--surface2); }
 }
 .chat-error-dismiss:hover { opacity: 1; }
 
+/* ── Runtime/LLM status banner (below telemetry strip, above errors) ── */
+.chat-status-banner {
+  flex-shrink: 0;
+  padding: 0 12px;
+  background: var(--bg-elevated);
+}
+.chat-status-banner-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid;
+  margin: 6px 0 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.chat-status-banner-inner.info {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.28);
+}
+.chat-status-banner-inner.warning {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.32);
+}
+.chat-status-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.chat-status-icon.info {
+  color: #60a5fa;
+}
+.chat-status-icon.warning {
+  color: #f59e0b;
+}
+.chat-status-text {
+  flex: 1;
+  color: var(--text-secondary);
+  cursor: help;
+}
+.chat-status-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.chat-status-dismiss:hover {
+  opacity: 1;
+}
+
 /* ── Message footer eco badge ── */
 .eco-savings-badge {
   display: inline-flex;

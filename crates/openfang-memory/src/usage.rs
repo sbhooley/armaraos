@@ -5,6 +5,7 @@ use chrono::Utc;
 use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 
 /// A single usage event recording an LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +22,10 @@ pub struct UsageRecord {
     pub cost_usd: f64,
     /// Number of tool calls in this interaction.
     pub tool_calls: u32,
+    /// Prompt-cache tokens written this turn (provider-specific).
+    pub cache_creation_input_tokens: u64,
+    /// Prompt-cache tokens read this turn (provider-specific).
+    pub cache_read_input_tokens: u64,
 }
 
 /// Summary of usage over a period.
@@ -66,6 +71,56 @@ pub struct DailyBreakdown {
     pub calls: u64,
 }
 
+/// Durable prompt-compression telemetry event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionUsageRecord {
+    pub agent_id: AgentId,
+    pub mode: String,
+    pub original_tokens_est: u64,
+    pub compressed_tokens_est: u64,
+    pub savings_pct: u8,
+    pub semantic_preservation_score: Option<f32>,
+}
+
+/// Aggregated compression effectiveness for a mode bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionModeSummary {
+    pub turns: u64,
+    pub compressed_turns: u64,
+    pub compression_hit_rate_pct: f64,
+    pub sample_count: usize,
+    pub savings_pct_p50: u8,
+    pub savings_pct_p95: u8,
+    pub savings_pct_mean: f64,
+    pub semantic_score_mean: Option<f64>,
+    pub semantic_score_p50: Option<f64>,
+    pub semantic_score_p95: Option<f64>,
+    pub semantic_score_samples: usize,
+    pub estimated_original_tokens: u64,
+    pub estimated_compressed_tokens: u64,
+    pub estimated_token_reduction_pct: f64,
+}
+
+/// Compression summary by mode and by agent/mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionSummary {
+    pub window: String,
+    pub modes: BTreeMap<String, CompressionModeSummary>,
+    pub agents: Vec<CompressionAgentSummary>,
+    pub estimated_compression_tokens_saved: u64,
+    pub cache_read_input_tokens: u64,
+    pub estimated_total_input_tokens_saved: u64,
+    pub estimated_cache_cost_saved_usd: f64,
+    pub estimated_compression_cost_saved_usd: f64,
+    pub estimated_total_cost_saved_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionAgentSummary {
+    pub agent_id: String,
+    pub modes: BTreeMap<String, CompressionModeSummary>,
+}
+
 /// Usage store backed by SQLite.
 #[derive(Clone)]
 pub struct UsageStore {
@@ -98,6 +153,45 @@ impl UsageStore {
                 record.output_tokens as i64,
                 record.cost_usd,
                 record.tool_calls as i64,
+            ],
+        )
+        .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        conn.execute(
+            "UPDATE usage_events
+             SET cache_creation_input_tokens = ?1, cache_read_input_tokens = ?2
+             WHERE id = ?3",
+            rusqlite::params![
+                record.cache_creation_input_tokens as i64,
+                record.cache_read_input_tokens as i64,
+                id,
+            ],
+        )
+        .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Record a prompt-compression telemetry event.
+    pub fn record_compression(&self, record: &CompressionUsageRecord) -> OpenFangResult<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO eco_compression_events (
+                id, agent_id, timestamp, mode,
+                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                id,
+                record.agent_id.0.to_string(),
+                now,
+                record.mode.to_ascii_lowercase(),
+                record.original_tokens_est as i64,
+                record.compressed_tokens_est as i64,
+                record.savings_pct as i64,
+                record.semantic_preservation_score.map(|v| v as f64),
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -348,6 +442,298 @@ impl UsageStore {
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         Ok(deleted)
     }
+
+    /// Query compression metrics by mode and by agent.
+    ///
+    /// `window_days`:
+    /// - `Some(N)` => only rows newer than `now - N days`
+    /// - `None` => all rows
+    pub fn query_compression_summary(
+        &self,
+        window_days: Option<u32>,
+    ) -> OpenFangResult<CompressionSummary> {
+        #[derive(Default)]
+        struct Agg {
+            turns: u64,
+            compressed_turns: u64,
+            original_tokens: u64,
+            compressed_tokens: u64,
+            savings_samples: Vec<u8>,
+            semantic_samples: Vec<f64>,
+        }
+        fn pctl(samples: &[u8], p: f64) -> u8 {
+            if samples.is_empty() {
+                return 0;
+            }
+            let mut s = samples.to_vec();
+            s.sort_unstable();
+            let idx = ((s.len().saturating_sub(1) as f64) * p).round() as usize;
+            s[idx.min(s.len().saturating_sub(1))]
+        }
+        fn finalize(a: Agg) -> CompressionModeSummary {
+            let savings_mean = if a.savings_samples.is_empty() {
+                0.0
+            } else {
+                a.savings_samples.iter().map(|v| *v as u64).sum::<u64>() as f64
+                    / a.savings_samples.len() as f64
+            };
+            let reduction_pct = if a.original_tokens == 0 {
+                0.0
+            } else {
+                100.0 - ((a.compressed_tokens as f64 * 100.0) / a.original_tokens.max(1) as f64)
+            };
+            let semantic_mean = if a.semantic_samples.is_empty() {
+                None
+            } else {
+                Some(a.semantic_samples.iter().sum::<f64>() / a.semantic_samples.len() as f64)
+            };
+            let semantic_p50 = if a.semantic_samples.is_empty() {
+                None
+            } else {
+                let mut s = a.semantic_samples.clone();
+                s.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                let idx = ((s.len().saturating_sub(1) as f64) * 0.50).round() as usize;
+                Some(s[idx.min(s.len().saturating_sub(1))])
+            };
+            let semantic_p95 = if a.semantic_samples.is_empty() {
+                None
+            } else {
+                let mut s = a.semantic_samples.clone();
+                s.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                let idx = ((s.len().saturating_sub(1) as f64) * 0.95).round() as usize;
+                Some(s[idx.min(s.len().saturating_sub(1))])
+            };
+            CompressionModeSummary {
+                turns: a.turns,
+                compressed_turns: a.compressed_turns,
+                compression_hit_rate_pct: if a.turns == 0 {
+                    0.0
+                } else {
+                    a.compressed_turns as f64 * 100.0 / a.turns as f64
+                },
+                sample_count: a.savings_samples.len(),
+                savings_pct_p50: pctl(&a.savings_samples, 0.50),
+                savings_pct_p95: pctl(&a.savings_samples, 0.95),
+                savings_pct_mean: savings_mean,
+                semantic_score_mean: semantic_mean,
+                semantic_score_p50: semantic_p50,
+                semantic_score_p95: semantic_p95,
+                semantic_score_samples: a.semantic_samples.len(),
+                estimated_original_tokens: a.original_tokens,
+                estimated_compressed_tokens: a.compressed_tokens,
+                estimated_token_reduction_pct: reduction_pct,
+            }
+        }
+
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match window_days {
+            Some(days) => (
+                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
+                 FROM eco_compression_events
+                 WHERE timestamp > datetime('now', ?1)",
+                vec![Box::new(format!("-{} days", days))],
+            ),
+            None => (
+                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
+                 FROM eco_compression_events",
+                vec![],
+            ),
+        };
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, i64>(3)? as u64,
+                    row.get::<_, i64>(4)? as u8,
+                    row.get::<_, Option<f64>>(5)?,
+                ))
+            })
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+
+        let mut mode_agg: HashMap<String, Agg> = HashMap::new();
+        let mut agent_mode_agg: HashMap<(String, String), Agg> = HashMap::new();
+        let mut total_compression_tokens_saved: u64 = 0;
+        for row in rows {
+            let (agent_id, mode_raw, original, compressed, savings_pct, semantic_score) =
+                row.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            if original > compressed {
+                total_compression_tokens_saved =
+                    total_compression_tokens_saved.saturating_add(original - compressed);
+            }
+            let mode = mode_raw.to_ascii_lowercase();
+            {
+                let a = mode_agg.entry(mode.clone()).or_default();
+                a.turns = a.turns.saturating_add(1);
+                if savings_pct > 0 {
+                    a.compressed_turns = a.compressed_turns.saturating_add(1);
+                }
+                a.original_tokens = a.original_tokens.saturating_add(original);
+                a.compressed_tokens = a.compressed_tokens.saturating_add(compressed);
+                a.savings_samples.push(savings_pct);
+                if let Some(v) = semantic_score {
+                    a.semantic_samples.push(v);
+                }
+            }
+            {
+                let a = agent_mode_agg.entry((agent_id, mode)).or_default();
+                a.turns = a.turns.saturating_add(1);
+                if savings_pct > 0 {
+                    a.compressed_turns = a.compressed_turns.saturating_add(1);
+                }
+                a.original_tokens = a.original_tokens.saturating_add(original);
+                a.compressed_tokens = a.compressed_tokens.saturating_add(compressed);
+                a.savings_samples.push(savings_pct);
+                if let Some(v) = semantic_score {
+                    a.semantic_samples.push(v);
+                }
+            }
+        }
+
+        let mut modes: BTreeMap<String, CompressionModeSummary> = BTreeMap::new();
+        for (mode, agg) in mode_agg {
+            modes.insert(mode, finalize(agg));
+        }
+
+        let mut agent_grouped: BTreeMap<String, BTreeMap<String, CompressionModeSummary>> =
+            BTreeMap::new();
+        for ((agent_id, mode), agg) in agent_mode_agg {
+            agent_grouped
+                .entry(agent_id)
+                .or_default()
+                .insert(mode, finalize(agg));
+        }
+        let agents = agent_grouped
+            .into_iter()
+            .map(|(agent_id, modes)| CompressionAgentSummary { agent_id, modes })
+            .collect();
+
+        let (cache_read_tokens, estimated_cache_cost_saved_usd, weighted_input_rate_sum, weighted_rate_tokens): (
+            u64,
+            f64,
+            f64,
+            u64,
+        ) = {
+            let (usage_sql, usage_params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                match window_days {
+                    Some(days) => (
+                        "SELECT model, input_tokens, cache_read_input_tokens FROM usage_events
+                         WHERE timestamp > datetime('now', ?1)",
+                        vec![Box::new(format!("-{} days", days))],
+                    ),
+                    None => (
+                        "SELECT model, input_tokens, cache_read_input_tokens FROM usage_events",
+                        vec![],
+                    ),
+                };
+            let usage_params_refs: Vec<&dyn rusqlite::types::ToSql> =
+                usage_params.iter().map(|p| p.as_ref()).collect();
+            let mut usage_stmt = conn
+                .prepare(usage_sql)
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let usage_rows = usage_stmt
+                .query_map(usage_params_refs.as_slice(), |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, i64>(2)? as u64,
+                    ))
+                })
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let mut cache_tokens: u64 = 0;
+            let mut cache_saved: f64 = 0.0;
+            let mut rate_sum: f64 = 0.0;
+            let mut rate_tokens: u64 = 0;
+            for row in usage_rows {
+                let (model, input_tokens, cache_read) =
+                    row.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+                let input_rate = estimate_input_per_million(&model) / 1_000_000.0;
+                if input_tokens > 0 {
+                    rate_sum += input_rate * input_tokens as f64;
+                    rate_tokens = rate_tokens.saturating_add(input_tokens);
+                }
+                if cache_read > 0 {
+                    cache_tokens = cache_tokens.saturating_add(cache_read);
+                    cache_saved += input_rate * cache_read as f64 * cache_discount_factor(&model);
+                }
+            }
+            (cache_tokens, cache_saved, rate_sum, rate_tokens)
+        };
+        let avg_input_rate_per_token = if weighted_rate_tokens == 0 {
+            0.0
+        } else {
+            weighted_input_rate_sum / weighted_rate_tokens as f64
+        };
+        let estimated_compression_cost_saved_usd =
+            total_compression_tokens_saved as f64 * avg_input_rate_per_token;
+        let estimated_total_input_tokens_saved =
+            total_compression_tokens_saved.saturating_add(cache_read_tokens);
+        let estimated_total_cost_saved_usd =
+            estimated_cache_cost_saved_usd + estimated_compression_cost_saved_usd;
+
+        Ok(CompressionSummary {
+            window: window_days
+                .map(|d| format!("{d}d"))
+                .unwrap_or_else(|| "all".to_string()),
+            modes,
+            agents,
+            estimated_compression_tokens_saved: total_compression_tokens_saved,
+            cache_read_input_tokens: cache_read_tokens,
+            estimated_total_input_tokens_saved,
+            estimated_cache_cost_saved_usd,
+            estimated_compression_cost_saved_usd,
+            estimated_total_cost_saved_usd,
+        })
+    }
+}
+
+fn estimate_input_per_million(model: &str) -> f64 {
+    let m = model.to_ascii_lowercase();
+    if m.contains("haiku") {
+        0.25
+    } else if m.contains("opus-4-6") || m.contains("claude-opus-4-6") {
+        5.0
+    } else if m.contains("opus") {
+        15.0
+    } else if m.contains("sonnet") {
+        3.0
+    } else if m.contains("gpt-4o-mini") {
+        0.15
+    } else if m.contains("gpt-4o") {
+        2.50
+    } else if m.contains("gpt-4.1-mini") {
+        0.40
+    } else if m.contains("gpt-4.1") {
+        2.00
+    } else if m.contains("gemini-2.5-pro") {
+        1.25
+    } else if m.contains("gemini-2.5-flash") {
+        0.15
+    } else if m.contains("deepseek") {
+        0.27
+    } else {
+        1.0
+    }
+}
+
+fn cache_discount_factor(model: &str) -> f64 {
+    let m = model.to_ascii_lowercase();
+    if m.contains("anthropic/") || m.contains("claude") {
+        0.90
+    } else if m.contains("openai/gpt-4o") || m.contains("gpt-4o") {
+        0.50
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +760,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.001,
                 tool_calls: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -385,6 +773,8 @@ mod tests {
                 output_tokens: 200,
                 cost_usd: 0.01,
                 tool_calls: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -410,6 +800,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.001,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -421,6 +813,8 @@ mod tests {
                 output_tokens: 100,
                 cost_usd: 0.005,
                 tool_calls: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -443,6 +837,8 @@ mod tests {
                     output_tokens: 50,
                     cost_usd: 0.001,
                     tool_calls: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                 })
                 .unwrap();
         }
@@ -455,6 +851,8 @@ mod tests {
                 output_tokens: 200,
                 cost_usd: 0.01,
                 tool_calls: 1,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -479,6 +877,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.05,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -499,6 +899,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.123,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -519,6 +921,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.001,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -536,5 +940,76 @@ mod tests {
         let summary = store.query_summary(None).unwrap();
         assert_eq!(summary.call_count, 0);
         assert_eq!(summary.total_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn test_record_and_query_compression_summary() {
+        let store = setup();
+        let a1 = AgentId::new();
+        let a2 = AgentId::new();
+
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: a1,
+                mode: "balanced".to_string(),
+                original_tokens_est: 100,
+                compressed_tokens_est: 60,
+                savings_pct: 40,
+                semantic_preservation_score: Some(0.92),
+            })
+            .unwrap();
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: a1,
+                mode: "balanced".to_string(),
+                original_tokens_est: 120,
+                compressed_tokens_est: 90,
+                savings_pct: 25,
+                semantic_preservation_score: None,
+            })
+            .unwrap();
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: a2,
+                mode: "off".to_string(),
+                original_tokens_est: 80,
+                compressed_tokens_est: 80,
+                savings_pct: 0,
+                semantic_preservation_score: None,
+            })
+            .unwrap();
+        store
+            .record(&UsageRecord {
+                agent_id: a1,
+                model: "claude-sonnet-4-6".to_string(),
+                input_tokens: 1000,
+                output_tokens: 100,
+                cost_usd: 0.0,
+                tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 500,
+            })
+            .unwrap();
+
+        let summary = store.query_compression_summary(None).unwrap();
+        let balanced = summary.modes.get("balanced").expect("balanced mode");
+        assert_eq!(balanced.turns, 2);
+        assert_eq!(balanced.compressed_turns, 2);
+        assert_eq!(balanced.savings_pct_p50, 40);
+        assert!(balanced.semantic_score_mean.unwrap_or_default() > 0.9);
+        assert!(balanced.semantic_score_p50.unwrap_or_default() > 0.9);
+        assert!(balanced.semantic_score_p95.unwrap_or_default() > 0.9);
+
+        let off = summary.modes.get("off").expect("off mode");
+        assert_eq!(off.turns, 1);
+        assert_eq!(off.compressed_turns, 0);
+        assert_eq!(off.savings_pct_p95, 0);
+        assert_eq!(summary.agents.len(), 2);
+        assert_eq!(summary.estimated_compression_tokens_saved, 70);
+        assert_eq!(summary.cache_read_input_tokens, 500);
+        assert_eq!(summary.estimated_total_input_tokens_saved, 570);
+        assert!(summary.estimated_cache_cost_saved_usd > 0.0);
+        assert!(summary.estimated_compression_cost_saved_usd > 0.0);
+        assert!(summary.estimated_total_cost_saved_usd > 0.0);
     }
 }

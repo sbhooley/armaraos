@@ -541,7 +541,7 @@ document.addEventListener('alpine:init', function() {
     lastErrorRequestId: '',
     version: '0.1.0',
     agentCount: 0,
-    /** Latest `GET /api/system/daemon-resources` payload for the header footprint strip. */
+    /** Latest `GET /api/system/daemon-resources` payload for the sidebar CPU/MEM badges. */
     daemonResources: null,
     pendingApprovalCount: 0,
     lastPendingApprovalSignature: '',

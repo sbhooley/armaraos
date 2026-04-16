@@ -15,6 +15,7 @@ members = [
     "crates/openfang-hands",
     "crates/openfang-extensions",
     "crates/ainl-memory",
+    "crates/ainl-compression",
     "crates/ainl-persona",
     "crates/ainl-graph-extractor",
     "crates/ainl-semantic-tagger",

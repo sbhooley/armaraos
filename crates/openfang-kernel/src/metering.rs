@@ -1,6 +1,8 @@
 //! Metering engine — tracks LLM cost and enforces spending quotas.
 
-use openfang_memory::usage::{ModelUsage, UsageRecord, UsageStore, UsageSummary};
+use openfang_memory::usage::{
+    CompressionSummary, CompressionUsageRecord, ModelUsage, UsageRecord, UsageStore, UsageSummary,
+};
 use openfang_types::agent::{AgentId, ResourceQuota};
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use std::sync::Arc;
@@ -20,6 +22,11 @@ impl MeteringEngine {
     /// Record a usage event (persists to SQLite).
     pub fn record(&self, record: &UsageRecord) -> OpenFangResult<()> {
         self.store.record(record)
+    }
+
+    /// Record a prompt-compression telemetry event (durable SQLite).
+    pub fn record_compression(&self, record: &CompressionUsageRecord) -> OpenFangResult<()> {
+        self.store.record_compression(record)
     }
 
     /// Check if an agent is within its spending quotas (hourly, daily, monthly).
@@ -140,6 +147,11 @@ impl MeteringEngine {
     /// Get usage grouped by model.
     pub fn get_by_model(&self) -> OpenFangResult<Vec<ModelUsage>> {
         self.store.query_by_model()
+    }
+
+    /// Get compression effectiveness summary by mode and agent.
+    pub fn get_compression_summary(&self, window_days: Option<u32>) -> OpenFangResult<CompressionSummary> {
+        self.store.query_compression_summary(window_days)
     }
 
     /// Estimate the cost of an LLM call based on model and token counts.
@@ -539,6 +551,8 @@ mod tests {
                 output_tokens: 50,
                 cost_usd: 0.001,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -562,6 +576,8 @@ mod tests {
                 output_tokens: 5000,
                 cost_usd: 0.05,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -589,6 +605,8 @@ mod tests {
                 output_tokens: 50000,
                 cost_usd: 100.0,
                 tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 
@@ -799,6 +817,8 @@ mod tests {
                 output_tokens: 200,
                 cost_usd: 0.005,
                 tool_calls: 3,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
             })
             .unwrap();
 

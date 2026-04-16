@@ -179,6 +179,32 @@
         <span class="conn-badge sidebar-label" :class="wsConnected ? 'ws' : 'http'" :title="wsConnected ? 'Agent stream: WebSocket' : 'Agent stream: HTTP polling'" x-text="wsConnected ? 'WS' : 'HTTP'"></span>
         <span class="conn-badge sidebar-label" :class="$store.ainl.sidebarOk ? 'ainl-live' : 'ainl-off'" :title="$store.ainl.sidebarTitle || 'AINL'" x-text="'AINL'"></span>
         <span class="conn-badge sidebar-label" :class="($store.kernelEvents && $store.kernelEvents.connected) ? 'sse' : 'sse-off'" :title="($store.kernelEvents && $store.kernelEvents.connected) ? 'Kernel events: live' : 'Kernel events: not connected'" x-text="'SSE'"></span>
+        <span
+          class="conn-badge sidebar-label conn-res-badge"
+          :class="{
+            'conn-res--ok': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent < 40),
+            'conn-res--warm': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent >= 40 && $store.app.daemonResources.cpu_percent < 70),
+            'conn-res--high': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent >= 70)
+          }"
+          :title="$store.app.daemonResourcesTooltipCpu()"
+          role="status"
+        >
+          <span class="conn-res-line"><span class="conn-res-lbl">CPU</span><span class="conn-res-val" x-text="$store.app.daemonResourcesCpuText()"></span></span>
+          <span class="conn-res-bar" aria-hidden="true"><span class="conn-res-bar-fill" :style="'width:' + ($store.app.daemonResourcesCpuBar() || 0) + '%'"></span></span>
+        </span>
+        <span
+          class="conn-badge sidebar-label conn-res-badge"
+          :class="{
+            'conn-res--ok': ($store.app.daemonResources && $store.app.daemonResources.memory_percent < 40),
+            'conn-res--warm': ($store.app.daemonResources && $store.app.daemonResources.memory_percent >= 40 && $store.app.daemonResources.memory_percent < 70),
+            'conn-res--high': ($store.app.daemonResources && $store.app.daemonResources.memory_percent >= 70)
+          }"
+          :title="$store.app.daemonResourcesTooltipMem()"
+          role="status"
+        >
+          <span class="conn-res-line"><span class="conn-res-lbl">MEM</span><span class="conn-res-val" x-text="$store.app.daemonResourcesMemText()"></span></span>
+          <span class="conn-res-bar" aria-hidden="true"><span class="conn-res-bar-fill" :style="'width:' + ($store.app.daemonResourcesMemBar() || 0) + '%'"></span></span>
+        </span>
       </div>
     </div>
     <div class="sidebar-conn-help" x-show="!$store.app.connected && !$store.app.booting" style="padding:8px 12px;font-size:11px;line-height:1.45;color:var(--text-muted);border-bottom:1px solid var(--border)">
@@ -409,49 +435,7 @@
 
   <!-- Notification center (fixed; outside main so page flex layout is unchanged) -->
   <div class="notify-center-root">
-    <div class="notify-center-cluster">
-      <div
-        class="daemon-resource-strip card"
-        x-show="$store.app.connected"
-        role="status"
-        aria-label="Daemon resource usage"
-      >
-        <div
-          class="daemon-resource-meter"
-          :class="{
-            'daemon-resource-meter--ok': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent < 40),
-            'daemon-resource-meter--warm': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent >= 40 && $store.app.daemonResources.cpu_percent < 70),
-            'daemon-resource-meter--high': ($store.app.daemonResources && $store.app.daemonResources.cpu_percent >= 70)
-          }"
-          :title="$store.app.daemonResourcesTooltipCpu()"
-        >
-          <div class="daemon-resource-meter-top">
-            <span class="daemon-resource-label">CPU</span>
-            <span class="daemon-resource-pct" x-text="$store.app.daemonResourcesCpuText()"></span>
-          </div>
-          <div class="daemon-resource-bar" aria-hidden="true">
-            <div class="daemon-resource-bar-fill" :style="'width:' + ($store.app.daemonResourcesCpuBar() || 0) + '%'"></div>
-          </div>
-        </div>
-        <div
-          class="daemon-resource-meter"
-          :class="{
-            'daemon-resource-meter--ok': ($store.app.daemonResources && $store.app.daemonResources.memory_percent < 40),
-            'daemon-resource-meter--warm': ($store.app.daemonResources && $store.app.daemonResources.memory_percent >= 40 && $store.app.daemonResources.memory_percent < 70),
-            'daemon-resource-meter--high': ($store.app.daemonResources && $store.app.daemonResources.memory_percent >= 70)
-          }"
-          :title="$store.app.daemonResourcesTooltipMem()"
-        >
-          <div class="daemon-resource-meter-top">
-            <span class="daemon-resource-label">MEM</span>
-            <span class="daemon-resource-pct" x-text="$store.app.daemonResourcesMemText()"></span>
-          </div>
-          <div class="daemon-resource-bar" aria-hidden="true">
-            <div class="daemon-resource-bar-fill" :style="'width:' + ($store.app.daemonResourcesMemBar() || 0) + '%'"></div>
-          </div>
-        </div>
-      </div>
-      <div class="notify-bell-wrap">
+    <div class="notify-bell-wrap">
         <div
           class="sr-only"
           role="status"
@@ -505,7 +489,6 @@
         </template>
       </div>
     </div>
-      </div>
     </div>
   </div>
 
@@ -1178,6 +1161,23 @@
                   </span>
                 </span>
               </template>
+            </div>
+
+            <!-- Top-bar runtime/LLM status guidance -->
+            <div class="chat-status-banner" x-show="runtimeStatusHintText" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 transform -translate-y-1" x-transition:enter-end="opacity-100 transform translate-y-0">
+              <div class="chat-status-banner-inner" :class="runtimeStatusLooksWarning ? 'warning' : 'info'">
+                <span class="chat-status-icon" :class="runtimeStatusLooksWarning ? 'warning' : 'info'">
+                  <svg x-show="runtimeStatusLooksWarning" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  <svg x-show="!runtimeStatusLooksWarning" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                </span>
+                <span class="chat-status-text" :title="runtimeStatusHintTitle" x-text="runtimeStatusHintText"></span>
+                <button
+                  class="chat-status-dismiss"
+                  x-show="runtimeStatusNote"
+                  @click="_clearRuntimeStatusTelemetry()"
+                  title="Dismiss"
+                >&times;</button>
+              </div>
             </div>
 
             <!-- LLM provider error banner — friendly message with actionable tip -->
@@ -4929,9 +4929,44 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <!-- Budget tab -->
           <div x-show="tab === 'budget'" x-data="{
             budgetData: null, agentRanking: [], budgetLoading: true,
+            compressionUsage: null, compressionUsageByWindow: {}, compressionWindow: '7d', compressionTrendMode: 'balanced', compressionLoading: false,
             editMode: false,
             editHourly: '', editDaily: '', editMonthly: '', editAlert: '', editTokenLimit: '',
             saving: false,
+            async fetchCompressionUsageWindow(windowLabel) {
+              return await OpenFangAPI.get('/api/usage/compression?window=' + encodeURIComponent(windowLabel));
+            },
+            async loadCompressionUsage(windowLabel = '7d') {
+              this.compressionLoading = true;
+              try {
+                let data = await this.fetchCompressionUsageWindow(windowLabel);
+                this.compressionWindow = windowLabel;
+                this.compressionUsage = data;
+                this.compressionUsageByWindow[windowLabel] = data;
+              } catch (e) {
+                this.compressionUsage = null;
+              }
+              this.compressionLoading = false;
+            },
+            async loadCompressionUsageWindows() {
+              this.compressionLoading = true;
+              try {
+                let labels = ['7d', '30d', 'all'];
+                let responses = await Promise.all(labels.map((label) => this.fetchCompressionUsageWindow(label).catch(() => null)));
+                for (let i = 0; i < labels.length; i++) {
+                  if (responses[i]) this.compressionUsageByWindow[labels[i]] = responses[i];
+                }
+                this.compressionUsage = this.compressionUsageByWindow[this.compressionWindow] || this.compressionUsageByWindow['7d'] || null;
+              } catch (e) {
+                this.compressionUsage = null;
+              }
+              this.compressionLoading = false;
+            },
+            setCompressionWindow(windowLabel) {
+              this.compressionWindow = windowLabel;
+              this.compressionUsage = this.compressionUsageByWindow[windowLabel] || null;
+              if (!this.compressionUsage) this.loadCompressionUsage(windowLabel);
+            },
             async loadBudget() {
               this.budgetLoading = true;
               try {
@@ -4942,6 +4977,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 this.budgetData = b;
                 this.agentRanking = a.agents || [];
               } catch(e) {}
+              await this.loadCompressionUsageWindows();
               this.budgetLoading = false;
             },
             startEdit() {
@@ -4969,6 +5005,72 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               this.saving = false;
             },
             fmtTokens(v) { return v > 0 ? (v >= 1000000 ? (v/1000000).toFixed(1)+'M' : v >= 1000 ? (v/1000).toFixed(0)+'K' : v) : 'per-agent'; },
+            modeStats(mode) {
+              if (!this.compressionUsage || !this.compressionUsage.modes) return null;
+              return this.compressionUsage.modes[mode] || null;
+            },
+            modeStatsByWindow(windowLabel, mode) {
+              let data = this.compressionUsageByWindow[windowLabel];
+              if (!data || !data.modes) return null;
+              return data.modes[mode] || null;
+            },
+            fmtSemantic(v) {
+              return (typeof v === 'number' && !Number.isNaN(v)) ? ((v * 100).toFixed(1) + '%') : '—';
+            },
+            fmtMoney(v) {
+              return (typeof v === 'number' && !Number.isNaN(v)) ? ('$' + v.toFixed(4)) : '—';
+            },
+            trendValue(windowLabel, metricKey) {
+              let stats = this.modeStatsByWindow(windowLabel, this.compressionTrendMode);
+              if (!stats) return null;
+              if (metricKey === 'savings') return (typeof stats.savings_pct_p50 === 'number') ? stats.savings_pct_p50 : null;
+              if (metricKey === 'semantic') return (typeof stats.semantic_score_p50 === 'number') ? (stats.semantic_score_p50 * 100) : null;
+              return null;
+            },
+            trendPoints(metricKey) {
+              let values = ['7d', '30d', 'all'].map((label) => this.trendValue(label, metricKey));
+              let w = 150, h = 42, p = 4, span = (h - (p * 2));
+              let points = [];
+              for (let i = 0; i < values.length; i++) {
+                if (values[i] == null) continue;
+                let x = p + ((w - (p * 2)) * (i / Math.max(1, values.length - 1)));
+                let clamped = Math.max(0, Math.min(100, Number(values[i]) || 0));
+                let y = h - p - ((clamped / 100) * span);
+                points.push(String(x.toFixed(2)) + ',' + String(y.toFixed(2)));
+              }
+              return points.join(' ');
+            },
+            trendDisplay(metricKey, value) {
+              if (value == null) return '—';
+              if (metricKey === 'savings') return Math.round(value) + '%';
+              return Number(value).toFixed(1) + '%';
+            },
+            trendSeries(metricKey) {
+              let labels = ['7d', '30d', 'all'];
+              let w = 150, h = 42, p = 4, span = (h - (p * 2));
+              let out = [];
+              for (let i = 0; i < labels.length; i++) {
+                let raw = this.trendValue(labels[i], metricKey);
+                if (raw == null) continue;
+                let x = p + ((w - (p * 2)) * (i / Math.max(1, labels.length - 1)));
+                let clamped = Math.max(0, Math.min(100, Number(raw) || 0));
+                let y = h - p - ((clamped / 100) * span);
+                out.push({
+                  label: labels[i],
+                  x: Number(x.toFixed(2)),
+                  y: Number(y.toFixed(2)),
+                  value: Number(raw),
+                  display: this.trendDisplay(metricKey, raw),
+                });
+              }
+              return out;
+            },
+            trendLatest(metricKey) {
+              let v = this.trendValue(this.compressionWindow, metricKey);
+              if (v == null) return '—';
+              if (metricKey === 'savings') return Math.round(v) + '%';
+              return v.toFixed(1) + '%';
+            },
             pctColor(pct) { return pct >= 0.8 ? '#ef4444' : pct >= 0.5 ? '#eab308' : '#22c55e'; },
             fmtUsd(v) { return v > 0 ? '$' + v.toFixed(4) : 'unlimited'; }
           }" x-init="loadBudget()">
@@ -5085,6 +5187,89 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <span class="text-xs text-dim" x-show="config.efficient_mode && config.efficient_mode !== 'off'">
                   Active · look for <strong>⚡ eco ↓X%</strong> and the <em>diff</em> button in chat responses
                 </span>
+              </div>
+              <div class="text-xs text-dim" style="margin-top:10px" x-show="compressionUsage && compressionUsage.window">
+                Durable compression telemetry window: <strong x-text="compressionUsage.window"></strong>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px">
+                <label class="text-xs text-dim">Window</label>
+                <select class="form-select" style="width:auto" :value="compressionWindow" @change="setCompressionWindow($event.target.value)">
+                  <option value="7d">7d</option>
+                  <option value="30d">30d</option>
+                  <option value="all">all</option>
+                </select>
+                <label class="text-xs text-dim">Trend mode</label>
+                <select class="form-select" style="width:auto" x-model="compressionTrendMode">
+                  <option value="balanced">balanced</option>
+                  <option value="aggressive">aggressive</option>
+                </select>
+              </div>
+              <div class="text-xs text-dim" style="margin-top:6px" x-show="compressionLoading">Loading compression telemetry…</div>
+              <div class="text-xs text-dim" style="margin-top:8px;display:flex;gap:12px;flex-wrap:wrap" x-show="!compressionLoading && compressionUsage">
+                <span x-text="'Input tokens saved (est): ' + (compressionUsage.estimated_total_input_tokens_saved || 0)"></span>
+                <span x-text="'Cost saved (est): ' + fmtMoney(compressionUsage.estimated_total_cost_saved_usd)"></span>
+              </div>
+              <div class="table-wrap" style="margin-top:10px" x-show="!compressionLoading && compressionUsage">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Mode</th>
+                      <th>Savings p50</th>
+                      <th>Savings p95</th>
+                      <th>Semantic p50</th>
+                      <th>Semantic p95</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="mode in ['balanced','aggressive']" :key="mode">
+                      <tr>
+                        <td class="font-bold" x-text="mode === 'balanced' ? 'Balanced' : 'Aggressive'"></td>
+                        <td x-text="modeStats(mode) ? (modeStats(mode).savings_pct_p50 + '%') : '—'"></td>
+                        <td x-text="modeStats(mode) ? (modeStats(mode).savings_pct_p95 + '%') : '—'"></td>
+                        <td x-text="modeStats(mode) ? fmtSemantic(modeStats(mode).semantic_score_p50) : '—'"></td>
+                        <td x-text="modeStats(mode) ? fmtSemantic(modeStats(mode).semantic_score_p95) : '—'"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <div class="stats-row" style="margin-top:10px" x-show="!compressionLoading">
+                <div class="stat-card" style="flex:1;min-width:220px">
+                  <div class="stat-label">Savings p50 trend (7d → 30d → all)</div>
+                  <div class="stat-value" style="font-size:16px" x-text="trendLatest('savings')"></div>
+                  <svg viewBox="0 0 150 42" style="width:100%;height:42px;display:block;margin-top:6px">
+                    <polyline points="4,38 146,38" fill="none" stroke="var(--border)" stroke-width="1"></polyline>
+                    <polyline :points="trendPoints('savings')" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    <template x-for="pt in trendSeries('savings')" :key="'sv-' + pt.label">
+                      <circle :cx="pt.x" :cy="pt.y" r="2.5" fill="var(--accent)">
+                        <title x-text="pt.label + ': ' + pt.display"></title>
+                      </circle>
+                    </template>
+                  </svg>
+                  <div class="text-xs text-dim" style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">
+                    <span x-text="'7d: ' + trendDisplay('savings', trendValue('7d', 'savings'))"></span>
+                    <span x-text="'30d: ' + trendDisplay('savings', trendValue('30d', 'savings'))"></span>
+                    <span x-text="'all: ' + trendDisplay('savings', trendValue('all', 'savings'))"></span>
+                  </div>
+                </div>
+                <div class="stat-card" style="flex:1;min-width:220px">
+                  <div class="stat-label">Semantic p50 trend (7d → 30d → all)</div>
+                  <div class="stat-value" style="font-size:16px" x-text="trendLatest('semantic')"></div>
+                  <svg viewBox="0 0 150 42" style="width:100%;height:42px;display:block;margin-top:6px">
+                    <polyline points="4,38 146,38" fill="none" stroke="var(--border)" stroke-width="1"></polyline>
+                    <polyline :points="trendPoints('semantic')" fill="none" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                    <template x-for="pt in trendSeries('semantic')" :key="'sm-' + pt.label">
+                      <circle :cx="pt.x" :cy="pt.y" r="2.5" fill="#22c55e">
+                        <title x-text="pt.label + ': ' + pt.display"></title>
+                      </circle>
+                    </template>
+                  </svg>
+                  <div class="text-xs text-dim" style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">
+                    <span x-text="'7d: ' + trendDisplay('semantic', trendValue('7d', 'semantic'))"></span>
+                    <span x-text="'30d: ' + trendDisplay('semantic', trendValue('30d', 'semantic'))"></span>
+                    <span x-text="'all: ' + trendDisplay('semantic', trendValue('all', 'semantic'))"></span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -7210,6 +7395,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     </template>
 
     <template x-if="page === 'graph-memory'">
+      <div class="graph-memory-page-root">
       <div x-data="graphMemoryPanel()" x-init="init()" class="graph-memory-panel page-body" style="padding:16px 20px 24px">
         <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
           <div style="display:flex;align-items:center;gap:12px">
@@ -7230,7 +7416,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <p class="text-xs text-dim" style="margin:-6px 0 10px 2px">
           Tip: Scroll to move the page. Hold <strong>Ctrl</strong> (or <strong>Cmd</strong> on Mac) while scrolling to zoom the graph.
         </p>
-        <div id="graph-memory-canvas" style="width:100%;height:calc(100vh - 220px);min-height:480px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
+        <div id="graph-memory-canvas" style="width:100%;height:min(620px, max(360px, calc(100vh - 280px)));min-height:360px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
           <svg id="gm-svg" width="100%" height="100%">
             <defs>
               <filter id="gm-glow">
@@ -7404,6 +7590,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
           </div>
         </div>
+      </div>
       </div>
     </template>
 

@@ -80,6 +80,9 @@ pub struct MessageResponse {
     /// The compressed version of the user message (only present when savings_pct > 0; powers diff UI).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compressed_input: Option<String>,
+    /// Optional semantic preservation score for compressed input (0.0..1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compression_semantic_score: Option<f32>,
     /// Tool calls from this turn (HTTP clients without WebSocket tool events).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolTurnRecord>,

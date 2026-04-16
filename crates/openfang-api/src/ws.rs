@@ -582,6 +582,7 @@ async fn handle_text_message(
                         let mut is_silent = false;
                         let mut compression_savings_pct: u8 = 0;
                         let mut compressed_input: Option<String> = None;
+                        let mut compression_semantic_score: Option<f32> = None;
                         let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
                         let mut flush_deadline = far_future;
 
@@ -612,11 +613,12 @@ async fn handle_text_message(
                                                 continue;
                                             }
                                             // Capture compression stats (emitted once before any LLM call)
-                                            if let StreamEvent::CompressionStats { savings_pct, compressed_text } = &ev {
+                                            if let StreamEvent::CompressionStats { savings_pct, compressed_text, semantic_score } = &ev {
                                                 compression_savings_pct = *savings_pct;
                                                 if !compressed_text.is_empty() {
                                                     compressed_input = Some(compressed_text.clone());
                                                 }
+                                                compression_semantic_score = *semantic_score;
                                                 continue;
                                             }
 
@@ -702,6 +704,7 @@ async fn handle_text_message(
                             is_silent,
                             compression_savings_pct,
                             compressed_input,
+                            compression_semantic_score,
                         )
                     });
 
@@ -753,6 +756,7 @@ async fn handle_text_message(
                             is_silent,
                             compression_savings_pct,
                             compressed_input,
+                            compression_semantic_score,
                         )) => {
                             let user_message = content.clone();
                             let agent_id_str = agent_id.to_string();
@@ -794,6 +798,9 @@ async fn handle_text_message(
                                 }
                                 if let Some(ref ci) = compressed_input {
                                     silent_payload["compressed_input"] = serde_json::json!(ci);
+                                }
+                                if let Some(score) = compression_semantic_score {
+                                    silent_payload["compression_semantic_score"] = serde_json::json!(score);
                                 }
                                 let _ = send_json(sender, &silent_payload).await;
                                 return;
@@ -855,6 +862,9 @@ async fn handle_text_message(
                             }
                             if let Some(ref ci) = compressed_input {
                                 response_payload["compressed_input"] = serde_json::json!(ci);
+                            }
+                            if let Some(score) = compression_semantic_score {
+                                response_payload["compression_semantic_score"] = serde_json::json!(score);
                             }
                             let _ = send_json(sender, &response_payload).await;
                         }

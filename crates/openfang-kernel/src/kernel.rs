@@ -2531,6 +2531,31 @@ impl OpenFangKernel {
                 serde_json::Value::String(self.config.efficient_mode.clone())
             });
 
+        // Adaptive eco policy (Milestone 2): model-catalog pricing + provider capability matrix.
+        // Default: shadow-only (`adaptive_eco.enforce = false`) — attaches `adaptive_eco` metadata for telemetry.
+        if self.config.adaptive_eco.enabled {
+            let catalog = self
+                .model_catalog
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let snap = openfang_runtime::eco_mode_resolver::resolve_adaptive_eco_turn(
+                &self.config.adaptive_eco,
+                &manifest,
+                message,
+                &catalog,
+            );
+            drop(catalog);
+            if self.config.adaptive_eco.enforce {
+                manifest.metadata.insert(
+                    "efficient_mode".to_string(),
+                    serde_json::Value::String(snap.effective_mode.clone()),
+                );
+            }
+            if let Ok(v) = serde_json::to_value(&snap) {
+                manifest.metadata.insert("adaptive_eco".to_string(), v);
+            }
+        }
+
         let memory = Arc::clone(&self.memory);
         // Build link context from user message (auto-extract URLs for the agent)
         let message_owned = if let Some(link_ctx) =
@@ -2707,7 +2732,33 @@ impl OpenFangKernel {
                             output_tokens: result.total_usage.output_tokens,
                             cost_usd: cost,
                             tool_calls: result.iterations.saturating_sub(1),
+                            cache_creation_input_tokens: result
+                                .total_usage
+                                .cache_creation_input_tokens,
+                            cache_read_input_tokens: result.total_usage.cache_read_input_tokens,
                         });
+                    let mode = manifest
+                        .metadata
+                        .get("efficient_mode")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("off")
+                        .to_ascii_lowercase();
+                    let original_tokens_est = (message_owned.len() / 4 + 1) as u64;
+                    let compressed_tokens_est = result
+                        .compressed_input
+                        .as_ref()
+                        .map(|s| (s.len() / 4 + 1) as u64)
+                        .unwrap_or(original_tokens_est);
+                    let _ = kernel_clone.metering.record_compression(
+                        &openfang_memory::usage::CompressionUsageRecord {
+                            agent_id: bill_id,
+                            mode,
+                            original_tokens_est,
+                            compressed_tokens_est,
+                            savings_pct: result.compression_savings_pct,
+                            semantic_preservation_score: result.compression_semantic_score,
+                        },
+                    );
 
                     let _ = kernel_clone
                         .registry
@@ -2872,6 +2923,7 @@ impl OpenFangKernel {
                     llm_fallback_note: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
+                    compression_semantic_score: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -2953,6 +3005,7 @@ impl OpenFangKernel {
                     llm_fallback_note: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
+                    compression_semantic_score: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -3465,7 +3518,31 @@ impl OpenFangKernel {
             output_tokens: result.total_usage.output_tokens,
             cost_usd: cost,
             tool_calls: result.iterations.saturating_sub(1),
+            cache_creation_input_tokens: result.total_usage.cache_creation_input_tokens,
+            cache_read_input_tokens: result.total_usage.cache_read_input_tokens,
         });
+        let mode = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("off")
+            .to_ascii_lowercase();
+        let original_tokens_est = (message_with_links.len() / 4 + 1) as u64;
+        let compressed_tokens_est = result
+            .compressed_input
+            .as_ref()
+            .map(|s| (s.len() / 4 + 1) as u64)
+            .unwrap_or(original_tokens_est);
+        let _ = self
+            .metering
+            .record_compression(&openfang_memory::usage::CompressionUsageRecord {
+                agent_id: llm_billing_id,
+                mode,
+                original_tokens_est,
+                compressed_tokens_est,
+                savings_pct: result.compression_savings_pct,
+                semantic_preservation_score: result.compression_semantic_score,
+            });
 
         // Populate cost on the result based on usage_footer mode
         let mut result = result;

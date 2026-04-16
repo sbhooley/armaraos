@@ -731,6 +731,7 @@ pub async fn send_message(
                     skill_draft_path,
                     compression_savings_pct: result.compression_savings_pct,
                     compressed_input: result.compressed_input.clone(),
+                    compression_semantic_score: result.compression_semantic_score,
                     tools: Vec::new(),
                     ainl_runtime_telemetry,
                 })),
@@ -1197,6 +1198,15 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             serde_json::Value::Bool(openfang_runtime::ainl_runtime_engine_env_disabled()),
         );
     }
+    let eco_compression = state
+        .kernel
+        .memory
+        .usage()
+        .query_compression_summary(Some(7))
+        .map(serde_json::to_value)
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_else(|| serde_json::json!({"window":"7d","modes":{},"agents":[]}));
 
     Json(serde_json::json!({
         "status": "running",
@@ -1213,6 +1223,13 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
         "agents": agents,
         "openfang_runtime_ainl": openfang_runtime_ainl,
+        "eco_compression": eco_compression,
+        "adaptive_eco": {
+            "enabled": state.kernel.config.adaptive_eco.enabled,
+            "enforce": state.kernel.config.adaptive_eco.enforce,
+            "allow_aggressive_on_structured": state.kernel.config.adaptive_eco.allow_aggressive_on_structured,
+            "semantic_floor": state.kernel.config.adaptive_eco.semantic_floor,
+        },
     }))
 }
 
@@ -7704,6 +7721,43 @@ pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoRespons
         "today_cost_usd": today_cost.unwrap_or(0.0),
         "first_event_date": first_event.unwrap_or(None),
     }))
+}
+
+/// GET /api/usage/compression — Durable eco-mode prompt compression effectiveness.
+///
+/// Returns SQLite-backed aggregates with p50/p95 savings and estimated token reduction
+/// by mode and by agent. Query `?window=7d`, `?window=30d`, or `?window=all`.
+pub async fn usage_compression(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let window_days = query
+        .get("window")
+        .map(|w| w.trim().to_ascii_lowercase())
+        .and_then(|w| {
+            if w.is_empty() || w == "all" {
+                return None;
+            }
+            if let Some(stripped) = w.strip_suffix('d') {
+                stripped.parse::<u32>().ok()
+            } else {
+                w.parse::<u32>().ok()
+            }
+        });
+    match state.kernel.memory.usage().query_compression_summary(window_days) {
+        Ok(summary) => Json(serde_json::to_value(summary).unwrap_or_default()),
+        Err(_) => Json(serde_json::json!({
+            "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),
+            "modes": {},
+            "agents": [],
+            "estimated_compression_tokens_saved": 0,
+            "cache_read_input_tokens": 0,
+            "estimated_total_input_tokens_saved": 0,
+            "estimated_cache_cost_saved_usd": 0.0,
+            "estimated_compression_cost_saved_usd": 0.0,
+            "estimated_total_cost_saved_usd": 0.0
+        })),
+    }
 }
 
 // ---------------------------------------------------------------------------

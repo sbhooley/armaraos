@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 10;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -41,6 +41,13 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 8 {
         migrate_v8(conn)?;
+    }
+
+    if current_version < 9 {
+        migrate_v9(conn)?;
+    }
+    if current_version < 10 {
+        migrate_v10(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -349,6 +356,52 @@ fn migrate_v8(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 9: Add eco_compression_events table for durable prompt compression telemetry.
+fn migrate_v9(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS eco_compression_events (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            original_tokens_est INTEGER NOT NULL DEFAULT 0,
+            compressed_tokens_est INTEGER NOT NULL DEFAULT 0,
+            savings_pct INTEGER NOT NULL DEFAULT 0,
+            semantic_preservation_score REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_eco_compression_timestamp ON eco_compression_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_eco_compression_agent_time ON eco_compression_events(agent_id, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_eco_compression_mode_time ON eco_compression_events(mode, timestamp);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (9, datetime('now'), 'Add eco_compression_events table for durable compression telemetry');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 10: Extend usage_events with cache-aware token accounting.
+fn migrate_v10(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let cols = [
+        ("cache_creation_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ];
+    for (name, typedef) in &cols {
+        if !column_exists(conn, "usage_events", name) {
+            conn.execute(
+                &format!("ALTER TABLE usage_events ADD COLUMN {} {}", name, typedef),
+                [],
+            )?;
+        }
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (10, datetime('now'), 'Extend usage_events with cache token columns')",
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +426,7 @@ mod tests {
         assert!(tables.contains(&"memories".to_string()));
         assert!(tables.contains(&"entities".to_string()));
         assert!(tables.contains(&"relations".to_string()));
+        assert!(tables.contains(&"eco_compression_events".to_string()));
     }
 
     #[test]

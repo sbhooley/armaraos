@@ -16,6 +16,7 @@ ainl-runtime-engine = ["dep:ainl-runtime"]
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
+ainl-compression = { path = "../ainl-compression", version = "0.1.0-alpha" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6", optional = true }

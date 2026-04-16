@@ -406,6 +406,7 @@ Optional **`attachments`**: same shape as other agent routes (see request types 
 | **`llm_fallback_note`** | Present when a fallback or free-tier model path was used instead of the primary. |
 | **`skill_draft_path`** | Filesystem path when a **`[learn]`**-prefixed message produced a skill draft. |
 | **`compression_savings_pct`** / **`compressed_input`** | Ultra Cost-Efficient Mode: same semantics as WebSocket `response` / SSE metadata. Omitted when compression is off or savings are 0. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md). |
+| **`compression_semantic_score`** | Optional semantic-preservation estimate from the compressor (`0.0..1.0`). Included when compression telemetry captured a semantic score for the turn. |
 | **`tools`** | Array of **`ToolTurnRecord`** objects — **one entry per tool execution** in this HTTP turn (name, JSON **`input`** string, **`result`** string, **`is_error`**). Omitted when empty. Lets HTTP-only clients render the same tool cards as the WebSocket path (`tool_start` / `tool_end` / `tool_result`). Rust type: `openfang_types::message::ToolTurnRecord`; runtime accumulates into `AgentLoopResult.tool_turns`. |
 | **`ainl_runtime_telemetry`** | Present when the embedded `ainl-runtime-engine` path handled the turn; includes fields like `turn_status`, `warning_count`, extraction/memory-context counters, patch-dispatch counters, and `steps_executed`. |
 
@@ -428,7 +429,8 @@ Optional **`attachments`**: same shape as other agent routes (see request types 
     }
   ],
   "compression_savings_pct": 34,
-  "compressed_input": "Summarize README…"
+  "compressed_input": "Summarize README…",
+  "compression_semantic_score": 0.93
 }
 ```
 
@@ -2122,6 +2124,65 @@ High-level totals across all agents (input/output tokens, estimated USD, call co
 }
 ```
 
+### GET /api/usage/compression
+
+Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Used by the **Settings → Budget → Ultra Cost-Efficient Mode** card.
+
+**Query params**:
+
+| Param | Description |
+|-------|-------------|
+| `window` | Optional window selector: `7d` (default), `30d`, or `all`. |
+
+**Response** `200 OK`:
+
+```json
+{
+  "window": "7d",
+  "modes": {
+    "balanced": {
+      "turns": 84,
+      "compressed_turns": 84,
+      "compression_hit_rate_pct": 100.0,
+      "sample_count": 84,
+      "savings_pct_p50": 44,
+      "savings_pct_p95": 62,
+      "savings_pct_mean": 45.2,
+      "semantic_score_mean": 0.92,
+      "semantic_score_p50": 0.93,
+      "semantic_score_p95": 0.98,
+      "semantic_score_samples": 84,
+      "estimated_original_tokens": 18231,
+      "estimated_compressed_tokens": 9990,
+      "estimated_token_reduction_pct": 45.2
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "modes": {
+        "balanced": {
+          "turns": 24,
+          "compressed_turns": 24,
+          "compression_hit_rate_pct": 100.0,
+          "sample_count": 24,
+          "savings_pct_p50": 43,
+          "savings_pct_p95": 58,
+          "savings_pct_mean": 44.0,
+          "semantic_score_mean": 0.91,
+          "semantic_score_p50": 0.92,
+          "semantic_score_p95": 0.97,
+          "semantic_score_samples": 24,
+          "estimated_original_tokens": 5210,
+          "estimated_compressed_tokens": 2918,
+          "estimated_token_reduction_pct": 44.0
+        }
+      }
+    }
+  ]
+}
+```
+
 ### GET /api/usage/by-model
 
 Get usage breakdown by model.
@@ -2722,11 +2783,12 @@ Plain text (non-JSON) is also accepted and treated as a message.
   "iterations": 2,
   "cost_usd": 0.0012,
   "compression_savings_pct": 34,
-  "compressed_input": "…"
+  "compressed_input": "…",
+  "compression_semantic_score": 0.93
 }
 ```
 
-**Compression:** When input compression ran with non-zero savings, **`compression_savings_pct`** and **`compressed_input`** may be included (same semantics as **`POST /api/agents/{id}/message`**). The stream may also emit internal compression stats before LLM tokens for dashboard telemetry.
+**Compression:** When input compression ran with non-zero savings, **`compression_savings_pct`** and **`compressed_input`** may be included (same semantics as **`POST /api/agents/{id}/message`**). When semantic telemetry is available, **`compression_semantic_score`** may also be included. The stream may also emit internal compression stats before LLM tokens for dashboard telemetry.
 
 **AINL telemetry event:** When a turn is handled by `ainl-runtime-engine`, SSE emits **`event: ainl_runtime_telemetry`** with the same structured telemetry shape returned in HTTP `ainl_runtime_telemetry`.
 
@@ -3197,6 +3259,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | **Usage & Analytics** | | |
 | GET | `/api/usage` | Per-agent usage totals (persistent metering + `source`) |
 | GET | `/api/usage/summary` | Global usage totals (SQLite-backed) |
+| GET | `/api/usage/compression` | Compression analytics by window/mode/agent (includes savings + semantic p50/p95) |
 | GET | `/api/usage/by-model` | Usage by model breakdown |
 | **Migration** | | |
 | GET | `/api/migrate/detect` | Detect migration sources |

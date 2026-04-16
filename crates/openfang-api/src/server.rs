@@ -636,6 +636,10 @@ pub async fn build_router(
             axum::routing::get(routes::usage_by_model),
         )
         .route("/api/usage/daily", axum::routing::get(routes::usage_daily))
+        .route(
+            "/api/usage/compression",
+            axum::routing::get(routes::usage_compression),
+        )
         // Budget endpoints
         .route(
             "/api/budget",

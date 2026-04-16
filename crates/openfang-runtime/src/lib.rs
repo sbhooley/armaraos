@@ -85,6 +85,7 @@ pub mod context_overflow;
 pub mod copilot_oauth;
 pub mod docker_sandbox;
 pub mod document_tools;
+pub mod eco_mode_resolver;
 pub mod drivers;
 pub mod embedding;
 pub mod graceful_shutdown;

@@ -151,6 +151,8 @@ pub enum StreamEvent {
         savings_pct: u8,
         /// The compressed text (for diff UI in dashboard).
         compressed_text: String,
+        /// Optional semantic preservation score for the compressed input.
+        semantic_score: Option<f32>,
     },
     /// Structured telemetry emitted when a turn is handled by the embedded ainl-runtime path.
     AinlRuntimeTelemetry {

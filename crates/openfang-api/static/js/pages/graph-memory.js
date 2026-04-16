@@ -922,6 +922,13 @@ function graphMemoryPanel() {
           svg.select('#gm-labels').attr('transform', event.transform);
         });
       svg.call(zoom);
+      // d3-zoom may set touch-action:none on the SVG, which blocks trackpad/page scroll
+      // chaining on some engines; pan-y keeps vertical scroll while Ctrl/Cmd+wheel still zooms.
+      try {
+        svg.style('touch-action', 'pan-y');
+      } catch (eTouch) {
+        /* ignore */
+      }
 
       var linkSel = svg
         .select('#gm-links')

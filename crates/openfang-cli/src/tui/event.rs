@@ -445,6 +445,7 @@ pub fn spawn_daemon_stream(
             llm_fallback_note: None,
             compression_savings_pct: 0,
             compressed_input: None,
+            compression_semantic_score: None,
             ainl_runtime_telemetry: None,
         })));
     });
@@ -485,6 +486,7 @@ fn daemon_fallback(
             directives: Default::default(),
             compression_savings_pct: body["compression_savings_pct"].as_u64().unwrap_or(0) as u8,
             compressed_input: body["compressed_input"].as_str().map(|s| s.to_string()),
+            compression_semantic_score: body["compression_semantic_score"].as_f64().map(|v| v as f32),
             latency_ms: body["latency_ms"].as_u64(),
             llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
             ainl_runtime_telemetry: None,

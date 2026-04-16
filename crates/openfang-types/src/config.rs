@@ -1259,6 +1259,9 @@ pub struct KernelConfig {
     /// "off" | "balanced" (default, ~50–60 % reduction) | "aggressive" (~60 % reduction).
     #[serde(default = "default_efficient_mode")]
     pub efficient_mode: String,
+    /// Adaptive eco policy (shadow recommendations by default). See [`crate::adaptive_eco::AdaptiveEcoConfig`].
+    #[serde(default)]
+    pub adaptive_eco: crate::adaptive_eco::AdaptiveEcoConfig,
     /// Named agent pools sharing a manifest template (`[[agent_pools]]`).
     #[serde(default)]
     pub agent_pools: Vec<AgentPoolConfigEntry>,
@@ -1607,6 +1610,7 @@ impl Default for KernelConfig {
             runtime_limits: crate::runtime_limits::RuntimeLimitsConfig::default(),
             llm: LlmConfig::default(),
             efficient_mode: default_efficient_mode(),
+            adaptive_eco: crate::adaptive_eco::AdaptiveEcoConfig::default(),
             agent_pools: Vec::new(),
         }
     }

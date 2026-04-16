@@ -175,6 +175,10 @@ function chatPage() {
     lastStreamErrorTechnical: null,
     /** True when provider rate-limits; softer badge + color in telemetry. */
     lastStreamErrorIsRateLimited: false,
+    /** Top-bar runtime/LLM guidance shown below telemetry strip. */
+    runtimeStatusNote: null,
+    runtimeStatusTechnical: null,
+    runtimeStatusLevel: 'info',
     _typingTimeout: null,
     /** Timestamp (ms) when we last received a non-LLM event (tool/text) while sending.
      *  Used to display "Waiting for LLM · Xs" in the header when the LLM is slow
@@ -344,10 +348,70 @@ function chatPage() {
       return !!this.lastStreamErrorIsRateLimited;
     },
 
+    get runtimeStatusHintText() {
+      if (this.sending && this.llmWaitSeconds >= 10) {
+        return 'Still waiting for the LLM (' + this.llmWaitSeconds + 's). Expected: reply should continue. If it passes ~20s, you can wait, press Stop, or resend.';
+      }
+      if (this.sending && this.llmWaitSeconds >= 4) {
+        return 'Waiting for the LLM (' + this.llmWaitSeconds + 's). This is usually transient during model load or brief network jitter.';
+      }
+      return this.runtimeStatusNote || '';
+    },
+
+    get runtimeStatusHintTitle() {
+      if (this.sending && this.llmWaitSeconds >= 6) {
+        return 'Live wait status while the model is still processing.';
+      }
+      var tech = this.runtimeStatusTechnical;
+      if (!tech) return this.runtimeStatusNote || '';
+      var t = String(tech);
+      if (t.length > 700) t = t.slice(0, 697) + '\u2026';
+      return 'Technical detail: ' + t;
+    },
+
+    get runtimeStatusLooksWarning() {
+      if (this.runtimeStatusLevel === 'warn') return true;
+      if (this.sending && this.llmWaitSeconds >= 18) return true;
+      return false;
+    },
+
     _clearStreamErrorTelemetry: function() {
       this.lastStreamError = null;
       this.lastStreamErrorTechnical = null;
       this.lastStreamErrorIsRateLimited = false;
+    },
+
+    _clearRuntimeStatusTelemetry: function() {
+      this.runtimeStatusNote = null;
+      this.runtimeStatusTechnical = null;
+      this.runtimeStatusLevel = 'info';
+    },
+
+    _applyAinlRuntimeTelemetry: function(payload, source) {
+      if (!payload || typeof payload !== 'object') return;
+      var status = String(payload.turn_status || '').toLowerCase();
+      var warningCount = Number(payload.warning_count || 0);
+      var partial = !!payload.partial_success;
+      var note = '';
+      var level = 'info';
+      if (status && status !== 'ok') {
+        level = 'warn';
+        note = 'Runtime pre-pass reported ' + status.toUpperCase() + '. Expected: fallback to the normal LLM reply path. If this repeats, disable ainl_runtime_engine for this agent.';
+      } else if (partial || warningCount > 0) {
+        level = 'warn';
+        note = 'Runtime pre-pass completed with ' + warningCount + ' warning' + (warningCount === 1 ? '' : 's') + '. Expected: the LLM reply should still continue this turn. If output looks off, retry once.';
+      }
+      if (!note) return;
+      this.runtimeStatusNote = note;
+      try {
+        this.runtimeStatusTechnical = JSON.stringify({
+          source: source || 'ws',
+          telemetry: payload
+        });
+      } catch (e) {
+        this.runtimeStatusTechnical = String(payload);
+      }
+      this.runtimeStatusLevel = level;
     },
 
     _applyFriendlyError: function(raw) {
@@ -1128,6 +1192,7 @@ function chatPage() {
       this.sessionCompletionTokens = 0;
       this.lastTurnWallMs = null;
       this._clearStreamErrorTelemetry();
+      this._clearRuntimeStatusTelemetry();
 
       // Restore from cache immediately (synchronous) — loadSession will refresh in background
       var cached = _agentMsgCache[agent.id];
@@ -1544,6 +1609,10 @@ function chatPage() {
           // Cache after each tool result so mid-run state survives navigation
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.scrollToBottom();
+          break;
+
+        case 'ainl_runtime_telemetry':
+          this._applyAinlRuntimeTelemetry(data.telemetry, 'ws');
           break;
 
         case 'response':
@@ -2016,6 +2085,7 @@ function chatPage() {
     async _sendPayload(finalText, uploadedFiles, msgImages) {
       this.sending = true;
       this._clearStreamErrorTelemetry();
+      this._clearRuntimeStatusTelemetry();
       this._startElapsed();
 
       // Detect input that would be rejected by the 64KB WS / HTTP limit.
@@ -2070,6 +2140,7 @@ function chatPage() {
         if (res.input_tokens != null) this.sessionPromptTokens += res.input_tokens;
         if (res.output_tokens != null) this.sessionCompletionTokens += res.output_tokens;
         this._clearStreamErrorTelemetry();
+        this._applyAinlRuntimeTelemetry(res.ainl_runtime_telemetry, 'http');
         var httpMeta = (res.input_tokens || 0) + ' in / ' + (res.output_tokens || 0) + ' out';
         if (res.cost_usd != null) httpMeta += ' | $' + res.cost_usd.toFixed(4);
         if (res.iterations) httpMeta += ' | ' + res.iterations + ' iter';

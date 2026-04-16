@@ -3,6 +3,7 @@
 //! This crate defines all shared data structures used across the OpenFang kernel,
 //! runtime, memory substrate, and wire protocol. It contains no business logic.
 
+pub mod adaptive_eco;
 pub mod agent;
 pub mod approval;
 pub mod capability;

@@ -1,0 +1,17 @@
+[package]
+name = "ainl-compression"
+version = "0.1.0-alpha"
+description = "Embedding-free input/output compression primitives for AINL hosts"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+graph-telemetry = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+tracing = { workspace = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
