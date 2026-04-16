@@ -7165,6 +7165,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <button type="button" class="btn btn-ghost btn-sm" x-show="viewMode === 'snapshot'" @click="returnToLiveGraph()">Return to live</button>
           </div>
         </div>
+        <p class="text-xs text-dim" style="margin:-6px 0 10px 2px">
+          Tip: Scroll to move the page. Hold <strong>Ctrl</strong> (or <strong>Cmd</strong> on Mac) while scrolling to zoom the graph.
+        </p>
         <div id="graph-memory-canvas" style="width:100%;height:calc(100vh - 220px);min-height:480px;background:var(--graph-bg,#0f0f13);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
           <svg id="gm-svg" width="100%" height="100%">
             <defs>

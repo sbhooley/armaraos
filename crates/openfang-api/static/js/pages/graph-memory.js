@@ -905,6 +905,17 @@ function graphMemoryPanel() {
       var zoom = d3
         .zoom()
         .scaleExtent([0.2, 4])
+        // Keep page scrolling usable: plain wheel scrolls the page.
+        // Power users can still wheel-zoom the graph with Ctrl/Cmd + wheel.
+        .filter(function (event) {
+          if (!event) {
+            return true;
+          }
+          if (event.type === 'wheel') {
+            return !!(event.ctrlKey || event.metaKey);
+          }
+          return true;
+        })
         .on('zoom', function (event) {
           svg.select('#gm-links').attr('transform', event.transform);
           svg.select('#gm-nodes').attr('transform', event.transform);
