@@ -125,7 +125,7 @@ The bridge does **not** emit the same internal events as an LLM **`StopReason::E
 |-------------|--------|
 | **No LLM** | No model call; reply text is graph / persona summary only. |
 | **No tool / approval loop** | No `shell_exec`, approvals, or kernel tool policy on this path. |
-| **No streaming tokens** | Early return does not drive `StreamEvent` token deltas; clients see a single completed turn after save. |
+| **Limited streaming fidelity** | The bridge now emits SSE/WS events (`ainl_runtime_telemetry`, synthetic `TextDelta`, `ContentComplete`) but does not provide token-by-token model streaming. |
 | **Second SQLite handle** | WAL-safe; avoid conflicting long transactions with `GraphMemoryWriter` on the same file. Both paths may write **`runtime_state`** (bridge / **`AinlRuntime`** only) and episode/persona rows (**OpenFang**); keep turns short. |
 | **No extra multi-tenancy** | Same per-agent `agent_id` scoping as existing graph memory. |
 
@@ -136,9 +136,9 @@ The bridge does **not** emit the same internal events as an LLM **`StopReason::E
 1. **Single evolution writer** — explicit hand-off or read-only **ainl-runtime** on SQLite for `EVOLUTION_TRAIT_NAME`.
 2. **Tool + approval parity** — optional phase: host hooks drive OpenFang tool runner from patch / emit results.
 3. **Orchestration / dashboard** — feed mapped EndTurn fields into the same telemetry as LLM EndTurn.
-4. **Streaming** — if **ainl-runtime** gains incremental summaries, wire `StreamEvent`s.
+4. **Streaming parity** — if **ainl-runtime** gains incremental summaries, replace synthetic delta emission with native incremental events.
 
-Until then, use this path only for **experimental graph-first** agents that do not need a normal model reply.
+Until then, prefer this path for **graph-first** agents where bridge telemetry + synthesized text output are acceptable.
 
 ---
 

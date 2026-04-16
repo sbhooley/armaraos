@@ -113,6 +113,10 @@ async fn start_test_server_with_provider_patch(
             axum::routing::post(routes::send_message),
         )
         .route(
+            "/api/agents/{id}/message/stream",
+            axum::routing::post(routes::send_message_stream),
+        )
+        .route(
             "/api/agents/{id}/session",
             axum::routing::get(routes::get_agent_session),
         )
@@ -173,6 +177,7 @@ async fn start_test_server_with_provider_patch(
             "/api/approvals",
             axum::routing::get(routes::list_approvals).post(routes::create_approval),
         )
+        .route("/api/metrics", axum::routing::get(routes::prometheus_metrics))
         .route(
             "/api/ui-prefs",
             axum::routing::get(routes::get_ui_prefs).put(routes::put_ui_prefs),
@@ -547,6 +552,37 @@ async fn test_status_endpoint() {
 }
 
 #[tokio::test]
+async fn test_metrics_endpoint_includes_ainl_bridge_cache_counters() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/metrics", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+
+    assert!(
+        body.contains("openfang_ainl_runtime_bridge_cache_hits_total"),
+        "missing bridge cache hits metric: {body}"
+    );
+    assert!(
+        body.contains("openfang_ainl_runtime_bridge_cache_misses_total"),
+        "missing bridge cache misses metric: {body}"
+    );
+    assert!(
+        body.contains("openfang_ainl_runtime_bridge_construct_failures_total"),
+        "missing bridge construct failures metric: {body}"
+    );
+    assert!(
+        body.contains("openfang_ainl_runtime_bridge_run_failures_total"),
+        "missing bridge run failures metric: {body}"
+    );
+}
+
+#[tokio::test]
 async fn test_agents_runtime_effective_state_fields_present() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
@@ -612,6 +648,49 @@ async fn test_send_message_includes_ainl_runtime_telemetry_field() {
     assert!(
         body.get("ainl_runtime_telemetry").is_some(),
         "message response must include ainl_runtime_telemetry key"
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_stream_emits_ainl_runtime_telemetry_event() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let agents_resp = client
+        .get(format!("{}/api/agents", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(agents_resp.status(), 200);
+    let agents: Vec<serde_json::Value> = agents_resp.json().await.unwrap();
+    let agent_id = agents[0]["id"]
+        .as_str()
+        .expect("default assistant id")
+        .to_string();
+
+    let resp = client
+        .post(format!(
+            "{}/api/agents/{}/message/stream",
+            server.base_url, agent_id
+        ))
+        .json(&serde_json::json!({"message":"ping"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("text/event-stream"),
+        "unexpected content-type: {ct}"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("event: ainl_runtime_telemetry"),
+        "expected ainl runtime telemetry event in stream body: {body}"
     );
 }
 

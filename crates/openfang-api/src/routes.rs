@@ -4441,6 +4441,45 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
 
     out.push_str(&state.kernel.llm_factory.prometheus_snippet());
 
+    // AINL runtime bridge cache behavior (only increments when ainl-runtime-engine path is used).
+    let arm = openfang_runtime::ainl_runtime_bridge_metrics();
+    let cache_hits = arm
+        .get("cache_hits")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let cache_misses = arm
+        .get("cache_misses")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let construct_failures = arm
+        .get("construct_failures")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let run_failures = arm
+        .get("run_failures")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    out.push_str("# HELP openfang_ainl_runtime_bridge_cache_hits_total Total ainl-runtime bridge cache hits.\n");
+    out.push_str("# TYPE openfang_ainl_runtime_bridge_cache_hits_total counter\n");
+    out.push_str(&format!(
+        "openfang_ainl_runtime_bridge_cache_hits_total {cache_hits}\n"
+    ));
+    out.push_str("# HELP openfang_ainl_runtime_bridge_cache_misses_total Total ainl-runtime bridge cache misses.\n");
+    out.push_str("# TYPE openfang_ainl_runtime_bridge_cache_misses_total counter\n");
+    out.push_str(&format!(
+        "openfang_ainl_runtime_bridge_cache_misses_total {cache_misses}\n"
+    ));
+    out.push_str("# HELP openfang_ainl_runtime_bridge_construct_failures_total Total ainl-runtime bridge construction failures.\n");
+    out.push_str("# TYPE openfang_ainl_runtime_bridge_construct_failures_total counter\n");
+    out.push_str(&format!(
+        "openfang_ainl_runtime_bridge_construct_failures_total {construct_failures}\n"
+    ));
+    out.push_str("# HELP openfang_ainl_runtime_bridge_run_failures_total Total ainl-runtime bridge run failures.\n");
+    out.push_str("# TYPE openfang_ainl_runtime_bridge_run_failures_total counter\n");
+    out.push_str(&format!(
+        "openfang_ainl_runtime_bridge_run_failures_total {run_failures}\n\n"
+    ));
+
     // Version info
     out.push_str("# HELP openfang_info ArmaraOS version and build info.\n");
     out.push_str("# TYPE openfang_info gauge\n");

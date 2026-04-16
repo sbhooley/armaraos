@@ -60,6 +60,7 @@ SQLite enforces **basic referential integrity** on the graph edge table:
 **Higher-level validation** (orthogonal to FK row existence)
 
 - [`validate_graph(agent_id)`](https://docs.rs/ainl-memory/latest/ainl_memory/struct.SqliteGraphStore.html#method.validate_graph) reports agent-scoped edges, **dangling** endpoint pairs, optional **`DanglingEdgeDetail`** (includes **edge label**), **`cross_agent_boundary_edges`**, orphans, and `is_valid`. Use this for semantics, exports alignment, and post-repair audits.
+- [`validate_graph_checked(agent_id)`](https://docs.rs/ainl-memory/latest/ainl_memory/struct.SqliteGraphStore.html#method.validate_graph_checked): typed error variant returning `GraphValidationError` for callers that need structured handling.
 
 **Rust snapshot type vs SQL**
 

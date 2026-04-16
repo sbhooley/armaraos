@@ -55,6 +55,20 @@ impl std::fmt::Display for SnapshotImportError {
     }
 }
 
+/// Typed failures for graph validation.
+#[derive(Debug, Clone)]
+pub enum GraphValidationError {
+    Sqlite(String),
+}
+
+impl std::fmt::Display for GraphValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlite(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// Graph memory storage trait - swappable backends
 pub trait GraphStore {
     /// Write a node to storage
@@ -564,15 +578,26 @@ impl SqliteGraphStore {
 
     /// Validate structural integrity for one agent's induced subgraph.
     pub fn validate_graph(&self, agent_id: &str) -> Result<GraphValidationReport, String> {
+        self.validate_graph_checked(agent_id)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Typed validation variant for callers that need structured error handling.
+    pub fn validate_graph_checked(
+        &self,
+        agent_id: &str,
+    ) -> Result<GraphValidationReport, GraphValidationError> {
         use std::collections::HashSet;
 
-        let agent_nodes = self.agent_node_ids(agent_id)?;
+        let agent_nodes = self
+            .agent_node_ids(agent_id)
+            .map_err(GraphValidationError::Sqlite)?;
         let node_count = agent_nodes.len();
 
         let mut stmt = self
             .conn
             .prepare("SELECT from_id, to_id, label FROM ainl_graph_edges")
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| GraphValidationError::Sqlite(e.to_string()))?;
         let all_edges: Vec<(String, String, String)> = stmt
             .query_map([], |row| {
                 Ok((
@@ -581,9 +606,9 @@ impl SqliteGraphStore {
                     row.get::<_, String>(2)?,
                 ))
             })
-            .map_err(|e| e.to_string())?
+            .map_err(|e| GraphValidationError::Sqlite(e.to_string()))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| GraphValidationError::Sqlite(e.to_string()))?;
 
         let mut edge_pairs = Vec::new();
         for (from_id, to_id, label) in all_edges {
@@ -599,8 +624,12 @@ impl SqliteGraphStore {
         let mut cross_agent_boundary_edges = 0usize;
 
         for (from_id, to_id, label) in &edge_pairs {
-            let from_ok = self.node_row_exists(from_id)?;
-            let to_ok = self.node_row_exists(to_id)?;
+            let from_ok = self
+                .node_row_exists(from_id)
+                .map_err(GraphValidationError::Sqlite)?;
+            let to_ok = self
+                .node_row_exists(to_id)
+                .map_err(GraphValidationError::Sqlite)?;
             if !from_ok || !to_ok {
                 dangling_edges.push((from_id.clone(), to_id.clone()));
                 dangling_edge_details.push(DanglingEdgeDetail {
@@ -758,12 +787,10 @@ impl SqliteGraphStore {
                 .transaction()
                 .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;
             for node in &snapshot.nodes {
-                try_insert_node_ignore(&tx, node)
-                    .map_err(SnapshotImportError::Sqlite)?;
+                try_insert_node_ignore(&tx, node).map_err(SnapshotImportError::Sqlite)?;
             }
             for edge in &snapshot.edges {
-                try_insert_edge_ignore(&tx, edge)
-                    .map_err(SnapshotImportError::Sqlite)?;
+                try_insert_edge_ignore(&tx, edge).map_err(SnapshotImportError::Sqlite)?;
             }
             tx.commit()
                 .map_err(|e| SnapshotImportError::Sqlite(e.to_string()))?;

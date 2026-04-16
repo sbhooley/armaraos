@@ -25,6 +25,9 @@ fn test_validate_clean_graph() {
     assert!(r.dangling_edges.is_empty());
     assert_eq!(r.node_count, 2);
     assert_eq!(r.edge_count, 1);
+    let typed = store.validate_graph_checked(ag).unwrap();
+    assert!(typed.is_valid);
+    assert_eq!(typed.edge_count, 1);
 }
 
 #[test]

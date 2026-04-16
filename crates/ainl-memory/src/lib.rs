@@ -75,7 +75,7 @@ pub use snapshot::{
     AgentGraphSnapshot, DanglingEdgeDetail, GraphValidationReport, SnapshotEdge,
     SNAPSHOT_SCHEMA_VERSION,
 };
-pub use store::{GraphStore, SnapshotImportError, SqliteGraphStore};
+pub use store::{GraphStore, GraphValidationError, SnapshotImportError, SqliteGraphStore};
 
 use uuid::Uuid;
 

@@ -29,6 +29,31 @@ pub fn ainl_runtime_engine_env_disabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Runtime counters for ainl-runtime bridge cache behavior.
+#[must_use]
+pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
+    #[cfg(feature = "ainl-runtime-engine")]
+    {
+        let (hits, misses, construct_failures, run_failures) =
+            agent_loop::ainl_runtime_bridge_cache_metrics_snapshot();
+        serde_json::json!({
+            "cache_hits": hits,
+            "cache_misses": misses,
+            "construct_failures": construct_failures,
+            "run_failures": run_failures,
+        })
+    }
+    #[cfg(not(feature = "ainl-runtime-engine"))]
+    {
+        serde_json::json!({
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "construct_failures": 0,
+            "run_failures": 0,
+        })
+    }
+}
+
 /// Default User-Agent header sent with all outgoing HTTP requests.
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
 pub const USER_AGENT: &str = "openfang/0.3.48";

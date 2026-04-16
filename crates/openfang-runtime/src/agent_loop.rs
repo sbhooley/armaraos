@@ -131,13 +131,53 @@ fn ainl_runtime_bridge_cache(
 }
 
 #[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_cache_hits_counter() -> &'static std::sync::atomic::AtomicU64 {
+    static C: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_cache_misses_counter() -> &'static std::sync::atomic::AtomicU64 {
+    static C: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_construct_failures_counter() -> &'static std::sync::atomic::AtomicU64 {
+    static C: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+fn ainl_runtime_bridge_run_failures_counter() -> &'static std::sync::atomic::AtomicU64 {
+    static C: std::sync::OnceLock<std::sync::atomic::AtomicU64> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::sync::atomic::AtomicU64::new(0))
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
+pub(crate) fn ainl_runtime_bridge_cache_metrics_snapshot() -> (u64, u64, u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        ainl_runtime_bridge_cache_hits_counter().load(Ordering::Relaxed),
+        ainl_runtime_bridge_cache_misses_counter().load(Ordering::Relaxed),
+        ainl_runtime_bridge_construct_failures_counter().load(Ordering::Relaxed),
+        ainl_runtime_bridge_run_failures_counter().load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(feature = "ainl-runtime-engine")]
 fn ainl_runtime_bridge_cache_key(agent_id: &str, max_delegation_depth: u32) -> String {
     format!("{agent_id}:{max_delegation_depth}")
 }
 
 #[cfg(all(feature = "ainl-runtime-engine", test))]
 fn ainl_runtime_bridge_cache_clear_for_tests() {
+    use std::sync::atomic::Ordering;
     ainl_runtime_bridge_cache().clear();
+    ainl_runtime_bridge_cache_hits_counter().store(0, Ordering::SeqCst);
+    ainl_runtime_bridge_cache_misses_counter().store(0, Ordering::SeqCst);
+    ainl_runtime_bridge_construct_failures_counter().store(0, Ordering::SeqCst);
+    ainl_runtime_bridge_run_failures_counter().store(0, Ordering::SeqCst);
 }
 
 #[cfg(feature = "ainl-runtime-engine")]
@@ -148,8 +188,10 @@ fn get_or_create_ainl_runtime_bridge(
 ) -> Result<std::sync::Arc<crate::ainl_runtime_bridge::AinlRuntimeBridge>, String> {
     let key = ainl_runtime_bridge_cache_key(agent_id, max_delegation_depth);
     if let Some(existing) = ainl_runtime_bridge_cache().get(&key) {
+        ainl_runtime_bridge_cache_hits_counter().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok(std::sync::Arc::clone(existing.value()));
     }
+    ainl_runtime_bridge_cache_misses_counter().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
     let bridge = std::sync::Arc::new(
         crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(gw, max_delegation_depth)
@@ -192,6 +234,8 @@ async fn try_consume_turn_via_ainl_runtime(
     ) {
         Ok(b) => b,
         Err(e) => {
+            ainl_runtime_bridge_construct_failures_counter()
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!(
                 agent = %manifest.name,
                 error = %e,
@@ -215,6 +259,8 @@ async fn try_consume_turn_via_ainl_runtime(
     let mapped = match bridge.run_turn(agent_id_str, session_user_message, ctx) {
         Ok(m) => m,
         Err(e) => {
+            ainl_runtime_bridge_run_failures_counter()
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!(
                 agent = %manifest.name,
                 error = %e,
@@ -5283,6 +5329,12 @@ mod tests {
 
         assert!(std::sync::Arc::ptr_eq(&b1, &b2));
         assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 1);
+        let (hits, misses, construct_failures, run_failures) =
+            ainl_runtime_bridge_cache_metrics_snapshot();
+        assert_eq!(hits, 1);
+        assert_eq!(misses, 1);
+        assert_eq!(construct_failures, 0);
+        assert_eq!(run_failures, 0);
 
         if let Some(p) = prev {
             std::env::set_var("ARMARAOS_HOME", p);
