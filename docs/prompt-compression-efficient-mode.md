@@ -97,13 +97,24 @@ The AINL repo’s `ainl run --efficient-mode …` sets **`AINL_EFFICIENT_MODE`**
 
 - **`compression_savings_pct`** (`u8`, 0–100) — omitted when zero.
 - **`compressed_input`** (`string`, optional) — text actually sent to the LLM when savings &gt; 0; powers the **Eco Diff** UI.
+- **`adaptive_confidence`** (`f32`, optional) — policy confidence when **`[adaptive_eco]`** produced metadata for the turn.
+- **`eco_counterfactual`** (object, optional) — counterfactual token estimates (applied vs baselines / recommendation).
 - **`tools`** — optional array of tool executions for that blocking turn (same field name as elsewhere; unrelated to compression). See [api-reference.md](api-reference.md) (**POST /api/agents/{id}/message**).
 
 ### WebSocket (`/api/agents/{id}/ws`)
 
 Final **`{"type":"response",...}`** may include **`compression_savings_pct`** and **`compressed_input`** when compression ran.
 
-Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard uses it for the **⚡ eco ↓X%** badge and diff payload.
+Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard uses it for the **⚡ eco ↓X%** badge and diff payload. When **`[adaptive_eco]`** is enabled, the same event (and the final **`response`**) may also include **`adaptive_confidence`** (0.0–1.0) and **`eco_counterfactual`** (applied vs off / recommended token estimates). Chat appends a short **`conf N%`** / **`Δrec … tok`** suffix to the token line and exposes a **tooltip** with JSON for debugging.
+
+**Aggregates (dashboards / audits):**
+
+- **`GET /api/usage/adaptive-eco`** — counts shadow mismatches, circuit-breaker trips, hysteresis blocks (optional **`?window=7d`** or **`all`**).
+- **`GET /api/usage/adaptive-eco/replay`** — same window parameter; adds **shadow mismatch rate**, **eco compression turn count**, and **semantic score p50 / p95 / mean** from durable `eco_compression_events`.
+
+### Multi-provider prompt caching (context)
+
+Adaptive eco metadata includes a **`cache_capability`** label per provider (e.g. explicit prompt cache vs implicit automatic vs local/none). That label informs **`adaptive_confidence`** and reason codes; it does **not** change the compressor’s text pipeline. Provider-specific **prompt caching** (Anthropic/OpenAI/etc.) is orthogonal: ArmaraOS still compresses **input text** before the request; cache hits apply at the HTTP/SDK layer when the provider recognizes a prefix. Tune **`efficient_mode`** and **`[adaptive_eco]`** from measured savings and semantic scores, not from cache alone.
 
 ### Logs
 
@@ -132,6 +143,12 @@ cargo test -p openfang-runtime -- prompt_compressor
 ```
 
 Includes gap tests between Balanced and Aggressive on mixed prose and regression tests for dashboards, HTTP/AINL prompts, and preserve markers.
+
+**HTTP smoke (adaptive-eco usage routes):**
+
+```bash
+cargo test -p openfang-api --test api_integration_test test_usage_adaptive_eco_and_replay_endpoints -- --nocapture
+```
 
 ---
 

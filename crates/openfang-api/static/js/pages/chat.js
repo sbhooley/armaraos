@@ -429,6 +429,34 @@ function chatPage() {
       this.sessionEcoSavedPct = Math.round(this._sessionEcoSavedSum / this._sessionEcoSavedCount);
     },
 
+    /** Short suffix for message meta: adaptive confidence + shadow Δ vs recommendation (when present). */
+    _buildEcoMetaSuffix: function(data) {
+      if (!data) return '';
+      var parts = [];
+      if (data.adaptive_confidence != null && typeof data.adaptive_confidence === 'number') {
+        parts.push('conf ' + Math.round(data.adaptive_confidence * 100) + '%');
+      }
+      var cf = data.eco_counterfactual;
+      if (cf && cf.tokens_saved_delta_recommended_minus_applied != null) {
+        var d = cf.tokens_saved_delta_recommended_minus_applied;
+        parts.push('\u0394rec ' + (d > 0 ? '+' : '') + d + ' tok');
+      }
+      return parts.length ? ' | ' + parts.join(' \u00b7 ') : '';
+    },
+
+    /** Tooltip JSON for hover (truncated) — full receipt lives on the server / IR. */
+    _buildEcoMetaTooltip: function(data) {
+      if (!data) return '';
+      if (data.adaptive_confidence == null && !data.eco_counterfactual) return '';
+      try {
+        var o = { adaptive_confidence: data.adaptive_confidence, eco_counterfactual: data.eco_counterfactual };
+        var s = JSON.stringify(o);
+        return s.length > 900 ? s.slice(0, 897) + '...' : s;
+      } catch (e) {
+        return '';
+      }
+    },
+
     _syncEcoModeToConfig: async function(mode) {
       var normalized = (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
       // Skip redundant writes when we already synced this mode.
@@ -1655,6 +1683,8 @@ function chatPage() {
             var pct = data.compression_savings_pct;
             meta += pct > 0 ? ' | ⚡ eco ↓' + pct + '%' : ' | ⚡ eco';
           }
+          meta += this._buildEcoMetaSuffix(data);
+          var ecoTip = this._buildEcoMetaTooltip(data);
           // Use server response if non-empty, otherwise preserve accumulated streamed text
           var finalText = (data.content && data.content.trim()) ? data.content : streamedText;
           // Strip raw function-call JSON that some models leak as text
@@ -1675,7 +1705,7 @@ function chatPage() {
           this._recordEcoSaving(data.compression_savings_pct);
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
             compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
-            savingsPct: data.compression_savings_pct || 0 });
+            savingsPct: data.compression_savings_pct || 0, ecoMetaTooltip: ecoTip || null });
           // Snapshot to cache so switching away and back shows the complete turn instantly
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.sending = false;
@@ -1708,7 +1738,9 @@ function chatPage() {
             var sPct = data.compression_savings_pct;
             silentMeta += sPct > 0 ? ' | ⚡ eco ↓' + sPct + '%' : ' | ⚡ eco';
           }
-          this.messages.push({ id: ++msgId, role: 'system', text: '*(No reply — agent processed the message but determined no response was needed.)*', meta: silentMeta, tools: [], ts: Date.now() });
+          silentMeta += this._buildEcoMetaSuffix(data);
+          var silentEcoTip = this._buildEcoMetaTooltip(data);
+          this.messages.push({ id: ++msgId, role: 'system', text: '*(No reply — agent processed the message but determined no response was needed.)*', meta: silentMeta, tools: [], ts: Date.now(), ecoMetaTooltip: silentEcoTip || null });
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.scrollToBottom();
           if (data.skill_draft_path) {
@@ -2149,6 +2181,8 @@ function chatPage() {
           var hPct = res.compression_savings_pct;
           httpMeta += hPct > 0 ? ' | ⚡ eco ↓' + hPct + '%' : ' | ⚡ eco';
         }
+        httpMeta += this._buildEcoMetaSuffix(res);
+        var httpEcoTip = this._buildEcoMetaTooltip(res);
         var httpCompressedInput = (res.compressed_input && res.compression_savings_pct > 0) ? res.compressed_input : null;
         this._recordEcoSaving(res.compression_savings_pct);
         var httpTools = [];
@@ -2169,7 +2203,7 @@ function chatPage() {
         }
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
           compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
-          savingsPct: res.compression_savings_pct || 0 });
+          savingsPct: res.compression_savings_pct || 0, ecoMetaTooltip: httpEcoTip || null });
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
         var technical = e.message || 'Unknown error';

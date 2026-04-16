@@ -1357,10 +1357,10 @@
                         <div class="message-footer-meta" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
                           <div class="message-time" x-text="formatTime(msg.ts)" x-show="msg.ts && !msg.thinking"></div>
                           <template x-if="msg.meta && !msg.compressedInput">
-                            <div class="message-meta" x-text="msg.meta"></div>
+                            <div class="message-meta" x-text="msg.meta" :title="msg.ecoMetaTooltip || ''"></div>
                           </template>
                           <template x-if="msg.meta && msg.compressedInput">
-                            <div class="message-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <div class="message-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap" :title="msg.ecoMetaTooltip || ''">
                               <span x-text="msg.meta.replace(/⚡ eco[^|]*/,'').replace(/\|\s*$/,'').trim()"></span>
                               <button
                                 @click="openEcoDiff(msg)"

@@ -218,6 +218,14 @@ async fn start_test_server_with_provider_patch(
             axum::routing::get(routes::budget_status).put(routes::update_budget),
         )
         .route(
+            "/api/usage/adaptive-eco",
+            axum::routing::get(routes::usage_adaptive_eco),
+        )
+        .route(
+            "/api/usage/adaptive-eco/replay",
+            axum::routing::get(routes::usage_adaptive_eco_replay),
+        )
+        .route(
             "/api/approvals",
             axum::routing::get(routes::list_approvals).post(routes::create_approval),
         )
@@ -2287,4 +2295,37 @@ async fn test_auth_disabled_when_no_key() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_usage_adaptive_eco_and_replay_endpoints() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let eco = client
+        .get(format!("{}/api/usage/adaptive-eco", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(eco.status(), 200);
+    let eco_body: serde_json::Value = eco.json().await.unwrap();
+    assert!(
+        eco_body.get("events").is_some(),
+        "expected events summary: {eco_body}"
+    );
+
+    let replay = client
+        .get(format!(
+            "{}/api/usage/adaptive-eco/replay?window=7d",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 200);
+    let rep: serde_json::Value = replay.json().await.unwrap();
+    assert_eq!(rep["window"], "7d");
+    assert!(rep.get("adaptive_eco_events").is_some());
+    assert!(rep.get("shadow_mismatch_rate").is_some());
+    assert!(rep.get("eco_compression_turns").is_some());
 }
