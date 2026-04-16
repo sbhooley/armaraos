@@ -381,8 +381,13 @@ impl AinlRuntimeBridge {
 mod tests {
     use super::*;
 
+    fn runtime_env_lock() -> &'static tokio::sync::Mutex<()> {
+        crate::runtime_env_test_lock()
+    }
+
     #[tokio::test]
     async fn test_ainl_runtime_bridge_round_trips_simple_turn() {
+        let _guard = runtime_env_lock().lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         let prev = std::env::var("ARMARAOS_HOME").ok();
         std::env::set_var("ARMARAOS_HOME", dir.path().as_os_str());
@@ -406,6 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bridge_constructor_keeps_evolution_writes_disabled() {
+        let _guard = runtime_env_lock().lock().await;
         let dir = tempfile::tempdir().expect("tempdir");
         let prev = std::env::var("ARMARAOS_HOME").ok();
         std::env::set_var("ARMARAOS_HOME", dir.path().as_os_str());

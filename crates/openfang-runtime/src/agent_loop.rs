@@ -5006,6 +5006,10 @@ mod tests {
     use openfang_types::tool::ToolCall;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    fn runtime_env_lock() -> &'static tokio::sync::Mutex<()> {
+        crate::runtime_env_test_lock()
+    }
+
     #[test]
     #[cfg(feature = "ainl-runtime-engine")]
     fn test_ainl_runtime_engine_switch_matrix_manifest_and_env() {
@@ -5222,6 +5226,8 @@ mod tests {
             },
             ..Default::default()
         };
+        // Default agent-loop tests to the legacy LLM path; opt in explicitly when needed.
+        m.ainl_runtime_engine = false;
         m.metadata.insert(
             crate::prompt_builder::KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY.to_string(),
             serde_json::Value::Bool(true),
@@ -5232,6 +5238,7 @@ mod tests {
     #[cfg(feature = "ainl-runtime-engine")]
     #[tokio::test]
     async fn test_agent_loop_uses_openfang_by_default() {
+        let _guard = runtime_env_lock().lock().await;
         use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
 
@@ -5314,6 +5321,7 @@ mod tests {
     #[cfg(feature = "ainl-runtime-engine")]
     #[tokio::test]
     async fn test_ainl_runtime_bridge_cache_reuses_instance() {
+        let _guard = runtime_env_lock().lock().await;
         crate::ainl_runtime_bridge::test_hooks::reset_bridge_new_count();
         ainl_runtime_bridge_cache_clear_for_tests();
 

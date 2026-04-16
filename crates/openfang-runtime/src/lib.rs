@@ -29,6 +29,12 @@ pub fn ainl_runtime_engine_env_disabled() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
+pub(crate) fn runtime_env_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// Runtime counters for ainl-runtime bridge cache behavior.
 #[must_use]
 pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
