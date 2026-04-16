@@ -80,7 +80,7 @@ If the agent manifest includes **`metadata.efficient_mode`**, it **wins** over t
 
 ### Dashboard
 
-- **Settings → Budget** — card **Ultra Cost-Efficient Mode** with a dropdown and short guidance on typical savings ranges and dense-technical prompts.
+- **Settings → Budget** — card **Ultra Cost-Efficient Mode** with a dropdown, compression telemetry (window **7d / 30d / all**), and an **Adaptive eco policy** block that loads **`GET /api/usage/adaptive-eco`** and **`/replay`** for the same window.
 - **Chat (agent open)** — header **⚡ eco** pill cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`). The **authoritative per-agent map** is stored in **`~/.armaraos/ui-prefs.json`** under **`agent_eco_modes`** (merged into `localStorage` **`armaraos-eco-modes-v1`** on load) so each agent remembers its own mode across navigation and **desktop reinstalls** that wipe WebView storage. The UI still calls **`POST /api/config/set`** with **`path: "efficient_mode"`** so the running kernel applies the mode for the **currently open** agent’s next message. Global default remains **`efficient_mode`** in **`config.toml`** / **`GET /api/config`** for new installs and for agents without an entry in **`agent_eco_modes`**.
 
 ### AINL CLI (host signal only)
@@ -114,7 +114,7 @@ Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard 
 
 ### Multi-provider prompt caching (context)
 
-Adaptive eco metadata includes a **`cache_capability`** label per provider (e.g. explicit prompt cache vs implicit automatic vs local/none). That label informs **`adaptive_confidence`** and reason codes; it does **not** change the compressor’s text pipeline. Provider-specific **prompt caching** (Anthropic/OpenAI/etc.) is orthogonal: ArmaraOS still compresses **input text** before the request; cache hits apply at the HTTP/SDK layer when the provider recognizes a prefix. Tune **`efficient_mode`** and **`[adaptive_eco]`** from measured savings and semantic scores, not from cache alone.
+See **[prompt-caching-multi-provider.md](prompt-caching-multi-provider.md)** — how provider prompt-cache billing relates to ArmaraOS **input** compression and **`cache_capability`**.
 
 ### Logs
 

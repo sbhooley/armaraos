@@ -4,6 +4,15 @@
 
 Prompt caching support varies significantly across providers. This guide covers implementation status and capabilities for each provider.
 
+### ArmaraOS input compression vs provider prompt cache
+
+These are **different layers**:
+
+- **Input compression** (`efficient_mode`, `ainl-compression`) runs **before** the HTTP request and reduces estimated input tokens for that call. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
+- **Provider prompt caching** (this document’s per-provider sections) is decided by the **LLM vendor** when it recognizes a stable prefix in the serialized request body.
+
+When **`[adaptive_eco]`** is enabled, telemetry includes a **`cache_capability`** label per provider (explicit vs implicit vs local/none). That label informs **`adaptive_confidence`** and dashboards; it does **not** change the compressor pipeline. Aggregate usage: **`GET /api/usage/adaptive-eco`** and **`GET /api/usage/adaptive-eco/replay`**.
+
 ---
 
 ## ✅ Anthropic (Claude) — FULLY IMPLEMENTED

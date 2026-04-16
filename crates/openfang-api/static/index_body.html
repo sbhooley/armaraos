@@ -4930,6 +4930,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div x-show="tab === 'budget'" x-data="{
             budgetData: null, agentRanking: [], budgetLoading: true,
             compressionUsage: null, compressionUsageByWindow: {}, compressionWindow: '7d', compressionTrendMode: 'balanced', compressionLoading: false,
+            adaptiveEcoSummary: null, adaptiveEcoReplay: null, adaptiveEcoLoading: false,
             editMode: false,
             editHourly: '', editDaily: '', editMonthly: '', editAlert: '', editTokenLimit: '',
             saving: false,
@@ -4966,6 +4967,27 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               this.compressionWindow = windowLabel;
               this.compressionUsage = this.compressionUsageByWindow[windowLabel] || null;
               if (!this.compressionUsage) this.loadCompressionUsage(windowLabel);
+              this.loadAdaptiveEco(windowLabel);
+            },
+            adaptiveEcoQuery(windowLabel) {
+              if (!windowLabel || windowLabel === 'all') return '?window=all';
+              return '?window=' + encodeURIComponent(windowLabel);
+            },
+            async loadAdaptiveEco(windowLabel) {
+              this.adaptiveEcoLoading = true;
+              try {
+                let q = this.adaptiveEcoQuery(windowLabel);
+                let [s, r] = await Promise.all([
+                  OpenFangAPI.get('/api/usage/adaptive-eco' + q),
+                  OpenFangAPI.get('/api/usage/adaptive-eco/replay' + q)
+                ]);
+                this.adaptiveEcoSummary = s;
+                this.adaptiveEcoReplay = r;
+              } catch (e) {
+                this.adaptiveEcoSummary = null;
+                this.adaptiveEcoReplay = null;
+              }
+              this.adaptiveEcoLoading = false;
             },
             async loadBudget() {
               this.budgetLoading = true;
@@ -4978,6 +5000,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 this.agentRanking = a.agents || [];
               } catch(e) {}
               await this.loadCompressionUsageWindows();
+              await this.loadAdaptiveEco(this.compressionWindow);
               this.budgetLoading = false;
             },
             startEdit() {
@@ -5070,6 +5093,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               if (v == null) return '—';
               if (metricKey === 'savings') return Math.round(v) + '%';
               return v.toFixed(1) + '%';
+            },
+            fmtMismatchRate(v) {
+              return (typeof v === 'number' && !Number.isNaN(v)) ? ((v * 100).toFixed(1) + '%') : '—';
             },
             pctColor(pct) { return pct >= 0.8 ? '#ef4444' : pct >= 0.5 ? '#eab308' : '#22c55e'; },
             fmtUsd(v) { return v > 0 ? '$' + v.toFixed(4) : 'unlimited'; }
@@ -5270,6 +5296,42 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <span x-text="'all: ' + trendDisplay('semantic', trendValue('all', 'semantic'))"></span>
                   </div>
                 </div>
+              </div>
+              <div class="border-t" style="margin-top:14px;padding-top:12px;border-color:var(--border)">
+                <h5 style="margin:0 0 6px;font-size:13px">Adaptive eco policy</h5>
+                <p class="text-xs text-dim" style="margin-bottom:10px">
+                  Shadow tier vs applied mode, circuit breaker, and hysteresis. Uses the same window as compression stats above.
+                </p>
+                <div class="text-xs text-dim" x-show="adaptiveEcoLoading">Loading adaptive eco telemetry…</div>
+                <div class="stats-row" style="margin-top:8px;gap:8px" x-show="!adaptiveEcoLoading && adaptiveEcoSummary">
+                  <div class="stat-card" style="flex:1;min-width:120px">
+                    <div class="stat-label">Events</div>
+                    <div class="stat-value" style="font-size:16px" x-text="adaptiveEcoSummary.events ?? 0"></div>
+                  </div>
+                  <div class="stat-card" style="flex:1;min-width:120px">
+                    <div class="stat-label">Shadow mismatch</div>
+                    <div class="stat-value" style="font-size:16px" x-text="adaptiveEcoSummary.shadow_mismatch_turns ?? 0"></div>
+                  </div>
+                  <div class="stat-card" style="flex:1;min-width:120px">
+                    <div class="stat-label">Breaker trips</div>
+                    <div class="stat-value" style="font-size:16px" x-text="adaptiveEcoSummary.circuit_breaker_trips ?? 0"></div>
+                  </div>
+                  <div class="stat-card" style="flex:1;min-width:120px">
+                    <div class="stat-label">Hysteresis blocks</div>
+                    <div class="stat-value" style="font-size:16px" x-text="adaptiveEcoSummary.hysteresis_blocks ?? 0"></div>
+                  </div>
+                </div>
+                <div class="text-xs text-dim" style="margin-top:10px;line-height:1.6" x-show="!adaptiveEcoLoading && adaptiveEcoReplay">
+                  <span>Replay — mismatch rate <strong x-text="fmtMismatchRate(adaptiveEcoReplay.shadow_mismatch_rate)"></strong></span>
+                  <span> · eco compression turns <span x-text="adaptiveEcoReplay.eco_compression_turns ?? 0"></span></span>
+                  <span> · semantic p50 / p95 / mean </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.compression_semantic_p50)"></span>
+                  <span> / </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.compression_semantic_p95)"></span>
+                  <span> / </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.compression_semantic_mean)"></span>
+                </div>
+                <div class="text-xs text-dim" style="margin-top:8px" x-show="!adaptiveEcoLoading && !adaptiveEcoSummary && !adaptiveEcoReplay">Adaptive eco endpoints unavailable or returned no data.</div>
               </div>
             </div>
           </div>
