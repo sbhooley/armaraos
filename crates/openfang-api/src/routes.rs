@@ -700,6 +700,21 @@ pub async fn send_message(
             } else {
                 None
             };
+            let ainl_runtime_telemetry = result.ainl_runtime_telemetry.as_ref().map(|t| {
+                serde_json::json!({
+                    "turn_status": format!("{:?}", t.turn_status),
+                    "partial_success": t.partial_success,
+                    "warning_count": t.warning_count,
+                    "has_extraction_report": t.has_extraction_report,
+                    "memory_context_recent_episodes": t.memory_context_recent_episodes,
+                    "memory_context_relevant_semantic": t.memory_context_relevant_semantic,
+                    "memory_context_active_patches": t.memory_context_active_patches,
+                    "memory_context_has_persona_snapshot": t.memory_context_has_persona_snapshot,
+                    "patch_dispatch_count": t.patch_dispatch_count,
+                    "patch_dispatch_adapter_output_count": t.patch_dispatch_adapter_output_count,
+                    "steps_executed": t.steps_executed,
+                })
+            });
 
             (
                 StatusCode::OK,
@@ -715,6 +730,7 @@ pub async fn send_message(
                     compression_savings_pct: result.compression_savings_pct,
                     compressed_input: result.compressed_input.clone(),
                     tools: Vec::new(),
+                    ainl_runtime_telemetry,
                 })),
             )
         }
@@ -2319,6 +2335,10 @@ pub async fn send_message_stream(
                             "phase": phase,
                             "detail": detail,
                         }))
+                        .unwrap_or_else(|_| Event::default().data("error")),
+                    StreamEvent::AinlRuntimeTelemetry { payload } => Event::default()
+                        .event("ainl_runtime_telemetry")
+                        .json_data(payload)
                         .unwrap_or_else(|_| Event::default().data("error")),
                     _ => Event::default().comment("skip"),
                 });

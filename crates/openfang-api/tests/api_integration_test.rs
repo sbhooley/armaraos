@@ -584,6 +584,38 @@ async fn test_agents_runtime_effective_state_fields_present() {
 }
 
 #[tokio::test]
+async fn test_send_message_includes_ainl_runtime_telemetry_field() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let agents_resp = client
+        .get(format!("{}/api/agents", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(agents_resp.status(), 200);
+    let agents: Vec<serde_json::Value> = agents_resp.json().await.unwrap();
+    let agent_id = agents[0]["id"]
+        .as_str()
+        .expect("default assistant id")
+        .to_string();
+
+    let resp = client
+        .post(format!("{}/api/agents/{}/message", server.base_url, agent_id))
+        .json(&serde_json::json!({"message":"ping"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+
+    assert!(
+        body.get("ainl_runtime_telemetry").is_some(),
+        "message response must include ainl_runtime_telemetry key"
+    );
+}
+
+#[tokio::test]
 async fn test_ui_prefs_get_empty_when_missing() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();

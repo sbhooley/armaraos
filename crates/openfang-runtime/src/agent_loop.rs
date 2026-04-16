@@ -265,6 +265,7 @@ async fn try_consume_turn_via_ainl_runtime(
         llm_fallback_note: None,
         compression_savings_pct,
         compressed_input,
+        ainl_runtime_telemetry: Some(mapped.telemetry.clone()),
     }))
 }
 
@@ -687,6 +688,8 @@ pub struct AgentLoopResult {
     pub compression_savings_pct: u8,
     /// The compressed version of the user message (only set when savings_pct > 0; for diff UI).
     pub compressed_input: Option<String>,
+    /// Structured telemetry from ainl-runtime-engine, when that path handled the turn.
+    pub ainl_runtime_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry>,
 }
 
 /// Check whether a tool call is missing any required parameters.
@@ -1332,6 +1335,7 @@ pub async fn run_agent_loop(
                         llm_fallback_note: llm_fallback_note.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
+                        ainl_runtime_telemetry: None,
                     });
                 }
 
@@ -1628,6 +1632,7 @@ pub async fn run_agent_loop(
                     llm_fallback_note: llm_fallback_note.clone(),
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
+                    ainl_runtime_telemetry: None,
                 });
             }
             StopReason::ToolUse => {
@@ -1919,6 +1924,7 @@ pub async fn run_agent_loop(
                             llm_fallback_note: llm_fallback_note.clone(),
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
+                            ainl_runtime_telemetry: None,
                         });
                     }
                 }
@@ -2031,6 +2037,7 @@ pub async fn run_agent_loop(
                         llm_fallback_note: llm_fallback_note.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
+                        ainl_runtime_telemetry: None,
                     });
                 }
                 // Model hit token limit — add partial response and continue
@@ -2087,6 +2094,7 @@ pub async fn run_agent_loop(
         llm_fallback_note,
         compression_savings_pct,
         compressed_input,
+        ainl_runtime_telemetry: None,
     })
             }
         )
@@ -3013,6 +3021,39 @@ pub async fn run_agent_loop_streaming(
             )
             .await
             {
+                if let Ok(ref result) = res {
+                    if let Some(ref t) = result.ainl_runtime_telemetry {
+                        let payload = serde_json::json!({
+                            "turn_status": format!("{:?}", t.turn_status),
+                            "partial_success": t.partial_success,
+                            "warning_count": t.warning_count,
+                            "has_extraction_report": t.has_extraction_report,
+                            "memory_context_recent_episodes": t.memory_context_recent_episodes,
+                            "memory_context_relevant_semantic": t.memory_context_relevant_semantic,
+                            "memory_context_active_patches": t.memory_context_active_patches,
+                            "memory_context_has_persona_snapshot": t.memory_context_has_persona_snapshot,
+                            "patch_dispatch_count": t.patch_dispatch_count,
+                            "patch_dispatch_adapter_output_count": t.patch_dispatch_adapter_output_count,
+                            "steps_executed": t.steps_executed,
+                        });
+                        let _ = stream_tx
+                            .send(StreamEvent::AinlRuntimeTelemetry { payload })
+                            .await;
+                    }
+                    if !result.response.is_empty() {
+                        let _ = stream_tx
+                            .send(StreamEvent::TextDelta {
+                                text: result.response.clone(),
+                            })
+                            .await;
+                    }
+                    let _ = stream_tx
+                        .send(StreamEvent::ContentComplete {
+                            stop_reason: StopReason::EndTurn,
+                            usage: result.total_usage,
+                        })
+                        .await;
+                }
                 return res;
             }
         }
@@ -3215,6 +3256,7 @@ pub async fn run_agent_loop_streaming(
                         llm_fallback_note: llm_fallback_note.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
+                        ainl_runtime_telemetry: None,
                     });
                 }
 
@@ -3504,6 +3546,7 @@ pub async fn run_agent_loop_streaming(
                     llm_fallback_note: llm_fallback_note.clone(),
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
+                    ainl_runtime_telemetry: None,
                 });
             }
             StopReason::ToolUse => {
@@ -3831,6 +3874,7 @@ pub async fn run_agent_loop_streaming(
                             llm_fallback_note: llm_fallback_note.clone(),
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
+                            ainl_runtime_telemetry: None,
                         });
                     }
                 }
@@ -3939,6 +3983,7 @@ pub async fn run_agent_loop_streaming(
                         llm_fallback_note: llm_fallback_note.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
+                        ainl_runtime_telemetry: None,
                     });
                 }
                 let text = response.text();
@@ -4000,6 +4045,7 @@ pub async fn run_agent_loop_streaming(
         llm_fallback_note,
         compression_savings_pct,
         compressed_input,
+        ainl_runtime_telemetry: None,
     })
             }
         )

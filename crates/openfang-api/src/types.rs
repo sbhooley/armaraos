@@ -83,6 +83,9 @@ pub struct MessageResponse {
     /// Tool calls from this turn (HTTP clients without WebSocket tool events).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolTurnRecord>,
+    /// Structured telemetry for ainl-runtime-engine turns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ainl_runtime_telemetry: Option<serde_json::Value>,
 }
 
 /// Request to install a skill from the marketplace.

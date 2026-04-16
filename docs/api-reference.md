@@ -407,6 +407,7 @@ Optional **`attachments`**: same shape as other agent routes (see request types 
 | **`skill_draft_path`** | Filesystem path when a **`[learn]`**-prefixed message produced a skill draft. |
 | **`compression_savings_pct`** / **`compressed_input`** | Ultra Cost-Efficient Mode: same semantics as WebSocket `response` / SSE metadata. Omitted when compression is off or savings are 0. See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md). |
 | **`tools`** | Array of **`ToolTurnRecord`** objects — **one entry per tool execution** in this HTTP turn (name, JSON **`input`** string, **`result`** string, **`is_error`**). Omitted when empty. Lets HTTP-only clients render the same tool cards as the WebSocket path (`tool_start` / `tool_end` / `tool_result`). Rust type: `openfang_types::message::ToolTurnRecord`; runtime accumulates into `AgentLoopResult.tool_turns`. |
+| **`ainl_runtime_telemetry`** | Present when the embedded `ainl-runtime-engine` path handled the turn; includes fields like `turn_status`, `warning_count`, extraction/memory-context counters, patch-dispatch counters, and `steps_executed`. |
 
 **Example** (with tools and compression):
 
@@ -2726,6 +2727,8 @@ Plain text (non-JSON) is also accepted and treated as a message.
 ```
 
 **Compression:** When input compression ran with non-zero savings, **`compression_savings_pct`** and **`compressed_input`** may be included (same semantics as **`POST /api/agents/{id}/message`**). The stream may also emit internal compression stats before LLM tokens for dashboard telemetry.
+
+**AINL telemetry event:** When a turn is handled by `ainl-runtime-engine`, SSE emits **`event: ainl_runtime_telemetry`** with the same structured telemetry shape returned in HTTP `ainl_runtime_telemetry`.
 
 **Error:**
 

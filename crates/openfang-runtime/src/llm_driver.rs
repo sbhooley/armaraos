@@ -152,6 +152,10 @@ pub enum StreamEvent {
         /// The compressed text (for diff UI in dashboard).
         compressed_text: String,
     },
+    /// Structured telemetry emitted when a turn is handled by the embedded ainl-runtime path.
+    AinlRuntimeTelemetry {
+        payload: serde_json::Value,
+    },
 }
 
 /// Trait for LLM drivers.

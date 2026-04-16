@@ -1204,6 +1204,10 @@ fn map_stream_event(event: &StreamEvent, verbose: VerboseLevel) -> Option<serde_
             "phase": phase,
             "detail": detail,
         })),
+        StreamEvent::AinlRuntimeTelemetry { payload } => Some(serde_json::json!({
+            "type": "ainl_runtime_telemetry",
+            "telemetry": payload,
+        })),
         _ => None, // Skip ToolInputDelta, ContentComplete
     }
 }

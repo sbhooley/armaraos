@@ -2843,6 +2843,7 @@ impl OpenFangKernel {
                     llm_fallback_note: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
+                    ainl_runtime_telemetry: None,
                 })
             }
             Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
@@ -2923,6 +2924,7 @@ impl OpenFangKernel {
                     llm_fallback_note: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
+                    ainl_runtime_telemetry: None,
                 })
             }
             Err(e) => Err(KernelError::OpenFang(OpenFangError::Internal(format!(
