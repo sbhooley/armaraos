@@ -111,6 +111,22 @@ pub struct AdaptiveEcoReplayReport {
     pub compression_semantic_p50: Option<f64>,
     pub compression_semantic_p95: Option<f64>,
     pub compression_semantic_mean: Option<f64>,
+    /// Rows where `effective_mode` differs from the previous row for the same agent (within the window).
+    pub effective_mode_flip_turns: u64,
+    /// Sum over agents of `max(0, event_count - 1)` — possible within-agent transitions.
+    pub effective_mode_transition_slots: u64,
+    /// `effective_mode_flip_turns / max(1, effective_mode_transition_slots)`.
+    pub effective_mode_flip_rate: f64,
+    pub adaptive_confidence_samples: u64,
+    pub adaptive_confidence_p50: Option<f64>,
+    pub adaptive_confidence_p95: Option<f64>,
+    pub adaptive_confidence_mean: Option<f64>,
+    /// Count with confidence in \[0.0, 0.33).
+    pub adaptive_confidence_bucket_low: u64,
+    /// Count with confidence in \[0.33, 0.66).
+    pub adaptive_confidence_bucket_mid: u64,
+    /// Count with confidence in \[0.66, 1.0\].
+    pub adaptive_confidence_bucket_high: u64,
 }
 
 /// Heuristic 0.0–1.0 confidence for adaptive policy for this turn (dashboard / receipts).

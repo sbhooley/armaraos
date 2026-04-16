@@ -116,6 +116,16 @@ pub struct CompressionSummary {
     pub estimated_cache_cost_saved_usd: f64,
     pub estimated_compression_cost_saved_usd: f64,
     pub estimated_total_cost_saved_usd: f64,
+    /// Same window as compression rows: adaptive eco summary + full replay report (also on dedicated endpoints).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_eco: Option<CompressionAdaptiveEcoBundle>,
+}
+
+/// Adaptive eco telemetry bundled for `GET /api/usage/compression` (same `window` as parent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionAdaptiveEcoBundle {
+    pub summary: AdaptiveEcoUsageSummary,
+    pub replay: AdaptiveEcoReplayReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,6 +431,83 @@ impl UsageStore {
             0.0
         };
 
+        let effective_mode_flip_turns: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM (
+                        SELECT
+                            LAG(effective_mode) OVER (
+                                PARTITION BY agent_id ORDER BY timestamp
+                            ) AS prev_mode,
+                            effective_mode
+                        FROM adaptive_eco_events
+                        WHERE {time_filter}
+                    ) WHERE prev_mode IS NOT NULL AND prev_mode != effective_mode"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let effective_mode_transition_slots: u64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COALESCE(SUM(cnt - 1), 0) FROM (
+                        SELECT COUNT(*) AS cnt FROM adaptive_eco_events
+                        WHERE {time_filter}
+                        GROUP BY agent_id
+                    )"
+                ),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+
+        let effective_mode_flip_rate = if effective_mode_transition_slots > 0 {
+            effective_mode_flip_turns as f64 / effective_mode_transition_slots as f64
+        } else {
+            0.0
+        };
+
+        let mut stmt_conf = conn
+            .prepare(&format!(
+                "SELECT adaptive_confidence FROM adaptive_eco_events
+                 WHERE {time_filter} AND adaptive_confidence IS NOT NULL
+                 ORDER BY adaptive_confidence"
+            ))
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let confidences: Vec<f64> = stmt_conf
+            .query_map([], |row| row.get::<_, f64>(0))
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let nc = confidences.len();
+        let adaptive_confidence_samples = nc as u64;
+        let (adaptive_confidence_p50, adaptive_confidence_p95, adaptive_confidence_mean) =
+            if nc == 0 {
+                (None, None, None)
+            } else {
+                let mean = Some(confidences.iter().sum::<f64>() / nc as f64);
+                let p50 = Some(confidences[nc / 2]);
+                let p95_idx = (((nc.saturating_sub(1)) as f64 * 0.95).round() as usize).min(nc - 1);
+                let p95 = Some(confidences[p95_idx]);
+                (p50, p95, mean)
+            };
+
+        let mut adaptive_confidence_bucket_low: u64 = 0;
+        let mut adaptive_confidence_bucket_mid: u64 = 0;
+        let mut adaptive_confidence_bucket_high: u64 = 0;
+        for v in &confidences {
+            if *v < 0.33 {
+                adaptive_confidence_bucket_low += 1;
+            } else if *v < 0.66 {
+                adaptive_confidence_bucket_mid += 1;
+            } else {
+                adaptive_confidence_bucket_high += 1;
+            }
+        }
+
         Ok(AdaptiveEcoReplayReport {
             window: window_str,
             adaptive_eco_events,
@@ -432,6 +519,16 @@ impl UsageStore {
             compression_semantic_p50,
             compression_semantic_p95,
             compression_semantic_mean,
+            effective_mode_flip_turns,
+            effective_mode_transition_slots,
+            effective_mode_flip_rate,
+            adaptive_confidence_samples,
+            adaptive_confidence_p50,
+            adaptive_confidence_p95,
+            adaptive_confidence_mean,
+            adaptive_confidence_bucket_low,
+            adaptive_confidence_bucket_mid,
+            adaptive_confidence_bucket_high,
         })
     }
 
@@ -945,6 +1042,14 @@ impl UsageStore {
         let estimated_total_cost_saved_usd =
             estimated_cache_cost_saved_usd + estimated_compression_cost_saved_usd;
 
+        let adaptive_eco = match (
+            self.query_adaptive_eco_summary(window_days),
+            self.query_adaptive_eco_replay_report(window_days),
+        ) {
+            (Ok(summary), Ok(replay)) => Some(CompressionAdaptiveEcoBundle { summary, replay }),
+            _ => None,
+        };
+
         Ok(CompressionSummary {
             window: window_days
                 .map(|d| format!("{d}d"))
@@ -957,6 +1062,7 @@ impl UsageStore {
             estimated_cache_cost_saved_usd,
             estimated_compression_cost_saved_usd,
             estimated_total_cost_saved_usd,
+            adaptive_eco,
         })
     }
 }
@@ -1276,6 +1382,10 @@ mod tests {
         assert!(summary.estimated_cache_cost_saved_usd > 0.0);
         assert!(summary.estimated_compression_cost_saved_usd > 0.0);
         assert!(summary.estimated_total_cost_saved_usd > 0.0);
+        assert!(summary.adaptive_eco.is_some());
+        let bundle = summary.adaptive_eco.as_ref().unwrap();
+        assert_eq!(bundle.summary.window, "all");
+        assert_eq!(bundle.replay.window, "all");
     }
 
     #[test]
@@ -1306,5 +1416,48 @@ mod tests {
         assert_eq!(s.events, 1);
         assert_eq!(s.shadow_mismatch_turns, 1);
         assert_eq!(s.hysteresis_blocks, 1);
+    }
+
+    #[test]
+    fn test_adaptive_eco_replay_mode_flips_and_confidence_distribution() {
+        use std::thread;
+        use std::time::Duration;
+
+        let store = setup();
+        let aid = AgentId::new();
+        let mk = |effective_mode: &str, conf: f32| AdaptiveEcoUsageRecord {
+            agent_id: aid,
+            effective_mode: effective_mode.to_string(),
+            recommended_mode: "balanced".to_string(),
+            base_mode_before_circuit: None,
+            circuit_breaker_tripped: false,
+            hysteresis_blocked: false,
+            shadow_only: true,
+            enforce: false,
+            provider: "openrouter".to_string(),
+            model: "x".to_string(),
+            cache_capability: "routed".to_string(),
+            input_price_per_million: None,
+            reason_codes: vec![],
+            semantic_preservation_score: None,
+            adaptive_confidence: Some(conf),
+            counterfactual: None,
+        };
+
+        store.record_adaptive_eco(&mk("balanced", 0.10)).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        store.record_adaptive_eco(&mk("aggressive", 0.50)).unwrap();
+        thread::sleep(Duration::from_millis(20));
+        store.record_adaptive_eco(&mk("aggressive", 0.80)).unwrap();
+
+        let r = store.query_adaptive_eco_replay_report(None).unwrap();
+        assert_eq!(r.adaptive_eco_events, 3);
+        assert_eq!(r.effective_mode_flip_turns, 1);
+        assert_eq!(r.effective_mode_transition_slots, 2);
+        assert!((r.effective_mode_flip_rate - 0.5).abs() < 1e-9);
+        assert_eq!(r.adaptive_confidence_samples, 3);
+        assert_eq!(r.adaptive_confidence_bucket_low, 1);
+        assert_eq!(r.adaptive_confidence_bucket_mid, 1);
+        assert_eq!(r.adaptive_confidence_bucket_high, 1);
     }
 }

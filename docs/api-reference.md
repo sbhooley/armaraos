@@ -2126,7 +2126,7 @@ High-level totals across all agents (input/output tokens, estimated USD, call co
 
 ### GET /api/usage/compression
 
-Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Used by the **Settings → Budget → Ultra Cost-Efficient Mode** card.
+Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Used by the **Settings → Budget → Ultra Cost-Efficient Mode** card. When adaptive eco telemetry is available, the same response may include an **`adaptive_eco`** object (summary + full replay report for that **`window`**) so clients do not need a second round-trip.
 
 **Query params**:
 
@@ -2139,6 +2139,37 @@ Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Use
 ```json
 {
   "window": "7d",
+  "adaptive_eco": {
+    "summary": {
+      "window": "7d",
+      "events": 120,
+      "shadow_mismatch_turns": 15,
+      "circuit_breaker_trips": 3,
+      "hysteresis_blocks": 8
+    },
+    "replay": {
+      "window": "7d",
+      "adaptive_eco_events": 120,
+      "shadow_mismatch_turns": 15,
+      "shadow_mismatch_rate": 0.125,
+      "circuit_breaker_trips": 3,
+      "hysteresis_blocks": 8,
+      "eco_compression_turns": 100,
+      "compression_semantic_p50": 0.91,
+      "compression_semantic_p95": 0.97,
+      "compression_semantic_mean": 0.92,
+      "effective_mode_flip_turns": 12,
+      "effective_mode_transition_slots": 80,
+      "effective_mode_flip_rate": 0.15,
+      "adaptive_confidence_samples": 118,
+      "adaptive_confidence_p50": 0.72,
+      "adaptive_confidence_p95": 0.88,
+      "adaptive_confidence_mean": 0.74,
+      "adaptive_confidence_bucket_low": 10,
+      "adaptive_confidence_bucket_mid": 40,
+      "adaptive_confidence_bucket_high": 68
+    }
+  },
   "modes": {
     "balanced": {
       "turns": 84,
@@ -2179,9 +2210,17 @@ Durable compression analytics (SQLite-backed) grouped by eco mode and agent. Use
         }
       }
     }
-  ]
+  ],
+  "estimated_compression_tokens_saved": 8333,
+  "cache_read_input_tokens": 12000,
+  "estimated_total_input_tokens_saved": 20333,
+  "estimated_cache_cost_saved_usd": 0.11,
+  "estimated_compression_cost_saved_usd": 0.25,
+  "estimated_total_cost_saved_usd": 0.36
 }
 ```
+
+Omit **`adaptive_eco`** only if the usage store failed to assemble the bundle (the error fallback may set **`adaptive_eco`** to **`null`**).
 
 ### GET /api/usage/adaptive-eco
 
@@ -2202,6 +2241,43 @@ Durable **adaptive eco** telemetry (SQLite `adaptive_eco_events`): counts shadow
   "shadow_mismatch_turns": 15,
   "circuit_breaker_trips": 3,
   "hysteresis_blocks": 8
+}
+```
+
+### GET /api/usage/adaptive-eco/replay
+
+Pre-enforcement **replay report** for the same window as **`GET /api/usage/compression`**: shadow mismatch rate, semantic percentiles on durable compression rows, **effective mode flip** rate (within-agent `effective_mode` changes vs eligible transitions), and **adaptive confidence** distribution (p50 / p95 / mean plus low/mid/high bucket counts). Same fields are nested under **`adaptive_eco.replay`** on **`GET /api/usage/compression`** when present.
+
+**Query params**:
+
+| Param | Description |
+|-------|-------------|
+| `window` | Optional: `7d`, `30d`, or `all` (omit for all time). |
+
+**Response** `200 OK` (shape matches **`adaptive_eco.replay`** in the compression response):
+
+```json
+{
+  "window": "7d",
+  "adaptive_eco_events": 120,
+  "shadow_mismatch_turns": 15,
+  "shadow_mismatch_rate": 0.125,
+  "circuit_breaker_trips": 3,
+  "hysteresis_blocks": 8,
+  "eco_compression_turns": 100,
+  "compression_semantic_p50": 0.91,
+  "compression_semantic_p95": 0.97,
+  "compression_semantic_mean": 0.92,
+  "effective_mode_flip_turns": 12,
+  "effective_mode_transition_slots": 80,
+  "effective_mode_flip_rate": 0.15,
+  "adaptive_confidence_samples": 118,
+  "adaptive_confidence_p50": 0.72,
+  "adaptive_confidence_p95": 0.88,
+  "adaptive_confidence_mean": 0.74,
+  "adaptive_confidence_bucket_low": 10,
+  "adaptive_confidence_bucket_mid": 40,
+  "adaptive_confidence_bucket_high": 68
 }
 ```
 

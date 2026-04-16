@@ -218,6 +218,10 @@ async fn start_test_server_with_provider_patch(
             axum::routing::get(routes::budget_status).put(routes::update_budget),
         )
         .route(
+            "/api/usage/compression",
+            axum::routing::get(routes::usage_compression),
+        )
+        .route(
             "/api/usage/adaptive-eco",
             axum::routing::get(routes::usage_adaptive_eco),
         )
@@ -2328,4 +2332,30 @@ async fn test_usage_adaptive_eco_and_replay_endpoints() {
     assert!(rep.get("adaptive_eco_events").is_some());
     assert!(rep.get("shadow_mismatch_rate").is_some());
     assert!(rep.get("eco_compression_turns").is_some());
+    assert!(
+        rep.get("effective_mode_flip_rate").is_some(),
+        "replay should include mode flip rate: {rep}"
+    );
+    assert!(
+        rep.get("adaptive_confidence_bucket_low").is_some(),
+        "replay should include confidence buckets: {rep}"
+    );
+
+    let comp = client
+        .get(format!(
+            "{}/api/usage/compression?window=7d",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(comp.status(), 200);
+    let comp_body: serde_json::Value = comp.json().await.unwrap();
+    assert!(
+        comp_body.get("adaptive_eco").is_some(),
+        "compression response should embed adaptive_eco bundle: {comp_body}"
+    );
+    let bundle = comp_body.get("adaptive_eco").unwrap();
+    assert!(bundle.get("summary").and_then(|s| s.get("events")).is_some());
+    assert!(bundle.get("replay").and_then(|r| r.get("shadow_mismatch_rate")).is_some());
 }

@@ -109,8 +109,11 @@ Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard 
 
 **Aggregates (dashboards / audits):**
 
+- **`GET /api/usage/compression`** — durable compression rollups; may embed **`adaptive_eco: { summary, replay }`** for the same **`?window=`** so adaptive outcomes are available without extra requests (see [api-reference.md](api-reference.md#get-apiusagecompression)).
 - **`GET /api/usage/adaptive-eco`** — counts shadow mismatches, circuit-breaker trips, hysteresis blocks (optional **`?window=7d`** or **`all`**).
-- **`GET /api/usage/adaptive-eco/replay`** — same window parameter; adds **shadow mismatch rate**, **eco compression turn count**, and **semantic score p50 / p95 / mean** from durable `eco_compression_events`.
+- **`GET /api/usage/adaptive-eco/replay`** — same window parameter; **shadow mismatch rate**, **eco compression turn count**, **semantic p50 / p95 / mean** on durable `eco_compression_events`, plus **effective mode flip** rate and **adaptive confidence** p50/p95/mean and bucket counts.
+
+Formal Milestone 1 recovery checklist (pre–Milestone 2): [MILESTONE1_PREFLIGHT_RECOVERY_CHECKLIST.md](MILESTONE1_PREFLIGHT_RECOVERY_CHECKLIST.md).
 
 ### Multi-provider prompt caching (context)
 

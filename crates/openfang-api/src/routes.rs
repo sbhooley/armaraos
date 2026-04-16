@@ -7761,7 +7761,8 @@ pub async fn usage_compression(
             "estimated_total_input_tokens_saved": 0,
             "estimated_cache_cost_saved_usd": 0.0,
             "estimated_compression_cost_saved_usd": 0.0,
-            "estimated_total_cost_saved_usd": 0.0
+            "estimated_total_cost_saved_usd": 0.0,
+            "adaptive_eco": null
         })),
     }
 }
@@ -7826,7 +7827,17 @@ pub async fn usage_adaptive_eco_replay(
             "eco_compression_turns": 0,
             "compression_semantic_p50": null,
             "compression_semantic_p95": null,
-            "compression_semantic_mean": null
+            "compression_semantic_mean": null,
+            "effective_mode_flip_turns": 0,
+            "effective_mode_transition_slots": 0,
+            "effective_mode_flip_rate": 0.0,
+            "adaptive_confidence_samples": 0,
+            "adaptive_confidence_p50": null,
+            "adaptive_confidence_p95": null,
+            "adaptive_confidence_mean": null,
+            "adaptive_confidence_bucket_low": 0,
+            "adaptive_confidence_bucket_mid": 0,
+            "adaptive_confidence_bucket_high": 0
         })),
     }
 }
