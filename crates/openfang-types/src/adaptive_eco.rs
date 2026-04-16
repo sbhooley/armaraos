@@ -42,6 +42,21 @@ pub struct AdaptiveEcoConfig {
     /// Minimum wall time between enforced mode changes per billing agent (0 = disabled).
     #[serde(default)]
     pub min_secs_between_enforced_changes: u64,
+    /// Assumed provider **prompt cache** lifetime (e.g. Anthropic/OpenAI on the order of minutes).
+    /// Used with [`Self::cache_ttl_dampens_raises`] to avoid rapid compression **tier raises** while
+    /// cached prefixes may still be stabilizing (reduces oscillation with cache-capable providers).
+    #[serde(default = "default_provider_prompt_cache_ttl_secs")]
+    pub provider_prompt_cache_ttl_secs: u64,
+    /// When true and [`Self::enforce`] is on, block raising `efficient_mode` to a higher tier until
+    /// [`Self::provider_prompt_cache_ttl_secs`] has elapsed since the last raise, for providers whose
+    /// [`AdaptiveEcoTurnSnapshot::cache_capability`] indicates prompt caching (`explicit_prompt_cache`,
+    /// `implicit_automatic`). Step-downs are not blocked by this rule.
+    #[serde(default = "default_true")]
+    pub cache_ttl_dampens_raises: bool,
+    /// Extra samples appended to the circuit-breaker window when the provider has prompt-cache support,
+    /// so short oscillations in semantic scores are less likely to trip the breaker during a cache TTL.
+    #[serde(default = "default_circuit_breaker_extra_window_when_prompt_cache")]
+    pub circuit_breaker_extra_window_when_prompt_cache: u32,
 }
 
 fn default_enforce_min_consecutive_turns() -> u32 {
@@ -60,6 +75,14 @@ fn default_circuit_breaker_min_below_floor() -> u32 {
     3
 }
 
+fn default_provider_prompt_cache_ttl_secs() -> u64 {
+    300
+}
+
+fn default_circuit_breaker_extra_window_when_prompt_cache() -> u32 {
+    6
+}
+
 impl Default for AdaptiveEcoConfig {
     fn default() -> Self {
         Self {
@@ -73,6 +96,10 @@ impl Default for AdaptiveEcoConfig {
             circuit_breaker_min_below_floor: default_circuit_breaker_min_below_floor(),
             post_circuit_cooldown_secs: 0,
             min_secs_between_enforced_changes: 0,
+            provider_prompt_cache_ttl_secs: default_provider_prompt_cache_ttl_secs(),
+            cache_ttl_dampens_raises: default_true(),
+            circuit_breaker_extra_window_when_prompt_cache:
+                default_circuit_breaker_extra_window_when_prompt_cache(),
         }
     }
 }

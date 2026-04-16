@@ -24,7 +24,9 @@ pub fn normalize_efficient_mode(raw: &str) -> &'static str {
     }
 }
 
-fn cache_capability_label(provider: &str) -> &'static str {
+/// Provider → durable `cache_capability` label (used for policy, telemetry, and TTL dampening).
+#[must_use]
+pub fn cache_capability_label(provider: &str) -> &'static str {
     let p = provider.trim().to_ascii_lowercase();
     match p.as_str() {
         "anthropic" => "explicit_prompt_cache",
@@ -33,6 +35,25 @@ fn cache_capability_label(provider: &str) -> &'static str {
         "groq" | "ollama" | "nvidia" | "lmstudio" | "vllm" => "none_local",
         "openrouter" => "routed_provider_dependent",
         _ => "unknown",
+    }
+}
+
+/// True when the snapshot label indicates vendor prompt caching that shares a TTL window with billing.
+#[must_use]
+pub fn prompt_cache_capability_label(label: &str) -> bool {
+    matches!(
+        label.trim(),
+        "explicit_prompt_cache" | "implicit_automatic" | "routed_provider_dependent"
+    )
+}
+
+/// Relative compression aggressiveness for policy comparisons (higher = more compression).
+#[must_use]
+pub fn compression_tier_rank(mode: &str) -> u8 {
+    match normalize_efficient_mode(mode) {
+        "aggressive" => 2,
+        "balanced" => 1,
+        _ => 0,
     }
 }
 
@@ -256,6 +277,15 @@ mod tests {
         assert_eq!(m2, "off");
         assert!(!b2);
         assert!(map.is_empty());
+    }
+
+    #[test]
+    fn tier_rank_and_cache_labels_sanity() {
+        assert_eq!(compression_tier_rank("off"), 0);
+        assert_eq!(compression_tier_rank("balanced"), 1);
+        assert_eq!(compression_tier_rank("aggressive"), 2);
+        assert!(prompt_cache_capability_label("explicit_prompt_cache"));
+        assert!(!prompt_cache_capability_label("none_local"));
     }
 
     #[test]

@@ -403,6 +403,10 @@ pub struct OpenFangKernel {
     /// Per billing agent: adaptive eco enforcement hysteresis (consecutive recommendation streak).
     adaptive_eco_hysteresis:
         dashmap::DashMap<AgentId, openfang_types::adaptive_eco::AdaptiveEcoHysteresisState>,
+    /// Last time an **enforced** `efficient_mode` differed from post-circuit baseline (rate limit).
+    adaptive_eco_last_enforced_switch_at: dashmap::DashMap<AgentId, std::time::Instant>,
+    /// Last time compression tier **increased** under enforcement (prompt-cache TTL dampening).
+    adaptive_eco_last_raise_at: dashmap::DashMap<AgentId, std::time::Instant>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
     pub heartbeat_failure_gate: Arc<crate::heartbeat::FailureNotifyGate>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
@@ -762,9 +766,11 @@ impl OpenFangKernel {
         llm_billing_id: AgentId,
     ) {
         use openfang_runtime::eco_mode_resolver::{
-            circuit_breaker_adjust_base, hysteresis_resolve_adaptive_effective,
+            cache_capability_label, circuit_breaker_adjust_base, compression_tier_rank,
+            hysteresis_resolve_adaptive_effective, prompt_cache_capability_label,
             resolve_adaptive_eco_turn,
         };
+        use std::time::Duration;
         manifest
             .metadata
             .entry("efficient_mode".to_string())
@@ -790,8 +796,20 @@ impl OpenFangKernel {
 
         let mut mode_after_circuit = base_mode.clone();
         let mut circuit_tripped = false;
+        let cap_label = cache_capability_label(manifest.model.provider.trim());
+        let extra_cb_window =
+            if self.config.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache > 0
+                && prompt_cache_capability_label(cap_label)
+            {
+                self.config
+                    .adaptive_eco
+                    .circuit_breaker_extra_window_when_prompt_cache as usize
+            } else {
+                0
+            };
         if self.config.adaptive_eco.circuit_breaker_enabled {
-            let w = self.config.adaptive_eco.circuit_breaker_window.max(1) as usize;
+            let w = (self.config.adaptive_eco.circuit_breaker_window.max(1) as usize)
+                .saturating_add(extra_cb_window);
             let scores = self
                 .memory
                 .usage()
@@ -830,19 +848,64 @@ impl OpenFangKernel {
 
         if self.config.adaptive_eco.enforce {
             let min_n = self.config.adaptive_eco.enforce_min_consecutive_turns;
-            let (eff, blocked) = hysteresis_resolve_adaptive_effective(
+            let (mut eff, mut blocked) = hysteresis_resolve_adaptive_effective(
                 &self.adaptive_eco_hysteresis,
                 llm_billing_id,
                 &mode_after_circuit,
                 &snap.recommended_mode,
                 min_n,
             );
+            let tier_base = compression_tier_rank(&mode_after_circuit);
+            let now = std::time::Instant::now();
+
+            let min_gap_secs = self.config.adaptive_eco.min_secs_between_enforced_changes;
+            if min_gap_secs > 0 && eff != mode_after_circuit {
+                if let Some(last) = self
+                    .adaptive_eco_last_enforced_switch_at
+                    .get(&llm_billing_id)
+                {
+                    if now.duration_since(*last) < Duration::from_secs(min_gap_secs) {
+                        eff.clone_from(&mode_after_circuit);
+                        blocked = true;
+                        snap.reason_codes
+                            .push("policy:min_secs_between_enforced_changes".to_string());
+                    }
+                }
+            }
+
+            if self.config.adaptive_eco.cache_ttl_dampens_raises
+                && prompt_cache_capability_label(snap.cache_capability.as_str())
+                && compression_tier_rank(&eff) > tier_base
+            {
+                let ttl = Duration::from_secs(
+                    self.config
+                        .adaptive_eco
+                        .provider_prompt_cache_ttl_secs
+                        .max(1),
+                );
+                if let Some(last) = self.adaptive_eco_last_raise_at.get(&llm_billing_id) {
+                    if now.duration_since(*last) < ttl {
+                        eff.clone_from(&mode_after_circuit);
+                        blocked = true;
+                        snap.reason_codes.push("cache_ttl:dampen_raise".to_string());
+                    }
+                }
+            }
+
             snap.effective_mode = eff.clone();
             snap.hysteresis_blocked = blocked;
             manifest.metadata.insert(
                 "efficient_mode".to_string(),
-                serde_json::Value::String(eff),
+                serde_json::Value::String(eff.clone()),
             );
+
+            if eff != mode_after_circuit {
+                self.adaptive_eco_last_enforced_switch_at
+                    .insert(llm_billing_id, now);
+            }
+            if compression_tier_rank(&eff) > tier_base {
+                self.adaptive_eco_last_raise_at.insert(llm_billing_id, now);
+            }
         } else {
             snap.effective_mode = mode_after_circuit.clone();
             snap.hysteresis_blocked = false;
@@ -1531,6 +1594,8 @@ impl OpenFangKernel {
             agent_pool_workers: dashmap::DashMap::new(),
             agent_loop_phases: dashmap::DashMap::new(),
             adaptive_eco_hysteresis: dashmap::DashMap::new(),
+            adaptive_eco_last_enforced_switch_at: dashmap::DashMap::new(),
+            adaptive_eco_last_raise_at: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
             ),

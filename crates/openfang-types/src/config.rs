@@ -4069,6 +4069,14 @@ impl KernelConfig {
         if self.adaptive_eco.min_secs_between_enforced_changes > 86_400 * 30 {
             self.adaptive_eco.min_secs_between_enforced_changes = 86_400 * 30;
         }
+        if self.adaptive_eco.provider_prompt_cache_ttl_secs == 0 {
+            self.adaptive_eco.provider_prompt_cache_ttl_secs = 300;
+        } else if self.adaptive_eco.provider_prompt_cache_ttl_secs > 86_400 * 7 {
+            self.adaptive_eco.provider_prompt_cache_ttl_secs = 86_400 * 7;
+        }
+        if self.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache > 256 {
+            self.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache = 256;
+        }
     }
 }
 

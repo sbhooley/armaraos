@@ -36,5 +36,6 @@ This document is the **formal deliverable** for the “strict recovery pass” b
 - [x] Durable schema + query path verified in code.
 - [x] API response shape for compression documented (`docs/api-reference.md`) and includes optional `adaptive_eco` bundle.
 - [x] Automated tests cover usage store + adaptive replay extensions (`openfang-memory` tests; `api_integration_test` for usage routes).
+- [x] Milestone 2 gaps closed: **prompt-cache TTL dampening** + extra circuit window (`kernel.rs` + `[adaptive_eco]` fields) and **`cargo test -p openfang-runtime --test adaptive_eco_eval_harness`** (see `docs/operations/ADAPTIVE_ECO_EVAL_HARNESS.md`).
 
 For rollout, treat this checklist as **complete** for Milestone 1 integrity at the time above; re-run the same table after any refactor of `usage.rs`, `routes.rs` usage handlers, or compression migrations.

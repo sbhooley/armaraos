@@ -68,9 +68,15 @@ semantic_floor = 0.82
 circuit_breaker_enabled = true
 circuit_breaker_window = 12
 circuit_breaker_min_below_floor = 3
+# Optional rate limits (0 = disabled)
+min_secs_between_enforced_changes = 0
+# Prompt-cache TTL awareness (reduces oscillation with Anthropic/OpenAI-style caching)
+provider_prompt_cache_ttl_secs = 300
+cache_ttl_dampens_raises = true
+circuit_breaker_extra_window_when_prompt_cache = 6
 ```
 
-**Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns` / circuit breaker fields. See [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
+**Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns`, **`min_secs_between_enforced_changes`**, circuit breaker fields, and (if needed) **`provider_prompt_cache_ttl_secs`** / **`cache_ttl_dampens_raises`**. Run the **`cargo test -p openfang-runtime adaptive_eco_eval`** harness before broad enforcement; see [operations/ADAPTIVE_ECO_EVAL_HARNESS.md](operations/ADAPTIVE_ECO_EVAL_HARNESS.md). API reference: [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
 
 Hot-reload: use **`POST /api/config/set`** with `path: "efficient_mode"` (full contract: [api-reference.md](api-reference.md#post-apiconfigset)) or edit the file and **`POST /api/config/reload`** where applicable.
 
