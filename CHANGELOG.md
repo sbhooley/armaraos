@@ -7,24 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Reserve for **0.7.6+** after **`v0.7.5`** is tagged; until then, all shipped work belongs under **[0.7.5]** below.
+Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries below **[0.7.5]** describe the **0.7.5** release candidate on `main` as of the dated section header.
 
-## [0.7.5] - TBD
+## [0.7.5] - 2026-04-17
 
-Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). Set the date when you tag.
+Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). This changelog section consolidates graph-memory GA work, control-plane UX, validation scripts, and release documentation prepared for the **0.7.5** tag.
 
 ### Added
 
 - **Adaptive eco (usage + compression):** Durable metering events, circuit breaker + hysteresis, usage/replay APIs, counterfactual receipts + confidence, chat response meta + tooltips, **Settings → Budget** adaptive-eco aggregates, replay distributions + **`adaptive_eco`** bundle in usage exports, prompt-cache TTL dampening + eval harness, **live policy reload** (no daemon restart for policy tweaks), staging runbook + **`scripts/verify-adaptive-eco-usage.sh`**. Wired to **`ainl-compression`** / eco telemetry and dashboard surfaces.
 - **`ainl-compression` + eco shadow path:** Shared compression crate, eco telemetry plumbing, and adaptive-eco shadow mode leading into the features above.
 - **MCP readiness:** Framework for **`GET /api/mcp/servers`** **`readiness`** (version + checks), dashboard **Get started** MCP card + **`openfang doctor`** output; daemon base URL exposed for AINL programs; related tool fixes.
-- **Graph memory (dashboard + API):** Explainability and stack updates (**API + docs**), **live `GraphMemoryWrite` events** after **ainl-runtime** prelude turns (secondary writer notification + timeline sync), production-ready graph-memory operations, **Ctrl/Cmd + wheel** zoom vs page scroll on the graph view.
+- **Graph memory (dashboard + API):** Explainability and stack updates (**API + docs**), kernel notify path for graph-memory write events (dashboard timeline), production-ready graph-memory operations, **Ctrl/Cmd + wheel** zoom vs page scroll on the graph view.
+- **Graph memory context (prompt injection):** **`openfang-runtime`** **`graph_memory_context`** — bounded blocks (**RecentAttempts**, **KnownFacts**, **KnownConflicts**, **SuggestedProcedure**), **`MemoryContextPolicy`** (global/per-block toggles, provenance + contradiction **GA gate** fields, budgets, rollout/A-B hooks), task-scoped episodic recall via **`ainl-memory`** **`recall_task_scoped_episodes`**, **`why_selected`** selection diagnostics (structured debug + latest snapshot exposed on **`GET /api/status`** as **`graph_memory_selection_debug`**).
+- **Memory control plane:** **`GET`/`PUT /api/graph-memory/controls`** — per-agent **`remember`**, **`forget`**, **`inspect`**, **`clear_scope`**, **`temporary_mode`**, shared-memory toggle, and per-block injection flags (**`include_episodic_hints`**, **`include_semantic_facts`**, **`include_conflicts`**, **`include_procedural_hints`**); **Settings** + **Graph Memory** UI; unit tests for forget/clear-scope immediate recall cessation.
+- **Python inbox + contract metrics:** Inbox schema/version validation, quarantine for unsupported payloads, scope-tag filtering; **`graph_memory_contract_metrics`** on **`GET /api/status`** (imported / quarantined / invalid-scope counters); backward-compat and drift tests in **`ainl_inbox_reader`**.
+- **Dashboard — graph memory UX:** **Overview** card (injected lines, truncations, provenance + contradiction gates, inbox quarantines); **Chat** telemetry strip **memory on turn** indicator; **Graph Memory** contradiction safety panel, procedural hint effectiveness summary, **why selected** diagnostics drawer.
+- **Background semantic consolidation:** Rate-limited dedupe pass in **`graph_memory_writer`** (post-turn, export/import safe deletes).
+- **Graph memory validation scripts:** **`scripts/check-memory-ga-gates.sh`** — **`--offline`** (targeted **`cargo test`**) and **`--base <url>`** (live **`/api/status`** + controls shape); **`scripts/check-graph-memory-timeline-diagnostics.sh`** for kernel/event timeline checks; **`scripts/verify-dashboard-smoke.sh`** asserts **`graph_memory_context_metrics`** provenance/contradiction gate fields.
+- **CI:** Merge-gating **`memory-ga-gates`** job runs **`check-memory-ga-gates.sh --offline`**.
+- **Release documentation:** **[docs/ga-signoff-checklist.md](docs/ga-signoff-checklist.md)** — step-by-step human sign-off (product, runtime, security/privacy, data/ML) with evidence and templates; linked from **[docs/RELEASING.md](docs/RELEASING.md)**, **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)**, **[docs/graph-memory.md](docs/graph-memory.md)**, **[docs/README.md](docs/README.md)**.
 - **AINL bridge hardening:** Observability, typed graph validation, runtime telemetry on **SSE** / **`POST …/message`** paths, test-surface and boundary-error consistency, runtime kill-switch + **`ui-prefs`** / status smoke tests.
 - **Dashboard:** **Notification center** work (durable rows, approvals refresh hooks, **daemon CPU + memory** next to the bell where applicable), **Orchestration traces** moved under **Graph Memory** with traces page polish, **durable usage + eco prefs**, workspace pill / default tool allowlist merge behavior.
 - **Branding:** Refreshed ArmaraOS logos, favicon, and desktop app icons.
-- **CI / release / cross-repo:** **`scripts/check-version-consistency.sh`** (workspace + Tauri + **`README`** + **`docs/api-reference.md`** samples) in **`.github/workflows/ci.yml`**; **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (pre-tag checklist, **`verify-dashboard-smoke.sh`**, updater notes, **0.7.5 risk validation**); **[docs/RELEASING.md](docs/RELEASING.md)** version-sample policy; **`.github/pull_request_template.md`** optional **Release PR** checklist; integration tests served via **`build_router`** + merge-gating **dashboard-smoke** CI job; **CONTRIBUTING** / **CLAUDE** integration-test table; **ainativelangweb** **`config/site.ts`** → **`latestArmaraosReleaseTag`: `v0.7.5`** when **`public/downloads/armaraos/latest.json`** is absent.
+- **CI / release / cross-repo:** **`scripts/check-version-consistency.sh`** (workspace + Tauri + **`README`** + **`docs/api-reference.md`** samples) in **`.github/workflows/ci.yml`**; **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (pre-tag checklist, **`verify-dashboard-smoke.sh`**, memory GA live checks, human sign-off pointer, updater notes, **0.7.5 risk validation**); **[docs/RELEASING.md](docs/RELEASING.md)** version-sample policy; **`.github/pull_request_template.md`** optional **Release PR** checklist; integration tests served via **`build_router`** + merge-gating **dashboard-smoke** CI job; **CONTRIBUTING** / **CLAUDE** integration-test table; **ainativelangweb** **`config/site.ts`** → **`latestArmaraosReleaseTag`: `v0.7.5`** when **`public/downloads/armaraos/latest.json`** is absent.
 - **Embedded AINL wheel:** **`AINL_PYPI_VERSION`** **`1.7.0`** in **`.github/workflows/ci.yml`** / **`release.yml`**, **`xtask bundle-ainl-wheel`** default, and **`programs/**/*.ainl`** validation — matches **PyPI** / **ainativelang.com** **`latestAinlRelease`** (**1.7.0**).
-- **Graph memory SSE diagnostics:** **`graph_memory_context_metrics`** adds **`graph_memory_kernel_notify_ok_total`** / **`graph_memory_kernel_notify_err_total`** (kernel **`notify_graph_memory_write`** outcomes for the dashboard **`GraphMemoryWrite`** path); **`scripts/check-graph-memory-timeline-diagnostics.sh`**; live **`scripts/check-memory-ga-gates.sh`** requires the new metric keys.
 
 ### Changed
 
@@ -46,16 +53,20 @@ Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump
 
 - **`CONTRIBUTING.md`**, **`CLAUDE.md`** — **`api_boundary_contracts_test`**, **`sse_stream_auth`**, WS limits in **`openfang-api`**; test counts aligned with **`cargo test --workspace`**.
 - **`docs/api-reference.md`** — SSE auth parity; **`version` / `tag_name` / release** samples for **0.7.5**; **`GET /api/agents`** (**`workspace`** / **`workspace_rel_home`**); **`GET /api/usage`** + **`/usage/summary`** shapes; **`GET /api/agents/{id}/tools`** default merged allowlist; **`/api/ui-prefs`** **`agent_eco_modes`**; MCP readiness + orchestration cross-links as applicable.
-- **`docs/mcp-a2a.md`**, **`docs/graph-memory.md`**, **`docs/dashboard-*.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/ainl-showcases.md`**, **`docs/launch-roadmap.md`**, **`docs/release-desktop.md`**, **`docs/README.md`** — adaptive eco, graph-memory live timeline, dashboard QA (**eco 7b**, Get started, Home folder preview, **Open workspace**), MCP primary flow on overview, integration-test pointers.
-- **`docs/dashboard-testing.md`** — Graph Memory **`GET /api/events/stream`** verification, **`/api/status`** notify + policy counters, **`check-graph-memory-timeline-diagnostics.sh`**.
+- **`docs/mcp-a2a.md`**, **`docs/graph-memory.md`**, **`docs/graph-memory-sync.md`**, **`docs/dashboard-*.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/ainl-showcases.md`**, **`docs/launch-roadmap.md`**, **`docs/release-desktop.md`**, **`docs/README.md`** — adaptive eco; graph-memory prompt blocks, GA gate metrics, control-plane endpoints, inbox contract enforcement; graph-memory live timeline; dashboard QA (**eco 7b**, Get started, Home folder preview, **Open workspace**); MCP primary flow on overview; integration-test pointers.
+- **`docs/dashboard-testing.md`** — Graph Memory **`GET /api/events/stream`** verification; **`/api/status`** graph memory metrics, provenance + contradiction gates, per-block kill switches, rollback smoke; **`check-graph-memory-timeline-diagnostics.sh`**; **`check-memory-ga-gates.sh`** (offline + live).
+- **`docs/release-candidate-validation.md`** — automated checks including **`check-memory-ga-gates.sh`**; daemon smoke with configurable **`api_listen`** base URL; pointer to **[ga-signoff-checklist.md](docs/ga-signoff-checklist.md)** for human GA approvals.
+- **`docs/ga-signoff-checklist.md`** — product/runtime/security/data owner sign-off steps, evidence, and exit criteria for graph memory GA.
+- **`docs/RELEASING.md`** — links to release-candidate validation and GA sign-off checklist.
 - **`README.md`** — version badge **0.7.5**.
 
 ### Risk notes
 
-Operator validation for these items lives in **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (**0.7.5 release risks**).
+Operator validation for these items lives in **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (**0.7.5 release risks**). Human approvals follow **[docs/ga-signoff-checklist.md](docs/ga-signoff-checklist.md)**.
 
 - **AINL runtime engine** defaults **on**; legacy agents without the key migrate to **`true`** on boot — confirm if you depended on implicit off.
 - **Adaptive eco** touches budgeting, compression, and usage exports — validate staging policy + replay before wide rollout.
+- **Graph memory GA gates** — staging validation recommended before org-wide rollout; owners should complete the **[ga-signoff-checklist.md](docs/ga-signoff-checklist.md)** before calling GA complete.
 - **Desktop updater:** after tagging, confirm **`latest.json`** on **ainativelang.com** and in-app updates; **`AINLATIVELANGWEB_DEPLOY_TOKEN`** for automatic website sync (**[release-desktop.md](docs/release-desktop.md)**).
 
 ## [0.7.4] - 2026-04-14
