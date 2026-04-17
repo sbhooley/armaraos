@@ -3,9 +3,8 @@
 
 Scales the source PNG to **cover** a solid black square (center-crop), then resizes for each bundle asset.
 
-**Opaque RGB output (no alpha):** After compositing, the image is flattened to RGB. If we saved RGBA with
-semi-transparent anti-aliasing, macOS would composite those pixels against its default light plate, which
-looks like a silver border or background behind the black. Fully opaque pixels eliminate that.
+After compositing onto black, we flatten to **opaque RGBA** (alpha=255 everywhere): no semi-transparent
+edge pixels (avoids macOS light-plate bleed), and **Tauri’s** `generate_context!` requires **RGBA** bundle PNGs.
 Run from repo root: python3 crates/openfang-desktop/scripts/regen_icons_from_logo.py
 """
 from __future__ import annotations
@@ -39,7 +38,7 @@ def trim_to_content(im: Image.Image, pad: int = 2) -> Image.Image:
 def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
     """Scale `im` uniformly to cover `side`×`side`, center-crop, on an opaque black square.
 
-    Returns **RGB** only: transparency is blended onto black so no alpha remains (avoids macOS silver bleed).
+    Returns **RGBA** with alpha=255 everywhere (flat bitmap; Tauri bundle requires RGBA).
     """
     im = im.convert("RGBA")
     w, h = im.size
@@ -54,7 +53,7 @@ def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
     tmp.paste(cropped, (0, 0), cropped)
     rgb = Image.new("RGB", (side, side), (0, 0, 0))
     rgb.paste(tmp, (0, 0), tmp)
-    return rgb
+    return rgb.convert("RGBA")
 
 
 def main() -> int:

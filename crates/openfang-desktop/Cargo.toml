@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Native desktop application for ArmaraOS (Tauri 2.0)"
 
+[lints.rust]
+# objc 0.2 `msg_send!` expands to cfg values (e.g. `cargo-clippy`) that fail `check-cfg` under -D warnings.
+unexpected_cfgs = "allow"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
