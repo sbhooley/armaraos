@@ -317,6 +317,35 @@ function overviewPage() {
       return this.mcpServers.filter(function(s) { return s.status === 'connected'; });
     },
 
+    get graphMemoryMetrics() {
+      var m = (this.status && this.status.graph_memory_context_metrics) || {};
+      var c = (this.status && this.status.graph_memory_contract_metrics) || {};
+      return {
+        episodic: Number(m.injected_episodic_total || 0),
+        semantic: Number(m.injected_semantic_total || 0),
+        conflict: Number(m.injected_conflict_total || 0),
+        procedural: Number(m.injected_procedural_total || 0),
+        truncations: Number(m.truncation_hits_total || 0),
+        skippedLowQuality: Number(m.skipped_low_quality_total || 0),
+        tempReadsSuppressed: Number(m.temp_mode_suppressed_reads_total || 0),
+        tempWritesSuppressed: Number(m.temp_mode_suppressed_writes_total || 0),
+        rolloutReadsSuppressed: Number(m.rollout_suppressed_reads_total || 0),
+        rolloutWritesSuppressed: Number(m.rollout_suppressed_writes_total || 0),
+        provenanceGatePass: m.provenance_gate_pass !== false,
+        contradictionGatePass: m.contradiction_gate_pass !== false,
+        inboxImported: Number(c.inbox_imported_total || 0),
+        inboxQuarantined: Number(c.inbox_quarantined_total || 0),
+        inboxInvalidScopeSkipped: Number(c.inbox_invalid_scope_skipped_total || 0),
+      };
+    },
+
+    get graphMemorySignalsActive() {
+      var m = this.graphMemoryMetrics;
+      return (m.episodic + m.semantic + m.conflict + m.procedural) > 0 ||
+        m.tempReadsSuppressed > 0 || m.tempWritesSuppressed > 0 ||
+        m.rolloutReadsSuppressed > 0 || m.rolloutWritesSuppressed > 0;
+    },
+
     /** Entries for readiness chips (`readiness.checks` from API). */
     get mcpReadinessChecks() {
       var r = this.mcpReadiness;
@@ -375,7 +404,7 @@ function overviewPage() {
         { key: 'channel', label: 'Connect a messaging channel (optional)', done: this.channels.length > 0, action: '#channels' },
         // Shortcuts only — never marked complete (always show ○ + Go)
         { key: 'chat', label: 'Send your first message (optional)', done: false, action: '#agents', perpetual: true },
-        { key: 'skill', label: 'Browse or install a skill (optional)', done: false, action: '#skills', perpetual: true }
+        { key: 'skill', label: 'Browse skills or MCP servers (optional)', done: false, action: '#skills', perpetual: true }
       ];
     },
 
@@ -447,7 +476,7 @@ function overviewPage() {
       if (this.setupCoreDoneCount < this.setupCoreTotal) {
         return this.setupCoreDoneCount + '/' + this.setupCoreTotal + ' core steps · ' + this.setupDoneCount + '/' + this.setupTrackableTotal + ' completed';
       }
-      return 'Core complete — optional channel ' + this.setupOptionalDoneCount + '/' + this.setupOptionalTotal + ' · message & skills stay open below';
+      return 'Core complete — optional channel ' + this.setupOptionalDoneCount + '/' + this.setupOptionalTotal + ' · chat & skills/MCP shortcuts stay open below';
     },
 
     /** After core steps, drive the bar from optional tasks (0–100%). */

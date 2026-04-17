@@ -69,6 +69,7 @@ pub use query::{
     recall_by_procedure_type, recall_by_topic_cluster, recall_contradictions,
     recall_delta_by_relevance, recall_episodes_by_conversation, recall_episodes_with_signal,
     recall_flagged_episodes, recall_low_success_procedures, recall_recent, recall_strength_history,
+    recall_task_scoped_episodes,
     walk_from, GraphQuery,
 };
 pub use snapshot::{

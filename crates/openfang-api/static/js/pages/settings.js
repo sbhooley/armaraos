@@ -38,6 +38,18 @@ function settingsPage() {
     loadErrorRequestId: '',
     loadErrorWhere: '',
     loadErrorServerPath: '',
+    graphMemoryAgents: [],
+    graphMemoryAgentId: '',
+    graphMemoryControls: {
+      memory_enabled: true,
+      temporary_mode: false,
+      shared_memory_enabled: false,
+      include_episodic_hints: true,
+      include_semantic_facts: true,
+      include_conflicts: true,
+      include_procedural_hints: true,
+    },
+    graphMemoryControlsSaving: false,
 
     // -- Desktop (Tauri) AINL status (synced via Alpine.store('ainl').desktop) --
     ainlDesktopLoading: false,
@@ -221,7 +233,8 @@ function settingsPage() {
           this.loadConfig(),
           this.loadProviders(),
           this.loadModels(),
-          this.loadUpdaterPrefs()
+          this.loadUpdaterPrefs(),
+          this.loadGraphMemoryControls()
         ]);
       } catch(e) {
         applyPageLoadError(this, e, 'Could not load settings.');
@@ -324,6 +337,68 @@ function settingsPage() {
           config_schema_version_binary: status.config_schema_version_binary != null ? status.config_schema_version_binary : null
         };
       } catch(e) { throw e; }
+    },
+
+    async loadGraphMemoryControls() {
+      try {
+        var agentsResp = await OpenFangAPI.get('/api/agents');
+        this.graphMemoryAgents = Array.isArray(agentsResp)
+          ? agentsResp
+          : ((agentsResp && agentsResp.agents) || []);
+        if (!this.graphMemoryAgents.length) {
+          this.graphMemoryAgentId = '';
+          return;
+        }
+        if (!this.graphMemoryAgentId) {
+          this.graphMemoryAgentId = String(this.graphMemoryAgents[0].id || '');
+        }
+        await this.onGraphMemoryAgentChange();
+      } catch (e) {
+        this.graphMemoryAgents = [];
+      }
+    },
+
+    async onGraphMemoryAgentChange() {
+      if (!this.graphMemoryAgentId) return;
+      try {
+        var data = await OpenFangAPI.get(
+          '/api/graph-memory/controls?agent_id=' + encodeURIComponent(this.graphMemoryAgentId)
+        );
+        var c = (data && data.controls) || {};
+        this.graphMemoryControls = {
+          memory_enabled: c.memory_enabled !== false,
+          temporary_mode: !!c.temporary_mode,
+          shared_memory_enabled: !!c.shared_memory_enabled,
+          include_episodic_hints: c.include_episodic_hints !== false,
+          include_semantic_facts: c.include_semantic_facts !== false,
+          include_conflicts: c.include_conflicts !== false,
+          include_procedural_hints: c.include_procedural_hints !== false,
+        };
+      } catch (e) {
+        // keep current values on transient errors
+      }
+    },
+
+    async saveGraphMemoryControls() {
+      if (!this.graphMemoryAgentId || this.graphMemoryControlsSaving) return;
+      this.graphMemoryControlsSaving = true;
+      try {
+        await OpenFangAPI.put('/api/graph-memory/controls', {
+          agent_id: this.graphMemoryAgentId,
+          memory_enabled: !!this.graphMemoryControls.memory_enabled,
+          temporary_mode: !!this.graphMemoryControls.temporary_mode,
+          shared_memory_enabled: !!this.graphMemoryControls.shared_memory_enabled,
+          include_episodic_hints: !!this.graphMemoryControls.include_episodic_hints,
+          include_semantic_facts: !!this.graphMemoryControls.include_semantic_facts,
+          include_conflicts: !!this.graphMemoryControls.include_conflicts,
+          include_procedural_hints: !!this.graphMemoryControls.include_procedural_hints,
+        });
+        OpenFangToast && OpenFangToast.success('Graph memory controls saved');
+      } catch (e) {
+        OpenFangToast &&
+          OpenFangToast.error(openFangErrText(e) || 'Failed to save graph memory controls');
+      }
+      this.graphMemoryControlsSaving = false;
     },
 
     async loadUsage() {

@@ -63,12 +63,27 @@ function graphMemoryPanel() {
     timelineScope: 'all',
     snapshots: [],
     auditEntries: [],
+    memoryControls: {
+      memory_enabled: true,
+      temporary_mode: false,
+      shared_memory_enabled: false,
+      include_episodic_hints: true,
+      include_semantic_facts: true,
+      include_conflicts: true,
+      include_procedural_hints: true,
+    },
+    inspectScope: 'agent_private',
+    inspectEntries: [],
+    rememberFactText: '',
     selectedSnapshotId: '',
     viewMode: 'live',
     governanceBusy: false,
     snapshotLabel: '',
     runCaptures: { A: null, B: null },
     runResults: { A: null, B: null },
+    memoryDiagnostics: null,
+    memorySelectionDebug: [],
+    showWhySelectedDrawer: false,
 
     kindColor: {
       episode: '#7c9ef5',
@@ -551,7 +566,164 @@ function graphMemoryPanel() {
     },
 
     async refreshGovernanceData() {
-      await Promise.all([this.loadSnapshots(), this.loadAudit()]);
+      await Promise.all([
+        this.loadSnapshots(),
+        this.loadAudit(),
+        this.loadMemoryControls(),
+        this.loadInspectEntries(),
+        this.loadMemoryDiagnostics(),
+      ]);
+    },
+
+    async loadMemoryDiagnostics() {
+      try {
+        var status = await OpenFangAPI.get('/api/status');
+        this.memoryDiagnostics = (status && status.graph_memory_context_metrics) || null;
+        this.memorySelectionDebug = (status && status.graph_memory_selection_debug) || [];
+      } catch (e) {
+        this.memoryDiagnostics = null;
+        this.memorySelectionDebug = [];
+      }
+    },
+
+    async loadMemoryControls() {
+      if (!this.agentId) {
+        return;
+      }
+      try {
+        var data = await OpenFangAPI.get(
+          '/api/graph-memory/controls?agent_id=' + encodeURIComponent(this.agentId)
+        );
+        var c = (data && data.controls) || {};
+        this.memoryControls = {
+          memory_enabled: c.memory_enabled !== false,
+          temporary_mode: !!c.temporary_mode,
+          shared_memory_enabled: !!c.shared_memory_enabled,
+          include_episodic_hints: c.include_episodic_hints !== false,
+          include_semantic_facts: c.include_semantic_facts !== false,
+          include_conflicts: c.include_conflicts !== false,
+          include_procedural_hints: c.include_procedural_hints !== false,
+        };
+      } catch (e) {
+        console.error('graph-memory: load controls failed', e);
+      }
+    },
+
+    async saveMemoryControls() {
+      if (!this.agentId || this.governanceBusy) {
+        return;
+      }
+      this.governanceBusy = true;
+      try {
+        await OpenFangAPI.put('/api/graph-memory/controls', {
+          agent_id: this.agentId,
+          memory_enabled: !!this.memoryControls.memory_enabled,
+          temporary_mode: !!this.memoryControls.temporary_mode,
+          shared_memory_enabled: !!this.memoryControls.shared_memory_enabled,
+          include_episodic_hints: !!this.memoryControls.include_episodic_hints,
+          include_semantic_facts: !!this.memoryControls.include_semantic_facts,
+          include_conflicts: !!this.memoryControls.include_conflicts,
+          include_procedural_hints: !!this.memoryControls.include_procedural_hints,
+        });
+        this.notifySuccess('Memory controls saved');
+      } catch (e) {
+        console.error('graph-memory: save controls failed', e);
+        this.notifyError(this.errorText(e, 'Could not save memory controls'));
+      } finally {
+        this.governanceBusy = false;
+      }
+    },
+
+    async loadInspectEntries() {
+      if (!this.agentId) {
+        this.inspectEntries = [];
+        return;
+      }
+      try {
+        var data = await OpenFangAPI.get(
+          '/api/graph-memory/what-do-you-remember?agent_id=' +
+            encodeURIComponent(this.agentId) +
+            '&scope=' +
+            encodeURIComponent(this.inspectScope) +
+            '&limit=50'
+        );
+        this.inspectEntries = (data && data.entries) || [];
+      } catch (e) {
+        console.error('graph-memory: inspect failed', e);
+        this.inspectEntries = [];
+      }
+    },
+
+    async rememberFact() {
+      var fact = String(this.rememberFactText || '').trim();
+      if (!this.agentId || !fact || this.governanceBusy) {
+        return;
+      }
+      this.governanceBusy = true;
+      try {
+        await OpenFangAPI.post('/api/graph-memory/remember', {
+          agent_id: this.agentId,
+          fact: fact,
+          scope: this.inspectScope,
+          confidence: 0.9,
+        });
+        this.rememberFactText = '';
+        await this.loadInspectEntries();
+        await this.fetchGraph();
+        this.notifySuccess('Fact remembered');
+      } catch (e) {
+        console.error('graph-memory: remember failed', e);
+        this.notifyError(this.errorText(e, 'Could not remember fact'));
+      } finally {
+        this.governanceBusy = false;
+      }
+    },
+
+    async forgetFact(entry) {
+      var fact = entry && entry.fact ? String(entry.fact) : '';
+      if (!this.agentId || !fact || this.governanceBusy) {
+        return;
+      }
+      this.governanceBusy = true;
+      try {
+        await OpenFangAPI.post('/api/graph-memory/forget', {
+          agent_id: this.agentId,
+          fact: fact,
+        });
+        await this.loadInspectEntries();
+        await this.fetchGraph();
+        this.notifySuccess('Fact forgotten');
+      } catch (e) {
+        console.error('graph-memory: forget failed', e);
+        this.notifyError(this.errorText(e, 'Could not forget fact'));
+      } finally {
+        this.governanceBusy = false;
+      }
+    },
+
+    async clearInspectScope() {
+      if (!this.agentId || this.governanceBusy) {
+        return;
+      }
+      if (!window.confirm('Clear all semantic facts in this scope?')) {
+        return;
+      }
+      this.governanceBusy = true;
+      try {
+        await OpenFangAPI.post('/api/graph-memory/clear-scope', {
+          agent_id: this.agentId,
+          scope: this.inspectScope,
+          reason: 'dashboard clear scope',
+        });
+        await this.loadInspectEntries();
+        await this.fetchGraph();
+        this.notifySuccess('Scope cleared');
+      } catch (e) {
+        console.error('graph-memory: clear scope failed', e);
+        this.notifyError(this.errorText(e, 'Could not clear scope'));
+      } finally {
+        this.governanceBusy = false;
+      }
     },
 
     async loadSnapshots() {
@@ -757,6 +929,37 @@ function graphMemoryPanel() {
       return {
         nodes: JSON.parse(JSON.stringify(this.nodes || [])),
         edges: JSON.parse(JSON.stringify(this.edges || [])),
+      };
+    },
+
+    proceduralHintStats() {
+      var rows = (this.nodes || []).filter(function(n) { return n && n.kind === 'procedural'; });
+      if (!rows.length) {
+        return { total: 0, active: 0, retired: 0, avgSuccess: 0, avgFitness: 0 };
+      }
+      var retired = 0;
+      var successSum = 0;
+      var successCount = 0;
+      var fitnessSum = 0;
+      var fitnessCount = 0;
+      rows.forEach(function(r) {
+        var m = r.meta || {};
+        if (m.retired) retired += 1;
+        if (typeof m.success_rate === 'number' && !Number.isNaN(m.success_rate)) {
+          successSum += m.success_rate;
+          successCount += 1;
+        }
+        if (typeof m.fitness === 'number' && !Number.isNaN(m.fitness)) {
+          fitnessSum += m.fitness;
+          fitnessCount += 1;
+        }
+      });
+      return {
+        total: rows.length,
+        active: rows.length - retired,
+        retired: retired,
+        avgSuccess: successCount ? (successSum / successCount) : 0,
+        avgFitness: fitnessCount ? (fitnessSum / fitnessCount) : 0
       };
     },
 

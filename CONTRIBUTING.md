@@ -72,7 +72,17 @@ This cuts link time significantly (thin LTO, 8 codegen units, `opt-level=2`) whi
 cargo test --workspace
 ```
 
-The test suite is currently 1,744+ tests. All must pass before merging.
+The test suite is currently 2,793+ tests. All must pass before merging.
+
+### Version consistency (semver bumps)
+
+When you change **`[workspace.package].version`** in the repo-root **`Cargo.toml`**, also update **`crates/openfang-desktop/tauri.conf.json`**, **`README.md`** badge, and the canonical JSON samples in **`docs/api-reference.md`** (see **[docs/RELEASING.md](docs/RELEASING.md)**). Verify locally:
+
+```bash
+bash scripts/check-version-consistency.sh
+```
+
+Pre-tag checklist: **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)**.
 
 ### Run Tests for a Single Crate
 
@@ -367,7 +377,7 @@ tools = ["my_tool"]
 2. **Make your changes**: Follow the code style guidelines above.
 
 3. **Test thoroughly**:
-   - `cargo test --workspace` must pass (all 1,744+ tests).
+   - `cargo test --workspace` must pass (all 2,793+ tests).
    - `cargo clippy --workspace --all-targets -- -D warnings` must produce zero warnings.
    - `cargo fmt --all --check` must produce no diff.
 

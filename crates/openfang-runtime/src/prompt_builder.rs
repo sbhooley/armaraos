@@ -419,6 +419,51 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
     out
 }
 
+/// Build bounded graph-memory prompt sections in deterministic order.
+///
+/// The caller is expected to pass pre-ranked/pre-truncated lines per block.
+pub fn build_graph_memory_sections(
+    recent_attempts: &[String],
+    known_facts: &[String],
+    known_conflicts: &[String],
+    suggested_procedure: &[String],
+) -> String {
+    let mut out = String::new();
+    if !recent_attempts.is_empty() {
+        out.push_str("\n\n## RecentAttempts\n");
+        for line in recent_attempts {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !known_facts.is_empty() {
+        out.push_str("\n## KnownFacts\n");
+        for line in known_facts {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !known_conflicts.is_empty() {
+        out.push_str("\n## KnownConflicts\n");
+        for line in known_conflicts {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !suggested_procedure.is_empty() {
+        out.push_str("\n## SuggestedProcedure\n");
+        for line in suggested_procedure {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 fn build_skills_section(skill_summary: &str, prompt_context: &str) -> String {
     let mut out = String::from("## Skills\n");
     if !skill_summary.is_empty() {
@@ -967,6 +1012,44 @@ mod tests {
         // Should be capped at 500 + "..."
         assert!(section.contains("..."));
         assert!(section.len() < 1200);
+    }
+
+    #[test]
+    fn test_graph_memory_sections_empty() {
+        let section = build_graph_memory_sections(&[], &[], &[], &[]);
+        assert!(section.is_empty());
+    }
+
+    #[test]
+    fn test_graph_memory_sections_sparse() {
+        let section = build_graph_memory_sections(
+            &["attempt one".to_string()],
+            &[],
+            &["fact x conflicts y".to_string()],
+            &[],
+        );
+        assert!(section.contains("## RecentAttempts"));
+        assert!(section.contains("- attempt one"));
+        assert!(section.contains("## KnownConflicts"));
+        assert!(!section.contains("## KnownFacts"));
+        assert!(!section.contains("## SuggestedProcedure"));
+    }
+
+    #[test]
+    fn test_graph_memory_sections_dense_deterministic_order() {
+        let section = build_graph_memory_sections(
+            &["a1".to_string(), "a2".to_string()],
+            &["f1".to_string()],
+            &["c1".to_string()],
+            &["p1".to_string()],
+        );
+        let p_attempts = section.find("## RecentAttempts").unwrap_or(usize::MAX);
+        let p_facts = section.find("## KnownFacts").unwrap_or(usize::MAX);
+        let p_conflicts = section.find("## KnownConflicts").unwrap_or(usize::MAX);
+        let p_procedure = section.find("## SuggestedProcedure").unwrap_or(usize::MAX);
+        assert!(p_attempts < p_facts);
+        assert!(p_facts < p_conflicts);
+        assert!(p_conflicts < p_procedure);
     }
 
     #[test]

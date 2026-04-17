@@ -7,28 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- Next release changes go here -->
+Reserve for **0.7.6+** after **`v0.7.5`** is tagged; until then, all shipped work belongs under **[0.7.5]** below.
 
-### Documentation
+## [0.7.5] - TBD
 
-- **`CONTRIBUTING.md`**, **`CLAUDE.md`** — document **`api_boundary_contracts_test`**, **`sse_stream_auth`**, and WS unit tests under **`openfang-api`**.
-- **`docs/api-reference.md`** — SSE section points at **`sse_stream_auth`** for loopback / Bearer parity on event and log streams.
-- **`docs/mcp-a2a.md`** — HTTP **`POST /mcp`** verification note + **`api_boundary_contracts_test`**.
+Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). Set the date when you tag.
+
+### Added
+
+- **Adaptive eco (usage + compression):** Durable metering events, circuit breaker + hysteresis, usage/replay APIs, counterfactual receipts + confidence, chat response meta + tooltips, **Settings → Budget** adaptive-eco aggregates, replay distributions + **`adaptive_eco`** bundle in usage exports, prompt-cache TTL dampening + eval harness, **live policy reload** (no daemon restart for policy tweaks), staging runbook + **`scripts/verify-adaptive-eco-usage.sh`**. Wired to **`ainl-compression`** / eco telemetry and dashboard surfaces.
+- **`ainl-compression` + eco shadow path:** Shared compression crate, eco telemetry plumbing, and adaptive-eco shadow mode leading into the features above.
+- **MCP readiness:** Framework for **`GET /api/mcp/servers`** **`readiness`** (version + checks), dashboard **Get started** MCP card + **`openfang doctor`** output; daemon base URL exposed for AINL programs; related tool fixes.
+- **Graph memory (dashboard + API):** Explainability and stack updates (**API + docs**), **live `GraphMemoryWrite` events** after **ainl-runtime** prelude turns (secondary writer notification + timeline sync), production-ready graph-memory operations, **Ctrl/Cmd + wheel** zoom vs page scroll on the graph view.
+- **AINL bridge hardening:** Observability, typed graph validation, runtime telemetry on **SSE** / **`POST …/message`** paths, test-surface and boundary-error consistency, runtime kill-switch + **`ui-prefs`** / status smoke tests.
+- **Dashboard:** **Notification center** work (durable rows, approvals refresh hooks, **daemon CPU + memory** next to the bell where applicable), **Orchestration traces** moved under **Graph Memory** with traces page polish, **durable usage + eco prefs**, workspace pill / default tool allowlist merge behavior.
+- **Branding:** Refreshed ArmaraOS logos, favicon, and desktop app icons.
+- **CI / release / cross-repo:** **`scripts/check-version-consistency.sh`** (workspace + Tauri + **`README`** + **`docs/api-reference.md`** samples) in **`.github/workflows/ci.yml`**; **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (pre-tag checklist, **`verify-dashboard-smoke.sh`**, updater notes, **0.7.5 risk validation**); **[docs/RELEASING.md](docs/RELEASING.md)** version-sample policy; **`.github/pull_request_template.md`** optional **Release PR** checklist; integration tests served via **`build_router`** + merge-gating **dashboard-smoke** CI job; **CONTRIBUTING** / **CLAUDE** integration-test table; **ainativelangweb** **`config/site.ts`** → **`latestArmaraosReleaseTag`: `v0.7.5`** when **`public/downloads/armaraos/latest.json`** is absent.
+- **Embedded AINL wheel:** **`AINL_PYPI_VERSION`** **`1.7.0`** in **`.github/workflows/ci.yml`** / **`release.yml`**, **`xtask bundle-ainl-wheel`** default, and **`programs/**/*.ainl`** validation — matches **PyPI** / **ainativelang.com** **`latestAinlRelease`** (**1.7.0**).
 
 ### Changed
 
-- **ainl-runtime-engine defaults:** `openfang-runtime` now includes **`ainl-runtime-engine`** in default Cargo features, and new `AgentManifest` defaults (including wizard-created manifests) set **`ainl_runtime_engine = true`** by default.
-- **Legacy agent migration:** On daemon boot, agents with no explicit `ainl_runtime_engine` key in on-disk `agent.toml` are safely migrated to `true` and persisted to SQLite, while explicit on-disk `true`/`false` values remain untouched.
+- **CI:** **`dashboard-smoke`** is **merge-gating** (removed **`continue-on-error`**) so **`scripts/ci-dashboard-smoke.sh`** must pass on **`main`** PRs.
+- **Kernel / MCP defaults:** Sensible **AINL MCP** allowlist defaults and **glob** filters for tool exposure (**`docs`** + behavior).
+- **Dashboard (copy):** Sidebar, command palette, **Get started** quick action, **Skills/MCP** page title, setup wizard, and overview checklist align on **Skills/MCP** (skills + MCP servers + presets).
+- **AINL runtime engine:** Shipped **on** by default — **`openfang-runtime`** default features include **`ainl-runtime-engine`**; new **`AgentManifest`** defaults (including wizard) set **`ainl_runtime_engine = true`**; **experimental** badge removed from the Config toggle once stable.
+- **Legacy agent migration:** On daemon boot, agents with **no** explicit **`ainl_runtime_engine`** in on-disk **`agent.toml`** migrate to **`true`** and persist to SQLite; explicit **`true`/`false`** on disk stay put.
 
 ### Fixed
 
-- **Agent Config → AINL runtime engine toggle:** `PATCH /api/agents/{id}/config` now writes **`ainl_runtime_engine`** into **`agent.toml`** (the TOML patch path previously omitted it), restores the flag from SQLite when merging a newer on-disk template at daemon boot, and includes the boolean on **`GET /api/agents`** so the dashboard does not reset the checkbox from list payloads.
+- **`scripts/verify-dashboard-smoke.sh`:** HTML checks no longer use `curl | grep -q` (avoids curl exit 23 from SIGPIPE when `grep` exits early under `set -o pipefail`, e.g. macOS). Required for merge-gating **`dashboard-smoke`** CI.
+- **`ainl_runtime_engine` end-to-end:** **`PATCH /api/agents/{id}/config`** writes **`ainl_runtime_engine`** into **`agent.toml`**, restores from SQLite when merging templates at boot, and includes the flag on **`GET /api/agents`** so the dashboard list does not reset the checkbox.
+- **ainl-runtime:** Persona snapshots no longer leak into normal chat replies.
+- **Graph memory UI:** Scroll vs zoom interaction documented and fixed for the graph canvas.
 
 ### Documentation
 
-- **`docs/api-reference.md`** — `GET /api/agents` includes **`workspace`** / **`workspace_rel_home`**; correct **`GET /api/usage`** and **`GET /api/usage/summary`** response shapes (persistent metering); **`GET /api/agents/{id}/tools`** documents default merged tool names for non-empty allowlists; **`/api/ui-prefs`** documents **`agent_eco_modes`**.
-- **`docs/dashboard-testing.md`** — eco **7b** per-agent checks; Get started usage hero + Analytics parity; Home folder **full-viewport** preview; Config tab default allowlist merge; **Open workspace** QA; **`ui-prefs`** curl note.
-- **`docs/dashboard-home-folder.md`**, **`docs/dashboard-overview-ui.md`**, **`docs/dashboard-settings-runtime-ui.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/README.md`**, **`CLAUDE.md`** — dashboard copy aligned with persistent usage, **`ui-prefs`** eco map, workspace pill → **Home folder**, and full-screen file preview.
+- **`CONTRIBUTING.md`**, **`CLAUDE.md`** — **`api_boundary_contracts_test`**, **`sse_stream_auth`**, WS limits in **`openfang-api`**; test counts aligned with **`cargo test --workspace`**.
+- **`docs/api-reference.md`** — SSE auth parity; **`version` / `tag_name` / release** samples for **0.7.5**; **`GET /api/agents`** (**`workspace`** / **`workspace_rel_home`**); **`GET /api/usage`** + **`/usage/summary`** shapes; **`GET /api/agents/{id}/tools`** default merged allowlist; **`/api/ui-prefs`** **`agent_eco_modes`**; MCP readiness + orchestration cross-links as applicable.
+- **`docs/mcp-a2a.md`**, **`docs/graph-memory.md`**, **`docs/dashboard-*.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/ainl-showcases.md`**, **`docs/launch-roadmap.md`**, **`docs/release-desktop.md`**, **`docs/README.md`** — adaptive eco, graph-memory live timeline, dashboard QA (**eco 7b**, Get started, Home folder preview, **Open workspace**), MCP primary flow on overview, integration-test pointers.
+- **`README.md`** — version badge **0.7.5**.
+
+### Risk notes
+
+Operator validation for these items lives in **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (**0.7.5 release risks**).
+
+- **AINL runtime engine** defaults **on**; legacy agents without the key migrate to **`true`** on boot — confirm if you depended on implicit off.
+- **Adaptive eco** touches budgeting, compression, and usage exports — validate staging policy + replay before wide rollout.
+- **Desktop updater:** after tagging, confirm **`latest.json`** on **ainativelang.com** and in-app updates; **`AINLATIVELANGWEB_DEPLOY_TOKEN`** for automatic website sync (**[release-desktop.md](docs/release-desktop.md)**).
 
 ## [0.7.4] - 2026-04-14
 
@@ -528,7 +553,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Device pairing and approval system
 
 #### Production Readiness
-- 1731+ tests across 15 crates, 0 failures
+- 2,793+ tests across the workspace, 0 failures (historical snapshot; see current **CONTRIBUTING.md**)
 - Cross-platform support (Linux, macOS, Windows)
 - Graceful shutdown with signal handling (SIGINT/SIGTERM on Unix, Ctrl+C on Windows)
 - Daemon PID file with stale process detection
@@ -537,6 +562,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.5
 [0.7.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.4
 [0.7.3]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.3
 [0.7.2]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.2

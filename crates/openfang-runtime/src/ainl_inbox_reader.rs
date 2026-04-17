@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ainl_memory::{
     AgentGraphSnapshot, AinlMemoryNode, AinlNodeType, PersonaSource, SnapshotEdge,
@@ -20,6 +21,36 @@ use crate::graph_memory_writer::GraphMemoryWriter;
 
 const INBOX_FILENAME: &str = "ainl_graph_memory_inbox.json";
 const REQUIRES_AINL_TAGGER: &str = "requires_ainl_tagger";
+const INBOX_SCHEMA_VERSION: &str = "1";
+const SOURCE_FEATURE_INBOX_V1: &str = "inbox_v1";
+const SOURCE_FEATURE_AINL_GRAPH_MEMORY: &str = "ainl_graph_memory";
+static INBOX_IMPORTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INBOX_QUARANTINED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INBOX_INVALID_SCOPE_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+fn is_supported_scope_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "scope:agent_private" | "scope:workspace_shared" | "scope:org_shared"
+    )
+}
+
+fn has_invalid_scope_tag(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|t| t.starts_with("scope:") && !is_supported_scope_tag(t))
+}
+
+fn schema_version(root: &Value) -> Option<&str> {
+    root.get("schema_version").and_then(|v| v.as_str())
+}
+
+pub fn inbox_contract_metrics() -> serde_json::Value {
+    serde_json::json!({
+        "inbox_imported_total": INBOX_IMPORTED_TOTAL.load(AtomicOrdering::Relaxed),
+        "inbox_quarantined_total": INBOX_QUARANTINED_TOTAL.load(AtomicOrdering::Relaxed),
+        "inbox_invalid_scope_skipped_total": INBOX_INVALID_SCOPE_SKIPPED_TOTAL.load(AtomicOrdering::Relaxed),
+    })
+}
 
 fn inbox_path(agent_id: &str) -> std::path::PathBuf {
     openfang_types::config::openfang_home_dir()
@@ -131,6 +162,16 @@ fn convert_one_inbox_node(
         .cloned()
         .unwrap_or(Value::Object(Map::new()));
     let tags = value_string_vec(obj.get("tags"));
+    if has_invalid_scope_tag(&tags) {
+        INBOX_INVALID_SCOPE_SKIPPED_TOTAL.fetch_add(1, AtomicOrdering::Relaxed);
+        warn!(
+            agent_id = %writer_agent_id,
+            inbox_id = %id_str,
+            tags = ?tags,
+            "inbox: skipped node with unsupported scope tag"
+        );
+        return None;
+    }
     let created_at = value_as_f32(obj.get("created_at"), 0.0);
 
     let map = match payload {
@@ -404,6 +445,28 @@ async fn atomic_write_inbox(path: &Path, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+async fn quarantine_inbox(path: &Path, reason: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "inbox path has no parent".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| format!("create inbox parent: {e}"))?;
+    let stamp = chrono::Utc::now().timestamp_millis();
+    let quarantine_name = format!("ainl_graph_memory_inbox.quarantine.{stamp}.json");
+    let quarantine_path = parent.join(quarantine_name);
+    tokio::fs::rename(path, &quarantine_path)
+        .await
+        .map_err(|e| format!("quarantine inbox rename: {e}"))?;
+    warn!(
+        path = %quarantine_path.display(),
+        reason = %reason,
+        "AINL graph memory inbox quarantined"
+    );
+    INBOX_QUARANTINED_TOTAL.fetch_add(1, AtomicOrdering::Relaxed);
+    Ok(())
+}
+
 /// Import inbox nodes/edges into `writer`'s SQLite graph, then reset the inbox file.
 pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<usize, String> {
     let path = inbox_path(writer.agent_id());
@@ -416,7 +479,27 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<usize, String> {
         return Ok(0);
     }
     let root: Value = serde_json::from_slice(&bytes).map_err(|e| format!("inbox json: {e}"))?;
+    if let Some(v) = schema_version(&root) {
+        if v != INBOX_SCHEMA_VERSION {
+            let reason = format!(
+                "unsupported schema_version '{v}' (expected '{INBOX_SCHEMA_VERSION}')"
+            );
+            let _ = quarantine_inbox(&path, &reason).await;
+            return Err(reason);
+        }
+    }
     let source_features = parse_source_features(&root);
+    if !source_features.iter().any(|f| f == SOURCE_FEATURE_INBOX_V1)
+        && !source_features
+            .iter()
+            .any(|f| f == SOURCE_FEATURE_AINL_GRAPH_MEMORY)
+    {
+        debug!(
+            agent_id = %writer.agent_id(),
+            source_features = ?source_features,
+            "inbox: missing expected source_features marker; continuing with conservative parsing"
+        );
+    }
     let nodes_raw = root
         .get("nodes")
         .and_then(|n| n.as_array())
@@ -480,6 +563,7 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<usize, String> {
         imported_edges = edge_count,
         "AINL graph memory inbox drained"
     );
+    INBOX_IMPORTED_TOTAL.fetch_add(node_count as u64, AtomicOrdering::Relaxed);
     Ok(node_count)
 }
 
@@ -780,5 +864,123 @@ mod tests {
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
         tokio::fs::write(&inbox_path, b"").await.unwrap();
         assert_eq!(drain_inbox(&writer).await.expect("empty inbox"), 0);
+    }
+
+    #[tokio::test]
+    async fn drain_inbox_quarantines_unsupported_schema_version() {
+        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let inbox_dir = dir.path().join("agents").join(AGENT);
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let inbox_path = inbox_dir.join(INBOX_FILENAME);
+        let payload = json!({
+            "schema_version": "2",
+            "nodes": [],
+            "edges": [],
+            "source_features": ["ainl_graph_memory", "inbox_v1"],
+        });
+        tokio::fs::write(&inbox_path, serde_json::to_vec(&payload).unwrap())
+            .await
+            .unwrap();
+        let err = drain_inbox(&writer).await.err().expect("expected error");
+        assert!(err.contains("unsupported schema_version"), "err={err}");
+        let mut quarantined = false;
+        let mut rd = tokio::fs::read_dir(&inbox_dir).await.unwrap();
+        while let Some(ent) = rd.next_entry().await.unwrap() {
+            let name = ent.file_name().to_string_lossy().to_string();
+            if name.starts_with("ainl_graph_memory_inbox.quarantine.") && name.ends_with(".json") {
+                quarantined = true;
+                break;
+            }
+        }
+        assert!(quarantined, "expected quarantined inbox artifact");
+    }
+
+    #[tokio::test]
+    async fn drain_inbox_accepts_missing_schema_version_for_backcompat() {
+        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let inbox_dir = dir.path().join("agents").join(AGENT);
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let inbox_path = inbox_dir.join(INBOX_FILENAME);
+        let payload = json!({
+            "nodes": [{
+                "id": "11111111-2222-4333-8444-555555555555",
+                "node_type": "semantic",
+                "agent_id": AGENT,
+                "label": "backcompat fact",
+                "payload": {
+                    "fact": "compat fact",
+                    "confidence": 0.81,
+                    "source_turn_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                },
+                "tags": ["scope:agent_private"],
+                "created_at": 0.0
+            }],
+            "edges": [],
+            "source_features": ["ainl_graph_memory", "inbox_v1"],
+        });
+        tokio::fs::write(&inbox_path, serde_json::to_vec(&payload).unwrap())
+            .await
+            .unwrap();
+        let imported = drain_inbox(&writer).await.expect("drain");
+        assert_eq!(imported, 1, "missing schema_version should remain backward compatible");
+    }
+
+    #[tokio::test]
+    async fn drain_inbox_ignores_unknown_fields_without_drift_failure() {
+        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let inbox_dir = dir.path().join("agents").join(AGENT);
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let inbox_path = inbox_dir.join(INBOX_FILENAME);
+        let payload = json!({
+            "schema_version": "1",
+            "nodes": [{
+                "id": "aaaaaaaa-2222-4333-8444-555555555555",
+                "node_type": "semantic",
+                "agent_id": AGENT,
+                "label": "future field fact",
+                "payload": {
+                    "fact": "future fact",
+                    "confidence": 0.79,
+                    "source_turn_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                    "future_extra": {"v": 1}
+                },
+                "tags": ["scope:workspace_shared"],
+                "created_at": 0.0,
+                "future_root_field": "x"
+            }],
+            "edges": [],
+            "source_features": ["ainl_graph_memory", "inbox_v1"],
+            "future_envelope_field": {"mode": "compat"}
+        });
+        tokio::fs::write(&inbox_path, serde_json::to_vec(&payload).unwrap())
+            .await
+            .unwrap();
+        let imported = drain_inbox(&writer).await.expect("drain");
+        assert_eq!(imported, 1, "unknown fields should not cause drift failure");
+    }
+
+    #[test]
+    fn convert_one_inbox_node_rejects_invalid_scope_tags() {
+        let raw = json!({
+            "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "node_type": "semantic",
+            "agent_id": AGENT,
+            "label": "bad scope",
+            "payload": {
+                "fact": "should be skipped",
+                "confidence": 0.9,
+                "source_turn_id": "ffffffff-ffff-4fff-8fff-ffffffffffff"
+            },
+            "tags": ["scope:unknown_scope"],
+            "created_at": 0.0
+        });
+        let out = convert_one_inbox_node(&raw, AGENT, &[]);
+        assert!(out.is_none(), "node with invalid scope tag should be skipped");
     }
 }

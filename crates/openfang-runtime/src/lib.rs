@@ -91,6 +91,7 @@ pub(crate) mod eco_telemetry;
 pub mod embedding;
 pub mod graceful_shutdown;
 pub mod graph_extractor;
+pub mod graph_memory_context;
 pub mod graph_memory_writer;
 pub mod hooks;
 pub mod host_ainl_snapshot;

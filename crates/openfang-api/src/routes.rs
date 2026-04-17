@@ -1214,6 +1214,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .unwrap_or_else(|| serde_json::json!({"window":"7d","modes":{},"agents":[]}));
 
     let adaptive_eco = state.kernel.adaptive_eco_config();
+    let memory_context_metrics = openfang_runtime::graph_memory_context::memory_context_metrics();
+    let memory_selection_debug = openfang_runtime::graph_memory_context::latest_selection_debug(20);
+    let memory_contract_metrics = openfang_runtime::ainl_inbox_reader::inbox_contract_metrics();
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1229,6 +1232,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "config_schema_version_binary": openfang_types::config::CONFIG_SCHEMA_VERSION,
         "agents": agents,
         "openfang_runtime_ainl": openfang_runtime_ainl,
+        "graph_memory_context_metrics": memory_context_metrics,
+        "graph_memory_selection_debug": memory_selection_debug,
+        "graph_memory_contract_metrics": memory_contract_metrics,
         "eco_compression": eco_compression,
         "adaptive_eco": {
             "enabled": adaptive_eco.enabled,

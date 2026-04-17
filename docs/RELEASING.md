@@ -1,6 +1,12 @@
 # Releasing ArmaraOS (semver tags)
 
-Use this for **routine patch/minor releases** once signing keys, icons, and CI are already set up. For the **first production** gate (Tauri keygen, secrets, icons from scratch), see **[production-checklist.md](production-checklist.md)**. For **desktop smoke** after a tag (Tauri, updater, dashboard), see **[release-desktop.md](release-desktop.md)**.
+Use this for **routine patch/minor releases** once signing keys, icons, and CI are already set up. For the **first production** gate (Tauri keygen, secrets, icons from scratch), see **[production-checklist.md](production-checklist.md)**. For **desktop smoke** after a tag (Tauri, updater, dashboard), see **[release-desktop.md](release-desktop.md)**. For **pre-tag smoke + manual dashboard checks**, see **[release-candidate-validation.md](release-candidate-validation.md)**. For **human GA sign-off** (product, runtime, security/privacy, data/ML owners), see **[ga-signoff-checklist.md](ga-signoff-checklist.md)**.
+
+---
+
+## Documentation version samples (policy)
+
+Example JSON in **`docs/api-reference.md`** (and related docs called out in the table below) must use the **same semver** as **`[workspace.package].version`** in the repo-root **`Cargo.toml`**. CI runs **`scripts/check-version-consistency.sh`** to catch drift. Prefer updating samples on each bump over leaving stale `0.7.x` literals; for narrative-only examples you may use placeholders like **`vX.Y.Z`** if the doc explicitly says “example tag”.
 
 ---
 
@@ -37,15 +43,15 @@ Commit **`Cargo.lock`** with the version bump.
 
 Edit root **`CHANGELOG.md`**:
 
-- Add **`## [x.y.z] - YYYY-MM-DD`** under **`[Unreleased]`** (or move **`[Unreleased]`** notes into the new section).
-- Keep **`[Unreleased]`** empty or stubbed after the release section.
+- Add **`## [x.y.z] - YYYY-MM-DD`** under **`[Unreleased]`** (or move **`[Unreleased]`** notes into the new section). While the release is still in progress, **`TBD`** is acceptable for the date; replace it with **`YYYY-MM-DD`** when you tag.
+- Keep **`[Unreleased]`** for **post-`x.y.z`** work (or stubbed) after you freeze the release section.
 - Add a compare link at the bottom: **`[x.y.z]: https://github.com/sbhooley/armaraos/releases/tag/vx.y.z`**
 
 ---
 
 ## 3. Marketing site (GitHub fallback)
 
-The Next.js site (**ainativelangweb**) uses **`config/site.ts`** → **`latestArmaraosReleaseTag`** when **`public/downloads/armaraos/latest.json`** is missing. Set it to the **tag you are about to publish** (e.g. **`v0.7.3`**) so homepage/`/download` GitHub fallbacks stay consistent. The **`sync-desktop-updates-to-website`** job in **armaraos** `release.yml` pushes installer manifests into that repo after the release workflow runs.
+The Next.js site (**ainativelangweb**) uses **`config/site.ts`** → **`latestArmaraosReleaseTag`** when **`public/downloads/armaraos/latest.json`** is missing. Set it to the **tag you are about to publish** (e.g. **`v0.7.5`**) so homepage/`/download` GitHub fallbacks stay consistent. The **`sync-desktop-updates-to-website`** job in **armaraos** `release.yml` bumps this field when the deploy token is configured; for the commit that **prepares** the release, align **`latestArmaraosReleaseTag`** manually if needed. **Post-tag:** confirm **`https://ainativelang.com/downloads/armaraos/latest.json`** and updater behavior per **[release-desktop.md](release-desktop.md)**.
 
 ---
 
@@ -57,6 +63,7 @@ From the repo root:
 cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+bash scripts/check-version-consistency.sh
 ```
 
 Optional: **`cargo build --release -p openfang-cli`** for a final binary sanity check.
@@ -80,7 +87,7 @@ See **[release-desktop.md](release-desktop.md)** (post-release verification + sm
 
 ---
 
-## Audit / API reminders (0.7.3+)
+## Audit / API reminders (0.7.x)
 
 - Successful **`PUT /api/agents/{id}/update`** records **`AgentManifestUpdate`** in the audit log (older rows may still say **`ConfigChange`**).
 - **`GET /api/agents/{id}?omit=manifest_toml`** avoids returning the large TOML blob.

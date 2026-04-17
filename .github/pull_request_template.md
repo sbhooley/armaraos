@@ -27,3 +27,14 @@ If the PR adds new automation, workflows, extensions, or user-facing “apps” 
 - [ ] No new unsafe code
 - [ ] No secrets or API keys in diff
 - [ ] User input validated at boundaries
+
+## Release PR (optional — version bump / tag)
+
+Check when this PR **bumps the workspace version** or prepares **`vX.Y.Z`**.
+
+- [ ] **`CHANGELOG.md`** — new `## [x.y.z] - date` section; `[Unreleased]` stubbed
+- [ ] **`Cargo.toml`** + **`crates/openfang-desktop/tauri.conf.json`** + **`README.md`** badge + **`docs/api-reference.md`** samples — aligned (or `bash scripts/check-version-consistency.sh` passes)
+- [ ] **ainativelangweb** **`config/site.ts`** → **`latestArmaraosReleaseTag`** matches the tag you will publish (if touching fallback)
+- [ ] **Pre-tag:** `bash scripts/check-version-consistency.sh` and steps in **`docs/release-candidate-validation.md`** (including **0.7.5 release risks** if applicable)
+- [ ] **`AINL_PYPI_VERSION`** in **`.github/workflows/ci.yml`** / **`release.yml`** matches intended **PyPI** `ainativelang` (and **`xtask`** `bundle-ainl-wheel` default when bumping the pin)
+- [ ] **Post-tag:** updater **`latest.json` / `beta.json`** on **ainativelang.com** and desktop “Check for updates” per **`docs/release-desktop.md`**

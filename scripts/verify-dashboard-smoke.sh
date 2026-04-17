@@ -25,11 +25,16 @@ curl -sS -f "$BASE/api/health" | head -c 400
 echo ""
 
 echo "-- GET / (dashboard HTML: notification center bell markup)"
-if ! curl -sS -f -m 8 "$BASE/" | grep -qE 'notify-bell-btn|notify-center-root'; then
+# Avoid `curl | grep -q`: early grep exit SIGPIPEs curl (exit 23) under `set -o pipefail` on some hosts.
+DASH_HTML="$(curl -sS -f -m 8 "$BASE/")" || {
+  echo "ERROR: Failed to fetch dashboard HTML from $BASE/"
+  exit 1
+}
+if [[ ! "$DASH_HTML" =~ (notify-bell-btn|notify-center-root) ]]; then
   echo "ERROR: Dashboard HTML missing notification center (expected notify-bell-btn or notify-center-root)."
   exit 1
 fi
-if ! curl -sS -f -m 8 "$BASE/" | grep -q 'conn-res-badge'; then
+if [[ ! "$DASH_HTML" =~ conn-res-badge ]]; then
   echo "ERROR: Dashboard HTML missing sidebar daemon resource badges (expected conn-res-badge)."
   exit 1
 fi
@@ -74,6 +79,37 @@ if ainl.get("ainl_runtime_engine") is not True:
     )
     sys.exit(1)
 print("OK (ainl_runtime_engine compile flag true)")
+PY
+
+echo "-- GET /api/status (memory GA gate fields)"
+python3 - <<'PY'
+import json, os, sys
+
+raw = os.environ.get("STATUS_JSON", "")
+try:
+    d = json.loads(raw)
+except json.JSONDecodeError as e:
+    print("ERROR: /api/status is not valid JSON:", e, file=sys.stderr)
+    sys.exit(1)
+
+m = d.get("graph_memory_context_metrics") or {}
+required = [
+    "provenance_coverage_ratio",
+    "provenance_gate_pass",
+    "conflict_ratio",
+    "contradiction_gate_pass",
+]
+missing = [k for k in required if k not in m]
+if missing:
+    print("ERROR: missing graph_memory_context_metrics keys:", ", ".join(missing), file=sys.stderr)
+    sys.exit(1)
+if m.get("provenance_gate_pass") is not True:
+    print("ERROR: provenance_gate_pass=false", file=sys.stderr)
+    sys.exit(1)
+if m.get("contradiction_gate_pass") is not True:
+    print("ERROR: contradiction_gate_pass=false", file=sys.stderr)
+    sys.exit(1)
+print("OK (memory GA gate status fields)")
 PY
 
 echo "-- GET /api/schedules (expect 200 JSON)"

@@ -340,7 +340,7 @@
             </a>
             <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
-              <span class="nav-label">Skills</span>
+              <span class="nav-label">Skills/MCP</span>
             </a>
           </div>
         </template>
@@ -559,7 +559,7 @@
                 <span class="overview-quick-action-icon" aria-hidden="true">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
                 </span>
-                <span class="overview-quick-action-label">Browse Skills</span>
+                <span class="overview-quick-action-label">Browse Skills/MCP</span>
               </button>
               <button type="button" class="overview-quick-action-tile" @click="location.hash='ainl-library'">
                 <span class="overview-quick-action-icon" aria-hidden="true">
@@ -949,6 +949,27 @@
                 </template>
               </div>
             </div>
+
+            <!-- Graph memory health -->
+            <div class="card overview-panel-card" x-show="graphMemorySignalsActive">
+              <div class="card-header">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 2v20"/><path d="M2 12h20"/><circle cx="12" cy="12" r="3"/></svg>
+                Graph memory context
+              </div>
+              <div class="detail-grid" style="margin-top:8px">
+                <div class="detail-row"><span class="detail-label">Injected lines</span><span class="detail-value" x-text="(graphMemoryMetrics.episodic + graphMemoryMetrics.semantic + graphMemoryMetrics.conflict + graphMemoryMetrics.procedural)"></span></div>
+                <div class="detail-row"><span class="detail-label">Truncations</span><span class="detail-value" x-text="graphMemoryMetrics.truncations"></span></div>
+                <div class="detail-row"><span class="detail-label">Skipped low quality</span><span class="detail-value" x-text="graphMemoryMetrics.skippedLowQuality"></span></div>
+                <div class="detail-row"><span class="detail-label">Temporary mode suppressions</span><span class="detail-value" x-text="(graphMemoryMetrics.tempReadsSuppressed + graphMemoryMetrics.tempWritesSuppressed)"></span></div>
+                <div class="detail-row"><span class="detail-label">Provenance gate</span><span class="detail-value" :style="graphMemoryMetrics.provenanceGatePass ? 'color:var(--success)' : 'color:var(--error)'" x-text="graphMemoryMetrics.provenanceGatePass ? 'PASS' : 'FAIL'"></span></div>
+                <div class="detail-row"><span class="detail-label">Contradiction gate</span><span class="detail-value" :style="graphMemoryMetrics.contradictionGatePass ? 'color:var(--success)' : 'color:var(--error)'" x-text="graphMemoryMetrics.contradictionGatePass ? 'PASS' : 'FAIL'"></span></div>
+                <div class="detail-row"><span class="detail-label">Inbox quarantines</span><span class="detail-value" x-text="graphMemoryMetrics.inboxQuarantined"></span></div>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                <a class="btn btn-ghost btn-sm" href="#graph-memory">Open Graph Memory</a>
+                <a class="btn btn-ghost btn-sm" href="#settings">Memory Settings</a>
+              </div>
+            </div>
           </div>
 
           <!-- Recent Activity Feed -->
@@ -1016,7 +1037,7 @@
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
               </div>
               <div>
-                <div class="quick-action-label">Browse Skills</div>
+                <div class="quick-action-label">Browse Skills/MCP</div>
                 <div class="quick-action-desc">Explore available skills</div>
               </div>
             </div>
@@ -1153,6 +1174,16 @@
                 ></span>
               </span>
               <span class="chat-telem-sep">·</span>
+              <span
+                class="chat-telem-item"
+                title="Graph memory context used on the most recent turn"
+                x-show="memoryContextAppliedLastTurn !== null"
+              >
+                <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5;flex-shrink:0"><path d="M4 7h16"/><path d="M6 12h12"/><path d="M8 17h8"/></svg>
+                <span :style="memoryContextAppliedLastTurn ? 'color:var(--success)' : 'color:var(--textDim)'"
+                  x-text="memoryContextAppliedLastTurn ? 'memory on turn' : 'memory off turn'"></span>
+              </span>
+              <span class="chat-telem-sep" x-show="memoryContextAppliedLastTurn !== null">·</span>
               <!-- Tokens in / out -->
               <span class="chat-telem-item" title="Session tokens: input / output">
                 <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5;flex-shrink:0"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="12" height="4" rx="1"/><rect x="3" y="17" width="7" height="4" rx="1"/></svg>
@@ -3273,7 +3304,7 @@
     <template x-if="page === 'skills'">
       <div x-data="skillsPage">
         <div class="page-header dashboard-page-header-polish">
-          <h2>Skills</h2>
+          <h2>Skills/MCP</h2>
           <p class="dashboard-page-header-sub">Installed tools, ClawHub browse, MCP servers, and quick-start templates — all in one place.</p>
         </div>
         <div class="page-body dashboard-page-body-polish" x-init="loadSkills()">
@@ -4825,6 +4856,42 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <option value="hidden">Hide while that agent’s chat is open</option>
                   <option value="off">Off</option>
                 </select>
+              </div>
+            </div>
+
+            <div class="card mt-4">
+              <div class="card-header">Graph memory controls</div>
+              <div class="card-meta text-dim" style="margin-top:6px;line-height:1.5">
+                Configure memory policy per agent: global on/off, temporary mode, scope sharing, and per-block injection switches.
+              </div>
+              <div class="form-group" style="margin-top:12px;max-width:520px">
+                <label class="text-xs text-dim">Agent</label>
+                <select class="form-select" style="margin-top:6px;font-size:13px"
+                  x-model="graphMemoryAgentId"
+                  @change="onGraphMemoryAgentChange()">
+                  <template x-for="a in graphMemoryAgents" :key="a.id">
+                    <option :value="String(a.id)" x-text="a.name || a.id"></option>
+                  </template>
+                </select>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px" x-show="graphMemoryAgentId">
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.memory_enabled" /> Memory enabled</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.temporary_mode" /> Temporary mode</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.shared_memory_enabled" /> Shared memory enabled</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.include_episodic_hints" /> Episodic block</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.include_semantic_facts" /> Semantic block</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.include_conflicts" /> Conflict block</label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px"><input type="checkbox" x-model="graphMemoryControls.include_procedural_hints" /> Procedural block</label>
+              </div>
+              <p class="text-xs text-dim" style="margin-top:8px" x-show="graphMemoryAgentId" title="Temporary mode disables both memory reads and writes. Shared memory enables workspace/org scope exchanges.">
+                Use temporary mode for safe rollback. Use shared memory only when cross-agent continuity is intended.
+              </p>
+              <div class="flex items-center gap-2" style="margin-top:10px">
+                <button class="btn btn-primary btn-sm" :disabled="graphMemoryControlsSaving || !graphMemoryAgentId" @click="saveGraphMemoryControls()">
+                  <span x-show="!graphMemoryControlsSaving">Save graph memory controls</span>
+                  <span x-show="graphMemoryControlsSaving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <a class="btn btn-ghost btn-sm" href="#graph-memory">Open Graph Memory</a>
               </div>
             </div>
 
@@ -7220,7 +7287,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <div style="padding:4px 0" x-show="createdAgent">&#8226; Open <strong>Agents</strong> to start talking to your agent</div>
                   <div style="padding:4px 0" x-show="!createdAgent">&#8226; Go to <strong>Agents</strong> to create your first agent</div>
                   <div style="padding:4px 0" x-show="setupSummary.schedule">&#8226; Open <strong>Scheduler</strong> or <strong>Logs</strong> to see your sample job</div>
-                  <div style="padding:4px 0">&#8226; Browse <strong>Skills</strong> to add capabilities (web search, code execution, etc.)</div>
+                  <div style="padding:4px 0">&#8226; Browse <strong>Skills/MCP</strong> to add capabilities (web search, code execution, MCP servers, etc.)</div>
                   <div style="padding:4px 0">&#8226; Check <strong>Settings</strong> for advanced configuration</div>
                   <div style="padding:4px 0" x-show="!setupSummary.channel">&#8226; Visit <strong>Channels</strong> to connect messaging platforms</div>
                 </div>
@@ -7857,6 +7924,111 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <span x-text="runResults.B ? runResults.B.continuity.persona_before : 0"></span>
               </p>
               <p class="text-xs text-dim" style="margin:3px 0 0" x-show="!runResults.B">Capture run B to show continuity metrics.</p>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Contradiction safety panel</p>
+              <p class="text-xs" style="margin:0" x-show="memoryDiagnostics">
+                conflict ratio:
+                <strong x-text="memoryDiagnostics ? Number(memoryDiagnostics.conflict_ratio || 0).toFixed(2) : '0.00'"></strong>
+              </p>
+              <p class="text-xs" style="margin:3px 0 0" x-show="memoryDiagnostics">
+                gate:
+                <strong :style="memoryDiagnostics && memoryDiagnostics.contradiction_gate_pass ? 'color:var(--success)' : 'color:var(--error)'"
+                  x-text="memoryDiagnostics && memoryDiagnostics.contradiction_gate_pass ? 'PASS' : 'FAIL'"></strong>
+              </p>
+              <p class="text-xs text-dim" style="margin:3px 0 0" x-show="!memoryDiagnostics">Waiting for status diagnostics.</p>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Procedural hint effectiveness</p>
+              <p class="text-xs" style="margin:0">
+                Active / retired:
+                <strong x-text="proceduralHintStats().active + ' / ' + proceduralHintStats().retired"></strong>
+              </p>
+              <p class="text-xs" style="margin:3px 0 0">
+                Avg success / fitness:
+                <strong x-text="proceduralHintStats().avgSuccess.toFixed(2) + ' / ' + proceduralHintStats().avgFitness.toFixed(2)"></strong>
+              </p>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Memory controls</p>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.memory_enabled" />
+                  Memory enabled
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.temporary_mode" />
+                  Temporary mode (no reads/writes)
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.shared_memory_enabled" />
+                  Shared memory enabled
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.include_episodic_hints" />
+                  Inject episodic hints
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.include_semantic_facts" />
+                  Inject semantic facts
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.include_conflicts" />
+                  Inject conflict notes
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="memoryControls.include_procedural_hints" />
+                  Inject procedural hints
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy" @click="saveMemoryControls()">Save controls</button>
+                <p class="text-xs text-dim" style="margin:2px 0 0" title="Temporary mode disables both memory reads and writes for this agent">
+                  Temporary mode: no memory recall and no memory writes.
+                </p>
+              </div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
+              <p class="text-xs text-dim" style="margin:0 0 6px">Remember / inspect / forget</p>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <select class="form-input text-xs" style="padding:4px 8px;max-width:180px" x-model="inspectScope" @change="loadInspectEntries()">
+                  <option value="agent_private">agent_private</option>
+                  <option value="workspace_shared">workspace_shared</option>
+                  <option value="org_shared">org_shared</option>
+                </select>
+                <input class="form-input text-xs" style="padding:4px 8px;min-width:220px;flex:1 1 auto" placeholder="Remember fact..." x-model="rememberFactText" />
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy || !rememberFactText.trim()" @click="rememberFact()">Remember</button>
+                <button type="button" class="btn btn-ghost btn-sm" :disabled="governanceBusy" @click="clearInspectScope()">Clear scope</button>
+              </div>
+              <p class="text-xs text-dim" style="margin:6px 0 0" title="Forget removes one fact match; clear scope removes all facts in this namespace">
+                Scope namespaces: agent_private, workspace_shared, org_shared.
+              </p>
+              <div style="margin-top:8px;max-height:120px;overflow:auto;display:flex;flex-direction:column;gap:4px">
+                <template x-if="inspectEntries.length === 0">
+                  <p class="text-xs text-dim" style="margin:0">No scoped semantic facts found.</p>
+                </template>
+                <template x-for="entry in inspectEntries" :key="entry.id">
+                  <div class="text-xs" style="padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--surface)">
+                    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+                      <span x-text="entry.fact"></span>
+                      <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:0.65rem" :disabled="governanceBusy" @click="forgetFact(entry)">Forget</button>
+                    </div>
+                    <div class="text-dim" style="margin-top:2px" x-text="'confidence ' + Number(entry.confidence || 0).toFixed(2)"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <p class="text-xs text-dim" style="margin:0">Why selected diagnostics</p>
+              <button type="button" class="btn btn-ghost btn-sm" @click="showWhySelectedDrawer = !showWhySelectedDrawer" x-text="showWhySelectedDrawer ? 'Hide' : 'Show'"></button>
+            </div>
+            <div x-show="showWhySelectedDrawer" style="margin-top:8px;max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:4px">
+              <template x-if="!memorySelectionDebug.length">
+                <p class="text-xs text-dim" style="margin:0">No selection diagnostics captured yet.</p>
+              </template>
+              <template x-for="(row, idx) in memorySelectionDebug" :key="'wsd-' + idx">
+                <pre class="text-xs" style="margin:0;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--surface);white-space:pre-wrap;word-break:break-word" x-text="JSON.stringify(row, null, 2)"></pre>
+              </template>
             </div>
           </div>
           <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">

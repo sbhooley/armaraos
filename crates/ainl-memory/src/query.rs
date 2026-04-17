@@ -274,6 +274,57 @@ pub fn recall_episodes_with_signal(
     Ok(out)
 }
 
+/// Task-scoped episodic recall:
+/// 1) same conversation id first,
+/// 2) then topic tag overlap fallback when sparse.
+pub fn recall_task_scoped_episodes(
+    store: &dyn GraphStore,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    topic_tags: &[String],
+    limit: usize,
+) -> Result<Vec<EpisodicNode>, String> {
+    let mut in_conversation: Vec<(i64, EpisodicNode)> = Vec::new();
+    let mut by_topic: Vec<(i64, EpisodicNode)> = Vec::new();
+    for node in store.find_by_type("episode")? {
+        if !node_matches_agent(&node, agent_id) {
+            continue;
+        }
+        let AinlNodeType::Episode { episodic } = &node.node_type else {
+            continue;
+        };
+        if let Some(cid) = conversation_id {
+            if !cid.is_empty() && episodic.conversation_id == cid {
+                in_conversation.push((episodic.timestamp, episodic.clone()));
+                continue;
+            }
+        }
+        if !topic_tags.is_empty()
+            && episodic
+                .tags
+                .iter()
+                .any(|t| topic_tags.iter().any(|q| q == t))
+        {
+            by_topic.push((episodic.timestamp, episodic.clone()));
+        }
+    }
+    in_conversation.sort_by(|a, b| b.0.cmp(&a.0));
+    by_topic.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out: Vec<EpisodicNode> = in_conversation.into_iter().map(|(_, e)| e).collect();
+    if out.len() < limit {
+        for (_, ep) in by_topic {
+            if out.len() >= limit {
+                break;
+            }
+            if !out.iter().any(|e| e.turn_id == ep.turn_id) {
+                out.push(ep);
+            }
+        }
+    }
+    out.truncate(limit);
+    Ok(out)
+}
+
 // --- Procedural helpers ---
 
 pub fn recall_by_procedure_type(
@@ -824,5 +875,51 @@ mod tests {
         let active = store.query(ag).active_patches().expect("q");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, p1.id);
+    }
+
+    #[test]
+    fn test_recall_task_scoped_episodes_prefers_conversation_then_topic() {
+        let path = std::env::temp_dir().join(format!(
+            "ainl_query_task_scope_{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let store = SqliteGraphStore::open(&path).expect("open");
+        let now = chrono::Utc::now().timestamp();
+        let ag = "agent-task-scope";
+
+        let mut ep_conv = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now, vec![], None, None);
+        ep_conv.agent_id = ag.into();
+        if let AinlNodeType::Episode { ref mut episodic } = ep_conv.node_type {
+            episodic.conversation_id = "conv-1".into();
+            episodic.tags = vec!["topic:tax".into()];
+        }
+        let mut ep_topic = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 10, vec![], None, None);
+        ep_topic.agent_id = ag.into();
+        if let AinlNodeType::Episode { ref mut episodic } = ep_topic.node_type {
+            episodic.conversation_id = "conv-2".into();
+            episodic.tags = vec!["topic:tax".into()];
+        }
+        let mut ep_other = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 20, vec![], None, None);
+        ep_other.agent_id = ag.into();
+        if let AinlNodeType::Episode { ref mut episodic } = ep_other.node_type {
+            episodic.conversation_id = "conv-3".into();
+            episodic.tags = vec!["topic:other".into()];
+        }
+        store.write_node(&ep_conv).expect("w1");
+        store.write_node(&ep_topic).expect("w2");
+        store.write_node(&ep_other).expect("w3");
+
+        let rows = recall_task_scoped_episodes(
+            &store,
+            ag,
+            Some("conv-1"),
+            &["topic:tax".to_string()],
+            2,
+        )
+        .expect("query");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].conversation_id, "conv-1");
+        assert!(rows[1].tags.iter().any(|t| t == "topic:tax"));
     }
 }

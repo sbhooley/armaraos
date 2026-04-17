@@ -9,7 +9,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  AINL_PYPI_VERSION: "1.4.4"
+  # Must match a version published on PyPI: https://pypi.org/project/ainativelang/
+  # Keep aligned with marketing site latestAinlRelease (ainativelangweb config/site.ts).
+  AINL_PYPI_VERSION: "1.7.0"
 
 jobs:
   # ── Rust library crates (all 3 platforms) ──────────────────────────────────
@@ -64,12 +66,11 @@ jobs:
       # Tests that need a display (Tauri) are skipped in headless CI via cfg
       - run: cargo test --workspace
 
-  # Optional: boots a real daemon with a temp ARMARAOS_HOME and curls dashboard endpoints.
-  # Does not gate merges (continue-on-error) — catches drift vs scripts/verify-dashboard-smoke.sh.
+  # Boots a real daemon with a temp ARMARAOS_HOME and runs scripts/verify-dashboard-smoke.sh.
+  # Merge-gating — catches drift vs local ./scripts/verify-dashboard-smoke.sh.
   dashboard-smoke:
     name: Dashboard smoke (temp daemon)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -144,6 +145,26 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  version-consistency:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Cargo / Tauri / README / api-reference samples
+        run: bash scripts/check-version-consistency.sh
+
+  memory-ga-gates:
+    name: Memory GA gates (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: memory-ga-gates
+      - name: Run memory GA gate validator (offline)
+        run: bash scripts/check-memory-ga-gates.sh --offline
+
   openfang-kernel-programs:
     name: openfang-kernel + AINL programs
     runs-on: ubuntu-latest
@@ -161,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv /tmp/ainl-ci
-          /tmp/ainl-ci/bin/pip install -q "ainativelang>=1.3,<2"
+          /tmp/ainl-ci/bin/pip install -q "ainativelang==${AINL_PYPI_VERSION}"
           export PATH="/tmp/ainl-ci/bin:$PATH"
           find programs -name '*.ainl' -type f | while read -r f; do
             echo "validate $f"

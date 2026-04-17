@@ -41,6 +41,18 @@ Each write produces a full JSON document (not JSONL):
 
 Writes use **`*.tmp`** + **`os.replace`**. In-process concurrency is serialized with **`threading.Lock`** on the writer instance.
 
+### Contract enforcement (Rust drain path)
+
+When ArmaraOS drains `ainl_graph_memory_inbox.json`:
+
+- `schema_version` must be `"1"`; unsupported versions are quarantined.
+- Scope tags are validated when present. Supported values:
+ - `scope:agent_private`
+ - `scope:workspace_shared`
+ - `scope:org_shared`
+- Nodes with unsupported `scope:*` tags are skipped conservatively.
+- Missing `source_features` markers are tolerated but logged in debug mode.
+
 ## Python API
 
 - **`AinlMemorySyncWriter`**: **`push_nodes`**, **`push_patch`**, **`is_available`**.

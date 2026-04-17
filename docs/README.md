@@ -75,6 +75,8 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
+| [Release candidate validation](release-candidate-validation.md) | Pre-tag `cargo` / `check-version-consistency.sh` / `verify-dashboard-smoke.sh` + pointers to manual QA and post-tag updater checks |
+| [GA sign-off checklist](ga-signoff-checklist.md) | Human approvals (product, runtime, security/privacy, data/ML): exact steps, evidence, sign-off template for graph memory GA |
 | [Releasing (semver)](RELEASING.md) | Routine bump → `CHANGELOG` → `cargo fmt` / test / clippy → tag → GitHub Release; **ainativelangweb** `latestArmaraosReleaseTag`; audit/API notes |
 | [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
 | [Production Checklist](production-checklist.md) | First-ship gate before tagging v0.1.0 — signing keys, secrets, verification |
@@ -128,7 +130,7 @@ armaraos init && armaraos start
 | Model aliases | 23 |
 | API endpoints | 77 |
 | Security systems | 16 |
-| Tests | 1,767+ |
+| Tests | 2,793+ |
 
 ### Important paths
 
@@ -159,3 +161,15 @@ See **[data-directory.md](data-directory.md)** for overrides and migration from 
 | `OPENFANG_HOME` | Legacy alias for `ARMARAOS_HOME` |
 
 Only one provider key is needed to get started. Groq offers a free tier.
+
+---
+
+## Maintainers (releases + version samples)
+
+| Doc | Description |
+|-----|-------------|
+| [RELEASING.md](RELEASING.md) | Version bump, changelog, tag, marketing-site fallback |
+| [release-candidate-validation.md](release-candidate-validation.md) | Pre-tag `cargo` checks, **`scripts/check-version-consistency.sh`**, **`verify-dashboard-smoke.sh`**, manual QA pointer |
+| [release-desktop.md](release-desktop.md) | Desktop smoke, **`latest.json`**, post-tag updater verification |
+
+**Documentation version samples:** Example JSON in **[api-reference.md](api-reference.md)** must match the current workspace version from the repo-root **`Cargo.toml`**; CI runs **`scripts/check-version-consistency.sh`** from the repository root. Update those samples on every semver bump.

@@ -933,8 +933,22 @@ pub async fn run_agent_loop(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
+    let memory_policy = crate::graph_memory_context::MemoryContextPolicy::from_manifest_for_agent(
+        manifest,
+        Some(&session.agent_id.to_string()),
+    );
+    if memory_policy.temporary_mode {
+        crate::graph_memory_context::record_temp_mode_read_suppressed();
+        info!(
+            agent = %manifest.name,
+            "Memory temporary mode enabled: skipping runtime memory recalls and graph-memory prompt injection"
+        );
+    }
+
     // Recall relevant memories — prefer vector similarity search when embedding driver is available
-    let memories = if let Some(emb) = embedding_driver {
+    let memories = if !memory_policy.allow_reads() {
+        Vec::new()
+    } else if let Some(emb) = embedding_driver {
         match emb.embed_one(user_message).await {
             Ok(query_vec) => {
                 debug!("Using vector recall (dims={})", query_vec.len());
@@ -1015,7 +1029,24 @@ pub async fn run_agent_loop(
 
     // Persona hook: query AINL graph memory for PersonaNodes and prepend
     // to system prompt so the agent's learned traits affect every LLM call.
-    if let Some(ref gm) = graph_memory {
+    if memory_policy.allow_reads() {
+        if let Some(ref gm) = graph_memory {
+            let prompt_ctx =
+                crate::graph_memory_context::build_prompt_memory_context(gm, &memory_policy).await;
+            if !prompt_ctx.is_empty() {
+                system_prompt.push_str(&prompt_ctx.to_prompt_block());
+            }
+            if !prompt_ctx.selection_debug.is_empty() {
+                debug!(
+                    agent_id = %session.agent_id,
+                    why_selected = %serde_json::Value::Array(prompt_ctx.selection_debug.clone()),
+                    "graph-memory why_selected diagnostics (non-streaming)"
+                );
+            }
+        }
+    }
+    if memory_policy.allow_reads() {
+        if let Some(ref gm) = graph_memory {
         let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await; // 90 days
         if !persona_nodes.is_empty() {
             let traits: Vec<String> = persona_nodes
@@ -1050,12 +1081,19 @@ pub async fn run_agent_loop(
             }
         }
     }
+    }
 
+    let graph_memory_for_mcp = if memory_policy.allow_writes() {
+        graph_memory.clone()
+    } else {
+        crate::graph_memory_context::record_temp_mode_write_suppressed();
+        None
+    };
     append_mcp_readiness_context(
         &mut system_prompt,
         mcp_connections,
         &kernel,
-        &graph_memory,
+        &graph_memory_for_mcp,
         &session.agent_id,
     )
     .await;
@@ -1597,7 +1635,8 @@ pub async fn run_agent_loop(
                 let tools_for_episode =
                     canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
-                if let Some(ref gm) = graph_memory {
+                if memory_policy.allow_writes() {
+                    if let Some(ref gm) = graph_memory {
                     let turn_trace =
                         graph_memory_turn_trace_json(
                             agent_id_str.as_str(),
@@ -1665,7 +1704,11 @@ pub async fn run_agent_loop(
                         );
                     }
                 }
-                if let Some(gm) = graph_memory.clone() {
+                } else {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                }
+                if memory_policy.allow_writes() {
+                    if let Some(gm) = graph_memory.clone() {
                     let turn_outcome = crate::persona_evolution::TurnOutcome {
                         tool_calls: tools_for_episode.clone(),
                         delegation_to: None,
@@ -1677,6 +1720,7 @@ pub async fn run_agent_loop(
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
                         let _report = gm.run_persona_evolution_pass().await;
+                        let _ = gm.run_background_memory_consolidation().await;
                         if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
                             &gm,
                             &agent_id,
@@ -1693,6 +1737,9 @@ pub async fn run_agent_loop(
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
+                } else {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                }
 
                 // Save session
                 memory
@@ -1705,7 +1752,9 @@ pub async fn run_agent_loop(
                     "User asked: {}\nI responded: {}",
                     user_message, final_response
                 );
-                if let Some(emb) = embedding_driver {
+                if !memory_policy.allow_writes() {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                } else if let Some(emb) = embedding_driver {
                     match emb.embed_one(&interaction_text).await {
                         Ok(vec) => {
                             let _ = memory
@@ -1732,7 +1781,7 @@ pub async fn run_agent_loop(
                                 .await;
                         }
                     }
-                } else {
+                } else if memory_policy.allow_writes() {
                     let _ = memory
                         .remember(
                             session.agent_id,
@@ -2911,8 +2960,22 @@ pub async fn run_agent_loop_streaming(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
+    let memory_policy = crate::graph_memory_context::MemoryContextPolicy::from_manifest_for_agent(
+        manifest,
+        Some(&session.agent_id.to_string()),
+    );
+    if memory_policy.temporary_mode {
+        crate::graph_memory_context::record_temp_mode_read_suppressed();
+        info!(
+            agent = %manifest.name,
+            "Memory temporary mode enabled (streaming): skipping runtime memory recalls and graph-memory prompt injection"
+        );
+    }
+
     // Recall relevant memories — prefer vector similarity search when embedding driver is available
-    let memories = if let Some(emb) = embedding_driver {
+    let memories = if !memory_policy.allow_reads() {
+        Vec::new()
+    } else if let Some(emb) = embedding_driver {
         match emb.embed_one(user_message).await {
             Ok(query_vec) => {
                 debug!("Using vector recall (streaming, dims={})", query_vec.len());
@@ -2991,8 +3054,26 @@ pub async fn run_agent_loop_streaming(
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
+    if memory_policy.allow_reads() {
+        if let Some(ref gm) = graph_memory {
+            let prompt_ctx =
+                crate::graph_memory_context::build_prompt_memory_context(gm, &memory_policy).await;
+            if !prompt_ctx.is_empty() {
+                system_prompt.push_str(&prompt_ctx.to_prompt_block());
+            }
+            if !prompt_ctx.selection_debug.is_empty() {
+                debug!(
+                    agent_id = %session.agent_id,
+                    why_selected = %serde_json::Value::Array(prompt_ctx.selection_debug.clone()),
+                    "graph-memory why_selected diagnostics (streaming)"
+                );
+            }
+        }
+    }
+
     // Persona hook (streaming): same as `run_agent_loop`.
-    if let Some(ref gm) = graph_memory {
+    if memory_policy.allow_reads() {
+        if let Some(ref gm) = graph_memory {
         let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await;
         if !persona_nodes.is_empty() {
             let traits: Vec<String> = persona_nodes
@@ -3027,12 +3108,19 @@ pub async fn run_agent_loop_streaming(
             }
         }
     }
+    }
 
+    let graph_memory_for_mcp = if memory_policy.allow_writes() {
+        graph_memory.clone()
+    } else {
+        crate::graph_memory_context::record_temp_mode_write_suppressed();
+        None
+    };
     append_mcp_readiness_context(
         &mut system_prompt,
         mcp_connections,
         &kernel,
-        &graph_memory,
+        &graph_memory_for_mcp,
         &session.agent_id,
     )
     .await;
@@ -3615,7 +3703,8 @@ pub async fn run_agent_loop_streaming(
                 let tools_for_episode =
                     canonicalize_turn_tool_names_for_graph_storage(&turn_tool_names);
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
-                if let Some(ref gm) = graph_memory {
+                if memory_policy.allow_writes() {
+                    if let Some(ref gm) = graph_memory {
                     let turn_trace =
                         graph_memory_turn_trace_json(
                             agent_id_str.as_str(),
@@ -3686,7 +3775,11 @@ pub async fn run_agent_loop_streaming(
                         );
                     }
                 }
-                if let Some(gm) = graph_memory.clone() {
+                } else {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                }
+                if memory_policy.allow_writes() {
+                    if let Some(gm) = graph_memory.clone() {
                     let turn_outcome = crate::persona_evolution::TurnOutcome {
                         tool_calls: tools_for_episode.clone(),
                         delegation_to: None,
@@ -3696,6 +3789,7 @@ pub async fn run_agent_loop_streaming(
                     tokio::spawn(async move {
                         let agent_id = gm.agent_id().to_string();
                         let _report = gm.run_persona_evolution_pass().await;
+                        let _ = gm.run_background_memory_consolidation().await;
                         if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
                             &gm,
                             &agent_id,
@@ -3712,6 +3806,9 @@ pub async fn run_agent_loop_streaming(
                         graph_memory_refresh_armaraos_export_json(&agent_id).await;
                     });
                 }
+                } else {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                }
 
                 memory
                     .save_session_async(session)
@@ -3723,7 +3820,9 @@ pub async fn run_agent_loop_streaming(
                     "User asked: {}\nI responded: {}",
                     user_message, final_response
                 );
-                if let Some(emb) = embedding_driver {
+                if !memory_policy.allow_writes() {
+                    crate::graph_memory_context::record_temp_mode_write_suppressed();
+                } else if let Some(emb) = embedding_driver {
                     match emb.embed_one(&interaction_text).await {
                         Ok(vec) => {
                             let _ = memory
@@ -3750,7 +3849,7 @@ pub async fn run_agent_loop_streaming(
                                 .await;
                         }
                     }
-                } else {
+                } else if memory_policy.allow_writes() {
                     let _ = memory
                         .remember(
                             session.agent_id,

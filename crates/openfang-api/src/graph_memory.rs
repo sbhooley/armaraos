@@ -15,12 +15,13 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use rusqlite::OptionalExtension;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 use crate::routes::AppState;
 
@@ -82,6 +83,71 @@ pub struct GraphMemoryDeleteNodeRequest {
     pub reason: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct GraphMemoryRememberRequest {
+    pub agent_id: String,
+    pub fact: String,
+    #[serde(default = "default_remember_confidence")]
+    pub confidence: f32,
+    #[serde(default = "default_scope_agent_private")]
+    pub scope: String,
+}
+
+#[derive(Deserialize)]
+pub struct GraphMemoryForgetRequest {
+    pub agent_id: String,
+    pub fact: String,
+}
+
+#[derive(Deserialize)]
+pub struct GraphMemoryInspectQuery {
+    pub agent_id: String,
+    #[serde(default = "default_scope_agent_private")]
+    pub scope: String,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Deserialize)]
+pub struct GraphMemoryClearScopeRequest {
+    pub agent_id: String,
+    #[serde(default = "default_scope_agent_private")]
+    pub scope: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct GraphMemoryControlsPayload {
+    #[serde(default = "default_true")]
+    pub memory_enabled: bool,
+    #[serde(default)]
+    pub temporary_mode: bool,
+    #[serde(default)]
+    pub shared_memory_enabled: bool,
+    #[serde(default = "default_true")]
+    pub include_episodic_hints: bool,
+    #[serde(default = "default_true")]
+    pub include_semantic_facts: bool,
+    #[serde(default = "default_true")]
+    pub include_conflicts: bool,
+    #[serde(default = "default_true")]
+    pub include_procedural_hints: bool,
+}
+
+impl Default for GraphMemoryControlsPayload {
+    fn default() -> Self {
+        Self {
+            memory_enabled: true,
+            temporary_mode: false,
+            shared_memory_enabled: false,
+            include_episodic_hints: true,
+            include_semantic_facts: true,
+            include_conflicts: true,
+            include_procedural_hints: true,
+        }
+    }
+}
+
 const fn default_limit() -> usize {
     200
 }
@@ -92,6 +158,27 @@ const fn default_since_seconds() -> i64 {
 
 const fn default_audit_limit() -> usize {
     100
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_remember_confidence() -> f32 {
+    0.9
+}
+
+fn default_scope_agent_private() -> String {
+    "agent_private".to_string()
+}
+
+fn normalize_scope(raw: &str) -> Result<&'static str, String> {
+    match raw.trim() {
+        "agent_private" => Ok("agent_private"),
+        "workspace_shared" => Ok("workspace_shared"),
+        "org_shared" => Ok("org_shared"),
+        _ => Err("scope must be one of: agent_private, workspace_shared, org_shared".to_string()),
+    }
 }
 
 #[derive(Serialize)]
@@ -170,6 +257,10 @@ fn graph_db_path(home_dir: &Path, agent_id: &str) -> PathBuf {
 
 fn governance_dir(home_dir: &Path, agent_id: &str) -> PathBuf {
     home_dir.join("agents").join(agent_id).join(".graph-memory")
+}
+
+fn controls_path(home_dir: &Path, agent_id: &str) -> PathBuf {
+    governance_dir(home_dir, agent_id).join("controls.json")
 }
 
 fn snapshots_dir(home_dir: &Path, agent_id: &str) -> PathBuf {
@@ -372,6 +463,10 @@ fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
                     "topic_cluster": semantic.topic_cluster,
                     "source_episode_id": semantic.source_episode_id,
                     "recurrence_count": semantic.recurrence_count,
+                    "reference_count": semantic.reference_count,
+                    "last_referenced_at": semantic.last_referenced_at,
+                    "contradiction_ids": semantic.contradiction_ids,
+                    "tags": semantic.tags,
                 })),
             )
         }
@@ -392,6 +487,9 @@ fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
                     "tool_sequence": procedural.tool_sequence,
                     "confidence": procedural.confidence,
                     "success_rate": procedural.success_rate,
+                    "fitness": procedural.fitness,
+                    "retired": procedural.retired,
+                    "patch_version": procedural.patch_version,
                     "procedure_type": procedural.procedure_type,
                     "trace_id": procedural.trace_id,
                 })),
@@ -1122,4 +1220,424 @@ pub async fn post_graph_memory_delete_node(
         StatusCode::OK,
         Json(json!({ "ok": true, "deleted": 1, "counts": counts })),
     )
+}
+
+/// GET /api/graph-memory/controls?agent_id=...
+pub async fn get_graph_memory_controls(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<GraphMemorySnapshotsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&q.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let path = controls_path(&state.kernel.config.home_dir, &agent_id);
+    if !path.exists() {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "controls": GraphMemoryControlsPayload::default(),
+            })),
+        );
+    }
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("read controls: {e}") })),
+            )
+        }
+    };
+    let controls: GraphMemoryControlsPayload = serde_json::from_str(&raw).unwrap_or_default();
+    (StatusCode::OK, Json(json!({ "ok": true, "controls": controls })))
+}
+
+/// PUT /api/graph-memory/controls
+pub async fn put_graph_memory_controls(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GraphMemoryControlsPayloadWithAgent>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let controls = GraphMemoryControlsPayload {
+        memory_enabled: req.memory_enabled,
+        temporary_mode: req.temporary_mode,
+        shared_memory_enabled: req.shared_memory_enabled,
+        include_episodic_hints: req.include_episodic_hints,
+        include_semantic_facts: req.include_semantic_facts,
+        include_conflicts: req.include_conflicts,
+        include_procedural_hints: req.include_procedural_hints,
+    };
+    let path = controls_path(&state.kernel.config.home_dir, &agent_id);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("create controls dir: {e}") })),
+            );
+        }
+    }
+    let body = match serde_json::to_vec_pretty(&controls) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("serialize controls: {e}") })),
+            )
+        }
+    };
+    if let Err(e) = std::fs::write(&path, body) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("write controls: {e}") })),
+        );
+    }
+    let _ = append_audit(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        "controls_updated",
+        json!({
+            "memory_enabled": controls.memory_enabled,
+            "temporary_mode": controls.temporary_mode,
+            "shared_memory_enabled": controls.shared_memory_enabled,
+            "include_episodic_hints": controls.include_episodic_hints,
+            "include_semantic_facts": controls.include_semantic_facts,
+            "include_conflicts": controls.include_conflicts,
+            "include_procedural_hints": controls.include_procedural_hints,
+        }),
+    );
+    (StatusCode::OK, Json(json!({ "ok": true, "controls": controls })))
+}
+
+#[derive(Deserialize)]
+pub struct GraphMemoryControlsPayloadWithAgent {
+    pub agent_id: String,
+    #[serde(default = "default_true")]
+    pub memory_enabled: bool,
+    #[serde(default)]
+    pub temporary_mode: bool,
+    #[serde(default)]
+    pub shared_memory_enabled: bool,
+    #[serde(default = "default_true")]
+    pub include_episodic_hints: bool,
+    #[serde(default = "default_true")]
+    pub include_semantic_facts: bool,
+    #[serde(default = "default_true")]
+    pub include_conflicts: bool,
+    #[serde(default = "default_true")]
+    pub include_procedural_hints: bool,
+}
+
+/// POST /api/graph-memory/remember
+pub async fn post_graph_memory_remember(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GraphMemoryRememberRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let scope = match normalize_scope(&req.scope) {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let fact = req.fact.trim();
+    if fact.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "fact is required" })),
+        );
+    }
+    let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    if let Some(parent) = db.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let gm = match GraphMemory::new(&db) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("open graph memory: {e}") })),
+            )
+        }
+    };
+    let mut node = ainl_memory::AinlMemoryNode::new_fact(
+        fact.to_string(),
+        req.confidence.clamp(0.0, 1.0),
+        Uuid::new_v4(),
+    );
+    node.agent_id = agent_id.clone();
+    if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
+        semantic.tags.push(format!("scope:{scope}"));
+    }
+    if let Err(e) = gm.write_node(&node) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("remember write failed: {e}") })),
+        );
+    }
+    let _ = append_audit(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        "memory_remember",
+        json!({ "fact": fact, "scope": scope, "node_id": node.id.to_string() }),
+    );
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "node_id": node.id.to_string() })),
+    )
+}
+
+/// POST /api/graph-memory/forget
+pub async fn post_graph_memory_forget(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GraphMemoryForgetRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let fact = req.fact.trim();
+    if fact.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "fact is required" })),
+        );
+    }
+    let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let conn = match open_conn_with_fk(&db) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("graph db unavailable: {e}") })),
+            )
+        }
+    };
+    let deleted = conn
+        .execute(
+            "DELETE FROM ainl_graph_nodes
+             WHERE node_type = 'semantic'
+               AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+               AND COALESCE(json_extract(payload, '$.node_type.fact'), '') = ?2",
+            rusqlite::params![agent_id, fact],
+        )
+        .unwrap_or(0);
+    let _ = append_audit(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        "memory_forget",
+        json!({ "fact": fact, "deleted": deleted }),
+    );
+    (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted })))
+}
+
+/// GET /api/graph-memory/inspect?agent_id=...&scope=...&limit=...
+pub async fn get_graph_memory_inspect(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<GraphMemoryInspectQuery>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&q.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let scope = match normalize_scope(&q.scope) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let conn = match open_conn_with_fk(&db) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("graph db unavailable: {e}") })),
+            )
+        }
+    };
+    let limit = q.limit.clamp(1, 200) as i64;
+    let mut stmt = match conn.prepare(
+        "SELECT id,
+                COALESCE(json_extract(payload, '$.node_type.fact'), '') AS fact,
+                COALESCE(json_extract(payload, '$.node_type.confidence'), 0.0) AS confidence
+         FROM ainl_graph_nodes
+         WHERE node_type = 'semantic'
+           AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+           AND EXISTS (
+                SELECT 1 FROM json_each(payload, '$.node_type.tags') je
+                WHERE je.value = ?2
+           )
+         ORDER BY timestamp DESC
+         LIMIT ?3",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("prepare inspect query: {e}") })),
+            )
+        }
+    };
+    let rows = stmt
+        .query_map(
+            rusqlite::params![agent_id, format!("scope:{scope}"), limit],
+            |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "fact": r.get::<_, String>(1)?,
+                    "confidence": r.get::<_, f64>(2)?,
+                    "scope": scope,
+                }))
+            },
+        )
+        .map(|iter| iter.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+    (StatusCode::OK, Json(json!({ "ok": true, "entries": rows })))
+}
+
+/// POST /api/graph-memory/clear-scope
+pub async fn post_graph_memory_clear_scope(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GraphMemoryClearScopeRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let scope = match normalize_scope(&req.scope) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    };
+    let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let conn = match open_conn_with_fk(&db) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("graph db unavailable: {e}") })),
+            )
+        }
+    };
+    let deleted = conn
+        .execute(
+            "DELETE FROM ainl_graph_nodes
+             WHERE node_type = 'semantic'
+               AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+               AND EXISTS (
+                    SELECT 1 FROM json_each(payload, '$.node_type.tags') je
+                    WHERE je.value = ?2
+               )",
+            rusqlite::params![agent_id, format!("scope:{scope}")],
+        )
+        .unwrap_or(0);
+    let _ = append_audit(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        "memory_clear_scope",
+        json!({ "scope": scope, "deleted": deleted, "reason": req.reason.unwrap_or_default() }),
+    );
+    (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
+    use uuid::Uuid;
+
+    #[test]
+    fn normalize_scope_accepts_expected_values() {
+        assert_eq!(normalize_scope("agent_private").unwrap(), "agent_private");
+        assert_eq!(
+            normalize_scope("workspace_shared").unwrap(),
+            "workspace_shared"
+        );
+        assert_eq!(normalize_scope("org_shared").unwrap(), "org_shared");
+    }
+
+    #[test]
+    fn normalize_scope_rejects_unknown_values() {
+        let err = normalize_scope("team_shared").unwrap_err();
+        assert!(err.contains("scope must be one of"));
+    }
+
+    #[test]
+    fn controls_default_is_safe() {
+        let controls = GraphMemoryControlsPayload::default();
+        assert!(controls.memory_enabled);
+        assert!(!controls.temporary_mode);
+        assert!(!controls.shared_memory_enabled);
+        assert!(controls.include_episodic_hints);
+        assert!(controls.include_semantic_facts);
+        assert!(controls.include_conflicts);
+        assert!(controls.include_procedural_hints);
+    }
+
+    #[test]
+    fn forget_and_clear_scope_remove_rows_immediately() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db = temp.path().join("ainl_memory.db");
+        let memory = GraphMemory::new(&db).expect("memory");
+        let agent_id = "agent-sla";
+
+        let mut node = AinlMemoryNode::new_fact("user likes rust".to_string(), 0.91, Uuid::new_v4());
+        node.agent_id = agent_id.to_string();
+        if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
+            semantic.tags.push("scope:agent_private".to_string());
+        }
+        memory.write_node(&node).expect("write");
+
+        let conn = rusqlite::Connection::open(&db).expect("open db");
+        let mut inspect_stmt = conn
+            .prepare(
+                "SELECT COUNT(*)
+                 FROM ainl_graph_nodes
+                 WHERE COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND node_type = 'semantic'
+                   AND EXISTS (
+                     SELECT 1 FROM json_each(json_extract(payload, '$.node_type.tags'))
+                     WHERE value = ?2
+                   )",
+            )
+            .expect("prepare inspect");
+        let before: i64 = inspect_stmt
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .expect("count before");
+        assert!(before >= 1);
+
+        conn.execute(
+            "DELETE FROM ainl_graph_nodes
+             WHERE COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+               AND node_type = 'semantic'
+               AND COALESCE(json_extract(payload, '$.node_type.fact'), '') = ?2",
+            rusqlite::params![agent_id, "user likes rust"],
+        )
+        .expect("forget delete");
+        let after_forget: i64 = inspect_stmt
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .expect("count after forget");
+        assert_eq!(after_forget, 0, "forget should remove recall candidates immediately");
+
+        // Reinsert and verify clear-scope semantics.
+        memory.write_node(&node).expect("rewrite");
+        conn.execute(
+            "DELETE FROM ainl_graph_nodes
+             WHERE COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+               AND node_type = 'semantic'
+               AND EXISTS (
+                 SELECT 1 FROM json_each(json_extract(payload, '$.node_type.tags'))
+                 WHERE value = ?2
+               )",
+            rusqlite::params![agent_id, "scope:agent_private"],
+        )
+        .expect("clear scope delete");
+        let after_clear: i64 = inspect_stmt
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .expect("count after clear");
+        assert_eq!(after_clear, 0, "clear-scope should remove scoped facts immediately");
+    }
 }

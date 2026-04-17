@@ -150,7 +150,7 @@ These close the gaps that would make users pick OpenClaw over ArmaraOS.
 
 **Status: COMPLETE** — Already polished with 4 tabs (Installed, ClawHub, MCP Servers, Quick Start), live search with debounce, sort pills, categories, install/uninstall, skill detail modal, runtime badges, source badges, enable/disable toggles, security warnings.
 
-**Problem (was):** Skills page exists but needs polish for browsing/installing skills.
+**Problem (was):** Skills/MCP page exists but needs polish for browsing/installing skills and MCP servers.
 
 **What to do:**
 1. Verify `/api/skills/search` endpoint works
@@ -373,7 +373,7 @@ These are features where ArmaraOS can leapfrog OpenClaw.
 
 ### 4.5 Final Release -- READY
 
-**Status: ALL CODE COMPLETE** — All 18 code items done. 1751+ tests passing. Production audit completed: 2 critical bugs fixed (API delete alias, config/set route), CSP hardened (Tauri + middleware), Tauri signing key installed. **Stable desktop:** tag **v0.7.3** (patch line — see CHANGELOG). Build release artifacts from the tagged commit.
+**Status: ALL CODE COMPLETE** — All 18 code items done. 1751+ tests passing. Production audit completed: 2 critical bugs fixed (API delete alias, config/set route), CSP hardened (Tauri + middleware), Tauri signing key installed. **Stable desktop:** tag **v0.7.5** (patch line — see CHANGELOG). Build release artifacts from the tagged commit.
 
 1. Complete items from `production-checklist.md` (keygen DONE, secrets, icons DONE, domain pending)
 2. Tag `v0.1.0`

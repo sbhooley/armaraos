@@ -92,7 +92,7 @@ cargo build --workspace --release
 - [x] New types compile and pass doc tests
 - [x] Agent loop accepts context parameter (callers may pass `None` or workflow-built `Some`)
 - [x] Message type extended without breaking serialization
-- [x] All 1744+ existing tests pass (CI expectation; run locally before release)
+- [x] All 2,793+ existing tests pass (CI expectation; run locally before release)
 - [x] Zero clippy warnings (`cargo clippy --workspace --all-targets -- -D warnings`)
 - [x] Production-safe: optional context preserves legacy behavior where not wired
 

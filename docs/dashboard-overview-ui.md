@@ -26,7 +26,7 @@ Order matters for scanability and for the loading skeleton matching the real lay
 7. **Onboarding banner** — When onboarding store says so and checklist was dismissed.
 8. **Main content** (after successful load) — Hero stats, compact stats, observability snapshot, provider badges, panel grid (System health, Security, Channels, **MCP Servers**, **MCP readiness** chips from `GET /api/mcp/servers` → `readiness.checks`), Recent activity, empty states.
 
-The **Skills** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** (`POST /api/integrations/custom/*`) and a collapsible **preset examples** section (`POST /api/integrations/*`) for curated templates — both install without editing TOML; that flow complements the overview **MCP Servers** / readiness chips.
+The **Skills/MCP** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** (`POST /api/integrations/custom/*`) and a collapsible **preset examples** section (`POST /api/integrations/*`) for curated templates — both install without editing TOML; that flow complements the overview **MCP Servers** / readiness chips.
 
 The duplicate **Quick actions** block that previously appeared after the panel grid was removed; actions exist only in the top region.
 
@@ -45,7 +45,7 @@ The duplicate **Quick actions** block that previously appeared after the panel g
 | Label | Hash route |
 |-------|------------|
 | New Agent | `#agents` |
-| Browse Skills | `#skills` |
+| Browse Skills/MCP | `#skills` |
 | App Store | `#ainl-library` (internal page id `ainl-library`; alias `#app-store` may redirect in `app.js`) |
 | Add Channel | `#channels` |
 | Create Workflow | `#workflows` |
@@ -89,7 +89,7 @@ After the guided **Setup Wizard** completes, the dashboard sets `localStorage` *
 ## Setup checklist (same page)
 
 - **Core (3):** provider configured, at least one agent, at least one enabled schedule — card title **Getting Started**.
-- **Optional section:** **channel** row can complete (progress bar after core is 0–100% for this row only). **Chat** and **Skills** rows are **perpetual shortcuts** (`perpetual: true` in `overview.js`): always ○, always **Go**, never strikethrough; they do not use `localStorage` completion flags.
+- **Optional section:** **channel** row can complete (progress bar after core is 0–100% for this row only). **Chat** and **Skills/MCP** rows are **perpetual shortcuts** (`perpetual: true` in `overview.js`): always ○, always **Go**, never strikethrough; they do not use `localStorage` completion flags.
 - **Dismiss:** `localStorage` key `of-checklist-dismissed` hides the entire card.
 - **Setup Wizard** button in the checklist card is shown only when `overviewWizardCtaVisible` is true (same rule as the header primary button); onboarded users who have not clicked **Run setup again** (or the sidebar re-click) will not see it there either.
 

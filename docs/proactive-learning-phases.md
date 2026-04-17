@@ -338,7 +338,7 @@ cargo test --workspace
 - [ ] Events emitted at 10+ key interaction points
 - [ ] Client-side tracker respects privacy settings
 - [ ] Privacy API endpoints functional
-- [ ] All 1744+ existing tests pass
+- [ ] All 2,793+ existing tests pass
 - [ ] Can deploy (tracking disabled by default for new features)
 
 **Deployment Note:** This phase is pure infrastructure. Users see no changes unless they explicitly enable tracking in settings.
@@ -2124,7 +2124,7 @@ cargo test --workspace
 - [ ] Cost optimization insights generated
 - [ ] Feedback learning improves suggestions over time
 - [ ] Documentation complete and accurate
-- [ ] All tests pass (1800+ tests expected)
+- [ ] All tests pass (2,793+ workspace tests expected)
 - [ ] Can deploy (complete proactive learning system)
 
 ---

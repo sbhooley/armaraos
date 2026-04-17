@@ -6,7 +6,7 @@
 <h3 align="center">The Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 137K LOC. 15 library crates + <code>xtask</code> (16 workspace members). 1,767+ tests. Zero clippy warnings.<br/>
+  Open-source Agent OS built in Rust. 137K LOC. 15 library crates + <code>xtask</code> (16 workspace members). 2,793+ tests. Zero clippy warnings.<br/>
   <strong>One binary. Battle-tested. Agents that actually work for you.</strong>
 </p>
 
@@ -22,8 +22,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
-  <img src="https://img.shields.io/badge/version-0.7.3-green?style=flat-square" alt="v0.7.3" />
-  <img src="https://img.shields.io/badge/tests-1,767%2B%20passing-brightgreen?style=flat-square" 
+  <img src="https://img.shields.io/badge/version-0.7.5-green?style=flat-square" alt="v0.7.5" />
+  <img src="https://img.shields.io/badge/tests-2%2C793%2B%20passing-brightgreen?style=flat-square" 
 </p>
 
 ---
@@ -608,7 +608,7 @@ armaraos start
 # Build the workspace
 cargo build --workspace --lib
 
-# Run all tests (1,767+)
+# Run all tests (2,793+)
 cargo test --workspace
 
 # Lint (must be 0 warnings)

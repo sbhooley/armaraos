@@ -14,7 +14,7 @@ This hits `/api/health`, `/api/status`, `/api/schedules`, **`GET /api/version/gi
 
 ### CI: temp daemon + same smoke script
 
-GitHub Actions (Linux) runs an optional job **`dashboard-smoke`** that builds **`openfang`** release, uses a throwaway **`ARMARAOS_HOME`**, runs **`openfang init --quick`**, starts the daemon, then invokes **`./scripts/verify-dashboard-smoke.sh`**. Wrapper: **`scripts/ci-dashboard-smoke.sh`** (set **`OPENFANG_BIN`** if the binary lives somewhere other than **`target/release/openfang`**). The job is **`continue-on-error: true`** so a flaky boot does not block merges.
+GitHub Actions (Linux) runs a **`dashboard-smoke`** job that builds **`openfang`** release, uses a throwaway **`ARMARAOS_HOME`**, runs **`openfang init --quick`**, starts the daemon, then invokes **`./scripts/verify-dashboard-smoke.sh`**. Wrapper: **`scripts/ci-dashboard-smoke.sh`** (set **`OPENFANG_BIN`** if the binary lives somewhere other than **`target/release/openfang`**). The job is **merge-gating** on **`main`** PRs so dashboard drift fails CI.
 
 ### Rust: HTTP integration tests use the production router
 
@@ -39,7 +39,7 @@ Verifies **`PUT /api/agents/{id}/update`** applies **`AgentManifest`** TOML to t
 **Checklist card**
 
 - **Core (3):** configure an LLM provider, create your first agent, create a scheduled job. Section title **Getting Started**; progress bar reflects these three until all are done.
-- **Optional block:** messaging channel (completable), plus two **perpetual shortcuts** — send your first message (→ Chat/agents) and browse or install a skill (→ Skills). The shortcuts always show **○** and **Go**; they are **never** marked complete so users can jump back anytime. After core completes, the card title switches to **Optional setup**; the bar tracks only **channel** (0–100% for one row). Subtitle text reflects **4** trackable rows total (core three + channel).
+- **Optional block:** messaging channel (completable), plus two **perpetual shortcuts** — send your first message (→ Chat/agents) and browse skills or MCP servers (→ **Skills/MCP** / `#skills`). The shortcuts always show **○** and **Go**; they are **never** marked complete so users can jump back anytime. After core completes, the card title switches to **Optional setup**; the bar tracks only **channel** (0–100% for one row). Subtitle text reflects **4** trackable rows total (core three + channel).
 - **Dismiss** stores `of-checklist-dismissed` in `localStorage` and hides the whole checklist. After core + channel are satisfied, the card hides automatically unless dismissed earlier.
 
 **Removed onboarding keys (do not use in tests anymore):** `of-first-msg` and `of-skill-browsed` are no longer written or read. There is no `armaraos-onboarding-local` refresh for the checklist.
@@ -53,8 +53,8 @@ Verifies **`PUT /api/agents/{id}/update`** applies **`AgentManifest`** TOML to t
 Run the daemon, open the **Dashboard** URL from `openfang start` (default is often `http://127.0.0.1:50051` — see `api_listen` in `config.toml`).
 
 1. **Disconnected sidebar** — Stop the daemon (or point the browser at a wrong port). Confirm the sidebar shows **Copy debug info** and **Generate + copy bundle**. Click **Copy debug info**; paste into a scratch buffer and check for **URL**, **Where**, **Request ID**, **Error**, **Hint**, **Detail**, **Time**. Click **Generate + copy bundle**; paste and confirm **Bundle:** path plus the same context lines (when the API is reachable from loopback, a `.zip` is created under `~/.armaraos/support/` or your `ARMARAOS_HOME`).
-2. **Get started** — From a fresh profile or after clearing `localStorage` key `of-checklist-dismissed`, open **Get started** (`#overview`). Walk **core** rows (3), then confirm the card title becomes **Optional setup**, the bar tracks **channel** only, and **chat** / **skill** rows stay open with **Go** after you use them. Connect a channel or use **Dismiss** to clear the card.
-3. **Get started → Quick actions** — After load completes, confirm the **Quick actions** card appears near the top (under the **Live** strip when kernel events exist). Click each action and verify: **New Agent** → `#agents`, **Browse Skills** → `#skills`, **App Store** → `#ainl-library`, **Add Channel** → `#channels`, **Create Workflow** → `#workflows`, **Settings** → `#settings`, **Daemon & runtime** → `#runtime`. During initial load, a **seven-cell** skeleton should appear in that slot, then swap to buttons without a large layout jump.
+2. **Get started** — From a fresh profile or after clearing `localStorage` key `of-checklist-dismissed`, open **Get started** (`#overview`). Walk **core** rows (3), then confirm the card title becomes **Optional setup**, the bar tracks **channel** only, and **chat** / **skills/MCP** rows stay open with **Go** after you use them. Connect a channel or use **Dismiss** to clear the card.
+3. **Get started → Quick actions** — After load completes, confirm the **Quick actions** card appears near the top (under the **Live** strip when kernel events exist). Click each action and verify: **New Agent** → `#agents`, **Browse Skills/MCP** → `#skills`, **App Store** → `#ainl-library`, **Add Channel** → `#channels`, **Create Workflow** → `#workflows`, **Settings** → `#settings`, **Daemon & runtime** → `#runtime`. During initial load, a **seven-cell** skeleton should appear in that slot, then swap to buttons without a large layout jump.
 
 4. **Get started → Setup Wizard visibility** — With `localStorage` **`openfang-onboarded`** set to **`true`** (e.g. after finishing the wizard, or set manually in devtools), open **Get started**. Expect **Setup Wizard** hidden in the page header and in the setup checklist card; **Run setup again** visible in the header. Click **Run setup again** → **Setup Wizard** appears (header + checklist). Click **Setup Wizard** → `#wizard`. Alternatively, while still on Get started, click the sidebar **Get started** item again → same reveal. Clear `openfang-onboarded` or use a fresh profile → **Setup Wizard** should show by default without **Run setup again**. With onboarded + collapsed CTA, completing the wizard again (or a silent refresh after the flag flips) should hide the primary wizard button again.
 
@@ -482,5 +482,23 @@ curl -s http://127.0.0.1:4200/api/slash-templates
 3. **Details panel (node click):** Shows **What**, **Why**, **Evidence** (JSON), **Edges (typed)** with direction + `rel`, and **Neighbors**. Full node id + **Copy**.
 4. **Live timeline:** After graph writes, entries should show **kernel-provided summaries** when `SystemEvent::GraphMemoryWrite.provenance` is present (not only the generic “New … stored”). Click a row to **focus** the node when `nodeId` is known.
 5. **API spot-check:** `GET /api/graph-memory?agent_id=<uuid>&limit=50` — each node should include **`explain`** with `what_happened` / `why_happened` / `evidence` / `relations`.
+6. **Control-plane endpoints:**
+   - `GET /api/graph-memory/controls?agent_id=<id>` returns `memory_enabled`, `temporary_mode`, `shared_memory_enabled`, plus per-block toggles (`include_episodic_hints`, `include_semantic_facts`, `include_conflicts`, `include_procedural_hints`).
+   - `PUT /api/graph-memory/controls` persists values under `~/.armaraos/agents/<id>/.graph-memory/controls.json`.
+   - `POST /api/graph-memory/remember` writes a semantic row with a scope tag.
+   - `POST /api/graph-memory/forget` deletes matching semantic fact rows.
+   - `GET /api/graph-memory/inspect?agent_id=<id>&scope=agent_private` (or `GET /api/graph-memory/what-do-you-remember?...`) returns scoped facts.
+   - `POST /api/graph-memory/clear-scope` deletes semantic rows for a specific scope.
+7. **Temporary mode audit check:** enable temporary mode via controls, run one chat turn, then inspect `/api/status` and verify `graph_memory_context_metrics.temp_mode_suppressed_reads_total` and `...writes_total` increment while prompt memory sections do not appear.
+8. **Per-block kill switches:** toggle each block flag off one at a time and run a turn; verify only enabled block families are present in prompt memory sections.
+9. **Rollback smoke:** set `memory_enabled=false`, run a turn (no memory blocks), then restore defaults and confirm memory blocks return.
+10. **Provenance + contradiction GA gates:** check `/api/status` includes:
+    - `graph_memory_context_metrics.provenance_coverage_ratio`
+    - `graph_memory_context_metrics.provenance_coverage_floor`
+    - `graph_memory_context_metrics.provenance_gate_pass`
+    - `graph_memory_context_metrics.conflict_ratio`
+    - `graph_memory_context_metrics.contradiction_gate_pass`
+    Treat either gate value `false` as release-blocking.
+11. **One-command validator:** run `bash scripts/check-memory-ga-gates.sh --base http://127.0.0.1:4200` to execute the same gate checks programmatically.
 
 See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)** for the event/API contract and release ordering.

@@ -5,7 +5,7 @@ This directory is reserved for bundling AINL into the desktop app.
 ### What belongs here
 
 - **A pinned `ainativelang` wheel**, for example:
-  - `ainativelang-1.4.0-py3-none-any.whl`
+  - `ainativelang-1.7.0-py3-none-any.whl`
 
 Option A bundling uses an **internal virtualenv** under the app data directory. **If a wheel is present**, it is installed offline on first run. **If no wheel is bundled**, the app automatically runs `pip install` of `ainativelang[mcp]` from PyPI (one-time network; default spec is overridable via `ARMARAOS_AINL_PYPI_SPEC`). **Python** is auto-detected (`python3`, `python`, Windows `py -3`, or `ARMARAOS_PYTHON`).
 
@@ -14,7 +14,7 @@ Option A bundling uses an **internal virtualenv** under the app data directory. 
 From the repo root:
 
 ```bash
-cargo run -p xtask -- bundle-ainl-wheel --version 1.4.0
+cargo run -p xtask -- bundle-ainl-wheel --version 1.7.0
 ```
 
 ### Why the wheel is not committed

@@ -98,8 +98,8 @@ ainl validate programs/system_health_monitor/system_health_monitor.ainl --strict
   "daemon_status": "ok",
   "agents": 3,
   "update_available": false,
-  "armaraos_running": "0.7.3",
-  "armaraos_upstream_tag": "v0.7.3",
+  "armaraos_running": "0.7.5",
+  "armaraos_upstream_tag": "v0.7.5",
   "ainl_pypi_version": "1.5.0",
   "checked_at": 1712563200
 }

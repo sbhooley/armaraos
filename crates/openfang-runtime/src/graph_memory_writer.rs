@@ -20,8 +20,10 @@ use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
 use openfang_types::event::GraphMemoryWriteProvenance;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::{Mutex as StdMutex, OnceLock};
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -45,6 +47,12 @@ impl PersonaEvolutionExtractionReport {
 
 /// Horizon for “any persona row exists” checks (per-agent DB; long window ≈ all history).
 pub(crate) const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
+const CONSOLIDATION_MIN_INTERVAL_SECS: i64 = 60;
+
+fn consolidation_tracker() -> &'static StdMutex<HashMap<String, i64>> {
+    static TRACKER: OnceLock<StdMutex<HashMap<String, i64>>> = OnceLock::new();
+    TRACKER.get_or_init(|| StdMutex::new(HashMap::new()))
+}
 
 /// JSON snapshot path for the Python `ainl_graph_memory` bridge (auto-refresh after persona evolution).
 ///
@@ -575,6 +583,92 @@ impl GraphMemoryWriter {
                 agent_id: self.agent_id.clone(),
             }
         }
+    }
+
+    /// Background hygiene pass:
+    /// - dedupe semantic facts by normalized fact text for this agent,
+    /// - keep the highest-confidence (and newest tie-breaker) row,
+    /// - drop duplicate rows to reduce stale/noisy recall.
+    ///
+    /// Returns the number of deleted semantic rows.
+    pub async fn run_background_memory_consolidation(&self) -> usize {
+        let now = chrono::Utc::now().timestamp();
+        {
+            let mut tr = match consolidation_tracker().lock() {
+                Ok(g) => g,
+                Err(_) => return 0,
+            };
+            if let Some(prev) = tr.get(&self.agent_id) {
+                if now - *prev < CONSOLIDATION_MIN_INTERVAL_SECS {
+                    return 0;
+                }
+            }
+            tr.insert(self.agent_id.clone(), now);
+        }
+
+        let mut deleted = 0usize;
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut ids_to_delete: HashSet<String> = HashSet::new();
+        {
+            let mut inner = self.inner.lock().await;
+            let mut rows: Vec<(f32, String, Uuid)> = inner
+                .recall_by_type(ainl_memory::AinlNodeKind::Semantic, 60 * 60 * 24 * 365)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|n| {
+                    if n.agent_id != self.agent_id {
+                        return None;
+                    }
+                    match &n.node_type {
+                        AinlNodeType::Semantic { semantic } => {
+                            Some((semantic.confidence, semantic.fact.trim().to_ascii_lowercase(), n.id))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            rows.sort_by(|a, b| {
+                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (_conf, key, id) in rows {
+                if key.is_empty() {
+                    continue;
+                }
+                if !seen.insert(key) {
+                    ids_to_delete.insert(id.to_string());
+                }
+            }
+            if !ids_to_delete.is_empty() {
+                if let Ok(mut snapshot) = inner.export_graph(&self.agent_id) {
+                    let before = snapshot.nodes.len();
+                    snapshot
+                        .nodes
+                        .retain(|n| !ids_to_delete.contains(&n.id.to_string()));
+                    if snapshot.nodes.len() < before {
+                        let _ = inner.import_graph(&snapshot, false);
+                        deleted = before - snapshot.nodes.len();
+                    }
+                }
+            }
+        }
+        if deleted > 0 {
+            self.fire_write_hook(
+                "fact",
+                Some(GraphMemoryWriteProvenance {
+                    node_ids: vec![],
+                    node_kind: Some("semantic".to_string()),
+                    reason: Some("background_consolidation".to_string()),
+                    summary: Some(format!("Consolidation removed {deleted} duplicate semantic row(s)")),
+                    trace_id: None,
+                }),
+            );
+            debug!(
+                agent_id = %self.agent_id,
+                deleted = deleted,
+                "AINL graph memory: background consolidation removed duplicate semantic rows"
+            );
+        }
+        deleted
     }
 }
 

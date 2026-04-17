@@ -158,6 +158,11 @@ function chatPage() {
     sessionCompletionTokens: 0,
     /** Wall time (ms) for the last completed turn from server (`turn_wall_ms`). */
     lastTurnWallMs: null,
+    /** Subtle indicator: whether memory context was applied on the last completed turn. */
+    memoryContextAppliedLastTurn: null,
+    /** Timestamp when the memory indicator was last updated. */
+    memoryContextAppliedAtMs: null,
+    _memoryInjectedBeforeTurn: null,
     /** Ultra Cost-Efficient Mode: "off" | "balanced" | "aggressive" (loaded from config on init). */
     efficientMode: (function() {
       var stored = localStorage.getItem('armaraos-eco-mode');
@@ -1706,6 +1711,7 @@ function chatPage() {
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
             compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
             savingsPct: data.compression_savings_pct || 0, ecoMetaTooltip: ecoTip || null });
+          this._updateMemoryAppliedIndicatorForTurn();
           // Snapshot to cache so switching away and back shows the complete turn instantly
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
           this.sending = false;
@@ -2119,6 +2125,7 @@ function chatPage() {
       this._clearStreamErrorTelemetry();
       this._clearRuntimeStatusTelemetry();
       this._startElapsed();
+      this._captureMemoryBaselineForTurn();
 
       // Detect input that would be rejected by the 64KB WS / HTTP limit.
       // Auto-split into chunks and queue them so the agent receives all content.
@@ -2204,6 +2211,7 @@ function chatPage() {
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
           compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
           savingsPct: res.compression_savings_pct || 0, ecoMetaTooltip: httpEcoTip || null });
+        this._updateMemoryAppliedIndicatorForTurn();
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
         var technical = e.message || 'Unknown error';
@@ -2224,6 +2232,39 @@ function chatPage() {
         var el = document.getElementById('msg-input'); if (el) el.focus();
         self._processQueue();
       });
+    },
+
+    _extractInjectedLinesTotal(status) {
+      var m = (status && status.graph_memory_context_metrics) || {};
+      if (typeof m.injected_lines_total === 'number') return m.injected_lines_total;
+      return Number(m.injected_episodic_total || 0)
+        + Number(m.injected_semantic_total || 0)
+        + Number(m.injected_conflict_total || 0)
+        + Number(m.injected_procedural_total || 0);
+    },
+
+    async _captureMemoryBaselineForTurn() {
+      try {
+        var status = await OpenFangAPI.get('/api/status');
+        this._memoryInjectedBeforeTurn = this._extractInjectedLinesTotal(status);
+      } catch (e) {
+        this._memoryInjectedBeforeTurn = null;
+      }
+    },
+
+    async _updateMemoryAppliedIndicatorForTurn() {
+      try {
+        var status = await OpenFangAPI.get('/api/status');
+        var after = this._extractInjectedLinesTotal(status);
+        if (typeof after !== 'number') return;
+        var before = this._memoryInjectedBeforeTurn;
+        this.memoryContextAppliedLastTurn = (typeof before === 'number') ? (after > before) : null;
+        this.memoryContextAppliedAtMs = Date.now();
+      } catch (e) {
+        this.memoryContextAppliedLastTurn = null;
+      } finally {
+        this._memoryInjectedBeforeTurn = null;
+      }
     },
 
     // Stop the current agent run

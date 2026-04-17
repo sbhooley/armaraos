@@ -1088,7 +1088,7 @@ pub enum TraceEventType {
    - Large fan-outs (50+ parallel agents) ❌
    - Memory and CPU profiling ❌
 
-**Test Command:** `cargo test --workspace` passes all 1744+ tests including orchestration tests.
+**Test Command:** `cargo test --workspace` passes all 2,793+ tests including orchestration tests.
 
 **Gaps:** End-to-end orchestration scenarios, load testing, and quota enforcement edge cases need more coverage.
 

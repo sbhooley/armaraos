@@ -4,7 +4,7 @@ ArmaraOS records **typed graph nodes** from live agent execution using the stand
 
 **Primary code:** `crates/openfang-runtime/src/graph_memory_writer.rs` (async-safe wrapper), `crates/ainl-memory/` (store + schema).
 
-**Operator quick links:** optional env toggles for richer graph writes are summarized in **[persona-evolution.md](persona-evolution.md)** (persona axis hook) and **`crates/openfang-runtime/README.md`** (extractor + tagger features and the same variables). Python inbox (**`ARMARAOS_AGENT_ID`**): **[graph-memory-sync.md](graph-memory-sync.md)**.
+**Operator quick links:** optional env toggles for richer graph writes are summarized in **[persona-evolution.md](persona-evolution.md)** (persona axis hook) and **`crates/openfang-runtime/README.md`** (extractor + tagger features and the same variables). Python inbox (**`ARMARAOS_AGENT_ID`**): **[graph-memory-sync.md](graph-memory-sync.md)**. Pre-release human sign-off (controls, gates, scope, evaluation): **[ga-signoff-checklist.md](ga-signoff-checklist.md)**.
 
 **Further reading (narrative + timeline):** [When Your AI Agent Actually Remembers: Introducing AINL’s Graph-as-Memory Architecture](https://ainativelang.com/blog/graph-as-memory-architecture-ainl) on ainativelang.com (Python AINL, Rust `ainl-*`, ArmaraOS). Verified chronology and citations: **[`PRIOR_ART.md`](../PRIOR_ART.md)** in this repository.
 
@@ -104,9 +104,64 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 
 ---
 
-## Follow-ups
+## Prompt-time memory blocks
 
-1. **Episodes at prompt time**: optional injection of **`recall_recent`** episode summaries into the system prompt is not implemented yet (persona-only today).
+OpenFang now assembles bounded graph-memory context sections during prompt build (non-streaming + streaming):
+
+- **`RecentAttempts`** — recent episodic/tool summaries (session-first with strict caps)
+- **`KnownFacts`** — ranked semantic facts (`confidence`, `recurrence_count`, `reference_count`, recency)
+- **`KnownConflicts`** — contradiction notes for high-confidence conflicting semantic rows
+- **`SuggestedProcedure`** — advisory procedural hints (`fitness`/`success_rate`, non-retired only)
+
+All sections are fail-closed (low-quality memory is skipped), include conservative truncation, and may be disabled by temporary mode.
+
+### Temporary mode and defaults
+
+- **Default**: memory context injection is on with conservative limits.
+- **Temporary mode** (`memory_temporary_mode` metadata or `AINL_MEMORY_TEMPORARY_MODE` env): disables graph-memory recall and graph-memory writes for that turn path.
+- **Global gate**: `AINL_MEMORY_ENABLED` can disable memory context integration quickly.
+- **Rollout gate**: `AINL_MEMORY_ROLLOUT` supports `off`, `internal`, `opt_in`, `default`.
+ - `internal` requires manifest metadata `memory_internal_agent = true`.
+ - `opt_in` requires manifest metadata `memory_opt_in = true` (or internal).
+
+### Background consolidation
+
+After turn writes, runtime schedules a lightweight background consolidation pass that removes
+duplicate semantic rows (same normalized fact text) for the same agent while preserving the
+highest-confidence row. The pass is rate-limited per agent.
+
+### Control-plane endpoints (dashboard/API)
+
+- `GET/PUT /api/graph-memory/controls`
+- `POST /api/graph-memory/remember`
+- `POST /api/graph-memory/forget`
+- `GET /api/graph-memory/inspect`
+- `GET /api/graph-memory/what-do-you-remember` (alias)
+- `POST /api/graph-memory/clear-scope`
+
+`controls` now supports per-block kill switches:
+- `include_episodic_hints`
+- `include_semantic_facts`
+- `include_conflicts`
+- `include_procedural_hints`
+
+### GA provenance gate metrics
+
+`GET /api/status` includes `graph_memory_context_metrics` with:
+- `provenance_coverage_ratio`
+- `provenance_coverage_floor`
+- `provenance_coverage_min_lines`
+- `provenance_gate_pass`
+- `conflict_ratio`
+- `conflict_ratio_max`
+- `conflict_ratio_min_semantic`
+- `contradiction_gate_pass`
+
+Defaults: floor `0.95` and min sampled lines `20` (override with
+`AINL_MEMORY_PROVENANCE_COVERAGE_FLOOR` and `AINL_MEMORY_PROVENANCE_MIN_LINES`).
+Contradiction ratio default max is `0.75` once semantic sample size reaches `20`
+(override with `AINL_MEMORY_CONFLICT_RATIO_MAX` and
+`AINL_MEMORY_CONFLICT_RATIO_MIN_SEMANTIC`).
 
 ---
 
