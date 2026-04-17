@@ -224,6 +224,28 @@ pub enum NetworkEvent {
     },
 }
 
+/// Optional provenance for [`SystemEvent::GraphMemoryWrite`] (dashboard timelines, graph UI).
+///
+/// Older payloads omit this field; clients should treat `None` as “kind only”.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct GraphMemoryWriteProvenance {
+    /// Node ids (UUID strings) tied to this write notification.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_ids: Vec<String>,
+    /// `episode` | `semantic` | `procedural` | `persona` | `runtime_state` when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_kind: Option<String>,
+    /// Machine-readable reason, e.g. `turn_complete`, `pattern_persisted`, `graph_extractor_pass`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// One-line summary for live timelines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Orchestration / trace correlation when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+}
+
 /// System-level event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event")]
@@ -330,8 +352,11 @@ pub enum SystemEvent {
     GraphMemoryWrite {
         /// Agent whose graph DB changed.
         agent_id: AgentId,
-        /// High-level write kind: `episode`, `fact`, or `delegation`.
+        /// High-level write kind: `episode`, `fact`, `delegation`, `procedural`, `persona`, etc.
         kind: String,
+        /// Optional details for dashboards (node ids, summary, reason).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<GraphMemoryWriteProvenance>,
     },
     /// Multi-step workflow run finished (API or scheduler).
     WorkflowRunFinished {
@@ -517,6 +542,54 @@ mod tests {
                 assert_eq!(summary, "done");
             }
             _ => panic!("expected WorkflowRunFinished"),
+        }
+    }
+
+    #[test]
+    fn graph_memory_write_provenance_roundtrips() {
+        let aid = AgentId::new();
+        let ev = SystemEvent::GraphMemoryWrite {
+            agent_id: aid,
+            kind: "procedural".into(),
+            provenance: Some(GraphMemoryWriteProvenance {
+                node_ids: vec!["aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee".into()],
+                node_kind: Some("procedural".into()),
+                reason: Some("pattern_persisted".into()),
+                summary: Some("Pattern test".into()),
+                trace_id: Some("trace-1".into()),
+            }),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: SystemEvent = serde_json::from_str(&json).unwrap();
+        match back {
+            SystemEvent::GraphMemoryWrite {
+                kind, provenance, ..
+            } => {
+                assert_eq!(kind, "procedural");
+                let p = provenance.expect("provenance");
+                assert_eq!(p.node_ids.len(), 1);
+                assert_eq!(p.reason.as_deref(), Some("pattern_persisted"));
+            }
+            _ => panic!("expected GraphMemoryWrite"),
+        }
+    }
+
+    #[test]
+    fn graph_memory_write_deserializes_without_provenance_field() {
+        let aid = AgentId::new();
+        let raw = format!(
+            r#"{{"event":"GraphMemoryWrite","agent_id":"{}","kind":"episode"}}"#,
+            aid
+        );
+        let parsed: SystemEvent = serde_json::from_str(&raw).expect("legacy json");
+        match parsed {
+            SystemEvent::GraphMemoryWrite {
+                kind, provenance, ..
+            } => {
+                assert_eq!(kind, "episode");
+                assert!(provenance.is_none());
+            }
+            _ => panic!("expected GraphMemoryWrite"),
         }
     }
 }

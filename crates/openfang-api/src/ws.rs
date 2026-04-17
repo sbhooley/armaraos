@@ -1591,7 +1591,6 @@ mod tests {
         assert_eq!(strip_think_tags("<think>all thinking</think>"), "");
     }
 
-
     #[test]
     fn ws_upgrade_api_key_allows_when_key_empty_even_with_bogus_bearer() {
         let mut headers = axum::http::HeaderMap::new();
@@ -1606,11 +1605,13 @@ mod tests {
     #[test]
     fn ws_upgrade_api_key_accepts_bearer_or_query_token() {
         let key = "super-secret-key-for-ws-tests";
-        let uri_with_token: axum::http::Uri = format!("http://x/ws?token={key}")
-            .parse()
-            .unwrap();
+        let uri_with_token: axum::http::Uri = format!("http://x/ws?token={key}").parse().unwrap();
         let headers_empty = axum::http::HeaderMap::new();
-        assert!(ws_upgrade_api_key_allowed(key, &headers_empty, &uri_with_token));
+        assert!(ws_upgrade_api_key_allowed(
+            key,
+            &headers_empty,
+            &uri_with_token
+        ));
 
         let mut headers_bearer = axum::http::HeaderMap::new();
         headers_bearer.insert(
@@ -1618,14 +1619,22 @@ mod tests {
             axum::http::HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
         );
         let uri_no_query: axum::http::Uri = "http://x/ws".parse().unwrap();
-        assert!(ws_upgrade_api_key_allowed(key, &headers_bearer, &uri_no_query));
+        assert!(ws_upgrade_api_key_allowed(
+            key,
+            &headers_bearer,
+            &uri_no_query
+        ));
 
         let mut headers_wrong = axum::http::HeaderMap::new();
         headers_wrong.insert(
             axum::http::header::AUTHORIZATION,
             axum::http::HeaderValue::from_static("Bearer wrong"),
         );
-        assert!(!ws_upgrade_api_key_allowed(key, &headers_wrong, &uri_no_query));
+        assert!(!ws_upgrade_api_key_allowed(
+            key,
+            &headers_wrong,
+            &uri_no_query
+        ));
     }
 
     #[test]

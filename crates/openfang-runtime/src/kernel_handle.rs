@@ -8,6 +8,7 @@
 use async_trait::async_trait;
 use openfang_types::agent::AgentId;
 use openfang_types::capability::Capability;
+use openfang_types::event::GraphMemoryWriteProvenance;
 use openfang_types::orchestration::{
     DelegateSelectionOptions, OrchestrationContext, SelectionStrategy,
 };
@@ -110,8 +111,13 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<(), String>;
 
     /// Notify dashboards that AINL graph memory was updated for `agent_id`.
-    async fn notify_graph_memory_write(&self, agent_id: &str, kind: &str) -> Result<(), String> {
-        let _ = (agent_id, kind);
+    async fn notify_graph_memory_write(
+        &self,
+        agent_id: &str,
+        kind: &str,
+        provenance: Option<GraphMemoryWriteProvenance>,
+    ) -> Result<(), String> {
+        let _ = (agent_id, kind, provenance);
         Ok(())
     }
 

@@ -312,11 +312,13 @@ mod tests {
         });
         let evs = buf.events_for_trace("t-life");
         assert!(
-            evs.iter().any(|e| matches!(e.event_type, TraceEventType::OrchestrationStart { .. })),
+            evs.iter()
+                .any(|e| matches!(e.event_type, TraceEventType::OrchestrationStart { .. })),
             "start event"
         );
         assert!(
-            evs.iter().any(|e| matches!(e.event_type, TraceEventType::AgentCompleted { .. })),
+            evs.iter()
+                .any(|e| matches!(e.event_type, TraceEventType::AgentCompleted { .. })),
             "completed event"
         );
         let cost = buf.trace_cost("t-life").expect("cost");

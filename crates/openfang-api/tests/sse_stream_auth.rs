@@ -260,4 +260,3 @@ async fn logs_stream_loopback_ok_without_bearer_when_api_key_set() {
     assert_eq!(res.status(), StatusCode::OK);
     drop(tmp);
 }
-

@@ -10,13 +10,50 @@ function graphMemoryNormalizeAgentsPayload(raw) {
   return [];
 }
 
+/** Deterministic one-line copy when API `explain` is absent (timeline fallback). */
+function graphMemoryFormatProceduralFallback(meta) {
+  var m = meta || {};
+  var seq = Array.isArray(m.tool_sequence) ? m.tool_sequence.join(' → ') : '';
+  var conf = m.confidence != null ? Number(m.confidence) : null;
+  var name = m.pattern_name ? String(m.pattern_name) : '';
+  var parts = [];
+  if (name) {
+    parts.push('Pattern “' + name + '”');
+  } else {
+    parts.push('Repeated tool chain');
+  }
+  if (seq) {
+    parts.push(seq);
+  }
+  if (conf != null && Number.isFinite(conf)) {
+    parts.push('confidence ' + conf.toFixed(2));
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** Deterministic one-line copy for persona nodes (timeline fallback). */
+function graphMemoryFormatPersonaFallback(meta) {
+  var m = meta || {};
+  var trait = m.trait_name ? String(m.trait_name) : '';
+  var st = m.strength != null ? Number(m.strength) : null;
+  var cycle = m.evolution_cycle != null ? Number(m.evolution_cycle) : 0;
+  var line = trait ? 'Trait “' + trait + '”' : 'Persona trait';
+  if (st != null && Number.isFinite(st)) {
+    line += ' at ' + st.toFixed(2);
+  }
+  if (cycle > 0) {
+    line += ' · evolved (cycle ' + cycle + ')';
+  }
+  return line;
+}
+
 function graphMemoryPanel() {
   return {
     nodes: [],
     edges: [],
     agents: [],
     agentId: '',
-    filters: ['episode', 'semantic', 'procedural', 'persona'],
+    filters: ['episode', 'semantic', 'procedural', 'persona', 'runtime_state'],
     selected: null,
     loading: false,
     simulation: null,
@@ -38,6 +75,7 @@ function graphMemoryPanel() {
       semantic: '#6be8a0',
       procedural: '#f5c75a',
       persona: '#c97cf5',
+      runtime_state: '#9aa0b4',
     },
 
     isGraphMemoryKernelEvent(d) {
@@ -90,6 +128,9 @@ function graphMemoryPanel() {
       }
       if (kind === 'procedural') {
         return 'procedural';
+      }
+      if (kind === 'persona') {
+        return 'persona';
       }
       return kind || 'semantic';
     },
@@ -148,13 +189,32 @@ function graphMemoryPanel() {
       if (writeKind === 'procedural') {
         return nk === 'procedural';
       }
+      if (writeKind === 'persona') {
+        return nk === 'persona';
+      }
       return true;
     },
 
     summarizeNode(node) {
-      var label = String((node && node.label) || '').trim();
+      var ex = node && node.explain;
+      var what =
+        ex &&
+        typeof ex === 'object' &&
+        ex.what_happened != null &&
+        String(ex.what_happened).trim();
+      var label = what
+        ? String(what).trim()
+        : String((node && node.label) || '').trim();
       if (!label) {
-        label = 'Untitled memory node';
+        var k = String((node && node.kind) || '');
+        var meta = (node && node.meta) || {};
+        if (k === 'procedural') {
+          label = graphMemoryFormatProceduralFallback(meta);
+        } else if (k === 'persona') {
+          label = graphMemoryFormatPersonaFallback(meta);
+        } else {
+          label = 'Untitled memory node';
+        }
       }
       if (label.length > 96) {
         label = label.slice(0, 96) + '…';
@@ -261,13 +321,32 @@ function graphMemoryPanel() {
       var aid = String(payload.agent_id || '').trim();
       var kind = String(payload.kind || '').trim() || 'write';
       var whenMs = this.parseEventTimeMs(detail);
-      var items = await this.resolveWriteDetails(aid, kind);
+      var prov = payload.provenance || null;
+      var items;
+      if (prov && prov.summary) {
+        var nk = prov.node_kind
+          ? String(prov.node_kind)
+          : this.timelineKindClass(kind);
+        var nid =
+          prov.node_ids && prov.node_ids.length ? String(prov.node_ids[0]) : '';
+        items = [
+          {
+            nodeId: nid,
+            nodeKind: nk,
+            nodeLabel: String(prov.summary),
+            reason: prov.reason ? String(prov.reason) : '',
+          },
+        ];
+      } else {
+        items = await this.resolveWriteDetails(aid, kind);
+      }
       if (!items.length) {
         items = [
           {
             nodeId: '',
             nodeKind: this.timelineKindClass(kind),
             nodeLabel: 'New ' + this.writeKindLabel(kind) + ' stored',
+            reason: '',
           },
         ];
       }
@@ -291,11 +370,39 @@ function graphMemoryPanel() {
           nodeKind: item.nodeKind || self.timelineKindClass(kind),
           nodeLabel: item.nodeLabel,
           nodeId: item.nodeId || '',
+          reason: item.reason || '',
         });
       });
       if (this.viewMode === 'live' && String(this.agentId || '') === aid) {
         await this.fetchGraph();
       }
+    },
+
+    /** Focus a node on the graph after live refresh (timeline click). */
+    selectNodeById(nodeId) {
+      var id = String(nodeId || '').trim();
+      if (!id) {
+        return;
+      }
+      var n = (this.nodes || []).find(function (x) {
+        return x && String(x.id) === id;
+      });
+      if (!n) {
+        return;
+      }
+      this.selected = n;
+      var self = this;
+      this.$nextTick(function () {
+        self.renderGraph();
+      });
+    },
+
+    /** Short deterministic line for procedural / persona nodes (timeline fallback). */
+    timelineDetailLine(entry) {
+      if (entry && entry.reason) {
+        return String(entry.reason).replace(/_/g, ' ');
+      }
+      return '';
     },
 
     async init() {
@@ -938,7 +1045,10 @@ function graphMemoryPanel() {
         .append('line')
         .attr('stroke', 'rgba(255,255,255,0.12)')
         .attr('stroke-width', 1.2)
-        .attr('marker-end', 'url(#gm-arrow)');
+        .attr('marker-end', 'url(#gm-arrow)')
+        .attr('title', function (d) {
+          return d.rel ? String(d.rel) : '';
+        });
 
       var nodeSel = svg
         .select('#gm-nodes')
@@ -1023,24 +1133,42 @@ function graphMemoryPanel() {
         .selectAll('text')
         .data(
           simNodes.filter(function (n) {
-            return n.kind === 'persona' || n.kind === 'episode';
+            return (
+              n.kind === 'persona' ||
+              n.kind === 'episode' ||
+              n.kind === 'procedural' ||
+              n.kind === 'semantic'
+            );
           })
         )
         .enter()
         .append('text')
-        .attr('font-size', '10px')
+        .attr('font-size', function (d) {
+          return d.kind === 'persona' || d.kind === 'episode' ? '10px' : '9px';
+        })
         .attr('fill', function (d) {
-          return self.kindColor[d.kind];
+          return self.kindColor[d.kind] || '#888';
         })
         .attr('fill-opacity', 0.8)
         .attr('text-anchor', 'middle')
         .attr('dy', function (d) {
-          return d.kind === 'persona' ? -18 : -13;
+          if (d.kind === 'persona') {
+            return -18;
+          }
+          if (d.kind === 'episode') {
+            return -13;
+          }
+          return -11;
         })
         .attr('pointer-events', 'none')
         .text(function (d) {
-          var lab = d.label || '';
-          return lab.slice(0, 28) + (lab.length > 28 ? '…' : '');
+          var raw =
+            d.kind === 'procedural' || d.kind === 'persona'
+              ? self.nodeTextKey(d)
+              : d.label || '';
+          var lab = String(raw || '');
+          var max = d.kind === 'semantic' ? 22 : 28;
+          return lab.slice(0, max) + (lab.length > max ? '…' : '');
         });
 
       svg.on('click', function () {

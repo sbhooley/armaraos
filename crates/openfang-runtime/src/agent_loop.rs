@@ -47,15 +47,31 @@ use tracing::{debug, info, warn};
 /// When a kernel handle is present, graph-memory writes publish `SystemEvent::GraphMemoryWrite` for dashboard SSE.
 fn graph_memory_sse_hook(
     kernel: &Option<Arc<dyn KernelHandle>>,
-) -> Option<Arc<dyn Fn(String, String) + Send + Sync>> {
+) -> Option<
+    Arc<
+        dyn Fn(String, String, Option<openfang_types::event::GraphMemoryWriteProvenance>)
+            + Send
+            + Sync,
+    >,
+> {
     kernel.as_ref().map(|k| {
         let k = Arc::clone(k);
-        Arc::new(move |agent_id: String, kind: String| {
-            let k = Arc::clone(&k);
-            tokio::spawn(async move {
-                let _ = k.notify_graph_memory_write(&agent_id, &kind).await;
-            });
-        }) as Arc<dyn Fn(String, String) + Send + Sync>
+        Arc::new(
+            move |agent_id: String,
+                  kind: String,
+                  provenance: Option<openfang_types::event::GraphMemoryWriteProvenance>| {
+                let k = Arc::clone(&k);
+                tokio::spawn(async move {
+                    let _ = k
+                        .notify_graph_memory_write(&agent_id, &kind, provenance)
+                        .await;
+                });
+            },
+        ) as Arc<
+            dyn Fn(String, String, Option<openfang_types::event::GraphMemoryWriteProvenance>)
+                + Send
+                + Sync,
+        >
     })
 }
 
@@ -334,7 +350,7 @@ async fn run_ainl_runtime_engine_prelude(
     // `ainl-runtime` writes via a separate SQLite handle, so those mutations do not naturally
     // pass through GraphMemoryWriter's direct write methods. Emit one observed-write signal so
     // the dashboard Graph Memory live timeline stays in sync for runtime-engine turns.
-    gm.emit_write_observed("episode");
+    gm.emit_write_observed("episode", None);
     crate::ainl_runtime_bridge::log_mapped_end_turn_fields(&manifest.name, &mapped);
     Some(mapped.telemetry.clone())
 }

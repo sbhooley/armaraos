@@ -1488,6 +1488,10 @@ pub struct McpServerConfigEntry {
     /// Environment variables to pass through (e.g., ["GITHUB_PERSONAL_ACCESS_TOKEN"]).
     #[serde(default)]
     pub env: Vec<String>,
+    /// Non-secret values for [`Self::env`] keys (dashboard / integrations.toml `config` map).
+    /// Not typically present in config.toml; used when merging extension installs.
+    #[serde(default)]
+    pub config_env: HashMap<String, String>,
     /// Extra HTTP headers for SSE / Streamable-HTTP transports.
     /// Each entry is `"Header-Name: value"` (e.g., `"Authorization: Bearer <token>"`).
     #[serde(default)]

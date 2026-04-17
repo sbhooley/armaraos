@@ -110,6 +110,8 @@ struct GraphMemoryNodeOut {
     vitals_trust: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     meta: Option<Value>,
+    /// Human-oriented explainability: what / why / evidence / neighbor relations.
+    explain: Value,
 }
 
 #[derive(Serialize)]
@@ -407,6 +409,10 @@ fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
                 "source": persona.source,
                 "dominant_axes": persona.dominant_axes,
                 "layer": persona.layer,
+                "evolution_cycle": persona.evolution_cycle,
+                "last_evolved": persona.last_evolved,
+                "provenance_episode_ids": persona.provenance_episode_ids,
+                "evolution_log_entries": persona.evolution_log.len(),
             })),
         ),
         AinlNodeType::RuntimeState { runtime_state } => (
@@ -433,6 +439,156 @@ fn normalize_rel(label: &str) -> String {
         "follows" => "follows".to_string(),
         "caused" | "caused_by" => "caused".to_string(),
         _ => "related".to_string(),
+    }
+}
+
+fn neighbor_relations_for_node(
+    node_id: &str,
+    edges: &[GraphMemoryEdgeOut],
+    id_to_label: &HashMap<String, String>,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for e in edges {
+        if e.source == node_id {
+            out.push(json!({
+                "direction": "out",
+                "rel": e.rel,
+                "peer_id": e.target,
+                "peer_label": id_to_label.get(&e.target).cloned().unwrap_or_default(),
+            }));
+        } else if e.target == node_id {
+            out.push(json!({
+                "direction": "in",
+                "rel": e.rel,
+                "peer_id": e.source,
+                "peer_label": id_to_label.get(&e.source).cloned().unwrap_or_default(),
+            }));
+        }
+    }
+    out
+}
+
+/// Dashboard-oriented explainability (what / why / evidence) per node kind.
+fn explainability_for_node(
+    node: &AinlMemoryNode,
+    ui_kind: &'static str,
+    neighbors: &[Value],
+) -> Value {
+    match &node.node_type {
+        AinlNodeType::Episode { episodic } => {
+            let what = if episodic.delegation_to.is_some() {
+                "Delegation episode: this turn routed work to another agent.".to_string()
+            } else {
+                "Conversation turn stored as an episode (tools + trace metadata).".to_string()
+            };
+            let why = "Episodic nodes anchor time-ordered memory and link to facts, patterns, and persona updates.".to_string();
+            let evidence = json!({
+                "turn_id": episodic.turn_id.to_string(),
+                "tool_calls": episodic.tool_calls,
+                "delegation_to": episodic.delegation_to,
+                "follows_episode_id": episodic.follows_episode_id,
+                "tags": episodic.tags,
+            });
+            json!({
+                "what_happened": what,
+                "why_happened": why,
+                "evidence": evidence,
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::Semantic { semantic } => {
+            let what = if semantic.fact.is_empty() {
+                "Semantic fact node (empty text in store).".to_string()
+            } else {
+                format!(
+                    "Semantic fact stored: {}",
+                    openfang_types::truncate_str(semantic.fact.as_str(), 200)
+                )
+            };
+            let why = if semantic.recurrence_count > 1 {
+                "This fact was reinforced by repeated extraction (recurrence).".to_string()
+            } else {
+                "Extracted from conversation / graph signals for long-horizon recall.".to_string()
+            };
+            let evidence = json!({
+                "confidence": semantic.confidence,
+                "recurrence_count": semantic.recurrence_count,
+                "source_episode_id": semantic.source_episode_id,
+                "topic_cluster": semantic.topic_cluster,
+            });
+            json!({
+                "what_happened": what,
+                "why_happened": why,
+                "evidence": evidence,
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::Procedural { procedural } => {
+            let chain = procedural.tool_sequence.join(" → ");
+            let what = if procedural.pattern_name.is_empty() {
+                format!("Procedural pattern (tools): {chain}")
+            } else {
+                format!("Procedural pattern “{}”: {chain}", procedural.pattern_name)
+            };
+            let why = "Tool-sequence patterns are learned so similar workflows can be recalled or reinforced.".to_string();
+            let evidence = json!({
+                "confidence": procedural.confidence,
+                "success_rate": procedural.success_rate,
+                "procedure_type": procedural.procedure_type,
+                "trace_id": procedural.trace_id,
+            });
+            json!({
+                "what_happened": what,
+                "why_happened": why,
+                "evidence": evidence,
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::Persona { persona } => {
+            let what = format!(
+                "Persona trait “{}” at strength {:.2}.",
+                persona.trait_name, persona.strength
+            );
+            let why = if persona.evolution_cycle > 0 {
+                "Updated by the persona / graph evolution pass (soft axes + trait strength)."
+                    .to_string()
+            } else {
+                "Persona row used for prompt-time recall and long-horizon adaptation.".to_string()
+            };
+            let evidence = json!({
+                "source": persona.source,
+                "layer": persona.layer,
+                "dominant_axes": persona.dominant_axes,
+                "evolution_cycle": persona.evolution_cycle,
+                "last_evolved": persona.last_evolved,
+                "provenance_episode_ids": persona.provenance_episode_ids,
+            });
+            json!({
+                "what_happened": what,
+                "why_happened": why,
+                "evidence": evidence,
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::RuntimeState { runtime_state } => {
+            json!({
+                "what_happened": format!(
+                    "Runtime graph state snapshot (turns {}, last extract {}).",
+                    runtime_state.turn_count, runtime_state.last_extraction_at_turn
+                ),
+                "why_happened": "Tracks extractor cadence and last evolution cycle for this agent.",
+                "evidence": json!({
+                    "turn_count": runtime_state.turn_count,
+                    "last_extraction_at_turn": runtime_state.last_extraction_at_turn,
+                }),
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
     }
 }
 
@@ -467,28 +623,21 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
         Err(_) => return json!({ "nodes": [], "edges": [] }),
     };
 
-    let mut nodes_out: Vec<GraphMemoryNodeOut> = Vec::new();
-    let mut id_set: HashSet<String> = HashSet::new();
-
+    let mut parsed: Vec<(String, String, AinlMemoryNode, i64)> = Vec::new();
     for row in rows.flatten() {
         let (id, node_type, payload, ts) = row;
         let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) else {
             continue;
         };
-        let (label, strength, vitals_gate, vitals_phase, vitals_trust, meta) =
-            label_for_node(&node);
+        parsed.push((id, node_type, node, ts));
+    }
+
+    let mut id_set: HashSet<String> = HashSet::new();
+    let mut id_to_label: HashMap<String, String> = HashMap::new();
+    for (id, _, node, _) in &parsed {
         id_set.insert(id.clone());
-        nodes_out.push(GraphMemoryNodeOut {
-            id,
-            kind: node_kind(node_type.as_str()),
-            label,
-            strength,
-            created_at: ts,
-            vitals_gate,
-            vitals_phase,
-            vitals_trust,
-            meta,
-        });
+        let (label, _, _, _, _, _) = label_for_node(node);
+        id_to_label.insert(id.clone(), label);
     }
 
     let mut edges_out: Vec<GraphMemoryEdgeOut> = Vec::new();
@@ -513,6 +662,27 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
                 }
             }
         }
+    }
+
+    let mut nodes_out: Vec<GraphMemoryNodeOut> = Vec::new();
+    for (id, node_type, node, ts) in parsed {
+        let nk = node_kind(node_type.as_str());
+        let (label, strength, vitals_gate, vitals_phase, vitals_trust, meta) =
+            label_for_node(&node);
+        let neighbors = neighbor_relations_for_node(&id, &edges_out, &id_to_label);
+        let explain = explainability_for_node(&node, nk, &neighbors);
+        nodes_out.push(GraphMemoryNodeOut {
+            id,
+            kind: nk,
+            label,
+            strength,
+            created_at: ts,
+            vitals_gate,
+            vitals_phase,
+            vitals_trust,
+            meta,
+            explain,
+        });
     }
 
     json!({

@@ -836,6 +836,22 @@ pub async fn build_router(
             axum::routing::get(routes::list_available_integrations),
         )
         .route(
+            "/api/integrations/mcp-presets",
+            axum::routing::get(routes::mcp_integration_presets),
+        )
+        .route(
+            "/api/integrations/validate",
+            axum::routing::post(routes::validate_integration_config),
+        )
+        .route(
+            "/api/integrations/custom/validate",
+            axum::routing::post(routes::validate_custom_mcp_config),
+        )
+        .route(
+            "/api/integrations/custom/add",
+            axum::routing::post(routes::add_custom_mcp),
+        )
+        .route(
             "/api/integrations/add",
             axum::routing::post(routes::add_integration),
         )

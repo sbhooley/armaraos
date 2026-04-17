@@ -652,8 +652,19 @@ fn describe_event(event: &Event) -> String {
             } => format!(
                 "Approval pending: {tool_name} for agent {agent_id} ({request_id}): {action_summary}"
             ),
-            SystemEvent::GraphMemoryWrite { agent_id, kind } => {
-                format!("Graph memory write: agent {agent_id}, kind={kind}")
+            SystemEvent::GraphMemoryWrite {
+                agent_id,
+                kind,
+                provenance,
+            } => {
+                let mut s = format!("Graph memory write: agent {agent_id}, kind={kind}");
+                if let Some(p) = provenance {
+                    if let Some(sum) = p.summary.as_ref() {
+                        use std::fmt::Write as _;
+                        let _ = write!(&mut s, " — {}", sum);
+                    }
+                }
+                s
             }
             SystemEvent::WorkflowRunFinished {
                 workflow_name,

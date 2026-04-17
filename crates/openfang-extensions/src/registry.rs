@@ -5,8 +5,8 @@
 //! integrations to `McpServerConfigEntry` for kernel consumption.
 
 use crate::{
-    ExtensionError, ExtensionResult, InstalledIntegration, IntegrationCategory, IntegrationInfo,
-    IntegrationStatus, IntegrationTemplate, IntegrationsFile,
+    bundled, ExtensionError, ExtensionResult, InstalledIntegration, IntegrationCategory,
+    IntegrationInfo, IntegrationStatus, IntegrationTemplate, IntegrationsFile,
 };
 use openfang_types::config::{McpServerConfigEntry, McpTransportEntry};
 use std::collections::HashMap;
@@ -59,6 +59,16 @@ impl IntegrationRegistry {
         let content = std::fs::read_to_string(&self.integrations_path)?;
         let file: IntegrationsFile =
             toml::from_str(&content).map_err(|e| ExtensionError::TomlParse(e.to_string()))?;
+        for ct in file.custom_templates {
+            if bundled::is_bundled_id(&ct.id) {
+                warn!(
+                    "Skipping custom template '{}' in integrations.toml (bundled id)",
+                    ct.id
+                );
+                continue;
+            }
+            self.templates.insert(ct.id.clone(), ct);
+        }
         let count = file.installed.len();
         for entry in file.installed {
             self.installed.insert(entry.id.clone(), entry);
@@ -69,8 +79,16 @@ impl IntegrationRegistry {
 
     /// Save installed state to integrations.toml.
     pub fn save_installed(&self) -> ExtensionResult<()> {
+        let mut custom_templates: Vec<IntegrationTemplate> = self
+            .templates
+            .values()
+            .filter(|t| !bundled::is_bundled_id(&t.id))
+            .cloned()
+            .collect();
+        custom_templates.sort_by(|a, b| a.id.cmp(&b.id));
         let file = IntegrationsFile {
             installed: self.installed.values().cloned().collect(),
+            custom_templates,
         };
         let content =
             toml::to_string_pretty(&file).map_err(|e| ExtensionError::TomlParse(e.to_string()))?;
@@ -79,6 +97,26 @@ impl IntegrationRegistry {
         }
         std::fs::write(&self.integrations_path, content)?;
         Ok(())
+    }
+
+    /// Insert a user-defined MCP template (must not be a bundled id).
+    pub(crate) fn insert_custom_template_for_install(
+        &mut self,
+        template: IntegrationTemplate,
+    ) -> ExtensionResult<()> {
+        if bundled::is_bundled_id(&template.id) {
+            return Err(ExtensionError::InvalidIntegrationId(
+                "id is reserved for a built-in integration".to_string(),
+            ));
+        }
+        self.templates.insert(template.id.clone(), template);
+        Ok(())
+    }
+
+    pub(crate) fn rollback_custom_template_insert(&mut self, id: &str) {
+        if !bundled::is_bundled_id(id) {
+            self.templates.remove(id);
+        }
     }
 
     /// Get a template by ID.
@@ -109,6 +147,9 @@ impl IntegrationRegistry {
     pub fn uninstall(&mut self, id: &str) -> ExtensionResult<()> {
         if self.installed.remove(id).is_none() {
             return Err(ExtensionError::NotInstalled(id.to_string()));
+        }
+        if !bundled::is_bundled_id(id) {
+            self.templates.remove(id);
         }
         self.save_installed()
     }
@@ -183,9 +224,20 @@ impl IntegrationRegistry {
                 let template = self.templates.get(&inst.id)?;
                 let transport = match &template.transport {
                     crate::McpTransportTemplate::Stdio { command, args } => {
+                        let mut args = args.clone();
+                        if inst.id == "filesystem" {
+                            if let Some(paths) = inst.config.get("allowed_paths") {
+                                for p in paths.split(',') {
+                                    let t = p.trim();
+                                    if !t.is_empty() {
+                                        args.push(t.to_string());
+                                    }
+                                }
+                            }
+                        }
                         McpTransportEntry::Stdio {
                             command: command.clone(),
-                            args: args.clone(),
+                            args,
                         }
                     }
                     crate::McpTransportTemplate::Sse { url } => {
@@ -200,12 +252,28 @@ impl IntegrationRegistry {
                     .iter()
                     .map(|e| e.name.clone())
                     .collect();
+                let mut config_env: HashMap<String, String> = HashMap::new();
+                for e in &template.required_env {
+                    if e.is_secret {
+                        continue;
+                    }
+                    if let Some(v) = inst.config.get(&e.name) {
+                        if !v.trim().is_empty() {
+                            config_env.insert(e.name.clone(), v.clone());
+                        }
+                    }
+                }
+                let timeout_secs = template
+                    .mcp_timeout_secs
+                    .filter(|t| *t > 0 && *t <= 600)
+                    .unwrap_or(30);
                 Some(McpServerConfigEntry {
                     name: inst.id.clone(),
                     transport,
-                    timeout_secs: 30,
+                    timeout_secs,
                     env,
-                    headers: Vec::new(),
+                    config_env,
+                    headers: template.mcp_headers.clone(),
                 })
             })
             .collect()
@@ -236,8 +304,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut reg = IntegrationRegistry::new(dir.path());
         let count = reg.load_bundled();
-        assert_eq!(count, 25);
-        assert_eq!(reg.template_count(), 25);
+        assert_eq!(count, 27);
+        assert_eq!(reg.template_count(), 27);
     }
 
     #[test]
@@ -339,7 +407,7 @@ mod tests {
         let mut reg = IntegrationRegistry::new(dir.path());
         reg.load_bundled();
         let devtools = reg.list_by_category(&IntegrationCategory::DevTools);
-        assert_eq!(devtools.len(), 6);
+        assert_eq!(devtools.len(), 7);
     }
 
     #[test]
@@ -360,5 +428,53 @@ mod tests {
         reg.set_enabled("github", false).unwrap();
         let configs = reg.to_mcp_configs();
         assert!(configs.is_empty()); // disabled = not in MCP configs
+    }
+
+    #[test]
+    fn registry_custom_template_roundtrip_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut reg = IntegrationRegistry::new(dir.path());
+        reg.load_bundled();
+
+        let entry = InstalledIntegration {
+            id: "zcustomroundtrip".to_string(),
+            installed_at: chrono::Utc::now(),
+            enabled: true,
+            oauth_provider: None,
+            config: HashMap::new(),
+        };
+        let template = IntegrationTemplate {
+            id: "zcustomroundtrip".to_string(),
+            name: "Roundtrip".to_string(),
+            description: "test".to_string(),
+            category: IntegrationCategory::DevTools,
+            icon: "🔧".to_string(),
+            transport: crate::McpTransportTemplate::Stdio {
+                command: "npx".to_string(),
+                args: vec!["-y".to_string(), "noop".to_string()],
+            },
+            required_env: vec![],
+            oauth: None,
+            tags: vec!["custom".to_string()],
+            setup_instructions: String::new(),
+            health_check: crate::HealthCheckConfig::default(),
+            mcp_headers: vec![],
+            mcp_timeout_secs: Some(42),
+        };
+        reg.insert_custom_template_for_install(template.clone())
+            .unwrap();
+        reg.install(entry).unwrap();
+
+        let mut reg2 = IntegrationRegistry::new(dir.path());
+        reg2.load_bundled();
+        reg2.load_installed().unwrap();
+        let t2 = reg2
+            .get_template("zcustomroundtrip")
+            .expect("custom template");
+        assert_eq!(t2.name, "Roundtrip");
+        assert_eq!(t2.mcp_timeout_secs, Some(42));
+        let cfgs = reg2.to_mcp_configs();
+        assert_eq!(cfgs.len(), 1);
+        assert_eq!(cfgs[0].timeout_secs, 42);
     }
 }

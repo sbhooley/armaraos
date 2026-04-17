@@ -13,6 +13,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Workflow Endpoints](#workflow-endpoints)
 - [Trigger Endpoints](#trigger-endpoints)
 - [Memory Endpoints](#memory-endpoints)
+  - [GET /api/graph-memory (AINL graph)](#get-apigraph-memory)
 - [Channel Endpoints](#channel-endpoints)
 - [Template Endpoints](#template-endpoints)
 - [System Endpoints](#system-endpoints)
@@ -796,6 +797,28 @@ Delete a key-value pair.
 }
 ```
 
+### GET /api/graph-memory (AINL graph)
+
+Reads the per-agent **AINL graph** from `~/.armaraos/agents/<agent_id>/ainl_memory.db` for the **Graph Memory** dashboard (`#graph-memory`).
+
+**Query parameters**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `agent_id` | (required) | Kernel agent id (UUID string). |
+| `limit` | `200` | Max nodes (clamped). |
+| `since_seconds` | `7776000` | Only nodes with `timestamp >= now - since_seconds` (90 days default). |
+
+**Response** `200 OK`: JSON with `nodes`, `edges`, and `stats` (counts by node kind). Each **node** includes:
+
+- **`kind`**: `episode`, `semantic`, `procedural`, `persona`, or `runtime_state`
+- **`meta`**: type-specific fields from storage (facts, tools, persona axes, etc.)
+- **`explain`**: dashboard-oriented object with **`what_happened`**, **`why_happened`**, **`evidence`** (object), **`relations`** (neighbor edges with direction and `rel`), and **`node_kind`**
+
+Related governance routes: `GET /api/graph-memory/snapshots`, `GET /api/graph-memory/snapshot-graph`, `GET /api/graph-memory/audit`, `POST /api/graph-memory/snapshot|rollback|reset|delete-node`.
+
+Semantics and release ordering: **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)**. Narrative: **[graph-memory.md](graph-memory.md)**.
+
 ---
 
 ## Channel Endpoints
@@ -1307,6 +1330,64 @@ Hot-reload integration / extension MCP configs and reconnect.
 
 **Dashboard:** **Reload integrations**. **Auth:** same as other POST routes when `api_key` is set.
 
+### GET /api/integrations/mcp-presets
+
+Returns curated MCP preset metadata (IDs, titles, subtitles, sort order) for the **Skills → MCP** installer UI.
+
+**Response** `200 OK`:
+
+```json
+{
+  "presets": [
+    {
+      "preset_id": "postgres",
+      "integration_id": "postgresql",
+      "title": "PostgreSQL",
+      "subtitle": "Query Postgres via MCP",
+      "order": 30
+    }
+  ]
+}
+```
+
+### POST /api/integrations/custom/validate
+
+Validates a **user-defined MCP server** definition (no side effects). Used by **Skills → MCP → Add custom MCP server**.
+
+**Request body** (JSON): `id` (slug, lowercase, not a bundled integration id), `name`, optional `icon` / `description`, `transport` (`stdio` with `command` + optional `args`, or `sse` / `http` with `url`), optional `env` array of `{ "name", "label"?, "help"?, "is_secret"?, "value"? }`, optional `timeout_secs` (1–600), optional `headers` (array of `"Header-Name: value"` strings for SSE/HTTP).
+
+**Response** `200 OK`: `{ "ok": true|false, "id"?: "...", "field_errors": { "field": "message" } }`. Secrets are not echoed.
+
+### POST /api/integrations/custom/add
+
+Installs a custom MCP integration: persists the template in **`integrations.toml`** (`custom_templates`) plus **installed** state, splits secrets into the vault and non-secrets into **`config`**, then hot-reloads extension MCPs (same pipeline as preset installs).
+
+**Response** `201 Created`: `{ "ok": true, "id", "mode": "custom", "integration_status", "connected", "message" }` on success.
+
+**Errors** `400` / `409`: JSON may include `field_errors` for inline form guidance. Response bodies never include plaintext secret values.
+
+### POST /api/integrations/validate
+
+Validates an integration install payload **without** writing `integrations.toml` or the vault.
+
+**Request body** (JSON):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string (required) | Integration template id (see `GET /api/integrations/available`). |
+| `env` | object (optional) | String values for required env vars (secrets and non-secrets may be mixed; the server splits using template metadata). |
+| `config` | object (optional) | Non-secret integration config (e.g. filesystem `allowed_paths`). |
+
+Unknown keys return **`400`**. Response includes `field_errors` for inline form guidance.
+
+### POST /api/integrations/add (configured install)
+
+In addition to the legacy body `{ "id": "github" }`, you may include **`env`** and/or **`config`** objects to run the credential-aware installer (`openfang_extensions::install_integration`).
+
+**Response additions:** `mode` is `"legacy"` or `"configured"`; configured installs include `integration_status` (`ready` / `setup` / …).
+
+**Dashboard:** **Skills → MCP Servers** — **Add custom MCP server** (`POST /api/integrations/custom/*`) or **preset examples** (this endpoint). **Auth:** same as other POST routes when `api_key` is set.
+
 ### GET /api/peers
 
 List OFP (OpenFang Protocol) wire peers and their connection status.
@@ -1792,6 +1873,8 @@ ArmaraOS supports both Model Context Protocol (MCP) for tool interoperability an
 ### GET /api/mcp/servers
 
 List configured and connected MCP servers with their available tools, plus a **readiness** report for host integrations (calendar, future checks).
+
+The **`configured`** array is built from the kernel’s **effective** MCP server list (manual `config.toml` entries **plus** extension-installed integrations), not `config.toml` alone.
 
 **Response** `200 OK`:
 
@@ -3101,6 +3184,8 @@ The dashboard’s **`Alpine.store('kernelEvents')`** and **notification center**
 
 Payload `type` / `data` follows `EventPayload`: includes **`OrchestrationTrace`** with an `OrchestrationTraceEvent` when multi-agent orchestration steps are recorded (aligned with **`GET /api/orchestration/traces`**).
 
+**System** events include **`GraphMemoryWrite`** (`data.event`: `GraphMemoryWrite`) when the AINL graph store mutates: **`agent_id`**, **`kind`** (`episode`, `fact`, `delegation`, `procedural`, `persona`, …), and optional **`provenance`** (`node_ids`, `node_kind`, `reason`, `summary`, `trace_id`) for dashboard timeline copy. Older payloads without `provenance` still deserialize. See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)**.
+
 ---
 
 ## OpenAI-Compatible API
@@ -3375,6 +3460,8 @@ The `Retry-After` header indicates the window duration in seconds.
 | POST | `/api/clawhub/install` | Install from ClawHub |
 | **MCP & A2A** | | |
 | POST | `/api/integrations/reload` | Hot-reload extension MCP integrations |
+| POST | `/api/integrations/custom/validate` | Validate custom MCP definition (no writes) |
+| POST | `/api/integrations/custom/add` | Install user-defined MCP (registry + vault) |
 | GET | `/api/mcp/servers` | MCP server connections |
 | POST | `/mcp` | MCP HTTP transport (JSON-RPC 2.0) |
 | GET | `/.well-known/agent.json` | A2A agent card |

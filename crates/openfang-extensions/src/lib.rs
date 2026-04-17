@@ -1,7 +1,7 @@
 //! OpenFang Extensions — one-click integration system.
 //!
 //! This crate provides:
-//! - **Integration Registry**: 25 bundled MCP server templates (GitHub, Slack, etc.)
+//! - **Integration Registry**: 27 bundled MCP server templates (GitHub, Slack, etc.)
 //! - **Credential Vault**: AES-256-GCM encrypted storage with OS keyring support
 //! - **OAuth2 PKCE**: Localhost callback flows for Google/GitHub/Microsoft/Slack
 //! - **Health Monitor**: Auto-reconnect with exponential backoff
@@ -9,6 +9,7 @@
 
 pub mod bundled;
 pub mod credentials;
+pub mod custom_mcp;
 pub mod health;
 pub mod installer;
 pub mod oauth;
@@ -25,6 +26,8 @@ use std::collections::HashMap;
 pub enum ExtensionError {
     #[error("Integration not found: {0}")]
     NotFound(String),
+    #[error("Invalid integration id: {0}")]
+    InvalidIntegrationId(String),
     #[error("Integration already installed: {0}")]
     AlreadyInstalled(String),
     #[error("Integration not installed: {0}")]
@@ -177,6 +180,12 @@ pub struct IntegrationTemplate {
     /// Health check configuration.
     #[serde(default)]
     pub health_check: HealthCheckConfig,
+    /// Extra HTTP/SSE headers for remote MCP transports (`Header-Name: value` per line).
+    #[serde(default)]
+    pub mcp_headers: Vec<String>,
+    /// Override MCP request timeout (seconds) for this integration.
+    #[serde(default)]
+    pub mcp_timeout_secs: Option<u64>,
 }
 
 /// Status of an installed integration.
@@ -230,6 +239,9 @@ pub struct InstalledIntegration {
 pub struct IntegrationsFile {
     #[serde(default)]
     pub installed: Vec<InstalledIntegration>,
+    /// User-defined MCP templates (persisted; ids must not collide with bundled integrations).
+    #[serde(default)]
+    pub custom_templates: Vec<IntegrationTemplate>,
 }
 
 /// Combined view of an integration (template + install state).

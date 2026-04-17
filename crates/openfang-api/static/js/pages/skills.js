@@ -34,6 +34,35 @@ function skillsPage() {
     mcpServers: [],
     mcpLoading: false,
 
+    // MCP guided installer (Skills → MCP)
+    mcpPresets: [],
+    mcpAvailableIntegrations: [],
+    mcpInstalledIntegrations: [],
+    mcpPresetId: '',
+    mcpSelectedTemplate: null,
+    mcpForm: {},
+    mcpFieldErrors: {},
+    mcpInstallerLoading: false,
+    mcpInstallerBusy: false,
+    mcpInstallerError: '',
+
+    // Custom MCP (primary flow)
+    mcpShowPresets: false,
+    customMcpTransport: 'stdio',
+    customMcpForm: {
+      id: '',
+      name: '',
+      icon: '🔌',
+      description: '',
+      command: '',
+      argsLine: '',
+      url: '',
+      timeout_secs: '',
+      headersText: '',
+    },
+    customMcpEnvRows: [],
+    customMcpFieldErrors: {},
+
     // Category definitions from the OpenClaw ecosystem
     categories: [
       { id: 'coding', name: 'Coding & IDEs' },
@@ -317,6 +346,300 @@ function skillsPage() {
         this.mcpServers = { configured: [], connected: [], total_configured: 0, total_connected: 0 };
       }
       this.mcpLoading = false;
+    },
+
+    resetCustomMcpForm: function() {
+      this.customMcpTransport = 'stdio';
+      this.customMcpForm = {
+        id: '',
+        name: '',
+        icon: '🔌',
+        description: '',
+        command: '',
+        argsLine: '',
+        url: '',
+        timeout_secs: '',
+        headersText: '',
+      };
+      this.customMcpEnvRows = [];
+      this.customMcpFieldErrors = {};
+    },
+
+    addCustomMcpEnvRow: function() {
+      this.customMcpEnvRows.push({
+        name: '',
+        label: '',
+        help: '',
+        is_secret: true,
+        value: '',
+      });
+    },
+
+    removeCustomMcpEnvRow: function(idx) {
+      this.customMcpEnvRows.splice(idx, 1);
+    },
+
+    buildCustomMcpPayload: function() {
+      var transport;
+      var t = this.customMcpTransport;
+      if (t === 'stdio') {
+        var args = [];
+        var line = (this.customMcpForm.argsLine || '').trim();
+        if (line) {
+          line.split(/\s+/).forEach(function(a) {
+            if (a) args.push(a);
+          });
+        }
+        transport = { type: 'stdio', command: (this.customMcpForm.command || '').trim(), args: args };
+      } else if (t === 'sse') {
+        transport = { type: 'sse', url: (this.customMcpForm.url || '').trim() };
+      } else {
+        transport = { type: 'http', url: (this.customMcpForm.url || '').trim() };
+      }
+      var env = (this.customMcpEnvRows || []).map(function(row) {
+        return {
+          name: (row.name || '').trim(),
+          label: (row.label || '').trim() || (row.name || '').trim(),
+          help: (row.help || '').trim(),
+          is_secret: !!row.is_secret,
+          value: row.value != null ? String(row.value) : '',
+        };
+      }).filter(function(row) {
+        return row.name.length > 0;
+      });
+      var headers = [];
+      var ht = (this.customMcpForm.headersText || '').split('\n');
+      ht.forEach(function(line) {
+        var s = (line || '').trim();
+        if (s) headers.push(s);
+      });
+      var payload = {
+        id: (this.customMcpForm.id || '').trim(),
+        name: (this.customMcpForm.name || '').trim(),
+        icon: (this.customMcpForm.icon || '').trim() || '🔌',
+        transport: transport,
+        env: env,
+      };
+      var desc = (this.customMcpForm.description || '').trim();
+      if (desc) payload.description = desc;
+      var to = (this.customMcpForm.timeout_secs || '').trim();
+      if (to && !isNaN(parseInt(to, 10))) payload.timeout_secs = parseInt(to, 10);
+      if (headers.length && (t === 'sse' || t === 'http')) payload.headers = headers;
+      return payload;
+    },
+
+    async validateCustomMcp() {
+      this.customMcpFieldErrors = {};
+      this.mcpInstallerBusy = true;
+      try {
+        var payload = this.buildCustomMcpPayload();
+        var res = await OpenFangAPI.post('/api/integrations/custom/validate', payload);
+        if (res.field_errors && Object.keys(res.field_errors).length) {
+          this.customMcpFieldErrors = res.field_errors;
+          OpenFangToast.error('Fix the highlighted fields and try again.');
+        } else if (res.ok === false) {
+          OpenFangToast.error('Validation failed.');
+        } else {
+          OpenFangToast.success('Looks good — you can add this MCP server now.');
+        }
+      } catch(e) {
+        OpenFangToast.error('Validation failed: ' + openFangErrText(e));
+      }
+      this.mcpInstallerBusy = false;
+    },
+
+    async installCustomMcp() {
+      this.customMcpFieldErrors = {};
+      this.mcpInstallerBusy = true;
+      try {
+        var payload = this.buildCustomMcpPayload();
+        var res = await OpenFangAPI.post('/api/integrations/custom/add', payload);
+        OpenFangToast.success(res.message || 'Custom MCP installed');
+        this.resetCustomMcpForm();
+        await this.loadMcpPanel();
+        var cid = res.id;
+        if (cid) {
+          try {
+            await OpenFangAPI.post('/api/integrations/' + encodeURIComponent(cid) + '/reconnect', {});
+          } catch(e2) {
+            /* ignore */
+          }
+        }
+        await this.loadMcpPanel();
+      } catch(e) {
+        OpenFangToast.error('Install failed: ' + openFangErrText(e));
+      }
+      this.mcpInstallerBusy = false;
+    },
+
+    isCustomMcpInstalled: function() {
+      var id = (this.customMcpForm.id || '').trim();
+      if (!id) return false;
+      return this.isMcpIntegrationInstalled(id);
+    },
+
+    async loadMcpInstallerData() {
+      this.mcpInstallerLoading = true;
+      this.mcpInstallerError = '';
+      try {
+        var presets = await OpenFangAPI.get('/api/integrations/mcp-presets');
+        this.mcpPresets = (presets.presets || []).slice().sort(function(a, b) {
+          return (a.order || 0) - (b.order || 0);
+        });
+        var avail = await OpenFangAPI.get('/api/integrations/available');
+        this.mcpAvailableIntegrations = avail.integrations || [];
+        var inst = await OpenFangAPI.get('/api/integrations');
+        this.mcpInstalledIntegrations = inst.installed || [];
+        if (!this.mcpPresetId && this.mcpPresets.length) {
+          this.mcpPresetId = this.mcpPresets[0].preset_id;
+        }
+        this.applyMcpPresetSelection();
+      } catch(e) {
+        this.mcpInstallerError = e.message || String(e);
+      }
+      this.mcpInstallerLoading = false;
+    },
+
+    async loadMcpPanel() {
+      await Promise.all([this.loadMcpServers(), this.loadMcpInstallerData()]);
+    },
+
+    findMcpTemplate: function(integrationId) {
+      return (this.mcpAvailableIntegrations || []).find(function(t) { return t.id === integrationId; }) || null;
+    },
+
+    isMcpIntegrationInstalled: function(integrationId) {
+      return (this.mcpInstalledIntegrations || []).some(function(x) { return x.id === integrationId; });
+    },
+
+    applyMcpPresetSelection: function() {
+      this.mcpFieldErrors = {};
+      this.mcpInstallerError = '';
+      var preset = (this.mcpPresets || []).find(function(p) { return p.preset_id === this.mcpPresetId; }.bind(this));
+      if (!preset) {
+        this.mcpSelectedTemplate = null;
+        this.mcpForm = {};
+        return;
+      }
+      var tpl = this.findMcpTemplate(preset.integration_id);
+      this.mcpSelectedTemplate = tpl;
+      var form = {};
+      if (tpl && tpl.required_env) {
+        tpl.required_env.forEach(function(e) {
+          form[e.name] = '';
+        });
+      }
+      if (preset.integration_id === 'filesystem') {
+        form.allowed_paths = '';
+      }
+      if (preset.integration_id === 'apple-caldav') {
+        form.DAV_PROVIDER = form.DAV_PROVIDER || 'icloud';
+      }
+      this.mcpForm = form;
+    },
+
+    async validateMcpPreset() {
+      if (!this.mcpSelectedTemplate) return;
+      this.mcpFieldErrors = {};
+      this.mcpInstallerBusy = true;
+      try {
+        var preset = (this.mcpPresets || []).find(function(p) { return p.preset_id === this.mcpPresetId; }.bind(this));
+        var id = preset ? preset.integration_id : '';
+        var payload = { id: id, env: this.buildMcpInstallEnv(), config: this.buildMcpInstallConfig() };
+        var res = await OpenFangAPI.post('/api/integrations/validate', payload);
+        if (res.field_errors && Object.keys(res.field_errors).length) {
+          this.mcpFieldErrors = res.field_errors;
+          OpenFangToast.error('Fix the highlighted fields and try again.');
+        } else {
+          OpenFangToast.success('Looks good — you can install now.');
+        }
+      } catch(e) {
+        OpenFangToast.error('Validation failed: ' + openFangErrText(e));
+      }
+      this.mcpInstallerBusy = false;
+    },
+
+    buildMcpInstallEnv: function() {
+      var env = {};
+      var tpl = this.mcpSelectedTemplate;
+      if (!tpl || !tpl.required_env) return env;
+      var self = this;
+      tpl.required_env.forEach(function(field) {
+        var v = (self.mcpForm[field.name] != null) ? String(self.mcpForm[field.name]) : '';
+        env[field.name] = v;
+      });
+      return env;
+    },
+
+    buildMcpInstallConfig: function() {
+      var cfg = {};
+      var preset = (this.mcpPresets || []).find(function(p) { return p.preset_id === this.mcpPresetId; }.bind(this));
+      if (preset && preset.integration_id === 'filesystem') {
+        cfg.allowed_paths = (this.mcpForm.allowed_paths != null) ? String(this.mcpForm.allowed_paths) : '';
+      }
+      return cfg;
+    },
+
+    async installMcpPreset() {
+      var preset = (this.mcpPresets || []).find(function(p) { return p.preset_id === this.mcpPresetId; }.bind(this));
+      if (!preset) return;
+      this.mcpFieldErrors = {};
+      this.mcpInstallerBusy = true;
+      try {
+        var payload = {
+          id: preset.integration_id,
+          env: this.buildMcpInstallEnv(),
+          config: this.buildMcpInstallConfig(),
+        };
+        // OAuth-only templates (no required env) — still send empty objects so the configured installer runs.
+        if (preset.integration_id === 'google-calendar') {
+          payload.env = payload.env || {};
+          payload.config = payload.config || {};
+        }
+        var res = await OpenFangAPI.post('/api/integrations/add', payload);
+        OpenFangToast.success(res.message || 'Installed');
+        await this.loadMcpPanel();
+        // Best-effort reconnect for the new integration
+        try {
+          await OpenFangAPI.post('/api/integrations/' + encodeURIComponent(preset.integration_id) + '/reconnect', {});
+        } catch(e2) {
+          // ignore — user can hit Reconnect manually
+        }
+        await this.loadMcpPanel();
+      } catch(e) {
+        OpenFangToast.error('Install failed: ' + openFangErrText(e));
+      }
+      this.mcpInstallerBusy = false;
+    },
+
+    async reconnectMcpIntegration(integrationId) {
+      try {
+        await OpenFangAPI.post('/api/integrations/' + encodeURIComponent(integrationId) + '/reconnect', {});
+        OpenFangToast.success('Reconnect requested');
+        await this.loadMcpPanel();
+      } catch(e) {
+        OpenFangToast.error('Reconnect failed: ' + openFangErrText(e));
+      }
+    },
+
+    async registerMcpIntegrationLegacy(integrationId) {
+      try {
+        await OpenFangAPI.post('/api/integrations/add', { id: integrationId });
+        OpenFangToast.success('Integration registered');
+        await this.loadMcpPanel();
+      } catch(e) {
+        OpenFangToast.error('Register failed: ' + openFangErrText(e));
+      }
+    },
+
+    mcpCurrentPreset: function() {
+      var self = this;
+      return (this.mcpPresets || []).find(function(p) { return p.preset_id === self.mcpPresetId; }) || null;
+    },
+
+    mcpCurrentIntegrationId: function() {
+      var p = this.mcpCurrentPreset();
+      return p && p.integration_id ? p.integration_id : '';
     },
 
     // Category search on ClawHub

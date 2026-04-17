@@ -6101,11 +6101,14 @@ pub async fn hand_instance_browser(
 
 /// GET /api/mcp/servers — List configured MCP servers and their tools.
 pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Get configured servers from config
-    let config_servers: Vec<serde_json::Value> = state
+    // Get configured servers from the effective merged list (manual config.toml + integrations)
+    let effective = state
         .kernel
-        .config
-        .mcp_servers
+        .effective_mcp_servers
+        .read()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    let config_servers: Vec<serde_json::Value> = effective
         .iter()
         .map(|s| {
             let transport = match &s.transport {
@@ -11489,6 +11492,334 @@ fn remove_channel_config(
 // Integration management endpoints
 // ---------------------------------------------------------------------------
 
+fn json_string_map(
+    value: Option<&serde_json::Value>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let Some(v) = value else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "Expected JSON object".to_string())?;
+    let mut out = std::collections::HashMap::new();
+    for (k, val) in obj {
+        if val.is_null() {
+            out.insert(k.clone(), String::new());
+            continue;
+        }
+        let s = val
+            .as_str()
+            .ok_or_else(|| format!("Field '{k}' must be a string"))?;
+        out.insert(k.clone(), s.to_string());
+    }
+    Ok(out)
+}
+
+fn split_integration_payload(
+    template: &openfang_extensions::IntegrationTemplate,
+    env_map: &std::collections::HashMap<String, String>,
+    config_map: &std::collections::HashMap<String, String>,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    let mut secrets = std::collections::HashMap::new();
+    let mut cfg = config_map.clone();
+    for (k, v) in env_map {
+        if k == "allowed_paths" {
+            cfg.insert(k.clone(), v.clone());
+            continue;
+        }
+        if let Some(meta) = template.required_env.iter().find(|e| e.name == *k) {
+            if meta.is_secret {
+                secrets.insert(k.clone(), v.clone());
+            } else {
+                cfg.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    (secrets, cfg)
+}
+
+/// GET /api/integrations/mcp-presets — Curated MCP presets for the dashboard installer.
+pub async fn mcp_integration_presets() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "presets": [
+            {
+                "preset_id": "filesystem",
+                "integration_id": "filesystem",
+                "title": "Filesystem",
+                "subtitle": "Local files (allowed directories)",
+                "order": 10
+            },
+            {
+                "preset_id": "github",
+                "integration_id": "github",
+                "title": "GitHub",
+                "subtitle": "Repos, issues, and pull requests",
+                "order": 20
+            },
+            {
+                "preset_id": "postgres",
+                "integration_id": "postgresql",
+                "title": "PostgreSQL",
+                "subtitle": "Query Postgres via MCP",
+                "order": 30
+            },
+            {
+                "preset_id": "google-calendar",
+                "integration_id": "google-calendar",
+                "title": "Google Calendar",
+                "subtitle": "OAuth — use Connect flow when available",
+                "order": 40
+            },
+            {
+                "preset_id": "apple-caldav",
+                "integration_id": "apple-caldav",
+                "title": "Apple / CalDAV",
+                "subtitle": "iCloud calendars via CalDAV",
+                "order": 50
+            }
+        ]
+    }))
+}
+
+/// POST /api/integrations/validate — Validate a configured install payload (no side effects).
+pub async fn validate_integration_config(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/validate";
+    let id = match req.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Missing integration id",
+                "JSON body must include string 'id'.".to_string(),
+                Some("Use GET /api/integrations/mcp-presets for recommended IDs."),
+            );
+        }
+    };
+
+    let env_map = match json_string_map(req.get("env")) {
+        Ok(m) => m,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid env map",
+                e,
+                None,
+            );
+        }
+    };
+    let config_map = match json_string_map(req.get("config")) {
+        Ok(m) => m,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid config map",
+                e,
+                None,
+            );
+        }
+    };
+
+    let template = {
+        let registry = state
+            .kernel
+            .extension_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        match registry.get_template(&id) {
+            Some(t) => t.clone(),
+            None => {
+                return api_json_error(
+                    StatusCode::NOT_FOUND,
+                    &rid,
+                    PATH,
+                    "Unknown integration",
+                    format!("Unknown integration: '{id}'"),
+                    Some("Use GET /api/integrations/available to list templates."),
+                );
+            }
+        }
+    };
+
+    if let Err(e) = openfang_extensions::installer::validate_user_supplied_keys(
+        &template,
+        &id,
+        &env_map,
+        &config_map,
+    ) {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Invalid integration fields",
+            e.to_string(),
+            None,
+        );
+    }
+
+    let (secrets, cfg) = split_integration_payload(&template, &env_map, &config_map);
+    let field_errors = openfang_extensions::installer::integration_payload_field_errors(
+        &template, &id, &secrets, &cfg,
+    );
+
+    let ok = field_errors.is_empty();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": id,
+            "ok": ok,
+            "field_errors": field_errors,
+        })),
+    )
+}
+
+/// POST /api/integrations/custom/validate — Validate a custom MCP definition (no side effects).
+pub async fn validate_custom_mcp_config(Json(req): Json<serde_json::Value>) -> impl IntoResponse {
+    match openfang_extensions::custom_mcp::parse_custom_mcp_payload(&req) {
+        Err(field_errors) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": false,
+                "field_errors": field_errors,
+            })),
+        ),
+        Ok((template, secrets, cfg)) => {
+            let id = template.id.clone();
+            let field_errors = openfang_extensions::custom_mcp::custom_mcp_field_errors(
+                &template, &id, &secrets, &cfg,
+            );
+            let ok = field_errors.is_empty();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "id": id,
+                    "ok": ok,
+                    "field_errors": field_errors,
+                })),
+            )
+        }
+    }
+}
+
+/// POST /api/integrations/custom/add — Install a user-defined MCP server (registry + vault).
+pub async fn add_custom_mcp(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/custom/add";
+
+    let (template, secrets, cfg) =
+        match openfang_extensions::custom_mcp::parse_custom_mcp_payload(&req) {
+            Ok(x) => x,
+            Err(field_errors) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "request_id": rid.0,
+                        "path": PATH,
+                        "error": "Invalid custom MCP payload",
+                        "ok": false,
+                        "field_errors": field_errors,
+                    })),
+                );
+            }
+        };
+
+    let id = template.id.clone();
+    let field_errors =
+        openfang_extensions::custom_mcp::custom_mcp_field_errors(&template, &id, &secrets, &cfg);
+    if !field_errors.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "request_id": rid.0,
+                "path": PATH,
+                "error": "Invalid custom MCP fields",
+                "ok": false,
+                "field_errors": field_errors,
+            })),
+        );
+    }
+
+    let install_result = {
+        let mut resolver = state
+            .kernel
+            .credential_resolver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut registry = state
+            .kernel
+            .extension_registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+
+        match openfang_extensions::installer::install_custom_mcp(
+            &mut registry,
+            &mut resolver,
+            template,
+            &secrets,
+            &cfg,
+        ) {
+            Ok(result) => Ok(result),
+            Err(openfang_extensions::ExtensionError::AlreadyInstalled(id)) => Err((
+                StatusCode::CONFLICT,
+                format!("Integration '{id}' already installed"),
+            )),
+            Err(openfang_extensions::ExtensionError::InvalidIntegrationId(msg)) => {
+                Err((StatusCode::BAD_REQUEST, msg))
+            }
+            Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+        }
+    };
+
+    let result = match install_result {
+        Ok(r) => r,
+        Err((status, msg)) => {
+            return api_json_error(status, &rid, PATH, "Custom MCP install failed", msg, None);
+        }
+    };
+
+    state.kernel.extension_health.register(&id);
+
+    let connected = state.kernel.reload_extension_mcps().await.unwrap_or(0);
+
+    let integration_status = match &result.status {
+        openfang_extensions::IntegrationStatus::Ready => "ready",
+        openfang_extensions::IntegrationStatus::Setup => "setup",
+        openfang_extensions::IntegrationStatus::Disabled => "disabled",
+        openfang_extensions::IntegrationStatus::Available => "available",
+        openfang_extensions::IntegrationStatus::Error(_) => "error",
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": id,
+            "status": "installed",
+            "mode": "custom",
+            "integration_status": integration_status,
+            "connected": connected > 0,
+            "message": result.message,
+            "ok": true,
+        })),
+    )
+}
+
 /// GET /api/integrations — List installed integrations with status.
 pub async fn list_integrations(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let registry = state
@@ -11567,6 +11898,12 @@ pub async fn list_available_integrations(State(state): State<Arc<AppState>>) -> 
 }
 
 /// POST /api/integrations/add — Install an integration.
+///
+/// Back-compat: `{ "id": "github" }` registers the integration without running the
+/// credential-aware installer (legacy behavior).
+///
+/// Configured install: include `env` and/or `config` objects. Values are split into
+/// vault secrets vs non-secret config using template metadata (`required_env.is_secret`).
 pub async fn add_integration(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
@@ -11588,62 +11925,202 @@ pub async fn add_integration(
         }
     };
 
-    // Scope the write lock so it's dropped before any .await
-    let install_err = {
+    let use_configured = req.get("env").is_some() || req.get("config").is_some();
+
+    if !use_configured {
+        // Scope the write lock so it's dropped before any .await
+        let install_err = {
+            let mut registry = state
+                .kernel
+                .extension_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+
+            if registry.is_installed(&id) {
+                Some((
+                    StatusCode::CONFLICT,
+                    format!("Integration '{}' already installed", id),
+                ))
+            } else if registry.get_template(&id).is_none() {
+                Some((
+                    StatusCode::NOT_FOUND,
+                    format!("Unknown integration: '{}'", id),
+                ))
+            } else {
+                let entry = openfang_extensions::InstalledIntegration {
+                    id: id.clone(),
+                    installed_at: chrono::Utc::now(),
+                    enabled: true,
+                    oauth_provider: None,
+                    config: std::collections::HashMap::new(),
+                };
+                match registry.install(entry) {
+                    Ok(_) => None,
+                    Err(e) => Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+                }
+            }
+        }; // write lock dropped here
+
+        if let Some((status, error)) = install_err {
+            return api_json_error(
+                status,
+                &rid,
+                PATH,
+                "Integration install failed",
+                error,
+                None,
+            );
+        }
+
+        state.kernel.extension_health.register(&id);
+
+        let connected = state.kernel.reload_extension_mcps().await.unwrap_or(0);
+
+        return (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "status": "installed",
+                "mode": "legacy",
+                "connected": connected > 0,
+                "message": format!("Integration '{}' installed", id),
+            })),
+        );
+    }
+
+    let env_map = match json_string_map(req.get("env")) {
+        Ok(m) => m,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid env map",
+                e,
+                None,
+            );
+        }
+    };
+    let config_map = match json_string_map(req.get("config")) {
+        Ok(m) => m,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid config map",
+                e,
+                None,
+            );
+        }
+    };
+
+    let template = {
+        let registry = state
+            .kernel
+            .extension_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        match registry.get_template(&id) {
+            Some(t) => t.clone(),
+            None => {
+                return api_json_error(
+                    StatusCode::NOT_FOUND,
+                    &rid,
+                    PATH,
+                    "Unknown integration",
+                    format!("Unknown integration: '{id}'"),
+                    Some("Use GET /api/integrations/available to list templates."),
+                );
+            }
+        }
+    };
+
+    if let Err(e) = openfang_extensions::installer::validate_user_supplied_keys(
+        &template,
+        &id,
+        &env_map,
+        &config_map,
+    ) {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Invalid integration fields",
+            e.to_string(),
+            None,
+        );
+    }
+
+    let (secrets, merged_config) = split_integration_payload(&template, &env_map, &config_map);
+
+    let install_result = {
+        let mut resolver = state
+            .kernel
+            .credential_resolver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut registry = state
             .kernel
             .extension_registry
             .write()
             .unwrap_or_else(|e| e.into_inner());
 
-        if registry.is_installed(&id) {
-            Some((
+        match openfang_extensions::installer::install_integration(
+            &mut registry,
+            &mut resolver,
+            &id,
+            &secrets,
+            &merged_config,
+        ) {
+            Ok(result) => Ok(result),
+            Err(openfang_extensions::ExtensionError::AlreadyInstalled(id)) => Err((
                 StatusCode::CONFLICT,
-                format!("Integration '{}' already installed", id),
-            ))
-        } else if registry.get_template(&id).is_none() {
-            Some((
+                format!("Integration '{id}' already installed"),
+            )),
+            Err(openfang_extensions::ExtensionError::NotFound(id)) => Err((
                 StatusCode::NOT_FOUND,
-                format!("Unknown integration: '{}'", id),
-            ))
-        } else {
-            let entry = openfang_extensions::InstalledIntegration {
-                id: id.clone(),
-                installed_at: chrono::Utc::now(),
-                enabled: true,
-                oauth_provider: None,
-                config: std::collections::HashMap::new(),
-            };
-            match registry.install(entry) {
-                Ok(_) => None,
-                Err(e) => Some((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-            }
+                format!("Unknown integration: '{id}'"),
+            )),
+            Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
         }
-    }; // write lock dropped here
+    };
 
-    if let Some((status, error)) = install_err {
-        return api_json_error(
-            status,
-            &rid,
-            PATH,
-            "Integration install failed",
-            error,
-            None,
-        );
-    }
+    let result = match install_result {
+        Ok(r) => r,
+        Err((status, msg)) => {
+            return api_json_error(
+                status,
+                &rid,
+                PATH,
+                "Integration install failed",
+                msg,
+                Some("Check field names and required values."),
+            );
+        }
+    };
 
     state.kernel.extension_health.register(&id);
 
-    // Hot-connect the new MCP server
     let connected = state.kernel.reload_extension_mcps().await.unwrap_or(0);
+
+    let integration_status = match &result.status {
+        openfang_extensions::IntegrationStatus::Ready => "ready",
+        openfang_extensions::IntegrationStatus::Setup => "setup",
+        openfang_extensions::IntegrationStatus::Disabled => "disabled",
+        openfang_extensions::IntegrationStatus::Available => "available",
+        openfang_extensions::IntegrationStatus::Error(_) => "error",
+    };
 
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
             "id": id,
             "status": "installed",
+            "mode": "configured",
+            "integration_status": integration_status,
             "connected": connected > 0,
-            "message": format!("Integration '{}' installed", id),
+            "message": result.message,
         })),
     )
 }

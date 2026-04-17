@@ -1,0 +1,21 @@
+id = "filesystem"
+name = "Filesystem"
+description = "Read and write files under user-approved absolute directories via the official MCP filesystem server"
+category = "devtools"
+icon = "📁"
+tags = ["files", "filesystem", "local", "mcp"]
+
+[transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem"]
+
+[health_check]
+interval_secs = 60
+unhealthy_threshold = 3
+
+setup_instructions = """
+1. Enter one or more **absolute** directory paths (comma-separated) that agents may access.
+2. Paths are stored locally as integration config (not treated as secret credentials).
+3. The MCP server only exposes those directories; access outside them is blocked by the server.
+"""

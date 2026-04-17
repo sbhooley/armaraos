@@ -192,6 +192,7 @@ curl -sS -N "http://127.0.0.1:4200/api/logs/stream?level=info" | head -n 5
 
 - On the **Get started** page (`overview` route), lifecycle/system kernel events trigger a **debounced** refresh (~400ms) via `armaraos-kernel-event`. When `kernelEvents.last` is set, the page shows a compact **Live** strip (last event summary + **Timeline**).
 - **MCP readiness (panel grid):** After load, when **`GET /api/mcp/servers`** returns `readiness.checks`, the **MCP readiness** card lists one badge per check (e.g. **Calendar**) with green = ready / amber = not ready. Data comes from `overview.js` (`mcpReadiness`, getter `mcpReadinessChecks`). API details: [mcp-a2a.md](mcp-a2a.md) and [api-reference.md](api-reference.md#get-apimcpservers). CLI: `openfang doctor` prints the same checks; JSON checks use `daemon_mcp_readiness_<id>` (legacy `daemon_mcp_calendar` retained while `calendar_readiness` is aliased).
+- **Skills → MCP:** Open **#skills** → **MCP Servers**. Confirm the primary **Add custom MCP server** form calls **`POST /api/integrations/custom/validate`** and **`POST /api/integrations/custom/add`**, then **`POST /api/integrations/:id/reconnect`** as needed. Expand **Preset examples** and confirm presets load (`GET /api/integrations/mcp-presets`), fields come from **`GET /api/integrations/available`**, and **Validate** / **Install** / **Reconnect** call **`POST /api/integrations/validate`**, **`POST /api/integrations/add`** (with `env`/`config`), and **`POST /api/integrations/:id/reconnect`**. After install, **`GET /api/mcp/servers`** should list the server under **`configured`** and (when healthy) under **`connected`**.
 - **Usage / cost hero:** Token and cost figures load from **`GET /api/usage/summary`** (SQLite-backed totals), not ephemeral scheduler-only counters — values should survive **daemon restarts** and desktop upgrades as long as the data directory is preserved.
 - **Analytics parity:** The **Analytics** page summary tab uses the same **`/api/usage/summary`** store; **By agent** uses **`GET /api/usage`**, which now prefers the same persistent metering totals (see **`source`** per row in [api-reference.md](api-reference.md#get-apiusage)).
 - **Page leave:** The overview component registers `@page-leave.window="stopAutoRefresh()"` so timers and kernel listeners are cleared when navigating away. If you add **Playwright** (or similar) later, assert that after switching to another hash/route, `setInterval`-driven refresh is not still firing (e.g. spy on `/api/usage/summary` or equivalent after leaving the Get started page).
@@ -467,3 +468,19 @@ curl -s -X PUT http://127.0.0.1:4200/api/slash-templates \
 curl -s http://127.0.0.1:4200/api/slash-templates
 # Expect: {"templates":[{"name":"test","text":"This is a test template."}]}
 ```
+
+---
+
+## Graph Memory (`#graph-memory`)
+
+**Navigation:** Sidebar **Graph Memory**, or `http://127.0.0.1:4200/#graph-memory`.
+
+**Manual checks**
+
+1. Pick an agent with existing **`ainl_memory.db`** data (or run a short chat turn to create episodes).
+2. **Canvas:** Episode / semantic / procedural / persona / **runtime** filters toggle node sets; edges show a **tooltip** with relation kind (hover line).
+3. **Details panel (node click):** Shows **What**, **Why**, **Evidence** (JSON), **Edges (typed)** with direction + `rel`, and **Neighbors**. Full node id + **Copy**.
+4. **Live timeline:** After graph writes, entries should show **kernel-provided summaries** when `SystemEvent::GraphMemoryWrite.provenance` is present (not only the generic “New … stored”). Click a row to **focus** the node when `nodeId` is known.
+5. **API spot-check:** `GET /api/graph-memory?agent_id=<uuid>&limit=50` — each node should include **`explain`** with `what_happened` / `why_happened` / `evidence` / `relations`.
+
+See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)** for the event/API contract and release ordering.

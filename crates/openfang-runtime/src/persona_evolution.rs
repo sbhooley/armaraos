@@ -98,6 +98,27 @@ async fn evolve_from_turn_impl(
     engine.ingest_signals(synthetic);
     let snap = engine.snapshot();
     engine.write_persona_node(store, &snap)?;
+    let tools = turn
+        .tool_calls
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = if tools.is_empty() {
+        "Persona axis update from turn signals".to_string()
+    } else {
+        format!("Axis ingest from tools: {tools}")
+    };
+    writer.emit_write_observed(
+        "persona",
+        Some(openfang_types::event::GraphMemoryWriteProvenance {
+            node_ids: vec![],
+            node_kind: Some("persona".to_string()),
+            reason: Some("turn_axis_ingest".to_string()),
+            summary: Some(summary),
+            trace_id: None,
+        }),
+    );
     Ok(())
 }
 

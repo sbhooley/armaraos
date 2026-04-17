@@ -6876,6 +6876,10 @@ button.tool-card-header {
   background: rgba(201, 124, 245, 0.15);
   color: #c97cf5;
 }
+.node-badge-runtime_state {
+  background: rgba(154, 160, 180, 0.15);
+  color: #9aa0b4;
+}
 .node-dot {
   display: inline-block;
   width: 8px;
@@ -6895,6 +6899,9 @@ button.tool-card-header {
 .node-dot-persona {
   background: #c97cf5;
   box-shadow: 0 0 6px #c97cf5;
+}
+.node-dot-runtime_state {
+  background: #9aa0b4;
 }
 :root {
   --graph-bg: #0f0f13;

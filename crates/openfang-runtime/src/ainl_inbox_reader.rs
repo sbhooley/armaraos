@@ -405,15 +405,15 @@ async fn atomic_write_inbox(path: &Path, value: &Value) -> Result<(), String> {
 }
 
 /// Import inbox nodes/edges into `writer`'s SQLite graph, then reset the inbox file.
-pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
+pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<usize, String> {
     let path = inbox_path(writer.agent_id());
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(e) => return Err(format!("read inbox: {e}")),
     };
     if bytes.is_empty() || bytes.iter().all(|u| u.is_ascii_whitespace()) {
-        return Ok(());
+        return Ok(0);
     }
     let root: Value = serde_json::from_slice(&bytes).map_err(|e| format!("inbox json: {e}"))?;
     let source_features = parse_source_features(&root);
@@ -429,7 +429,7 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
         .unwrap_or_default();
 
     if nodes_raw.is_empty() && edges_raw.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let mut nodes: Vec<AinlMemoryNode> = Vec::new();
@@ -447,7 +447,7 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
     }
 
     if nodes.is_empty() && edges.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let node_count = nodes.len();
@@ -480,7 +480,7 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
         imported_edges = edge_count,
         "AINL graph memory inbox drained"
     );
-    Ok(())
+    Ok(node_count)
 }
 
 #[cfg(test)]
@@ -779,6 +779,6 @@ mod tests {
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
         tokio::fs::write(&inbox_path, b"").await.unwrap();
-        drain_inbox(&writer).await.expect("empty inbox");
+        assert_eq!(drain_inbox(&writer).await.expect("empty inbox"), 0);
     }
 }

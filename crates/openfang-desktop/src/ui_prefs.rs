@@ -227,9 +227,11 @@ mod tests {
     fn feed_urls_select_expected_armaraos_json() {
         assert_eq!(feed_url_for_channel("stable"), STABLE_FEED_URL);
         assert_eq!(feed_url_for_channel("beta"), BETA_FEED_URL);
-        assert!(STABLE_FEED_URL.ends_with("/latest.json"), "{STABLE_FEED_URL}");
+        assert!(
+            STABLE_FEED_URL.ends_with("/latest.json"),
+            "{STABLE_FEED_URL}"
+        );
         assert!(BETA_FEED_URL.ends_with("/beta.json"), "{BETA_FEED_URL}");
         assert_eq!(feed_url_for_channel("unknown"), STABLE_FEED_URL);
     }
 }
-

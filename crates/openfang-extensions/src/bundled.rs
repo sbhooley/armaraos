@@ -3,17 +3,30 @@
 //! All 25 integration TOML files are baked into the binary via `include_str!()`,
 //! ensuring they ship with every OpenFang build with zero filesystem dependencies.
 
+/// True if `id` is a built-in integration (cannot be overridden by custom MCP).
+pub fn is_bundled_id(id: &str) -> bool {
+    bundled_integrations().iter().any(|(bid, _)| *bid == id)
+}
+
 /// Returns all bundled integration templates as `(id, TOML content)` pairs.
 pub fn bundled_integrations() -> Vec<(&'static str, &'static str)> {
     vec![
-        // ── DevTools (6) ────────────────────────────────────────────────────
+        // ── DevTools (7) ────────────────────────────────────────────────────
+        (
+            "filesystem",
+            include_str!("../integrations/filesystem.toml"),
+        ),
         ("github", include_str!("../integrations/github.toml")),
         ("gitlab", include_str!("../integrations/gitlab.toml")),
         ("linear", include_str!("../integrations/linear.toml")),
         ("jira", include_str!("../integrations/jira.toml")),
         ("bitbucket", include_str!("../integrations/bitbucket.toml")),
         ("sentry", include_str!("../integrations/sentry.toml")),
-        // ── Productivity (6) ────────────────────────────────────────────────
+        // ── Productivity (7) ────────────────────────────────────────────────
+        (
+            "apple-caldav",
+            include_str!("../integrations/apple-caldav.toml"),
+        ),
         (
             "google-calendar",
             include_str!("../integrations/google-calendar.toml"),
@@ -71,7 +84,7 @@ mod tests {
 
     #[test]
     fn bundled_count() {
-        assert_eq!(bundled_integrations().len(), 25);
+        assert_eq!(bundled_integrations().len(), 27);
     }
 
     #[test]
@@ -115,8 +128,8 @@ mod tests {
             .iter()
             .filter(|t| t.category == crate::IntegrationCategory::AI)
             .count();
-        assert_eq!(devtools, 6);
-        assert_eq!(productivity, 6);
+        assert_eq!(devtools, 7);
+        assert_eq!(productivity, 7);
         assert_eq!(communication, 3);
         assert_eq!(data, 5);
         assert_eq!(cloud, 3);

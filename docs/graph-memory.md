@@ -77,7 +77,7 @@ Slim builds: **`cargo build -p openfang-runtime --no-default-features --features
 | Subsystem | Storage | UI / API |
 |-----------|---------|----------|
 | **Orchestration traces** | Kernel / **`openfang-memory`** ring + APIs | Dashboard **`#orchestration-traces`**, **`GET /api/orchestration/traces`**, SSE |
-| **AINL graph** | Per-agent **`ainl_memory.db`** | No dedicated dashboard page yet; query via **`ainl-memory`** APIs / future tooling |
+| **AINL graph** | Per-agent **`ainl_memory.db`** | Dashboard **Graph Memory** (`#graph-memory`): **`GET /api/graph-memory`** returns nodes with **`explain`** (what / why / evidence / typed edges) **`SystemEvent::GraphMemoryWrite`** SSE events include optional **`provenance`** (summary, node ids, reason). See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)**. |
 
 They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentional for cross-debugging.
 

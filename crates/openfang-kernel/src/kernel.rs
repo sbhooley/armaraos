@@ -6326,6 +6326,32 @@ impl OpenFangKernel {
             .map(|z| z.to_string())
     }
 
+    /// Ensure MCP stdio subprocesses can read whitelisted env vars.
+    ///
+    /// [`openfang_runtime::mcp::McpConnection`] clears the child environment and only
+    /// re-injects whitelisted keys from [`std::env`]. Integration installs may store
+    /// secrets in the vault (via [`Self::resolve_credential`]) and non-secrets in
+    /// [`openfang_types::config::McpServerConfigEntry::config_env`].
+    pub fn hydrate_mcp_stdio_env(
+        &self,
+        server_config: &openfang_types::config::McpServerConfigEntry,
+    ) {
+        for var_name in &server_config.env {
+            if std::env::var(var_name).is_ok() {
+                continue;
+            }
+            if let Some(v) = server_config.config_env.get(var_name) {
+                if !v.trim().is_empty() {
+                    std::env::set_var(var_name, v);
+                    continue;
+                }
+            }
+            if let Some(v) = self.resolve_credential(var_name) {
+                std::env::set_var(var_name, v);
+            }
+        }
+    }
+
     /// Merge resolved credentials into an `ainl` subprocess environment.
     ///
     /// The daemon does not load `~/.armaraos/.env` into [`std::env`], but the
@@ -6659,16 +6685,7 @@ impl OpenFangKernel {
                 McpTransportEntry::Http { url } => McpTransport::Http { url: url.clone() },
             };
 
-            // Resolve env vars from vault/dotenv before passing to MCP subprocess.
-            // The MCP spawn calls env_clear() then re-adds only whitelisted vars
-            // from std::env — so we must ensure they're in std::env first.
-            for var_name in &server_config.env {
-                if std::env::var(var_name).is_err() {
-                    if let Some(val) = self.resolve_credential(var_name) {
-                        std::env::set_var(var_name, &val);
-                    }
-                }
-            }
+            self.hydrate_mcp_stdio_env(server_config);
 
             let mcp_config = McpServerConfig {
                 name: server_config.name.clone(),
@@ -6779,6 +6796,8 @@ impl OpenFangKernel {
                 McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
                 McpTransportEntry::Http { url } => McpTransport::Http { url: url.clone() },
             };
+
+            self.hydrate_mcp_stdio_env(server_config);
 
             let mcp_config = McpServerConfig {
                 name: server_config.name.clone(),
@@ -6899,6 +6918,8 @@ impl OpenFangKernel {
             McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
             McpTransportEntry::Http { url } => McpTransport::Http { url: url.clone() },
         };
+
+        self.hydrate_mcp_stdio_env(&server_config);
 
         let mcp_config = McpServerConfig {
             name: server_config.name.clone(),
@@ -8154,9 +8175,7 @@ fn build_tool_to_agents_map(entries: &[AgentEntry]) -> HashMap<String, HashSet<A
             .filter(|tool| {
                 // If allowlist is non-empty, tool must be in it
                 let allowed_by_allowlist = allowlist.is_empty()
-                    || allowlist
-                        .iter()
-                        .any(|a| tool_name_matches_filter(a, tool));
+                    || allowlist.iter().any(|a| tool_name_matches_filter(a, tool));
 
                 // Tool must NOT be in blocklist
                 let not_blocked = !e
@@ -9122,7 +9141,12 @@ impl KernelHandle for OpenFangKernel {
         Ok(())
     }
 
-    async fn notify_graph_memory_write(&self, agent_id: &str, kind: &str) -> Result<(), String> {
+    async fn notify_graph_memory_write(
+        &self,
+        agent_id: &str,
+        kind: &str,
+        provenance: Option<openfang_types::event::GraphMemoryWriteProvenance>,
+    ) -> Result<(), String> {
         let aid = self.resolve_agent_id(agent_id)?;
         let event = Event::new(
             aid,
@@ -9130,6 +9154,7 @@ impl KernelHandle for OpenFangKernel {
             EventPayload::System(SystemEvent::GraphMemoryWrite {
                 agent_id: aid,
                 kind: kind.to_string(),
+                provenance,
             }),
         );
         let _ = OpenFangKernel::publish_event(self, event).await;
@@ -10093,7 +10118,10 @@ mod tests {
 
     #[test]
     fn test_tool_name_matches_filter_supports_case_insensitive_globs() {
-        assert!(tool_name_matches_filter("mcp_ainl_*", "mcp_ainl_ainl_validate"));
+        assert!(tool_name_matches_filter(
+            "mcp_ainl_*",
+            "mcp_ainl_ainl_validate"
+        ));
         assert!(tool_name_matches_filter(
             "MCP_AINL_AINL_COMPILE",
             "mcp_ainl_ainl_compile"

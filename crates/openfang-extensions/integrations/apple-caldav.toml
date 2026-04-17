@@ -1,0 +1,42 @@
+id = "apple-caldav"
+name = "Apple / CalDAV"
+description = "Access CalDAV calendars (including Apple iCloud) via the DAV MCP server"
+category = "productivity"
+icon = "🍎"
+tags = ["calendar", "caldav", "icloud", "apple", "dav"]
+
+[transport]
+type = "stdio"
+command = "npx"
+args = ["-y", "@jahfer/dav-mcp-server"]
+
+[[required_env]]
+name = "DAV_PROVIDER"
+label = "DAV provider"
+help = "Use icloud for Apple iCloud CalDAV"
+is_secret = false
+get_url = ""
+
+[[required_env]]
+name = "DAV_USERNAME"
+label = "Apple ID / username"
+help = "For iCloud, use your Apple ID email address"
+is_secret = false
+get_url = ""
+
+[[required_env]]
+name = "DAV_PASSWORD"
+label = "App-specific password"
+help = "Create an app-specific password in Apple ID settings (do not use your main Apple ID password)"
+is_secret = true
+get_url = "https://appleid.apple.com/account/manage"
+
+[health_check]
+interval_secs = 60
+unhealthy_threshold = 3
+
+setup_instructions = """
+1. Generate an **app-specific password** for OpenFang / ArmaraOS in Apple ID account settings.
+2. Set DAV_PROVIDER to icloud, DAV_USERNAME to your Apple ID email, and DAV_PASSWORD to that app-specific password.
+3. This integration talks to Apple's CalDAV endpoints using your credentials — treat them like any other cloud secret.
+"""

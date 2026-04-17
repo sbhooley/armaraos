@@ -5,7 +5,9 @@
 
 use crate::credentials::CredentialResolver;
 use crate::registry::IntegrationRegistry;
-use crate::{ExtensionError, ExtensionResult, InstalledIntegration, IntegrationStatus};
+use crate::{
+    ExtensionError, ExtensionResult, InstalledIntegration, IntegrationStatus, IntegrationTemplate,
+};
 use chrono::Utc;
 use std::collections::HashMap;
 use tracing::{info, warn};
@@ -26,18 +28,15 @@ pub struct InstallResult {
 
 /// Install an integration.
 ///
-/// Steps:
-/// 1. Look up template in registry.
-/// 2. Check credentials (vault → .env → env → prompt).
-/// 3. If `--key` provided, store in vault.
-/// 4. If OAuth required, run PKCE flow.
-/// 5. Write to integrations.toml.
-/// 6. Return install result.
+/// `secrets` are stored in the vault when possible (typically `is_secret` required env vars).
+/// `config` holds non-secret values (`is_secret = false` required env vars) plus integration-specific
+/// keys such as `allowed_paths` for the filesystem preset.
 pub fn install_integration(
     registry: &mut IntegrationRegistry,
     resolver: &mut CredentialResolver,
     id: &str,
-    provided_keys: &HashMap<String, String>,
+    secrets: &HashMap<String, String>,
+    config: &HashMap<String, String>,
 ) -> ExtensionResult<InstallResult> {
     // 1. Look up template
     let template = registry
@@ -50,27 +49,58 @@ pub fn install_integration(
         return Err(ExtensionError::AlreadyInstalled(id.to_string()));
     }
 
-    // 2. Store provided keys in vault
-    for (key, value) in provided_keys {
+    // 1b. Validate unknown keys (typos should fail fast)
+    validate_install_maps(&template, id, secrets, config)?;
+
+    // 2. Store provided secrets in vault
+    for (key, value) in secrets {
+        if value.trim().is_empty() {
+            continue;
+        }
         if let Err(e) = resolver.store_in_vault(key, Zeroizing::new(value.clone())) {
             warn!("Could not store {} in vault: {}", key, e);
-            // Fall through — the key is still in the provided_keys map
         }
     }
 
-    // 3. Check all required credentials
+    // 3. Determine credential completeness
     let required_keys: Vec<&str> = template
         .required_env
         .iter()
         .map(|e| e.name.as_str())
         .collect();
-    let missing = resolver.missing_credentials(&required_keys);
 
-    // For provided keys, check them too
-    let actually_missing: Vec<String> = missing
-        .into_iter()
-        .filter(|k| !provided_keys.contains_key(k))
-        .collect();
+    let mut actually_missing: Vec<String> = Vec::new();
+    for key in &required_keys {
+        let meta = template
+            .required_env
+            .iter()
+            .find(|e| e.name == *key)
+            .expect("required key must exist in template");
+        let has = if meta.is_secret {
+            resolver.has_credential(key)
+                || secrets
+                    .get(*key)
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+        } else {
+            resolver.has_credential(key)
+                || config
+                    .get(*key)
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+        };
+        if !has {
+            actually_missing.push((*key).to_string());
+        }
+    }
+
+    // Filesystem preset requires at least one allowed directory.
+    if id == "filesystem" {
+        let paths = config.get("allowed_paths").map(|s| s.trim()).unwrap_or("");
+        if paths.is_empty() {
+            actually_missing.push("allowed_paths".to_string());
+        }
+    }
 
     let status = if actually_missing.is_empty() {
         IntegrationStatus::Ready
@@ -81,13 +111,24 @@ pub fn install_integration(
     // 4. Determine OAuth provider
     let oauth_provider = template.oauth.as_ref().map(|o| o.provider.clone());
 
-    // 5. Write install record
+    // 5. Merge install record (persist non-secret config + integration-specific keys)
+    let mut merged_config = config.clone();
+    // Persist non-secret required env vars into config for MCP stdio env injection
+    for e in &template.required_env {
+        if e.is_secret {
+            continue;
+        }
+        if let Some(v) = config.get(&e.name) {
+            merged_config.insert(e.name.clone(), v.clone());
+        }
+    }
+
     let entry = InstalledIntegration {
         id: id.to_string(),
         installed_at: Utc::now(),
         enabled: true,
         oauth_provider,
-        config: HashMap::new(),
+        config: merged_config,
     };
     registry.install(entry)?;
 
@@ -103,6 +144,9 @@ pub fn install_integration(
             let missing_labels: Vec<String> = actually_missing
                 .iter()
                 .filter_map(|key| {
+                    if key == "allowed_paths" {
+                        return Some("Allowed directories (allowed_paths)".to_string());
+                    }
                     template
                         .required_env
                         .iter()
@@ -129,6 +173,112 @@ pub fn install_integration(
     })
 }
 
+/// Install a **custom** MCP integration created from the dashboard (user-defined template).
+///
+/// Registers the template in the registry, then runs the same credential + `integrations.toml`
+/// path as [`install_integration`]. Rolls back the in-memory template if installation fails.
+pub fn install_custom_mcp(
+    registry: &mut IntegrationRegistry,
+    resolver: &mut CredentialResolver,
+    template: IntegrationTemplate,
+    secrets: &HashMap<String, String>,
+    config: &HashMap<String, String>,
+) -> ExtensionResult<InstallResult> {
+    if crate::bundled::is_bundled_id(&template.id) {
+        return Err(ExtensionError::InvalidIntegrationId(
+            "id is reserved for a built-in integration".to_string(),
+        ));
+    }
+    if registry.is_installed(&template.id) {
+        return Err(ExtensionError::AlreadyInstalled(template.id.clone()));
+    }
+
+    let tid = template.id.clone();
+    registry.insert_custom_template_for_install(template)?;
+
+    match install_integration(registry, resolver, &tid, secrets, config) {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            registry.rollback_custom_template_insert(&tid);
+            Err(e)
+        }
+    }
+}
+
+fn validate_install_maps(
+    template: &crate::IntegrationTemplate,
+    id: &str,
+    secrets: &HashMap<String, String>,
+    config: &HashMap<String, String>,
+) -> ExtensionResult<()> {
+    validate_user_supplied_keys(template, id, secrets, config)
+}
+
+/// Validate keys for raw dashboard payloads (`env` + `config` objects) before splitting secrets.
+pub fn validate_user_supplied_keys(
+    template: &crate::IntegrationTemplate,
+    id: &str,
+    env_like: &HashMap<String, String>,
+    config: &HashMap<String, String>,
+) -> ExtensionResult<()> {
+    let mut allowed = std::collections::HashSet::new();
+    for e in &template.required_env {
+        allowed.insert(e.name.clone());
+    }
+    allowed.insert("allowed_paths".to_string());
+
+    for k in env_like.keys().chain(config.keys()) {
+        if !allowed.contains(k) {
+            return Err(ExtensionError::TomlParse(format!(
+                "Unknown field '{k}' for integration '{id}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate dashboard / API payloads before persisting installs.
+///
+/// Returns a map of field name → error message (empty map means OK).
+pub fn integration_payload_field_errors(
+    template: &crate::IntegrationTemplate,
+    id: &str,
+    secrets: &HashMap<String, String>,
+    config: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut errors = HashMap::new();
+    if let Err(e) = validate_install_maps(template, id, secrets, config) {
+        errors.insert("_general".to_string(), e.to_string());
+        return errors;
+    }
+
+    for e in &template.required_env {
+        let v_secret = secrets.get(&e.name).map(|s| s.as_str()).unwrap_or("");
+        let v_cfg = config.get(&e.name).map(|s| s.as_str()).unwrap_or("");
+        if e.is_secret {
+            if v_secret.trim().is_empty() {
+                errors.insert(e.name.clone(), format!("{} is required", e.label));
+            }
+        } else if v_cfg.trim().is_empty() && v_secret.trim().is_empty() {
+            // Non-secret values should be provided via `config` (or legacy `env` split),
+            // but we still treat empty as invalid for dashboard validation.
+            errors.insert(e.name.clone(), format!("{} is required", e.label));
+        }
+    }
+
+    if id == "filesystem" {
+        let paths = config.get("allowed_paths").map(|s| s.trim()).unwrap_or("");
+        if paths.is_empty() {
+            errors.insert(
+                "allowed_paths".to_string(),
+                "Enter at least one absolute directory path (comma-separated).".to_string(),
+            );
+        }
+    }
+
+    errors
+}
+
 /// Remove an installed integration.
 pub fn remove_integration(registry: &mut IntegrationRegistry, id: &str) -> ExtensionResult<String> {
     let template = registry.get_template(id);
@@ -152,17 +302,48 @@ pub fn list_integrations(
         let installed = registry.get_installed(&template.id);
         let status = match installed {
             Some(inst) if !inst.enabled => IntegrationStatus::Disabled,
-            Some(_inst) => {
+            Some(inst) => {
                 let required_keys: Vec<&str> = template
                     .required_env
                     .iter()
                     .map(|e| e.name.as_str())
                     .collect();
-                let missing = resolver.missing_credentials(&required_keys);
-                if missing.is_empty() {
-                    IntegrationStatus::Ready
-                } else {
+                let mut missing = false;
+                for key in &required_keys {
+                    let meta = template
+                        .required_env
+                        .iter()
+                        .find(|e| e.name == *key)
+                        .unwrap();
+                    let ok = if meta.is_secret {
+                        resolver.has_credential(key)
+                    } else {
+                        resolver.has_credential(key)
+                            || inst
+                                .config
+                                .get(*key)
+                                .map(|s| !s.trim().is_empty())
+                                .unwrap_or(false)
+                    };
+                    if !ok {
+                        missing = true;
+                        break;
+                    }
+                }
+                if template.id == "filesystem" {
+                    let paths = inst
+                        .config
+                        .get("allowed_paths")
+                        .map(|s| s.trim())
+                        .unwrap_or("");
+                    if paths.is_empty() {
+                        missing = true;
+                    }
+                }
+                if missing {
                     IntegrationStatus::Setup
+                } else {
+                    IntegrationStatus::Ready
                 }
             }
             None => IntegrationStatus::Available,
@@ -303,8 +484,14 @@ mod tests {
         let mut resolver = CredentialResolver::new(None, None);
 
         // Install github (will be Setup status since no token)
-        let result =
-            install_integration(&mut registry, &mut resolver, "github", &HashMap::new()).unwrap();
+        let result = install_integration(
+            &mut registry,
+            &mut resolver,
+            "github",
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(result.id, "github");
         // Status depends on whether GITHUB_PERSONAL_ACCESS_TOKEN is in env
         assert!(
@@ -329,7 +516,14 @@ mod tests {
         let mut keys = HashMap::new();
         keys.insert("NOTION_TOKEN".to_string(), "ntn_test_key_123".to_string());
 
-        let result = install_integration(&mut registry, &mut resolver, "notion", &keys).unwrap();
+        let result = install_integration(
+            &mut registry,
+            &mut resolver,
+            "notion",
+            &keys,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(result.id, "notion");
     }
 
@@ -341,9 +535,22 @@ mod tests {
 
         let mut resolver = CredentialResolver::new(None, None);
 
-        install_integration(&mut registry, &mut resolver, "github", &HashMap::new()).unwrap();
-        let err = install_integration(&mut registry, &mut resolver, "github", &HashMap::new())
-            .unwrap_err();
+        install_integration(
+            &mut registry,
+            &mut resolver,
+            "github",
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        let err = install_integration(
+            &mut registry,
+            &mut resolver,
+            "github",
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already"));
     }
 
@@ -364,7 +571,7 @@ mod tests {
         let resolver = CredentialResolver::new(None, None);
 
         let list = list_integrations(&registry, &resolver);
-        assert_eq!(list.len(), 25);
+        assert_eq!(list.len(), 27);
         assert!(list
             .iter()
             .all(|e| e.status == IntegrationStatus::Available));

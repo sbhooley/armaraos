@@ -19,6 +19,7 @@ use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
+use openfang_types::event::GraphMemoryWriteProvenance;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -70,7 +71,8 @@ pub fn armaraos_graph_memory_export_json_path(agent_id: &str) -> PathBuf {
 pub struct GraphMemoryWriter {
     pub(crate) inner: Arc<Mutex<GraphMemory>>,
     pub(crate) agent_id: String,
-    pub(crate) on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+    pub(crate) on_write:
+        Option<Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>>,
 }
 
 impl GraphMemoryWriter {
@@ -86,10 +88,13 @@ impl GraphMemoryWriter {
     }
 
     /// Same as [`Self::open`], with an optional hook invoked after each successful write.
-    /// Arguments to the hook: `(agent_id, kind)` where `kind` is `episode`, `delegation`, or `fact`.
+    /// Arguments to the hook: `(agent_id, kind, provenance)` where `kind` is e.g. `episode`,
+    /// `delegation`, `fact`, `procedural`, `persona`.
     pub fn open_with_notify(
         agent_id: &str,
-        on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+        on_write: Option<
+            Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>,
+        >,
     ) -> Result<Self, String> {
         let path = Self::db_path(agent_id)?;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| format!("create dir: {e}"))?;
@@ -106,7 +111,9 @@ impl GraphMemoryWriter {
     pub(crate) fn from_memory_for_tests(
         memory: GraphMemory,
         agent_id: impl Into<String>,
-        on_write: Option<Arc<dyn Fn(String, String) + Send + Sync>>,
+        on_write: Option<
+            Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>,
+        >,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(memory)),
@@ -130,9 +137,9 @@ impl GraphMemoryWriter {
         Self::db_path(agent_id)
     }
 
-    fn fire_write_hook(&self, kind: &str) {
+    fn fire_write_hook(&self, kind: &str, provenance: Option<GraphMemoryWriteProvenance>) {
         if let Some(f) = &self.on_write {
-            f(self.agent_id.clone(), kind.to_string());
+            f(self.agent_id.clone(), kind.to_string(), provenance);
         }
     }
 
@@ -141,19 +148,36 @@ impl GraphMemoryWriter {
     /// This is used by secondary writers (for example `ainl-runtime` running through a separate
     /// SQLite handle) so dashboard live timelines still receive `GraphMemoryWrite` events for the
     /// same agent and can refresh promptly.
-    pub fn emit_write_observed(&self, kind: &str) {
-        self.fire_write_hook(kind);
+    pub fn emit_write_observed(&self, kind: &str, provenance: Option<GraphMemoryWriteProvenance>) {
+        self.fire_write_hook(kind, provenance);
     }
 
     /// Import `ainl_graph_memory_inbox.json` (Python `AinlMemorySyncWriter`) into this agent's
     /// SQLite graph, then reset the inbox to an empty envelope.
     pub async fn drain_python_graph_memory_inbox(&self) {
-        if let Err(e) = crate::ainl_inbox_reader::drain_inbox(self).await {
-            warn!(
-                agent_id = %self.agent_id,
-                error = %e,
-                "AINL graph memory inbox drain failed"
-            );
+        match crate::ainl_inbox_reader::drain_inbox(self).await {
+            Ok(imported) if imported > 0 => {
+                self.fire_write_hook(
+                    "fact",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![],
+                        node_kind: None,
+                        reason: Some("inbox_import".to_string()),
+                        summary: Some(format!(
+                            "Imported {imported} node(s) from Python graph-memory inbox"
+                        )),
+                        trace_id: None,
+                    }),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory inbox drain failed"
+                );
+            }
         }
     }
 
@@ -177,6 +201,11 @@ impl GraphMemoryWriter {
         } else {
             "episode"
         };
+        let trace_id_for_hook = trace_json.as_ref().and_then(|v| {
+            v.get("trace_id")
+                .and_then(|x| x.as_str())
+                .map(std::string::ToString::to_string)
+        });
         let res = {
             let inner = self.inner.lock().await;
             let prev_id = inner
@@ -227,7 +256,26 @@ impl GraphMemoryWriter {
                     delegation_to = ?delegation_to,
                     "AINL graph memory: episode written"
                 );
-                self.fire_write_hook(kind);
+                let summary = if tool_calls.is_empty() {
+                    format!("Episode recorded ({id})")
+                } else {
+                    format!("Tools: {}", tool_calls.join(", "))
+                };
+                let reason = if delegation_to.is_some() {
+                    "delegation_episode"
+                } else {
+                    "turn_complete"
+                };
+                self.fire_write_hook(
+                    kind,
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("episode".to_string()),
+                        reason: Some(reason.to_string()),
+                        summary: Some(summary),
+                        trace_id: trace_id_for_hook,
+                    }),
+                );
                 Some(id)
             }
             Err(e) => {
@@ -251,13 +299,14 @@ impl GraphMemoryWriter {
         confidence: f32,
         trace_id: Option<String>,
     ) {
+        let seq_preview = tool_sequence.join(" → ");
         let res = {
             let inner = self.inner.lock().await;
             let mut node =
                 AinlMemoryNode::new_procedural_tools(name.to_string(), tool_sequence, confidence);
             node.agent_id = self.agent_id.clone();
             if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
-                procedural.trace_id = trace_id;
+                procedural.trace_id = trace_id.clone();
             }
             let id = node.id;
             inner.write_node(&node).map(|()| id)
@@ -270,7 +319,17 @@ impl GraphMemoryWriter {
                     pattern_name = %name,
                     "AINL graph memory: procedural pattern written"
                 );
-                self.fire_write_hook("procedural");
+                let summary = format!("Pattern “{name}”: {seq_preview}");
+                self.fire_write_hook(
+                    "procedural",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("procedural".to_string()),
+                        reason: Some("pattern_persisted".to_string()),
+                        summary: Some(summary),
+                        trace_id: trace_id,
+                    }),
+                );
             }
             Err(e) => warn!(
                 agent_id = %self.agent_id,
@@ -317,7 +376,17 @@ impl GraphMemoryWriter {
                     confidence = confidence,
                     "AINL graph memory: fact written"
                 );
-                self.fire_write_hook("fact");
+                let fact_preview = openfang_types::truncate_str(fact.as_str(), 160).to_string();
+                self.fire_write_hook(
+                    "fact",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("semantic".to_string()),
+                        reason: Some("fact_extracted".to_string()),
+                        summary: Some(format!("Fact: {fact_preview}")),
+                        trace_id: None,
+                    }),
+                );
             }
             Err(e) => warn!(
                 agent_id = %self.agent_id,
@@ -416,59 +485,87 @@ impl GraphMemoryWriter {
     pub async fn run_persona_evolution_pass(&self) -> PersonaEvolutionExtractionReport {
         #[cfg(feature = "ainl-extractor")]
         {
-            let inner = self.inner.lock().await;
-            let store = inner.sqlite_store();
-            let had_persona_before_pass = inner
-                .recall_by_type(
-                    ainl_memory::AinlNodeKind::Persona,
-                    PERSONA_PRIOR_LOOKBACK_SECS,
-                )
-                .unwrap_or_default()
-                .iter()
-                .any(|n| n.agent_id == self.agent_id);
-            let mut task = GraphExtractorTask::new(&self.agent_id);
-            let mut report = task.run_pass(store);
+            let report = {
+                let inner = self.inner.lock().await;
+                let store = inner.sqlite_store();
+                let had_persona_before_pass = inner
+                    .recall_by_type(
+                        ainl_memory::AinlNodeKind::Persona,
+                        PERSONA_PRIOR_LOOKBACK_SECS,
+                    )
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|n| n.agent_id == self.agent_id);
+                let mut task = GraphExtractorTask::new(&self.agent_id);
+                let mut report = task.run_pass(store);
 
-            if let Some(ref e) = report.extract_error {
-                warn!(
-                    agent_id = %self.agent_id,
-                    error = %e,
-                    "graph extractor signal merge failed"
-                );
-            }
-            if let Some(ref e) = report.pattern_error {
-                warn!(
-                    agent_id = %self.agent_id,
-                    error = %e,
-                    "graph extractor pattern persistence failed"
-                );
-            }
-            if let Some(ref e) = report.persona_error {
-                warn!(
-                    agent_id = %self.agent_id,
-                    error = %e,
-                    "graph extractor persona evolution write failed"
-                );
-            }
+                if let Some(ref e) = report.extract_error {
+                    warn!(
+                        agent_id = %self.agent_id,
+                        error = %e,
+                        "graph extractor signal merge failed"
+                    );
+                }
+                if let Some(ref e) = report.pattern_error {
+                    warn!(
+                        agent_id = %self.agent_id,
+                        error = %e,
+                        "graph extractor pattern persistence failed"
+                    );
+                }
+                if let Some(ref e) = report.persona_error {
+                    warn!(
+                        agent_id = %self.agent_id,
+                        error = %e,
+                        "graph extractor persona evolution write failed"
+                    );
+                }
 
-            if report.merged_signals.is_empty() {
-                #[cfg(feature = "ainl-persona-evolution")]
-                {
-                    for ax in PersonaAxis::ALL {
-                        task.evolution_engine.correction_tick(ax, 0.5);
-                    }
-                    let snapshot = task.evolution_engine.snapshot();
-                    if had_persona_before_pass {
-                        if let Err(e) = task.evolution_engine.write_persona_node(store, &snapshot) {
-                            warn!(
-                                agent_id = %self.agent_id,
-                                error = %e,
-                                "graph extractor persona evolution write failed"
-                            );
-                            merge_persona_err(&mut report.persona_error, e);
+                if report.merged_signals.is_empty() {
+                    #[cfg(feature = "ainl-persona-evolution")]
+                    {
+                        for ax in PersonaAxis::ALL {
+                            task.evolution_engine.correction_tick(ax, 0.5);
+                        }
+                        let snapshot = task.evolution_engine.snapshot();
+                        if had_persona_before_pass {
+                            if let Err(e) =
+                                task.evolution_engine.write_persona_node(store, &snapshot)
+                            {
+                                warn!(
+                                    agent_id = %self.agent_id,
+                                    error = %e,
+                                    "graph extractor persona evolution write failed"
+                                );
+                                merge_persona_err(&mut report.persona_error, e);
+                            }
                         }
                     }
                 }
+                report
+            };
+
+            if report.persona_error.is_none() {
+                let reason = if report.merged_signals.is_empty() {
+                    "persona_correction_tick"
+                } else {
+                    "graph_extractor_pass"
+                };
+                let summary = format!(
+                    "Persona evolution: {} signals merged, {} semantic rows touched",
+                    report.merged_signals.len(),
+                    report.semantic_nodes_updated
+                );
+                self.fire_write_hook(
+                    "persona",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![],
+                        node_kind: Some("persona".to_string()),
+                        reason: Some(reason.to_string()),
+                        summary: Some(summary),
+                        trace_id: None,
+                    }),
+                );
             }
             report
         }
@@ -683,19 +780,23 @@ mod tests {
         let memory = GraphMemory::new(&db_path).expect("open");
         let writes: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
         let writes_for_hook = Arc::clone(&writes);
-        let hook: Arc<dyn Fn(String, String) + Send + Sync> =
-            Arc::new(move |_agent_id: String, kind: String| {
-                if let Ok(mut v) = writes_for_hook.lock() {
-                    v.push(kind);
-                }
-            });
+        let hook: Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync> =
+            Arc::new(
+                move |_agent_id: String,
+                      kind: String,
+                      _prov: Option<GraphMemoryWriteProvenance>| {
+                    if let Ok(mut v) = writes_for_hook.lock() {
+                        v.push(kind);
+                    }
+                },
+            );
         let writer = GraphMemoryWriter {
             inner: Arc::new(Mutex::new(memory)),
             agent_id: "notify-agent".to_string(),
             on_write: Some(hook),
         };
 
-        writer.emit_write_observed("episode");
+        writer.emit_write_observed("episode", None);
 
         let seen = writes.lock().unwrap().clone();
         assert_eq!(seen, vec!["episode".to_string()]);

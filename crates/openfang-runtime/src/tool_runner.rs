@@ -274,7 +274,8 @@ pub async fn execute_tool(
                 "Auto-routing shell_exec MCP command to MCP tool dispatch"
             );
             let empty_args = serde_json::json!({});
-            let rerouted = dispatch_mcp_tool_by_name(&mcp_tool_name, &empty_args, mcp_connections).await;
+            let rerouted =
+                dispatch_mcp_tool_by_name(&mcp_tool_name, &empty_args, mcp_connections).await;
             return match rerouted {
                 Ok(content) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
@@ -5517,7 +5518,8 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(
-            result.content
+            result
+                .content
                 .contains("MCP not available for tool: mcp_ainl_ainl_capabilities"),
             "Expected MCP dispatch path, got: {}",
             result.content

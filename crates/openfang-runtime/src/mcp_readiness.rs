@@ -107,7 +107,9 @@ pub fn evaluate_from_snapshots(snapshots: &[McpToolSnapshot]) -> EvaluatedMcpRea
 
     // --- calendar check ---
     let cal = evaluate_calendar_check(snapshots, &mut tool_flags);
-    report.checks.insert(CHECK_ID_CALENDAR.to_string(), cal.result.clone());
+    report
+        .checks
+        .insert(CHECK_ID_CALENDAR.to_string(), cal.result.clone());
 
     let calendar_alias = CalendarReadinessAlias {
         ready: cal.result.ready,

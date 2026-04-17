@@ -3300,7 +3300,7 @@
               Installed <span class="badge badge-dim" x-show="skills.length" x-text="skills.length" style="margin-left:4px"></span>
             </div>
             <div class="tab" :class="{ active: tab === 'clawhub' }" @click="tab = 'clawhub'; if (!clawhubBrowseResults.length && !clawhubSearch) browseClawHub('trending')">ClawHub</div>
-            <div class="tab" :class="{ active: tab === 'mcp' }" @click="tab = 'mcp'; loadMcpServers()">MCP Servers</div>
+            <div class="tab" :class="{ active: tab === 'mcp' }" @click="tab = 'mcp'; loadMcpPanel()">MCP Servers</div>
             <div class="tab" :class="{ active: tab === 'create' }" @click="tab = 'create'">Quick Start</div>
           </div>
 
@@ -3450,10 +3450,177 @@
 
           <!-- TAB: MCP Servers -->
           <div x-show="tab === 'mcp'">
+            <div class="info-card mb-3">
+              <h4>Add custom MCP server</h4>
+              <p class="mb-2">Connect any stdio, SSE, or HTTP MCP server without editing <code>config.toml</code>. Pick a unique id, choose transport, then add environment variables. Secrets are stored in the daemon credential vault when possible.</p>
+              <p class="text-xs text-dim mb-2">Tools appear as <code>mcp_<span x-text="customMcpForm.id || 'your_id'"></span>_*</code>. Only run commands you trust.</p>
+              <p x-show="mcpInstallerLoading" class="text-xs text-dim">Loading installer…</p>
+              <p x-show="mcpInstallerError" class="text-xs" style="color:var(--danger,#ef4444)" x-text="mcpInstallerError"></p>
+
+              <div class="card" style="padding:12px;margin-top:8px">
+                <div class="grid gap-2 mb-2" style="grid-template-columns:1fr 1fr;max-width:720px">
+                  <div>
+                    <label class="text-xs text-dim">Integration id <span class="text-dim">(slug, lowercase)</span></label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.id" placeholder="e.g. my-api-tools" autocomplete="off" />
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors.id" x-text="customMcpFieldErrors.id"></div>
+                  </div>
+                  <div>
+                    <label class="text-xs text-dim">Display name</label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.name" placeholder="My API Tools" />
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors.name" x-text="customMcpFieldErrors.name"></div>
+                  </div>
+                </div>
+                <div class="grid gap-2 mb-2" style="grid-template-columns:80px 1fr;max-width:400px;align-items:end">
+                  <div>
+                    <label class="text-xs text-dim">Icon</label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.icon" placeholder="🔌" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-dim">Description <span class="text-dim">(optional)</span></label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.description" placeholder="What this MCP does" />
+                  </div>
+                </div>
+
+                <div class="mb-2" style="max-width:420px">
+                  <label class="text-xs text-dim">Transport</label>
+                  <select class="input input-sm" style="width:100%;margin-top:4px" x-model="customMcpTransport">
+                    <option value="stdio">stdio (local subprocess)</option>
+                    <option value="sse">SSE (remote URL)</option>
+                    <option value="http">HTTP / streamable HTTP (remote URL)</option>
+                  </select>
+                  <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors.transport" x-text="customMcpFieldErrors.transport"></div>
+                </div>
+
+                <template x-if="customMcpTransport === 'stdio'">
+                  <div class="mb-2" style="max-width:720px">
+                    <label class="text-xs text-dim">Command</label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.command" placeholder="npx" />
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors['transport.command']" x-text="customMcpFieldErrors['transport.command']"></div>
+                    <label class="text-xs text-dim mt-2 block">Arguments <span class="text-dim">(optional, space-separated)</span></label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.argsLine" placeholder="-y @modelcontextprotocol/server-filesystem /path" />
+                  </div>
+                </template>
+                <template x-if="customMcpTransport === 'sse' || customMcpTransport === 'http'">
+                  <div class="mb-2" style="max-width:720px">
+                    <label class="text-xs text-dim">Server URL</label>
+                    <input class="input" style="width:100%;margin-top:4px" x-model="customMcpForm.url" placeholder="https://example.com/mcp" />
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors['transport.url']" x-text="customMcpFieldErrors['transport.url']"></div>
+                    <label class="text-xs text-dim mt-2 block">Headers <span class="text-dim">(optional, one <code>Header: value</code> per line)</span></label>
+                    <textarea class="input" style="min-height:64px;width:100%;margin-top:4px" x-model="customMcpForm.headersText" placeholder="Authorization: Bearer …"></textarea>
+                  </div>
+                </template>
+
+                <div class="mb-2" style="max-width:200px">
+                  <label class="text-xs text-dim">Timeout (seconds)</label>
+                  <input class="input" type="number" min="1" max="600" style="width:100%;margin-top:4px" x-model="customMcpForm.timeout_secs" placeholder="30 (default)" />
+                  <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors.timeout_secs" x-text="customMcpFieldErrors.timeout_secs"></div>
+                </div>
+
+                <div class="mb-2">
+                  <div class="flex justify-between items-center mb-1">
+                    <label class="text-xs text-dim">Environment variables</label>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="addCustomMcpEnvRow()">+ Add variable</button>
+                  </div>
+                  <p class="text-xs text-dim mb-2">Mark sensitive values as secret so they are vault-backed and not echoed in API responses.</p>
+                  <template x-for="(row, idx) in customMcpEnvRows" :key="idx">
+                    <div class="card mb-2" style="padding:10px;background:var(--bg-secondary)">
+                      <div class="grid gap-2" style="grid-template-columns:1fr 1fr;max-width:720px">
+                        <div>
+                          <label class="text-xs text-dim">Name</label>
+                          <input class="input" style="width:100%;margin-top:4px" x-model="row.name" placeholder="API_KEY" />
+                        </div>
+                        <div>
+                          <label class="text-xs text-dim">Label</label>
+                          <input class="input" style="width:100%;margin-top:4px" x-model="row.label" placeholder="API key" />
+                        </div>
+                      </div>
+                      <div class="mt-2">
+                        <label class="text-xs text-dim">Help <span class="text-dim">(optional)</span></label>
+                        <input class="input" style="width:100%;margin-top:4px" x-model="row.help" />
+                      </div>
+                      <div class="flex flex-wrap gap-2 items-center mt-2">
+                        <label class="text-xs flex items-center gap-1"><input type="checkbox" x-model="row.is_secret" /> Secret (vault)</label>
+                        <input class="input flex-1" style="min-width:200px" :type="row.is_secret ? 'password' : 'text'" x-model="row.value" placeholder="Value" />
+                        <button type="button" class="btn btn-ghost btn-sm" @click="removeCustomMcpEnvRow(idx)">Remove</button>
+                      </div>
+                    </div>
+                  </template>
+                  <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="customMcpFieldErrors.env" x-text="customMcpFieldErrors.env"></div>
+                </div>
+
+                <div class="flex flex-wrap gap-2 mt-2">
+                  <button class="btn btn-ghost btn-sm" @click="validateCustomMcp()" :disabled="mcpInstallerBusy">Validate</button>
+                  <button class="btn btn-primary btn-sm" @click="installCustomMcp()" :disabled="mcpInstallerBusy">Add MCP server</button>
+                  <button class="btn btn-ghost btn-sm" x-show="isCustomMcpInstalled()" @click="reconnectMcpIntegration((customMcpForm.id || '').trim())" :disabled="mcpInstallerBusy">Reconnect</button>
+                  <button class="btn btn-ghost btn-sm" type="button" @click="resetCustomMcpForm()">Clear form</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="info-card mb-3">
+              <button type="button" class="btn btn-ghost btn-sm mb-2" @click="mcpShowPresets = !mcpShowPresets">
+                <span x-text="mcpShowPresets ? '▼' : '▶'"></span> Preset examples <span class="text-dim">(GitHub, filesystem, Postgres, …)</span>
+              </button>
+              <div x-show="mcpShowPresets" x-cloak>
+              <p class="mb-2 text-xs text-dim">Curated installs that match built-in templates. Use these when you want a guided setup for a known integration.</p>
+
+              <div class="flex flex-wrap gap-2 items-center mb-2" x-show="mcpPresets.length">
+                <label class="text-xs text-dim" style="min-width:120px">Preset</label>
+                <select class="input input-sm" style="max-width:420px" x-model="mcpPresetId" @change="applyMcpPresetSelection()">
+                  <template x-for="p in mcpPresets" :key="p.preset_id">
+                    <option :value="p.preset_id" x-text="p.title + ' — ' + p.subtitle"></option>
+                  </template>
+                </select>
+              </div>
+
+              <template x-if="mcpSelectedTemplate && mcpSelectedTemplate.id === 'google-calendar'">
+                <div class="mb-3">
+                  <p class="text-xs text-dim mb-2">Google Calendar uses OAuth in the full integration flow. This button registers the template so the daemon can launch the MCP server; complete OAuth via CLI/TUI if prompted.</p>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="btn btn-primary btn-sm" @click="registerMcpIntegrationLegacy('google-calendar')" :disabled="mcpInstallerBusy">Register Google Calendar</button>
+                    <button class="btn btn-ghost btn-sm" x-show="isMcpIntegrationInstalled('google-calendar')" @click="reconnectMcpIntegration('google-calendar')" :disabled="mcpInstallerBusy">Reconnect</button>
+                  </div>
+                </div>
+              </template>
+
+              <div x-show="mcpSelectedTemplate && mcpSelectedTemplate.id !== 'google-calendar'">
+                <div class="card" style="padding:12px;margin-top:8px">
+                  <div class="text-xs text-dim mb-2" x-show="mcpSelectedTemplate" x-text="mcpSelectedTemplate ? (mcpSelectedTemplate.description || '') : ''"></div>
+
+                  <div x-show="mcpSelectedTemplate && mcpSelectedTemplate.id === 'filesystem'" class="mb-2">
+                    <label class="text-xs text-dim">Allowed directories (comma-separated absolute paths)</label>
+                    <textarea class="input" style="min-height:72px;width:100%;margin-top:4px" x-model="mcpForm.allowed_paths" placeholder="/Users/you/Documents/project, /path/to/other"></textarea>
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors.allowed_paths" x-text="mcpFieldErrors.allowed_paths"></div>
+                  </div>
+
+                  <template x-if="mcpSelectedTemplate && mcpSelectedTemplate.required_env && mcpSelectedTemplate.required_env.length">
+                    <div>
+                      <template x-for="field in mcpSelectedTemplate.required_env" :key="field.name">
+                        <div class="mb-2">
+                          <label class="text-xs text-dim" x-text="field.label + ' (' + field.name + ')'"></label>
+                          <input class="input" style="width:100%;margin-top:4px" :type="field.is_secret ? 'password' : 'text'" x-model="mcpForm[field.name]" />
+                          <div class="text-xs text-dim mt-1" x-show="field.help" x-text="field.help"></div>
+                          <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors[field.name]" x-text="mcpFieldErrors[field.name]"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <div class="flex flex-wrap gap-2 mt-2">
+                    <button class="btn btn-ghost btn-sm" @click="validateMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate">Validate</button>
+                    <button class="btn btn-primary btn-sm" @click="installMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate || isMcpIntegrationInstalled(mcpCurrentIntegrationId())">Install</button>
+                    <button class="btn btn-ghost btn-sm" x-show="mcpPresetId && isMcpIntegrationInstalled(mcpCurrentIntegrationId())" @click="reconnectMcpIntegration(mcpCurrentIntegrationId())" :disabled="mcpInstallerBusy">Reconnect</button>
+                  </div>
+                  <p class="text-xs text-dim mt-2" x-show="mcpFieldErrors._general" x-text="mcpFieldErrors._general"></p>
+                </div>
+              </div>
+              </div>
+            </div>
+
             <div class="info-card">
               <h4>MCP Servers (Model Context Protocol)</h4>
               <p>MCP servers provide external tools to your agents &mdash; GitHub, filesystem, databases, APIs, and more. ArmaraOS is compatible with all OpenClaw MCP servers.</p>
-              <p class="mt-2" style="font-size:0.8rem;color:var(--text-dim)">Configure MCP servers in your <code>config.toml</code> under <code>[mcp_servers]</code>.</p>
+              <p class="mt-2" style="font-size:0.8rem;color:var(--text-dim)">Advanced: you can still configure MCP servers manually in <code>config.toml</code> under <code>[[mcp_servers]]</code>.</p>
             </div>
             <div x-show="mcpLoading" class="loading-state"><div class="spinner"></div><span>Loading MCP servers...</span></div>
             <div x-show="!mcpLoading">
@@ -3506,7 +3673,7 @@
               <!-- Empty state -->
               <div class="empty-state" x-show="mcpServers.total_configured === 0 && mcpServers.total_connected === 0">
                 <h4>No MCP servers configured</h4>
-                <p class="hint">MCP servers extend your agents with external tools. Add servers to your config.toml:</p>
+                <p class="hint">Use <strong>Add custom MCP server</strong> above, or add servers in <code>config.toml</code>:</p>
                 <pre style="text-align:left;font-size:0.75rem;margin-top:8px;background:var(--bg-secondary);padding:12px;border-radius:6px;max-width:400px;margin-left:auto;margin-right:auto">[[mcp_servers]]
 name = "filesystem"
 timeout_secs = 30
@@ -7500,8 +7667,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <span class="text-xs" :style="'padding:2px 8px;border-radius:999px;background:' + (viewMode === 'live' ? 'rgba(107,232,160,0.12)' : 'rgba(245,199,90,0.12)') + ';color:' + (viewMode === 'live' ? '#6be8a0' : '#f5c75a')" x-text="viewMode === 'live' ? 'Live' : 'Snapshot preview'"></span>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <template x-for="kind in ['episode','semantic','procedural','persona']" :key="kind">
-              <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind"></button>
+            <template x-for="kind in ['episode','semantic','procedural','persona','runtime_state']" :key="kind">
+              <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind === 'runtime_state' ? 'runtime' : kind"></button>
             </template>
             <select id="gm-agent-select" x-model="agentId" @change="onAgentChange()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%);min-width:12rem" aria-label="Agent for graph memory">
             </select>
@@ -7539,21 +7706,41 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="skeleton" style="width:60%;height:60%;border-radius:12px;opacity:0.15"></div>
           </div>
         </div>
-        <div x-show="selected" x-transition style="position:fixed;right:20px;top:80px;width:280px;max-width:calc(100vw - 40px);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:100">
+        <div x-show="selected" x-transition style="position:fixed;right:20px;top:80px;width:min(400px,calc(100vw - 40px));max-width:calc(100vw - 40px);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:100;max-height:min(640px,calc(100vh - 100px));overflow:auto">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
             <span :class="'node-badge node-badge-' + (selected && selected.kind ? selected.kind : '')" x-text="selected && selected.kind ? selected.kind : ''" style="font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;padding:2px 8px;border-radius:4px"></span>
             <button type="button" @click="selected = null" style="color:var(--text-dim);background:none;border:none;cursor:pointer;font-size:1.1rem" aria-label="Close">×</button>
           </div>
           <p x-text="selected && selected.label" style="font-size:0.88rem;font-weight:500;margin-bottom:8px;word-break:break-word"></p>
-          <p style="font-size:0.75rem;color:var(--text-dim)">ID: <code x-text="selected && selected.id ? (selected.id.slice(0,12) + '…') : ''" style="font-size:0.72rem"></code></p>
+          <p style="font-size:0.75rem;color:var(--text-dim);word-break:break-all">ID: <code x-text="selected && selected.id ? selected.id : ''" style="font-size:0.7rem"></code>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:0.65rem;margin-left:4px;vertical-align:middle" x-show="selected && selected.id" @click="copyNodeId(selected.id)">Copy</button>
+          </p>
           <p x-show="selected && selected.strength != null" style="font-size:0.75rem;color:var(--text-dim);margin-top:4px">
             Strength: <span x-text="selected && selected.strength != null ? selected.strength.toFixed(2) : ''" style="color:var(--accent);font-weight:600"></span>
           </p>
           <p style="font-size:0.75rem;color:var(--text-dim);margin-top:4px">
             Created: <span x-text="selected && selected.created_at ? new Date(selected.created_at * 1000).toLocaleString() : '—'"></span>
           </p>
+          <div x-show="selected && selected.explain" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">What</p>
+            <p style="font-size:0.8rem;line-height:1.4;margin:0 0 8px 0;word-break:break-word" x-text="selected && selected.explain ? selected.explain.what_happened : ''"></p>
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Why</p>
+            <p style="font-size:0.78rem;line-height:1.4;margin:0 0 8px 0;color:var(--text-dim);word-break:break-word" x-text="selected && selected.explain ? selected.explain.why_happened : ''"></p>
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Evidence</p>
+            <pre style="font-size:0.68rem;line-height:1.35;margin:0;padding:8px;background:var(--surface2);border-radius:6px;overflow:auto;max-height:140px;white-space:pre-wrap;word-break:break-word" x-text="selected && selected.explain && selected.explain.evidence ? JSON.stringify(selected.explain.evidence, null, 2) : '{}'"></pre>
+          </div>
+          <div x-show="selected && selected.explain && selected.explain.relations && selected.explain.relations.length" style="margin-top:12px">
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Edges (typed)</p>
+            <template x-for="rel in (selected && selected.explain && selected.explain.relations) ? selected.explain.relations : []" :key="(rel.peer_id || '') + '-' + (rel.direction || '') + '-' + (rel.rel || '')">
+              <div style="font-size:0.74rem;padding:4px 8px;border-radius:6px;background:var(--surface2);margin-bottom:4px">
+                <span x-text="(rel.direction || '') + ' · ' + (rel.rel || '')"></span>
+                <span class="text-dim"> → </span>
+                <span style="cursor:pointer;color:var(--accent)" @click="selectNodeById(rel.peer_id)" x-text="rel.peer_label || rel.peer_id"></span>
+              </div>
+            </template>
+          </div>
           <div x-show="selected && connectedTo(selected.id).length > 0" style="margin-top:12px">
-            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Connected to</p>
+            <p style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);margin-bottom:6px">Neighbors</p>
             <template x-for="n in connectedTo(selected && selected.id)" :key="n.id">
               <div @click="selected = n" style="font-size:0.78rem;padding:4px 8px;border-radius:6px;background:var(--surface2);cursor:pointer;margin-bottom:4px;display:flex;align-items:center;gap:6px">
                 <span :class="'node-dot node-dot-' + n.kind"></span>
@@ -7566,10 +7753,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </div>
         </div>
         <div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap">
-          <template x-for="kind in ['episode','semantic','procedural','persona']" :key="'stat-' + kind">
+          <template x-for="kind in ['episode','semantic','procedural','persona','runtime_state']" :key="'stat-' + kind">
             <div style="font-size:0.78rem;color:var(--text-dim)">
               <span :class="'node-dot node-dot-' + kind" style="display:inline-block;margin-right:5px"></span>
-              <span x-text="kind" style="text-transform:capitalize"></span>
+              <span x-text="kind === 'runtime_state' ? 'runtime' : kind" style="text-transform:capitalize"></span>
               <strong x-text="nodes.filter(function(n){ return n.kind===kind }).length" style="margin-left:4px;color:var(--text)"></strong>
             </div>
           </template>
@@ -7597,7 +7784,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
             </template>
             <template x-for="e in filteredTimeline()" :key="e.id">
-              <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+              <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;cursor:pointer" @click="e.nodeId ? selectNodeById(e.nodeId) : null" title="Click to focus node on graph">
                 <span :class="'node-dot node-dot-' + (e.nodeKind || 'semantic')" style="margin-top:4px;flex:0 0 auto"></span>
                 <div style="min-width:0;flex:1 1 auto">
                   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
@@ -7609,7 +7796,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <span class="text-xs" style="font-family:monospace;color:var(--text-dim)" x-text="e.agentName"></span>
                   </div>
                   <p style="margin:4px 0 0;font-size:0.8rem;line-height:1.35;word-break:break-word" x-text="e.nodeLabel"></p>
-                  <div x-show="e.nodeId" style="margin:4px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                  <p class="text-xs text-dim" style="margin:2px 0 0" x-show="e.reason" x-text="timelineDetailLine(e)"></p>
+                  <div x-show="e.nodeId" style="margin:4px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap" @click.stop>
                     <code style="font-size:0.68rem;color:var(--text-dim)" x-text="e.nodeId"></code>
                     <button type="button" class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:0.65rem" @click="copyNodeId(e.nodeId)">Copy</button>
                   </div>

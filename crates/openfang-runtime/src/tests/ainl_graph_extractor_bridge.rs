@@ -19,7 +19,7 @@ async fn extract_facts_writes_semantic_row_via_graph_memory_hook() {
     let writer = GraphMemoryWriter::from_memory_for_tests(
         memory,
         "bridge-sem-agent",
-        Some(Arc::new(move |_agent, kind| {
+        Some(Arc::new(move |_agent, kind, _prov| {
             if kind == "fact" {
                 fw.fetch_add(1, Ordering::SeqCst);
             }

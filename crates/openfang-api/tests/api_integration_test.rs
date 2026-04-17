@@ -504,7 +504,9 @@ async fn test_mcp_servers_readiness_shape() {
     let readiness = body.get("readiness").expect("readiness object");
     assert_eq!(
         readiness.get("version").and_then(|v| v.as_u64()),
-        Some(u64::from(openfang_runtime::mcp_readiness::READINESS_SCHEMA_VERSION))
+        Some(u64::from(
+            openfang_runtime::mcp_readiness::READINESS_SCHEMA_VERSION
+        ))
     );
     let checks = readiness
         .get("checks")
@@ -518,6 +520,169 @@ async fn test_mcp_servers_readiness_shape() {
         .get("calendar_readiness")
         .expect("calendar_readiness alias");
     assert_eq!(legacy.get("ready"), cal.get("ready"));
+}
+
+/// Guided MCP preset catalog for the dashboard installer.
+#[tokio::test]
+async fn test_integrations_mcp_presets_endpoint() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/integrations/mcp-presets", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let presets = body["presets"].as_array().expect("presets array");
+    assert!(
+        presets.iter().any(|p| p["integration_id"] == "postgresql"),
+        "postgres preset should map to postgresql integration id"
+    );
+    assert!(presets.iter().any(|p| p["integration_id"] == "filesystem"));
+}
+
+/// `POST /api/integrations/validate` — structured field errors for filesystem preset.
+#[tokio::test]
+async fn test_integrations_validate_filesystem_requires_allowed_paths() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/integrations/validate", server.base_url))
+        .json(&serde_json::json!({
+            "id": "filesystem",
+            "env": {},
+            "config": {}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    let fe = body["field_errors"]
+        .as_object()
+        .expect("field_errors object");
+    assert!(fe.contains_key("allowed_paths"), "{fe:?}");
+}
+
+/// `POST /api/integrations/custom/validate` — rejects bundled ids.
+#[tokio::test]
+async fn test_integrations_custom_validate_rejects_bundled_id() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/api/integrations/custom/validate",
+            server.base_url
+        ))
+        .json(&serde_json::json!({
+            "id": "github",
+            "name": "X",
+            "transport": { "type": "stdio", "command": "npx" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], false);
+    let fe = body["field_errors"].as_object().expect("field_errors");
+    assert!(fe.contains_key("id"), "{fe:?}");
+}
+
+/// `POST /api/integrations/custom/validate` — happy path (stdio, no env).
+#[tokio::test]
+async fn test_integrations_custom_validate_ok() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{}/api/integrations/custom/validate",
+            server.base_url
+        ))
+        .json(&serde_json::json!({
+            "id": "mytools",
+            "name": "My Tools",
+            "transport": { "type": "stdio", "command": "npx", "args": ["-y", "@foo/bar"] },
+            "env": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["id"], "mytools");
+}
+
+/// Custom MCP add persists template + install, then `GET /api/integrations/available` lists it.
+#[tokio::test]
+async fn test_integrations_custom_add_stdio_persists() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/integrations/custom/add", server.base_url))
+        .json(&serde_json::json!({
+            "id": "zcusttest01",
+            "name": "Z Cust Test",
+            "transport": { "type": "stdio", "command": "npx", "args": ["-y", "noop"] },
+            "env": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["mode"], "custom");
+    assert_eq!(body["id"], "zcusttest01");
+
+    let avail = client
+        .get(format!("{}/api/integrations/available", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(avail.status(), 200);
+    let aj: serde_json::Value = avail.json().await.unwrap();
+    let list = aj["integrations"].as_array().expect("integrations");
+    assert!(
+        list.iter().any(|t| t["id"] == "zcusttest01"),
+        "custom template should appear in available list"
+    );
+}
+
+/// Configured install rejects unknown env/config keys (typo guard).
+#[tokio::test]
+async fn test_integrations_add_configured_rejects_unknown_field() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/integrations/add", server.base_url))
+        .json(&serde_json::json!({
+            "id": "github",
+            "env": { "NOT_A_REAL_KEY": "x" },
+            "config": {}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+/// Legacy `{ "id" }` install remains available (no `env` / `config` keys).
+#[tokio::test]
+async fn test_integrations_add_legacy_mode_unchanged() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/integrations/add", server.base_url))
+        .json(&serde_json::json!({ "id": "github" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["mode"], "legacy");
 }
 
 #[tokio::test]
@@ -1970,6 +2135,47 @@ async fn test_graph_memory_delete_node_and_audit() {
         .iter()
         .any(|e| e["action"].as_str() == Some("node_deleted"));
     assert!(has_delete, "expected node_deleted audit entry: {audit}");
+}
+
+#[tokio::test]
+async fn test_graph_memory_explain_payload_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let agent_id = "graph-memory-it-explain";
+    seed_graph_memory(&server, agent_id);
+
+    let graph: serde_json::Value = client
+        .get(format!(
+            "{}/api/graph-memory?agent_id={}",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let nodes = graph["nodes"].as_array().expect("nodes array");
+    assert!(!nodes.is_empty(), "expected seeded nodes");
+    for n in nodes {
+        let explain = &n["explain"];
+        assert!(
+            explain.is_object(),
+            "each node must include explain object: {n}"
+        );
+        for key in [
+            "what_happened",
+            "why_happened",
+            "evidence",
+            "relations",
+            "node_kind",
+        ] {
+            assert!(
+                explain.get(key).is_some(),
+                "explain must include {key}: {explain}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

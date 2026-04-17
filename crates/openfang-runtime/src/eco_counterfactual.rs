@@ -85,14 +85,8 @@ mod tests {
             original_tokens: 100,
             compressed_tokens: 72,
         };
-        let r = build_eco_counterfactual_receipt(
-            msg,
-            EfficientMode::Balanced,
-            &applied,
-            28,
-            None,
-        )
-        .expect("receipt");
+        let r = build_eco_counterfactual_receipt(msg, EfficientMode::Balanced, &applied, 28, None)
+            .expect("receipt");
         assert_eq!(r.applied_mode, "balanced");
         assert_eq!(r.original_tokens_est, 100);
         assert_eq!(r.applied_compressed_tokens_est, 72);

@@ -42,6 +42,8 @@ ArmaraOS implements MCP protocol version `2024-11-05`.
 - CLI server: `crates/openfang-cli/src/mcp.rs`
 - Config types: `crates/openfang-types/src/config.rs` (`McpServerConfigEntry`, `McpTransportEntry`)
 
+**Dashboard (no TOML):** **Skills → MCP Servers** leads with **Add custom MCP server** (`POST /api/integrations/custom/validate` + `POST /api/integrations/custom/add`) for arbitrary stdio/SSE/HTTP MCP definitions persisted via the integration registry. A collapsible **preset examples** section covers curated templates (filesystem, GitHub, PostgreSQL, Google Calendar, Apple/CalDAV) using `POST /api/integrations/add` with optional `env` and `config` JSON objects (legacy `{ "id" }` remains supported). Secrets are stored in the daemon credential vault when available; non-secret values (and filesystem `allowed_paths`) persist in the per-integration `config` map. See **`GET /api/integrations/mcp-presets`**, **`POST /api/integrations/validate`**, and the **`/api/integrations/custom/*`** routes in [api-reference.md](api-reference.md).
+
 ---
 
 ### MCP Client
@@ -72,6 +74,7 @@ Each entry maps to a `McpServerConfigEntry` struct:
 | `transport` | `McpTransportEntry` | required | How to connect (stdio or SSE) |
 | `timeout_secs` | `u64` | `30` | JSON-RPC request timeout |
 | `env` | `Vec<String>` | `[]` | Env vars to pass through to the subprocess |
+| `config_env` | `HashMap<String,String>` | `{}` | Non-secret values for those env keys (dashboard/extension installs; not usually hand-edited in `config.toml`) |
 
 #### Transport Types
 

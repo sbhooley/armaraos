@@ -3056,14 +3056,10 @@ decay_rate = 0.05
                             ));
                             if let Some(obj) = checks_map {
                                 for (id, c) in obj {
-                                    let ready = c
-                                        .get("ready")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    let label = c
-                                        .get("label")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or(id);
+                                    let ready =
+                                        c.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let label =
+                                        c.get("label").and_then(|v| v.as_str()).unwrap_or(id);
                                     if ready {
                                         ui::check_ok(&format!("MCP readiness [{label}]: ready"));
                                     } else {
@@ -3109,10 +3105,8 @@ decay_rate = 0.05
                         }));
                         if let Some(obj) = checks_map {
                             for (id, c) in obj {
-                                let ready = c
-                                    .get("ready")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
+                                let ready =
+                                    c.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
                                 let status = if ready { "ok" } else { "warn" };
                                 checks.push(serde_json::json!({
                                     "check": format!("daemon_mcp_readiness_{id}"),
@@ -3123,10 +3117,8 @@ decay_rate = 0.05
                             }
                             // Back-compat: older doctor JSON consumers expect `daemon_mcp_calendar`.
                             if let Some(cal) = obj.get("calendar") {
-                                let cal_ready = cal
-                                    .get("ready")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
+                                let cal_ready =
+                                    cal.get("ready").and_then(|v| v.as_bool()).unwrap_or(false);
                                 checks.push(serde_json::json!({
                                     "check": "daemon_mcp_calendar",
                                     "status": if cal_ready { "ok" } else { "warn" },
@@ -5820,6 +5812,7 @@ fn cmd_integration_add(name: &str, key: Option<&str>) {
         &mut resolver,
         name,
         &provided_keys,
+        &std::collections::HashMap::new(),
     ) {
         Ok(result) => {
             match &result.status {

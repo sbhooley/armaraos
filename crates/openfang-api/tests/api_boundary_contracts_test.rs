@@ -225,11 +225,7 @@ async fn dashboard_auth_login_sets_cookie_and_allows_protected_route() {
         .get(reqwest::header::SET_COOKIE)
         .and_then(|h| h.to_str().ok())
         .expect("set-cookie header");
-    let cookie_pair = set_cookie
-        .split(';')
-        .next()
-        .expect("cookie pair")
-        .trim();
+    let cookie_pair = set_cookie.split(';').next().expect("cookie pair").trim();
 
     let ok = client
         .post(&agents_url)
