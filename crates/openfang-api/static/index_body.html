@@ -7726,7 +7726,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <template x-if="page === 'graph-memory'">
       <div class="graph-memory-page-root">
-      <div x-data="graphMemoryPanel()" x-init="init()" class="graph-memory-panel page-body" style="padding:16px 20px 24px">
+      <div x-data="graphMemoryPanel()" x-init="init()" @page-leave.window="cleanupKernelListener()" class="graph-memory-panel page-body" style="padding:16px 20px 24px">
         <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px">
           <div style="display:flex;align-items:center;gap:12px">
             <h2 class="page-header" style="margin:0;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Graph Memory</h2>

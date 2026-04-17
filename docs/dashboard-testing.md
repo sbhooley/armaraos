@@ -475,6 +475,32 @@ curl -s http://127.0.0.1:4200/api/slash-templates
 
 **Navigation:** Sidebar **Graph Memory**, or `http://127.0.0.1:4200/#graph-memory`.
 
+**SSE contract (live timeline source)**
+
+Kernel graph writes publish `SystemEvent::GraphMemoryWrite` on **`GET /api/events/stream`** (JSON per `data:` line). The dashboard listens for the substring `GraphMemoryWrite` inside each event’s `payload`.
+
+- **Automated:** `cargo test -p openfang-api --test api_integration_test test_kernel_events_stream_includes_graph_memory_write`
+- **Manual (daemon on `127.0.0.1:4200`):** In one terminal, stream events; in another, run a chat turn (or any action that writes graph memory):
+
+```bash
+curl -sN --max-time 45 "http://127.0.0.1:4200/api/events/stream" | rg -m1 "GraphMemoryWrite"
+```
+
+Expect a matching line within the timeout while the turn completes. If this prints nothing but graph nodes still update via `GET /api/graph-memory`, check `daemon.log` for `GraphMemoryWrite kernel notify failed` (notify path) and graph-memory controls (`temporary_mode`, rollout).
+
+**Structured checks (no log grep required)**
+
+`GET /api/status` includes `graph_memory_context_metrics` with:
+
+- **`graph_memory_kernel_notify_ok_total`** / **`graph_memory_kernel_notify_err_total`** — counts of successful vs failed `notify_graph_memory_write` calls (daemon lifetime; reset on restart). If **`notify_err_total` > 0**, the SSE timeline can miss writes even when SQLite still updates.
+- **`temp_mode_suppressed_*_total`** / **`rollout_suppressed_*_total`** — policy suppression (temporary mode, `memory_rollout` / `AINL_MEMORY_ROLLOUT`).
+
+One command:
+
+```bash
+bash scripts/check-graph-memory-timeline-diagnostics.sh http://127.0.0.1:4200
+```
+
 **Manual checks**
 
 1. Pick an agent with existing **`ainl_memory.db`** data (or run a short chat turn to create episodes).

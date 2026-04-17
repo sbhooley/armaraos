@@ -10,9 +10,11 @@
 
 use openfang_api::routes::AppState;
 use openfang_kernel::OpenFangKernel;
+use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -1747,6 +1749,62 @@ async fn test_kernel_events_stream_sse_smoke() {
         s.contains("data:") || s.contains("ping"),
         "expected SSE data or comment, got: {s:?}"
     );
+}
+
+/// `GraphMemoryWrite` appears on `GET /api/events/stream` when the kernel publishes it (graph-memory live timeline contract).
+#[tokio::test]
+async fn test_kernel_events_stream_includes_graph_memory_write() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap().to_string();
+
+    let sse_url = format!("{}/api/events/stream", server.base_url);
+    let mut sse_resp = client.get(sse_url).send().await.unwrap();
+    assert_eq!(sse_resp.status(), 200);
+
+    let kernel = server.state.kernel.clone();
+    let aid = agent_id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        kernel
+            .notify_graph_memory_write(&aid, "episode", None)
+            .await
+            .expect("notify_graph_memory_write should succeed for a spawned agent id");
+    });
+
+    let mut accumulated = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        if accumulated.contains("GraphMemoryWrite") {
+            break;
+        }
+        if tokio::time::Instant::now() > deadline {
+            let tail: String = accumulated.chars().rev().take(900).collect::<String>();
+            let tail: String = tail.chars().rev().collect();
+            panic!("timed out waiting for GraphMemoryWrite on SSE; tail={tail}");
+        }
+        match tokio::time::timeout(Duration::from_millis(700), sse_resp.chunk())
+            .await
+        {
+            Ok(Ok(Some(bytes))) => {
+                accumulated.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            Ok(Ok(None)) => {
+                panic!("SSE closed before GraphMemoryWrite; got={accumulated}");
+            }
+            Ok(Err(e)) => panic!("SSE chunk error: {e}"),
+            Err(_) => {}
+        }
+    }
 }
 
 /// GET /api/budget returns JSON used by the dashboard (notification center + Settings).

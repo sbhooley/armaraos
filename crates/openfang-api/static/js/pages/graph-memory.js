@@ -84,6 +84,13 @@ function graphMemoryPanel() {
     memoryDiagnostics: null,
     memorySelectionDebug: [],
     showWhySelectedDrawer: false,
+    /** Bound handler for `armaraos-kernel-event` — removed in {@link cleanupKernelListener}. */
+    _graphMemoryKernelHandler: null,
+    /** Dedupe `GraphMemoryWrite` by kernel event id (window listener + store watch + replay). */
+    _processedGraphMemoryEventIds: {},
+    /** Polling fallback when `$watch` on `kernelEvents.received` does not fire. */
+    _kernelEventsPollTimer: null,
+    _lastSeenKernelReceivedCount: -1,
 
     kindColor: {
       episode: '#7c9ef5',
@@ -95,7 +102,78 @@ function graphMemoryPanel() {
 
     isGraphMemoryKernelEvent(d) {
       var p = d && d.payload;
-      return !!(p && p.type === 'System' && p.data && p.data.event === 'GraphMemoryWrite');
+      if (!p || p.type !== 'System' || !p.data) {
+        return false;
+      }
+      var ev = p.data.event;
+      return ev === 'GraphMemoryWrite';
+    },
+
+    /**
+     * Ingest one kernel SSE event (same shape as `GET /api/events/stream` JSON).
+     * Also driven by `Alpine.store('kernelEvents')` when `CustomEvent` delivery is unreliable (e.g. WebView).
+     */
+    ingestKernelDetailForTimeline(detail) {
+      if (!this.isGraphMemoryKernelEvent(detail)) {
+        return;
+      }
+      var evid =
+        detail && detail.id != null
+          ? String(detail.id)
+          : '';
+      if (!evid) {
+        var pd = detail && detail.payload && detail.payload.data;
+        var k = pd && pd.kind ? String(pd.kind) : '';
+        evid =
+          String(detail && detail.timestamp != null ? detail.timestamp : '') +
+          ':' +
+          k +
+          ':' +
+          String(
+            pd && pd.agent_id != null ? pd.agent_id : ''
+          );
+      }
+      if (this._processedGraphMemoryEventIds[evid]) {
+        return;
+      }
+      this._processedGraphMemoryEventIds[evid] = true;
+      var n = Object.keys(this._processedGraphMemoryEventIds).length;
+      if (n > 400) {
+        var keys = Object.keys(this._processedGraphMemoryEventIds);
+        var drop = keys.slice(0, n - 300);
+        for (var i = 0; i < drop.length; i++) {
+          delete this._processedGraphMemoryEventIds[drop[i]];
+        }
+      }
+      this.handleGraphMemoryKernelEvent(detail);
+    },
+
+    /** Replay recent SSE events from `Alpine.store('kernelEvents').items` (subset of bus history). */
+    replayRecentKernelGraphMemoryFromStore() {
+      var self = this;
+      try {
+        var ke =
+          typeof Alpine !== 'undefined' && Alpine.store
+            ? Alpine.store('kernelEvents')
+            : null;
+        if (!ke || !Array.isArray(ke.items) || !ke.items.length) {
+          return;
+        }
+        var batch = ke.items.slice(-80);
+        for (var j = 0; j < batch.length; j++) {
+          var entry = batch[j];
+          if (!entry || !entry.payload) {
+            continue;
+          }
+          self.ingestKernelDetailForTimeline({
+            id: entry.id,
+            timestamp: entry.ts,
+            payload: entry.payload,
+          });
+        }
+      } catch (e) {
+        console.warn('graph-memory: replay kernel items failed', e);
+      }
     },
 
     notifySuccess(msg) {
@@ -242,10 +320,8 @@ function graphMemoryPanel() {
     },
 
     pushTimelineEntry(entry) {
-      this.liveTimeline.unshift(entry);
-      if (this.liveTimeline.length > this.timelineLimit) {
-        this.liveTimeline = this.liveTimeline.slice(0, this.timelineLimit);
-      }
+      var cap = this.timelineLimit;
+      this.liveTimeline = [entry].concat(this.liveTimeline).slice(0, cap);
     },
 
     filteredTimeline() {
@@ -366,10 +442,11 @@ function graphMemoryPanel() {
         ];
       }
       var self = this;
+      var evId = detail && detail.id != null ? String(detail.id) : '';
       items.forEach(function (item, idx) {
         self.pushTimelineEntry({
           id:
-            String(whenMs) +
+            (evId || String(whenMs)) +
             ':' +
             kind +
             ':' +
@@ -420,17 +497,109 @@ function graphMemoryPanel() {
       return '';
     },
 
+    /** Remove kernel SSE bridge listener (see {@link init}). */
+    cleanupKernelListener() {
+      if (this._graphMemoryKernelHandler) {
+        try {
+          window.removeEventListener(
+            'armaraos-kernel-event',
+            this._graphMemoryKernelHandler
+          );
+        } catch (e) {
+          /* ignore */
+        }
+        this._graphMemoryKernelHandler = null;
+      }
+      if (this._kernelEventsPollTimer) {
+        try {
+          clearInterval(this._kernelEventsPollTimer);
+        } catch (e2) {
+          /* ignore */
+        }
+        this._kernelEventsPollTimer = null;
+      }
+      this._lastSeenKernelReceivedCount = -1;
+    },
+
     async init() {
       await this.loadAgents();
       await this.fetchGraph();
       await this.refreshGovernanceData();
 
       var self = this;
-      window.addEventListener('armaraos-kernel-event', function (e) {
-        if (self.isGraphMemoryKernelEvent(e.detail)) {
-          self.handleGraphMemoryKernelEvent(e.detail);
+      this.cleanupKernelListener();
+      this._graphMemoryKernelHandler = function (e) {
+        try {
+          self.ingestKernelDetailForTimeline(e.detail);
+        } catch (err) {
+          console.warn('graph-memory: kernel event handling failed', err);
         }
-      });
+      };
+      window.addEventListener('armaraos-kernel-event', this._graphMemoryKernelHandler);
+
+      try {
+        if (typeof this.$watch === 'function') {
+          this.$watch(
+            function () {
+              try {
+                return Alpine.store('kernelEvents').received;
+              } catch (eR) {
+                return 0;
+              }
+            },
+            function () {
+              try {
+                var ke = Alpine.store('kernelEvents');
+                if (ke && ke.last) {
+                  self.ingestKernelDetailForTimeline(ke.last);
+                }
+              } catch (eW) {
+                console.warn('graph-memory: kernelEvents watch failed', eW);
+              }
+            }
+          );
+        }
+      } catch (eWatch) {
+        console.warn('graph-memory: could not bind kernelEvents $watch', eWatch);
+      }
+
+      this.replayRecentKernelGraphMemoryFromStore();
+
+      try {
+        var ke0 = Alpine.store('kernelEvents');
+        this._lastSeenKernelReceivedCount =
+          ke0 && typeof ke0.received === 'number' ? ke0.received : -1;
+      } catch (e0) {
+        this._lastSeenKernelReceivedCount = -1;
+      }
+      this._kernelEventsPollTimer = setInterval(function () {
+        try {
+          var ke = Alpine.store('kernelEvents');
+          var n = ke && typeof ke.received === 'number' ? ke.received : 0;
+          if (n === self._lastSeenKernelReceivedCount) {
+            return;
+          }
+          self._lastSeenKernelReceivedCount = n;
+          if (ke && ke.items && ke.items.length) {
+            var tail = ke.items.slice(-40);
+            for (var t = 0; t < tail.length; t++) {
+              var entry = tail[t];
+              if (!entry || !entry.payload) {
+                continue;
+              }
+              self.ingestKernelDetailForTimeline({
+                id: entry.id,
+                timestamp: entry.ts,
+                payload: entry.payload,
+              });
+            }
+          } else if (ke && ke.last) {
+            self.ingestKernelDetailForTimeline(ke.last);
+          }
+        } catch (ePoll) {
+          /* ignore */
+        }
+      }, 900);
 
       var canvas = document.getElementById('graph-memory-canvas');
       if (canvas && window.ResizeObserver) {

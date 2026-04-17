@@ -62,9 +62,23 @@ fn graph_memory_sse_hook(
                   provenance: Option<openfang_types::event::GraphMemoryWriteProvenance>| {
                 let k = Arc::clone(&k);
                 tokio::spawn(async move {
-                    let _ = k
+                    match k
                         .notify_graph_memory_write(&agent_id, &kind, provenance)
-                        .await;
+                        .await
+                    {
+                        Ok(()) => {
+                            crate::graph_memory_context::record_graph_memory_kernel_notify_ok();
+                        }
+                        Err(e) => {
+                            crate::graph_memory_context::record_graph_memory_kernel_notify_err();
+                            warn!(
+                                agent_id = %agent_id,
+                                kind = %kind,
+                                error = %e,
+                                "GraphMemoryWrite kernel notify failed (dashboard timeline/SSE may miss this write)"
+                            );
+                        }
+                    }
                 });
             },
         ) as Arc<

@@ -66,6 +66,8 @@ required = [
     "contradiction_gate_pass",
     "temp_mode_suppressed_reads_total",
     "temp_mode_suppressed_writes_total",
+    "graph_memory_kernel_notify_ok_total",
+    "graph_memory_kernel_notify_err_total",
 ]
 missing = [k for k in required if k not in metrics]
 if missing:

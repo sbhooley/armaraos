@@ -24,6 +24,20 @@ static ROLLOUT_SUPPRESSED_READS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ROLLOUT_SUPPRESSED_WRITES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_LINES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PROVENANCE_LINES_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// `KernelHandle::notify_graph_memory_write` succeeded (dashboard / SSE `GraphMemoryWrite`).
+static GRAPH_MEMORY_KERNEL_NOTIFY_OK_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// `KernelHandle::notify_graph_memory_write` failed (timeline may miss writes; see daemon logs).
+static GRAPH_MEMORY_KERNEL_NOTIFY_ERR_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Increment when the kernel publishes `GraphMemoryWrite` to the event bus (SSE path).
+pub fn record_graph_memory_kernel_notify_ok() {
+    GRAPH_MEMORY_KERNEL_NOTIFY_OK_TOTAL.fetch_add(1, AtomicOrdering::Relaxed);
+}
+
+/// Increment when notify failed (e.g. agent id resolution); SSE will not show this write.
+pub fn record_graph_memory_kernel_notify_err() {
+    GRAPH_MEMORY_KERNEL_NOTIFY_ERR_TOTAL.fetch_add(1, AtomicOrdering::Relaxed);
+}
 
 fn selection_debug_snapshot() -> &'static StdMutex<Vec<serde_json::Value>> {
     static SNAPSHOT: OnceLock<StdMutex<Vec<serde_json::Value>>> = OnceLock::new();
@@ -166,6 +180,8 @@ pub fn memory_context_metrics() -> serde_json::Value {
         "ab_control_turns_total": AB_CONTROL_TURNS_TOTAL.load(AtomicOrdering::Relaxed),
         "rollout_suppressed_reads_total": ROLLOUT_SUPPRESSED_READS_TOTAL.load(AtomicOrdering::Relaxed),
         "rollout_suppressed_writes_total": ROLLOUT_SUPPRESSED_WRITES_TOTAL.load(AtomicOrdering::Relaxed),
+        "graph_memory_kernel_notify_ok_total": GRAPH_MEMORY_KERNEL_NOTIFY_OK_TOTAL.load(AtomicOrdering::Relaxed),
+        "graph_memory_kernel_notify_err_total": GRAPH_MEMORY_KERNEL_NOTIFY_ERR_TOTAL.load(AtomicOrdering::Relaxed),
         "injected_lines_total": injected_lines_total,
         "provenance_lines_total": provenance_lines_total,
         "provenance_coverage_ratio": provenance_coverage_ratio,
@@ -972,5 +988,7 @@ mod tests {
         assert!(metrics.get("provenance_gate_pass").is_some());
         assert!(metrics.get("conflict_ratio").is_some());
         assert!(metrics.get("contradiction_gate_pass").is_some());
+        assert!(metrics.get("graph_memory_kernel_notify_ok_total").is_some());
+        assert!(metrics.get("graph_memory_kernel_notify_err_total").is_some());
     }
 }
