@@ -26,7 +26,7 @@ Order matters for scanability and for the loading skeleton matching the real lay
 7. **Onboarding banner** — When onboarding store says so and checklist was dismissed.
 8. **Main content** (after successful load) — Hero stats, compact stats, observability snapshot, provider badges, panel grid (System health, Security, Channels, **MCP Servers**, **MCP readiness** chips from `GET /api/mcp/servers` → `readiness.checks`), Recent activity, empty states.
 
-The **Skills** page (`#skills`) has a separate **MCP quick setup** card (presets + `POST /api/integrations/*`) for installing common MCP integrations without editing TOML; it complements the overview readiness chips.
+The **Skills** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** (`POST /api/integrations/custom/*`) and a collapsible **preset examples** section (`POST /api/integrations/*`) for curated templates — both install without editing TOML; that flow complements the overview **MCP Servers** / readiness chips.
 
 The duplicate **Quick actions** block that previously appeared after the panel grid was removed; actions exist only in the top region.
 
