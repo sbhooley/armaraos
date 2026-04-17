@@ -70,13 +70,15 @@ circuit_breaker_window = 12
 circuit_breaker_min_below_floor = 3
 # Optional rate limits (0 = disabled)
 min_secs_between_enforced_changes = 0
+# After a circuit-breaker step-down, block raising compression tier above the trip floor (seconds; 0 = off)
+post_circuit_cooldown_secs = 0
 # Prompt-cache TTL awareness (reduces oscillation with Anthropic/OpenAI-style caching)
 provider_prompt_cache_ttl_secs = 300
 cache_ttl_dampens_raises = true
 circuit_breaker_extra_window_when_prompt_cache = 6
 ```
 
-**Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns`, **`min_secs_between_enforced_changes`**, circuit breaker fields, and (if needed) **`provider_prompt_cache_ttl_secs`** / **`cache_ttl_dampens_raises`**. Run the **`cargo test -p openfang-runtime adaptive_eco_eval`** harness before broad enforcement; see [operations/ADAPTIVE_ECO_EVAL_HARNESS.md](operations/ADAPTIVE_ECO_EVAL_HARNESS.md). API reference: [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
+**Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. **Staging:** follow [operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md](operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md) and run **`scripts/verify-adaptive-eco-usage.sh`** against your daemon. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns`, **`min_secs_between_enforced_changes`**, circuit breaker fields, and (if needed) **`provider_prompt_cache_ttl_secs`** / **`cache_ttl_dampens_raises`**. Run **`cargo test -p openfang-runtime --test adaptive_eco_eval_harness`** before broad enforcement; see [operations/ADAPTIVE_ECO_EVAL_HARNESS.md](operations/ADAPTIVE_ECO_EVAL_HARNESS.md). API reference: [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
 
 Hot-reload: use **`POST /api/config/set`** with `path: "efficient_mode"` (full contract: [api-reference.md](api-reference.md#post-apiconfigset)) or edit the file and **`POST /api/config/reload`** where applicable.
 
@@ -105,17 +107,19 @@ The AINL repo’s `ainl run --efficient-mode …` sets **`AINL_EFFICIENT_MODE`**
 - **`compressed_input`** (`string`, optional) — text actually sent to the LLM when savings &gt; 0; powers the **Eco Diff** UI.
 - **`adaptive_confidence`** (`f32`, optional) — policy confidence when **`[adaptive_eco]`** produced metadata for the turn.
 - **`eco_counterfactual`** (object, optional) — counterfactual token estimates (applied vs baselines / recommendation).
+- **`adaptive_eco_effective_mode`**, **`adaptive_eco_recommended_mode`** (string, optional) — modes after kernel policy vs resolver recommendation (omitted when unset).
+- **`adaptive_eco_reason_codes`** (string array, optional) — machine-readable policy reasons for the turn (omitted when unset).
 - **`tools`** — optional array of tool executions for that blocking turn (same field name as elsewhere; unrelated to compression). See [api-reference.md](api-reference.md) (**POST /api/agents/{id}/message**).
 
 ### WebSocket (`/api/agents/{id}/ws`)
 
 Final **`{"type":"response",...}`** may include **`compression_savings_pct`** and **`compressed_input`** when compression ran.
 
-Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard uses it for the **⚡ eco ↓X%** badge and diff payload. When **`[adaptive_eco]`** is enabled, the same event (and the final **`response`**) may also include **`adaptive_confidence`** (0.0–1.0) and **`eco_counterfactual`** (applied vs off / recommended token estimates). Chat appends a short **`conf N%`** / **`Δrec … tok`** suffix to the token line and exposes a **tooltip** with JSON for debugging.
+Streaming emits a **`CompressionStats`** event before LLM tokens; the dashboard uses it for the **⚡ eco ↓X%** badge and diff payload. When **`[adaptive_eco]`** is enabled, the same event (and the final **`response`**) may also include **`adaptive_confidence`** (0.0–1.0), **`eco_counterfactual`**, and optional **`adaptive_eco_effective_mode` / `adaptive_eco_recommended_mode` / `adaptive_eco_reason_codes`**. Chat appends a short **`conf N%`** / **`Δrec … tok`** suffix to the token line and exposes a **tooltip** with JSON for debugging.
 
 **Aggregates (dashboards / audits):**
 
-- **`GET /api/usage/compression`** — durable compression rollups; may embed **`adaptive_eco: { summary, replay }`** for the same **`?window=`** so adaptive outcomes are available without extra requests (see [api-reference.md](api-reference.md#get-apiusagecompression)).
+- **`GET /api/usage/compression`** — durable compression rollups; may embed **`adaptive_eco: { summary, replay }`** for the same **`?window=`** so adaptive outcomes are available without extra requests (see [api-reference.md](api-reference.md#get-apiusagecompression)). If the compression rollup query fails, the response is still JSON-shaped with zeros/empties, may set **`compression_summary_error: true`**, and can still fill **`adaptive_eco`** from the dedicated adaptive queries when **`adaptive_eco_filled_from_fallback`** is true.
 - **`GET /api/usage/adaptive-eco`** — counts shadow mismatches, circuit-breaker trips, hysteresis blocks (optional **`?window=7d`** or **`all`**).
 - **`GET /api/usage/adaptive-eco/replay`** — same window parameter; **shadow mismatch rate**, **eco compression turn count**, **semantic p50 / p95 / mean** on durable `eco_compression_events`, plus **effective mode flip** rate and **adaptive confidence** p50/p95/mean and bucket counts.
 

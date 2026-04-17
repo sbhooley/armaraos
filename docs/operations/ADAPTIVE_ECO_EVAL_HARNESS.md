@@ -33,6 +33,7 @@ Before enabling **`adaptive_eco.enforce`**, use:
 
 ## See also
 
+- [ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md](ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md) — real traffic, shadow → enforce
 - [prompt-compression-efficient-mode.md](../prompt-compression-efficient-mode.md)
 - [MILESTONE1_PREFLIGHT_RECOVERY_CHECKLIST.md](../MILESTONE1_PREFLIGHT_RECOVERY_CHECKLIST.md)
 - [api-reference.md](../api-reference.md) — usage endpoints
