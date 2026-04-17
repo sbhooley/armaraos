@@ -28,7 +28,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 
 | Guide | Description |
 |-------|-------------|
-| [Orchestration guide](orchestration-guide.md) | Dashboard **Monitor → Orchestration traces**, API + SSE, quotas |
+| [Orchestration guide](orchestration-guide.md) | Dashboard **Agents → Orchestration**, API + SSE, quotas |
 | [Orchestration walkthrough](orchestration-walkthrough.md) | Hands-on URL hash **`#orchestration-traces`** and curl patterns |
 | [Task queue + orchestration](task-queue-orchestration.md) | **`task_post` / `task_claim`** stickiness with **`trace_id`** |
 | [Workflow examples](workflow-examples.md) | Compact JSON + register/run recipes |

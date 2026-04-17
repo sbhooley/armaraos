@@ -33,7 +33,7 @@ openfang orchestration watch --trace abc-trace-id --interval-secs 2
 
 ## Dashboard
 
-- Open the web UI (default `http://127.0.0.1:4200/`), then **Monitor → Orchestration traces** or navigate to hash **`#orchestration-traces`**.
+- Open the web UI (default `http://127.0.0.1:4200/`), then **Agents → Orchestration** (below **Graph Memory**) or navigate to hash **`#orchestration-traces`**.
 - **Trace list:** id substring filter; **From / To** datetime filters on `last_event_at`.
 - **Detail (per trace):** **Delegation graph** (indented call tree; click row to copy agent id); **event type filter** (comma-separated, narrows Gantt + events JSON); **Gantt-style timeline**; **token in/out heatmap**; collapsible JSON for cost, tree, and events (`static/js/pages/orchestration-traces.js`, styles in `static/css/layout.css`).
 - **Quota tree:** after loading by agent UUID, **quota usage bars** (used vs hourly token cap) plus JSON.

@@ -754,3 +754,115 @@
   min-width: 2px;
   transition: width 0.2s ease;
 }
+
+/* Orchestration page shell (aligned with Analytics / Graph Memory) */
+.orchestration-traces-page-root .orch-intro-card {
+  border-left: 4px solid var(--accent);
+  background: linear-gradient(180deg, var(--surface2) 0%, var(--surface) 55%);
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+}
+.orchestration-traces-page-root .orch-filter-bar {
+  margin-bottom: 18px;
+}
+.orchestration-traces-page-root .orch-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 14px;
+}
+.orchestration-traces-page-root .orch-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.orchestration-traces-page-root .orch-filter-field label {
+  margin: 0;
+}
+.orchestration-traces-page-root .orch-filter-input {
+  min-width: 160px;
+  max-width: 260px;
+  padding: 6px 10px;
+}
+.orchestration-traces-page-root .orch-quota-card {
+  margin-bottom: 18px;
+}
+.orchestration-traces-page-root .orch-quota-agent-input {
+  min-width: 220px;
+  max-width: 100%;
+  flex: 1 1 220px;
+}
+.orchestration-traces-page-root .orch-loading-state {
+  margin: 12px 0 20px;
+}
+.orchestration-traces-page-root .orch-layout-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .orchestration-traces-page-root .orch-layout-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.orchestration-traces-page-root .orch-trace-list-card,
+.orchestration-traces-page-root .orch-detail-card {
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+}
+.orchestration-traces-page-root .orch-trace-list-scroll {
+  max-height: min(70vh, 720px);
+  overflow: auto;
+  padding: 10px 12px 14px;
+}
+.orchestration-traces-page-root .orch-trace-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.orchestration-traces-page-root .orch-trace-pick:hover {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+}
+.orchestration-traces-page-root .orch-trace-pick--active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  background: linear-gradient(
+    135deg,
+    var(--surface2),
+    color-mix(in srgb, var(--accent) 9%, var(--surface2))
+  );
+}
+.orchestration-traces-page-root .orch-trace-pick-id {
+  word-break: break-all;
+  line-height: 1.35;
+}
+.orchestration-traces-page-root .orch-detail-scroll {
+  max-height: min(70vh, 720px);
+  overflow: auto;
+  padding: 14px 16px 18px;
+}
+.orchestration-traces-page-root .orch-d3-graph-host {
+  width: 100%;
+  min-height: 400px;
+  background: var(--graph-bg, #0f0f13);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}

@@ -26,7 +26,7 @@ When the **kernel** runs a workflow (`OpenFangKernel::run_workflow`) or the **HT
 | Field / behavior | Value |
 |------------------|--------|
 | **`pattern`** | `OrchestrationPattern::Workflow { workflow_id, step_index, step_name }` — identifies the definition and the step inside the run. |
-| **`trace_id`** | One id per **run**, shared by every step: `wf:{workflow_uuid}:run:{run_uuid}`. Filter this in **Monitor → Orchestration traces** (`#orchestration-traces`) or `openfang orchestration …`. |
+| **`trace_id`** | One id per **run**, shared by every step: `wf:{workflow_uuid}:run:{run_uuid}`. Filter this in **Agents → Orchestration** (`#orchestration-traces`) or `openfang orchestration …`. |
 | **`orchestrator_id` / `call_chain`** | Rooted at the **step’s target agent** for that turn; nested **`agent_send`** / **`agent_spawn`** extend the chain as usual. |
 | **`remaining_budget_ms`** | If unset when the context is built, the kernel may set it from **`[runtime_limits] orchestration_default_budget_ms`** in `config.toml` (`RuntimeLimitsConfig` in `openfang-types`). |
 

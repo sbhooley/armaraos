@@ -371,7 +371,7 @@ All tools properly registered in `builtin_tool_definitions()`:
 |-----------|--------|-------|
 | JavaScript logic | ✅ Complete | `orchestration-traces.js` (Gantt + heatmap builders) |
 | HTML template | ✅ Complete | `index_body.html` `#orchestration-traces` |
-| Navigation link | ✅ Complete | Monitor → Orchestration traces |
+| Navigation link | ✅ Complete | Agents → Orchestration (below Graph Memory) |
 | CSS styling | ✅ Complete | `layout.css` `.orch-*` |
 | Tree visualization | ⚠️ Basic | JSON in `<details>`; not a graphical graph |
 | Timeline view | ✅ Basic | Gantt-style bars from trace events |

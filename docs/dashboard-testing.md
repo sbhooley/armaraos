@@ -117,7 +117,7 @@ curl -sS "http://127.0.0.1:4200/api/version/github-latest" | head -c 400
 
 ## Orchestration traces (`#orchestration-traces`)
 
-**Navigation:** Sidebar **Monitor → Orchestration traces**, or open **`http://127.0.0.1:4200/#orchestration-traces`** (adjust host/port if needed).
+**Navigation:** Sidebar **Agents → Orchestration** (below **Graph Memory**), or open **`http://127.0.0.1:4200/#orchestration-traces`** (adjust host/port if needed).
 
 **Smoke (after a workflow or multi-agent run produced a trace):**
 

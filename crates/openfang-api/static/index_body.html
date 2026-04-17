@@ -281,6 +281,10 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/><line x1="7" y1="19" x2="17" y2="19"/></svg></span>
               <span class="nav-label">Graph Memory</span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'orchestration-traces' }" @click="navigate('orchestration-traces')" :aria-current="page === 'orchestration-traces' ? 'page' : false" href="#orchestration-traces" title="Orchestration traces">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="9"/></svg></span>
+              <span class="nav-label">Orchestration</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
               <span class="nav-label">Approvals</span>
@@ -397,10 +401,6 @@
             <a class="nav-item" :class="{ active: page === 'runtime' }" @click="navigate('runtime')" :aria-current="page === 'runtime' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
               <span class="nav-label">Runtime</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'orchestration-traces' }" @click="navigate('orchestration-traces')" :aria-current="page === 'orchestration-traces' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/></svg></span>
-              <span class="nav-label">Orchestration</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'settings' }" @click="navigate('settings')" :aria-current="page === 'settings' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg></span>
@@ -7673,54 +7673,71 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
     <template x-if="page === 'orchestration-traces'">
       <div x-data="orchestrationTracesPage" x-init="init()" class="orchestration-traces-page-root">
-        <div class="page-header">
+        <div class="page-header dashboard-page-header-polish">
           <h2>Orchestration traces</h2>
-          <p class="text-dim text-sm" style="margin:0">Recent multi-agent delegations (ring buffer, not persisted). Live updates also appear on <code class="text-xs">GET /api/events/stream</code> as <code class="text-xs">OrchestrationTrace</code>.</p>
+          <p class="dashboard-page-header-sub">Observe multi-agent delegations: delegation graph, Gantt timeline, token heatmap, and quota usage. Traces are held in a ring buffer (not persisted). Matching events also appear on the event stream as <code class="text-xs">OrchestrationTrace</code>.</p>
         </div>
-        <div class="page-body">
-          <div class="flex flex-wrap gap-2 mb-2 items-end">
-            <button type="button" class="btn btn-primary btn-sm" @click="loadSummaries()" :disabled="loading">Refresh list</button>
-            <input type="search" class="form-input text-xs" style="min-width:140px;max-width:240px;padding:6px 10px" placeholder="Trace id contains…" x-model="traceListFilter" autocomplete="off" aria-label="Filter traces by id substring" />
-            <label class="flex flex-col gap-0.5 text-xs text-dim" style="margin:0">From
-              <input type="datetime-local" class="form-input text-xs" style="padding:4px 8px;max-width:200px" x-model="traceDateFrom" title="Filter by last event (UTC stored; compare with local picker)" />
-            </label>
-            <label class="flex flex-col gap-0.5 text-xs text-dim" style="margin:0">To
-              <input type="datetime-local" class="form-input text-xs" style="padding:4px 8px;max-width:200px" x-model="traceDateTo" />
-            </label>
-            <button type="button" class="btn btn-ghost btn-sm" @click="clearDateFilters()">Clear dates</button>
+        <div class="page-body dashboard-page-body-polish" style="padding:0 20px 32px">
+          <div class="card orch-intro-card" style="margin-top:16px">
+            <p class="text-sm text-dim" style="margin:0;line-height:1.55"><strong style="font-weight:600;color:var(--text)">How to use this page.</strong> Refresh the list, filter by trace id or time range (<code class="text-xs">last_event_at</code>), then select a trace to load delegation detail. Use <strong>Quota tree</strong> with an agent UUID to inspect inherited limits without selecting a trace.</p>
           </div>
-          <p class="text-dim text-xs mb-3" style="margin-top:0">Date filters apply to <code class="text-xs">last_event_at</code> on each trace summary.</p>
-          <div class="card mb-3">
-            <div class="card-header">Quota tree (by agent UUID)</div>
-            <div class="p-3 flex flex-wrap gap-2 items-end">
-              <input type="text" class="form-input" style="min-width:220px;max-width:100%" placeholder="Agent UUID" x-model="agentIdForQuota" />
-              <button type="button" class="btn btn-ghost btn-sm" @click="loadQuotaTree()">Load quota tree</button>
+
+          <div class="dashboard-inline-filters orch-filter-bar">
+            <div class="orch-filter-row">
+              <button type="button" class="btn btn-primary btn-sm" @click="loadSummaries()" :disabled="loading">Refresh list</button>
+              <div class="orch-filter-field">
+                <label class="text-xs text-dim" for="orch-filter-trace">Trace id contains</label>
+                <input id="orch-filter-trace" type="search" class="form-input text-xs orch-filter-input" placeholder="Substring…" x-model="traceListFilter" autocomplete="off" aria-label="Filter traces by id substring" />
+              </div>
+              <div class="orch-filter-field">
+                <label class="text-xs text-dim" for="orch-filter-from">From</label>
+                <input id="orch-filter-from" type="datetime-local" class="form-input text-xs orch-filter-input" x-model="traceDateFrom" title="Filter by last event (UTC stored; compare with local picker)" />
+              </div>
+              <div class="orch-filter-field">
+                <label class="text-xs text-dim" for="orch-filter-to">To</label>
+                <input id="orch-filter-to" type="datetime-local" class="form-input text-xs orch-filter-input" x-model="traceDateTo" />
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" @click="clearDateFilters()">Clear dates</button>
             </div>
           </div>
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
-          <div x-show="!loading" class="grid gap-3" style="grid-template-columns:minmax(240px,1fr) minmax(0,2fr);align-items:start">
-            <div class="card">
+
+          <div class="card orch-quota-card">
+            <div class="card-header">Quota tree</div>
+            <p class="text-xs text-dim px-3 pt-2" style="margin:0">Load delegation quota by agent UUID (includes inherited limits).</p>
+            <div class="p-3 pt-2 flex flex-wrap gap-2 items-end">
+              <input type="text" class="form-input orch-quota-agent-input" placeholder="Agent UUID" x-model="agentIdForQuota" aria-label="Agent UUID for quota tree" />
+              <button type="button" class="btn btn-primary btn-sm" @click="loadQuotaTree()">Load quota tree</button>
+            </div>
+          </div>
+
+          <div x-show="loading" class="loading-state orch-loading-state"><div class="spinner"></div><span>Loading traces…</span></div>
+          <div x-show="!loading" class="orch-layout-grid">
+            <div class="card orch-trace-list-card">
               <div class="card-header">Recent traces</div>
-              <div class="p-2" style="max-height:70vh;overflow:auto">
+              <div class="orch-trace-list-scroll">
                 <template x-if="summaries.length === 0">
-                  <p class="text-dim text-sm" style="margin:0">No traces yet. Orchestration context is recorded when agents delegate via tools.</p>
+                  <div class="empty-state" style="padding:20px 12px;text-align:center">
+                    <p class="text-dim text-sm" style="margin:0">No traces yet. Delegation context appears when agents delegate via tools.</p>
+                  </div>
                 </template>
                 <template x-if="summaries.length > 0 && filteredSummaries().length === 0">
-                  <p class="text-dim text-sm" style="margin:0">No traces match the filter.</p>
+                  <div class="empty-state" style="padding:20px 12px;text-align:center">
+                    <p class="text-dim text-sm" style="margin:0">No traces match the current filters.</p>
+                  </div>
                 </template>
                 <template x-for="row in filteredSummaries()" :key="row.trace_id">
-                  <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;margin-bottom:4px;text-align:left"
-                    :class="{ 'btn-primary': selectedTraceId === row.trace_id }"
+                  <button type="button" class="orch-trace-pick"
+                    :class="{ 'orch-trace-pick--active': selectedTraceId === row.trace_id }"
                     @click="selectTrace(row.trace_id)">
-                    <span class="text-xs font-mono" x-text="row.trace_id"></span>
-                    <span class="text-xs text-dim block" x-text="'events: ' + row.event_count"></span>
+                    <span class="orch-trace-pick-id font-mono text-xs" x-text="row.trace_id"></span>
+                    <span class="orch-trace-pick-meta text-xs text-dim" x-text="'events · ' + row.event_count"></span>
                   </button>
                 </template>
               </div>
             </div>
-            <div class="card">
+            <div class="card orch-detail-card">
               <div class="card-header">Detail</div>
-              <div class="p-3" style="max-height:70vh;overflow:auto">
+              <div class="orch-detail-scroll">
                 <p class="text-dim text-sm" x-show="!selectedTraceId && !detailTree">Select a trace or load a quota tree.</p>
                 <p class="text-sm" style="color:var(--error)" x-show="detailError" x-text="detailError"></p>
                 <template x-if="selectedTraceId && detailEvents">
@@ -7734,7 +7751,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <div class="mb-3 orch-delegation-graph">
                     <div class="text-xs font-semibold mb-1">Delegation graph</div>
                     <p class="text-dim text-xs" style="margin:0 0 8px">Interactive force-directed graph. Drag nodes, click to copy ID.</p>
-                    <div id="d3-delegation-graph-svg" style="width:100%;min-height:400px;background:rgba(0,0,0,0.2);border-radius:8px;border:1px solid var(--border,#2d2d44)"></div>
+                    <div id="d3-delegation-graph-svg" class="orch-d3-graph-host"></div>
                     <details class="mt-2">
                       <summary class="text-xs font-semibold cursor-pointer text-dim">Show tree view</summary>
                       <div class="orch-tree-scroll mt-2" role="tree">
