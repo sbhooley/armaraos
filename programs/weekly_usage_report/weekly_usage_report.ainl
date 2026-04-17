@@ -12,9 +12,13 @@
 
 weekly_usage_report:
   ts = core.NOW 0
-  budget = http.GET "http://127.0.0.1:4200/api/budget"
-  agents_resp = http.GET "http://127.0.0.1:4200/api/budget/agents"
-  skills_resp = http.GET "http://127.0.0.1:4200/api/skills"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  budget_url = core.CONCAT api_base "/api/budget"
+  budget_agents_url = core.CONCAT api_base "/api/budget/agents"
+  skills_url = core.CONCAT api_base "/api/skills"
+  budget = http.GET budget_url
+  agents_resp = http.GET budget_agents_url
+  skills_resp = http.GET skills_url
 
   total_spent = core.GET budget total_spent_usd
   period = core.GET budget period

@@ -3018,23 +3018,139 @@ decay_rate = 0.05
         match client.get(format!("{base}/api/mcp/servers")).send() {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    if let Some(arr) = body.as_array() {
-                        let connected = arr
-                            .iter()
-                            .filter(|s| {
-                                s.get("connected")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false)
-                            })
-                            .count();
+                    let configured = body
+                        .get("configured")
+                        .and_then(|v| v.as_array())
+                        .map(|v| v.len())
+                        .unwrap_or_else(|| body.as_array().map(|v| v.len()).unwrap_or(0));
+                    let connected = body
+                        .get("connected")
+                        .and_then(|v| v.as_array())
+                        .map(|v| v.len())
+                        .unwrap_or_else(|| {
+                            body.as_array()
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter(|s| {
+                                            s.get("connected")
+                                                .and_then(|v| v.as_bool())
+                                                .unwrap_or(false)
+                                        })
+                                        .count()
+                                })
+                                .unwrap_or(0)
+                        });
+                    if configured > 0 || connected > 0 {
+                        let readiness = body.get("readiness");
+                        let readiness_version = readiness
+                            .and_then(|v| v.get("version"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let checks_map = readiness
+                            .and_then(|v| v.get("checks"))
+                            .and_then(|v| v.as_object());
                         if !json {
                             ui::check_ok(&format!(
                                 "MCP servers: {} configured, {} connected",
-                                arr.len(),
-                                connected
+                                configured, connected
                             ));
+                            if let Some(obj) = checks_map {
+                                for (id, c) in obj {
+                                    let ready = c
+                                        .get("ready")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    let label = c
+                                        .get("label")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(id);
+                                    if ready {
+                                        ui::check_ok(&format!("MCP readiness [{label}]: ready"));
+                                    } else {
+                                        let why = c
+                                            .get("missing_reason")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("not ready");
+                                        ui::check_warn(&format!("MCP readiness [{label}]: {why}"));
+                                        let remediation = c
+                                            .get("remediation")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        if !remediation.is_empty() {
+                                            ui::hint(remediation);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Fallback: legacy payload without `readiness.checks`
+                                let cal_ready = body
+                                    .get("calendar_readiness")
+                                    .and_then(|v| v.get("ready"))
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if cal_ready {
+                                    ui::check_ok("Calendar MCP readiness: ready");
+                                } else {
+                                    let why = body
+                                        .get("calendar_readiness")
+                                        .and_then(|v| v.get("missing_reason"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("not ready");
+                                    ui::check_warn(&format!("Calendar MCP readiness: {why}"));
+                                }
+                            }
                         }
-                        checks.push(serde_json::json!({"check": "daemon_mcp", "status": "ok", "configured": arr.len(), "connected": connected}));
+                        checks.push(serde_json::json!({
+                            "check": "daemon_mcp",
+                            "status": "ok",
+                            "configured": configured,
+                            "connected": connected,
+                            "readiness_version": readiness_version,
+                        }));
+                        if let Some(obj) = checks_map {
+                            for (id, c) in obj {
+                                let ready = c
+                                    .get("ready")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let status = if ready { "ok" } else { "warn" };
+                                checks.push(serde_json::json!({
+                                    "check": format!("daemon_mcp_readiness_{id}"),
+                                    "status": status,
+                                    "ready": ready,
+                                    "id": id,
+                                }));
+                            }
+                            // Back-compat: older doctor JSON consumers expect `daemon_mcp_calendar`.
+                            if let Some(cal) = obj.get("calendar") {
+                                let cal_ready = cal
+                                    .get("ready")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                checks.push(serde_json::json!({
+                                    "check": "daemon_mcp_calendar",
+                                    "status": if cal_ready { "ok" } else { "warn" },
+                                    "ready": cal_ready
+                                }));
+                            }
+                        } else {
+                            let cal_ready = body
+                                .get("calendar_readiness")
+                                .and_then(|v| v.get("ready"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            checks.push(serde_json::json!({
+                                "check": "daemon_mcp_readiness_calendar",
+                                "status": if cal_ready { "ok" } else { "warn" },
+                                "ready": cal_ready,
+                                "id": "calendar",
+                            }));
+                            checks.push(serde_json::json!({
+                                "check": "daemon_mcp_calendar",
+                                "status": if cal_ready { "ok" } else { "warn" },
+                                "ready": cal_ready
+                            }));
+                        }
                     }
                 }
             }

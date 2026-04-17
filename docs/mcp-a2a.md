@@ -387,6 +387,49 @@ type = "sse"
 url = "https://tools.example.com/mcp"
 ```
 
+#### Calendar MCP (Google and Apple/CalDAV)
+
+ArmaraOS does **not** bundle a calendar MCP server binary by default. Add your preferred
+calendar MCP server and point ArmaraOS at it.
+
+Google Calendar-style server (example shape):
+
+```toml
+[[mcp_servers]]
+name = "google-calendar"
+timeout_secs = 30
+env = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"]
+
+[mcp_servers.transport]
+type = "http"
+url = "http://127.0.0.1:8811/mcp"
+```
+
+Apple Calendar / CalDAV-style server (example shape):
+
+```toml
+[[mcp_servers]]
+name = "apple-caldav"
+timeout_secs = 30
+env = ["CALDAV_BASE_URL", "CALDAV_USERNAME", "CALDAV_APP_PASSWORD"]
+
+[mcp_servers.transport]
+type = "http"
+url = "http://127.0.0.1:8812/mcp"
+```
+
+After adding/updating MCP servers:
+
+```bash
+openfang doctor
+```
+
+`openfang doctor` and `GET /api/mcp/servers` expose a generic **`readiness`** object (`version` + per-check map under `checks`) so new integration checks (calendar, email, …) can ship without new top-level fields. The **`calendar`** check is the first registry entry.
+
+For **one release cycle**, the same calendar summary is also returned as **`calendar_readiness`** (legacy alias). Prefer `readiness.checks.calendar` in new clients.
+
+Use this to confirm that at least one connected MCP server exposes calendar/event tools (or to see remediation text when not).
+
 #### Multiple Servers
 
 ```toml
@@ -425,14 +468,14 @@ args = ["-y", "@modelcontextprotocol/server-postgres"]
 
 **Verification:** With a non-empty `api_key`, `POST /mcp` requires the same Bearer (or loopback rules) as other protected routes. Automated coverage includes `cargo test -p openfang-api --test api_boundary_contracts_test` (e.g. unknown `tools/call` target → JSON-RPC error).
 
-**GET /api/mcp/servers** response:
+**GET /api/mcp/servers** response (shape):
 
 ```json
 {
   "configured": [
     {
       "name": "github",
-      "transport": { "type": "stdio", "command": "npx", "args": [...] },
+      "transport": { "type": "stdio", "command": "npx", "args": ["…"] },
       "timeout_secs": 30,
       "env": ["GITHUB_PERSONAL_ACCESS_TOKEN"]
     }
@@ -442,14 +485,54 @@ args = ["-y", "@modelcontextprotocol/server-postgres"]
       "name": "github",
       "tools_count": 12,
       "tools": [
-        { "name": "mcp_github_create_issue", "description": "[MCP:github] Create a GitHub issue" },
-        { "name": "mcp_github_search_repos", "description": "[MCP:github] Search repositories" }
+        {
+          "name": "mcp_github_create_issue",
+          "description": "[MCP:github] Create a GitHub issue",
+          "calendar_like": false,
+          "readiness": {}
+        }
       ],
-      "connected": true
+      "connected": true,
+      "calendar_capable": false
     }
-  ]
+  ],
+  "total_configured": 1,
+  "total_connected": 1,
+  "readiness": {
+    "version": 1,
+    "checks": {
+      "calendar": {
+        "id": "calendar",
+        "label": "Calendar",
+        "ready": false,
+        "severity": "warn",
+        "missing_reason": "No connected MCP server exposed calendar/event tools. …",
+        "matched_servers": [],
+        "matched_tools": [],
+        "provider_hints": {
+          "google_like_server_connected": false,
+          "apple_like_server_connected": false,
+          "caldav_like_server_connected": false
+        },
+        "remediation": "Add a calendar MCP server …"
+      }
+    }
+  },
+  "calendar_readiness": {
+    "ready": false,
+    "connected_servers_with_calendar_tools": [],
+    "calendar_tool_names": [],
+    "provider_hints": {
+      "google_like_server_connected": false,
+      "apple_like_server_connected": false,
+      "caldav_like_server_connected": false
+    },
+    "missing_reason": "No connected MCP server exposed calendar/event tools. …"
+  }
 }
 ```
+
+Per-tool rows may include `readiness` maps (e.g. `{ "calendar": true }`) when a tool matches a check; `calendar_like` remains for backward compatibility.
 
 ---
 

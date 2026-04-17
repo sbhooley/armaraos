@@ -13,10 +13,15 @@
 
 channel_session_digest:
   ts = core.NOW 0
-  health = http.GET "http://127.0.0.1:4200/api/health"
-  agents = http.GET "http://127.0.0.1:4200/api/agents"
-  channels_resp = http.GET "http://127.0.0.1:4200/api/channels"
-  workflows = http.GET "http://127.0.0.1:4200/api/workflows"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  health_url = core.CONCAT api_base "/api/health"
+  agents_url = core.CONCAT api_base "/api/agents"
+  channels_url = core.CONCAT api_base "/api/channels"
+  workflows_url = core.CONCAT api_base "/api/workflows"
+  health = http.GET health_url
+  agents = http.GET agents_url
+  channels_resp = http.GET channels_url
+  workflows = http.GET workflows_url
 
   daemon_status = core.GET health status
   agent_count = core.LEN agents

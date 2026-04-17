@@ -930,6 +930,25 @@
                 </template>
               </div>
             </div>
+
+            <!-- MCP tool readiness (generic checks; calendar first) -->
+            <div class="card overview-panel-card" x-show="mcpReadinessChecks.length">
+              <div class="card-header">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                MCP readiness
+              </div>
+              <p class="text-xs text-dim" style="margin:0 0 8px 0" x-show="mcpReadiness && mcpReadiness.version != null">
+                Schema v<span x-text="mcpReadiness.version"></span> — tool integrations detected from connected MCP servers.
+              </p>
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+                <template x-for="c in mcpReadinessChecks" :key="c.id">
+                  <span class="badge" :class="c.ready ? 'badge-success' : 'badge-warn'" style="font-size:9px;padding:2px 8px;text-transform:none" :title="c.ready ? 'Ready' : 'Not ready — see openfang doctor'">
+                    <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="c.ready ? 'background:var(--success)' : 'background:var(--warning)'"></span>
+                    <span x-text="c.label"></span>
+                  </span>
+                </template>
+              </div>
+            </div>
           </div>
 
           <!-- Recent Activity Feed -->

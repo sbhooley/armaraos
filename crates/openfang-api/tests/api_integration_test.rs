@@ -485,6 +485,41 @@ async fn test_status_endpoint() {
     );
 }
 
+/// `GET /api/mcp/servers` — generic `readiness` map + backward-compatible `calendar_readiness`.
+#[tokio::test]
+async fn test_mcp_servers_readiness_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{}/api/mcp/servers", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.get("configured").is_some());
+    assert!(body.get("connected").is_some());
+
+    let readiness = body.get("readiness").expect("readiness object");
+    assert_eq!(
+        readiness.get("version").and_then(|v| v.as_u64()),
+        Some(u64::from(openfang_runtime::mcp_readiness::READINESS_SCHEMA_VERSION))
+    );
+    let checks = readiness
+        .get("checks")
+        .and_then(|c| c.as_object())
+        .expect("readiness.checks");
+    assert!(checks.contains_key("calendar"));
+    let cal = checks.get("calendar").expect("calendar check");
+    assert!(cal.get("ready").is_some());
+
+    let legacy = body
+        .get("calendar_readiness")
+        .expect("calendar_readiness alias");
+    assert_eq!(legacy.get("ready"), cal.get("ready"));
+}
+
 #[tokio::test]
 async fn test_metrics_endpoint_includes_ainl_bridge_cache_counters() {
     let server = start_test_server().await;

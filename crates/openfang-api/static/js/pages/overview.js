@@ -29,6 +29,10 @@ function overviewPage() {
     channels: [],
     providers: [],
     mcpServers: [],
+    /** GET /api/mcp/servers `readiness` object (`version` + `checks`). */
+    mcpReadiness: null,
+    /** @deprecated use `mcpReadiness.checks.calendar` — kept for one release. */
+    mcpCalendarReadiness: null,
     skillCount: 0,
     scheduleCount: 0,
     /** GET /api/observability/snapshot */
@@ -267,8 +271,23 @@ function overviewPage() {
     async loadMcpServers() {
       try {
         var data = await OpenFangAPI.get('/api/mcp/servers');
-        this.mcpServers = data.servers || [];
-      } catch(e) { this.mcpServers = []; }
+        var configured = Array.isArray(data.configured) ? data.configured : [];
+        var connected = Array.isArray(data.connected) ? data.connected : [];
+        var connectedSet = new Set(connected.map(function(s) { return String(s.name || ''); }));
+        var merged = configured.map(function(s) {
+          var n = String((s && s.name) || '');
+          return { name: n, status: connectedSet.has(n) ? 'connected' : 'configured' };
+        });
+        connected.forEach(function(s) {
+          var n = String((s && s.name) || '');
+          if (!merged.some(function(m) { return m.name === n; })) {
+            merged.push({ name: n, status: 'connected' });
+          }
+        });
+        this.mcpServers = merged;
+        this.mcpReadiness = data.readiness || null;
+        this.mcpCalendarReadiness = data.calendar_readiness || null;
+      } catch(e) { this.mcpServers = []; this.mcpReadiness = null; }
     },
 
     async loadSkills() {
@@ -296,6 +315,26 @@ function overviewPage() {
 
     get connectedMcp() {
       return this.mcpServers.filter(function(s) { return s.status === 'connected'; });
+    },
+
+    /** Entries for readiness chips (`readiness.checks` from API). */
+    get mcpReadinessChecks() {
+      var r = this.mcpReadiness;
+      if (!r || !r.checks || typeof r.checks !== 'object') return [];
+      var out = [];
+      try {
+        Object.keys(r.checks).forEach(function(id) {
+          var c = r.checks[id];
+          if (!c) return;
+          out.push({
+            id: id,
+            label: c.label || id,
+            ready: !!c.ready,
+            severity: c.severity || (c.ready ? 'ok' : 'warn')
+          });
+        });
+      } catch (e) { return []; }
+      return out;
     },
 
     // Provider health badge color

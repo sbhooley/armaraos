@@ -10,9 +10,13 @@
 
 system_health_monitor:
   ts = core.NOW 0
-  health = http.GET "http://127.0.0.1:4200/api/health"
-  agents = http.GET "http://127.0.0.1:4200/api/agents"
-  local_version = http.GET "http://127.0.0.1:4200/api/version"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  health_url = core.CONCAT api_base "/api/health"
+  agents_url = core.CONCAT api_base "/api/agents"
+  local_version_url = core.CONCAT api_base "/api/version"
+  health = http.GET health_url
+  agents = http.GET agents_url
+  local_version = http.GET local_version_url
   armaraos_release = http.GET "https://api.github.com/repos/sbhooley/armaraos/releases/latest"
   ainl_release = http.GET "https://pypi.org/pypi/ainativelang/json"
 

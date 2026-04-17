@@ -118,6 +118,51 @@ fn graph_memory_pattern_trace_id(
         .map(|o| o.trace_id.clone())
 }
 
+/// Append MCP readiness snapshot to the system prompt; when the kernel is available, persist a
+/// digest in shared memory and emit a tagged semantic fact on change (planner retrieval).
+async fn append_mcp_readiness_context(
+    system_prompt: &mut String,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<McpConnection>>>,
+    kernel: &Option<Arc<dyn KernelHandle>>,
+    graph_memory: &Option<crate::graph_memory_writer::GraphMemoryWriter>,
+    agent_id: &openfang_types::agent::AgentId,
+) {
+    let Some(mcp_mtx) = mcp_connections else {
+        return;
+    };
+    let guard = mcp_mtx.lock().await;
+    let ev = crate::mcp_readiness::evaluate_from_connections(&guard);
+    drop(guard);
+    let appendix = crate::mcp_readiness::format_prompt_appendix(&ev.report, 1200);
+    if !appendix.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&appendix);
+    }
+    let digest = crate::mcp_readiness::readiness_digest_json(&ev.report);
+    let digest_str = digest.to_string();
+    if let Some(ref k) = kernel {
+        let key = format!("mcp_readiness_digest:{}", agent_id.0);
+        let prev = k.memory_recall(&key).ok().flatten();
+        let changed = prev.map(|v| v.to_string()) != Some(digest_str.clone());
+        if changed {
+            let _ = k.memory_store(&key, digest);
+            if let Some(ref gm) = graph_memory {
+                let fact = format!("MCP readiness snapshot: {}", digest_str);
+                let mut tags = vec![
+                    "readiness".to_string(),
+                    "mcp".to_string(),
+                    "planner".to_string(),
+                ];
+                for id in ev.report.checks.keys() {
+                    tags.push(format!("readiness:{id}"));
+                }
+                gm.record_fact_with_tags(fact, 0.95, uuid::Uuid::new_v4(), &tags)
+                    .await;
+            }
+        }
+    }
+}
+
 #[cfg(feature = "ainl-runtime-engine")]
 fn ainl_runtime_engine_switch_active_with_env(
     manifest_enabled: bool,
@@ -985,6 +1030,15 @@ pub async fn run_agent_loop(
             }
         }
     }
+
+    append_mcp_readiness_context(
+        &mut system_prompt,
+        mcp_connections,
+        &kernel,
+        &graph_memory,
+        &session.agent_id,
+    )
+    .await;
 
     // Ultra Cost-Efficient Mode: compress user message before storing in session / LLM context.
     // Memory recall above intentionally uses the original `user_message` for semantic similarity.
@@ -2953,6 +3007,15 @@ pub async fn run_agent_loop_streaming(
             }
         }
     }
+
+    append_mcp_readiness_context(
+        &mut system_prompt,
+        mcp_connections,
+        &kernel,
+        &graph_memory,
+        &session.agent_id,
+    )
+    .await;
 
     // Ultra Cost-Efficient Mode: compress user message before LLM context (streaming path).
     // See run_agent_loop for the full explanation; same logic applies here.

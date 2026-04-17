@@ -1787,34 +1787,54 @@ ArmaraOS supports both Model Context Protocol (MCP) for tool interoperability an
 
 ### GET /api/mcp/servers
 
-List configured and connected MCP servers with their available tools.
+List configured and connected MCP servers with their available tools, plus a **readiness** report for host integrations (calendar, future checks).
 
 **Response** `200 OK`:
 
 ```json
 {
-  "servers": [
-    {
-      "name": "filesystem",
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
-      "connected": true,
-      "tools": [
-        {
-          "name": "mcp_filesystem_read_file",
-          "description": "Read a file from the filesystem"
+  "configured": [],
+  "connected": [],
+  "total_configured": 0,
+  "total_connected": 0,
+  "readiness": {
+    "version": 1,
+    "checks": {
+      "calendar": {
+        "id": "calendar",
+        "label": "Calendar",
+        "ready": false,
+        "severity": "warn",
+        "missing_reason": "No connected MCP server exposed calendar/event tools. …",
+        "matched_servers": [],
+        "matched_tools": [],
+        "provider_hints": {
+          "google_like_server_connected": false,
+          "apple_like_server_connected": false,
+          "caldav_like_server_connected": false
         },
-        {
-          "name": "mcp_filesystem_write_file",
-          "description": "Write content to a file"
-        }
-      ]
+        "remediation": "Add a calendar MCP server …"
+      }
     }
-  ],
-  "total": 1
+  },
+  "calendar_readiness": {
+    "ready": false,
+    "connected_servers_with_calendar_tools": [],
+    "calendar_tool_names": [],
+    "provider_hints": {
+      "google_like_server_connected": false,
+      "apple_like_server_connected": false,
+      "caldav_like_server_connected": false
+    },
+    "missing_reason": null
+  }
 }
 ```
+
+- **`readiness.version`** — bump when the `checks` map shape changes incompatibly.
+- **`calendar_readiness`** — legacy alias mirroring the calendar check (deprecated for new clients; use `readiness.checks.calendar`).
+
+Each connected server’s `tools[]` entries may include `calendar_like` and a `readiness` object (e.g. `{ "calendar": true }`) for matched tools.
 
 ### POST /mcp
 

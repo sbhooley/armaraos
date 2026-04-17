@@ -6140,6 +6140,13 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
 
     // Get connected servers and their tools from the live MCP connections
     let connections = state.kernel.mcp_connections.lock().await;
+    let evaluated = openfang_runtime::mcp_readiness::evaluate_from_connections(&connections);
+    let readiness_json = serde_json::to_value(&evaluated.report).unwrap_or_else(|_| {
+        serde_json::json!({ "version": openfang_runtime::mcp_readiness::READINESS_SCHEMA_VERSION, "checks": {} })
+    });
+    let calendar_readiness_json =
+        serde_json::to_value(&evaluated.calendar_readiness).unwrap_or(serde_json::Value::Null);
+
     let connected: Vec<serde_json::Value> = connections
         .iter()
         .map(|conn| {
@@ -6147,17 +6154,35 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
                 .tools()
                 .iter()
                 .map(|t| {
+                    let flags = openfang_runtime::mcp_readiness::flags_for_tool(
+                        conn.name(),
+                        &t.name,
+                        &t.description,
+                    );
+                    let is_calendar_like = flags
+                        .check_ids
+                        .contains(openfang_runtime::mcp_readiness::CHECK_ID_CALENDAR);
+                    let mut readiness_map = serde_json::Map::new();
+                    for id in &flags.check_ids {
+                        readiness_map.insert(id.clone(), serde_json::json!(true));
+                    }
                     serde_json::json!({
                         "name": t.name,
                         "description": t.description,
+                        "calendar_like": is_calendar_like,
+                        "readiness": serde_json::Value::Object(readiness_map),
                     })
                 })
                 .collect();
+            let has_calendar_tools = tools
+                .iter()
+                .any(|t| t["calendar_like"].as_bool().unwrap_or(false));
             serde_json::json!({
                 "name": conn.name(),
                 "tools_count": tools.len(),
                 "tools": tools,
                 "connected": true,
+                "calendar_capable": has_calendar_tools,
             })
         })
         .collect();
@@ -6167,6 +6192,8 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
         "connected": connected,
         "total_configured": config_servers.len(),
         "total_connected": connected.len(),
+        "readiness": readiness_json,
+        "calendar_readiness": calendar_readiness_json,
     }))
 }
 

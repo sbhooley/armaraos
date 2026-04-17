@@ -266,6 +266,7 @@ const AINL_AUTHORING_WORKFLOW_SECTION: &str = "\
 For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or similar **repeatable workflows**, prefer **AINL** `.ainl` graphs over ad-hoc scripts unless the user clearly needs a general-purpose language.
 
 - **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, fix the graph using fields in the tool response (e.g. **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`**) — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
+- **Tool-call shape matters:** for `mcp_ainl_*` tools, pass the graph text in the `code` field (legacy `ainl` may work but `code` is canonical), and call the MCP tool directly — do not wrap MCP tool names inside `shell_exec`.
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
 - **Starters:** for new graphs, consider **`mcp_ainl_ainl_list_ecosystem`** and **`mcp_ainl_ainl_import_*`** before writing large graphs from scratch.
 - **`ainl_run` adapters:** graphs that use `http`, `fs`, `cache`, or `sqlite` must pass an **`adapters`** object in the run payload — the MCP server does not register those adapters by default (see tool schema / server instructions).";

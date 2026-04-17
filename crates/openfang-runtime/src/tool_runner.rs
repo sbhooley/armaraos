@@ -92,6 +92,92 @@ fn check_taint_net_fetch(url: &str) -> Option<String> {
     None
 }
 
+/// Detect hallucinated `shell_exec` calls that are actually direct MCP tool names.
+///
+/// Some models occasionally emit `shell_exec` with `command: "mcp_server_tool"` instead of
+/// calling the MCP tool directly. When that command is a single token with the `mcp_` prefix,
+/// we transparently re-route to the MCP tool path.
+fn direct_mcp_tool_from_shell_command(input: &serde_json::Value) -> Option<String> {
+    let raw = input.get("command")?.as_str()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = raw.trim_matches(|c| c == '"' || c == '\'').trim();
+    if candidate.split_whitespace().count() != 1 {
+        return None;
+    }
+    if !mcp::is_mcp_tool(candidate) {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+/// Extract missing required top-level keys from a tool's JSON schema.
+fn missing_required_schema_keys(
+    input_schema: &serde_json::Value,
+    input: &serde_json::Value,
+) -> Vec<String> {
+    let required = input_schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let input_obj = input.as_object();
+    required
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|key| input_obj.is_none_or(|obj| !obj.contains_key(*key)))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+async fn dispatch_mcp_tool_by_name(
+    tool_name: &str,
+    input: &serde_json::Value,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    if !mcp::is_mcp_tool(tool_name) {
+        return Err(format!("Invalid MCP tool name: {tool_name}"));
+    }
+    let Some(mcp_conns) = mcp_connections else {
+        return Err(format!("MCP not available for tool: {tool_name}"));
+    };
+
+    let mut conns = mcp_conns.lock().await;
+    let known_names: Vec<String> = conns.iter().map(|c| c.name().to_string()).collect();
+    let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
+    let Some(server_name) = mcp::extract_mcp_server_from_known(tool_name, &known_refs) else {
+        return Err(format!("Invalid MCP tool name: {tool_name}"));
+    };
+
+    let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) else {
+        return Err(format!("MCP server '{server_name}' not connected"));
+    };
+
+    let missing_required = conn
+        .tools()
+        .iter()
+        .find(|d| d.name == tool_name)
+        .map(|d| missing_required_schema_keys(&d.input_schema, input))
+        .unwrap_or_default();
+    if !missing_required.is_empty() {
+        return Err(format!(
+            "MCP tool '{tool_name}' missing required arguments: {}",
+            missing_required.join(", ")
+        ));
+    }
+
+    debug!(
+        tool = tool_name,
+        server = server_name,
+        "Dispatching to MCP server"
+    );
+    conn.call_tool(tool_name, input)
+        .await
+        .map_err(|e| format!("MCP tool call failed: {e}"))
+}
+
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
     static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
@@ -163,6 +249,46 @@ pub async fn execute_tool(
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
     let tool_name = normalize_tool_name(tool_name);
+
+    // Auto-correct a common hallucination where models run MCP tools via shell_exec.
+    // Re-route before capability checks so agents that grant MCP but not shell_exec still work.
+    if tool_name == "shell_exec" {
+        if let Some(mcp_tool_name) = direct_mcp_tool_from_shell_command(input) {
+            if let Some(allowed) = allowed_tools {
+                if !allowed.iter().any(|t| t == &mcp_tool_name) {
+                    warn!(tool = %mcp_tool_name, "Capability denied: auto-routed MCP tool not in allowed list");
+                    return ToolResult {
+                        tool_use_id: tool_use_id.to_string(),
+                        content: format!(
+                            "Permission denied: agent does not have capability to use tool '{}'",
+                            mcp_tool_name
+                        ),
+                        is_error: true,
+                    };
+                }
+            }
+
+            debug!(
+                shell_command = %input["command"].as_str().unwrap_or(""),
+                mcp_tool = %mcp_tool_name,
+                "Auto-routing shell_exec MCP command to MCP tool dispatch"
+            );
+            let empty_args = serde_json::json!({});
+            let rerouted = dispatch_mcp_tool_by_name(&mcp_tool_name, &empty_args, mcp_connections).await;
+            return match rerouted {
+                Ok(content) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error: false,
+                },
+                Err(err) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {err}"),
+                    is_error: true,
+                },
+            };
+        }
+    }
 
     // Capability enforcement: reject tools not in the allowed list
     if let Some(allowed) = allowed_tools {
@@ -556,33 +682,7 @@ pub async fn execute_tool(
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
-                if let Some(mcp_conns) = mcp_connections {
-                    let mut conns = mcp_conns.lock().await;
-                    let known_names: Vec<String> =
-                        conns.iter().map(|c| c.name().to_string()).collect();
-                    let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
-                    if let Some(server_name) =
-                        mcp::extract_mcp_server_from_known(other, &known_refs)
-                    {
-                        if let Some(conn) = conns.iter_mut().find(|c| c.name() == server_name) {
-                            debug!(
-                                tool = other,
-                                server = server_name,
-                                "Dispatching to MCP server"
-                            );
-                            match conn.call_tool(other, input).await {
-                                Ok(content) => Ok(content),
-                                Err(e) => Err(format!("MCP tool call failed: {e}")),
-                            }
-                        } else {
-                            Err(format!("MCP server '{server_name}' not connected"))
-                        }
-                    } else {
-                        Err(format!("Invalid MCP tool name: {other}"))
-                    }
-                } else {
-                    Err(format!("MCP not available for tool: {other}"))
-                }
+                dispatch_mcp_tool_by_name(other, input, mcp_connections).await
             }
             // Fallback 2: Skill registry tool providers
             else if let Some(registry) = skill_registry {
@@ -5373,6 +5473,54 @@ mod tests {
         assert!(
             result.content.contains("Permission denied"),
             "fs-write should normalize to file_write which is not in allowed list"
+        );
+    }
+
+    #[test]
+    fn test_missing_required_schema_keys_reports_missing_fields() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["source", "strict"],
+            "properties": {
+                "source": { "type": "string" },
+                "strict": { "type": "boolean" }
+            }
+        });
+        let missing = missing_required_schema_keys(&schema, &serde_json::json!({"source": "x"}));
+        assert_eq!(missing, vec!["strict"]);
+    }
+
+    #[tokio::test]
+    async fn test_shell_exec_mcp_command_reroutes_before_capability_check() {
+        let allowed = vec!["mcp_ainl_ainl_capabilities".to_string()];
+        let result = execute_tool(
+            "test-id",
+            "shell_exec",
+            &serde_json::json!({"command": "mcp_ainl_ainl_capabilities"}),
+            None,
+            Some(&allowed),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None, // media_engine
+            None, // exec_policy
+            None, // tts_engine
+            None, // docker_config
+            None, // process_manager
+            None, // orchestration_live
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content
+                .contains("MCP not available for tool: mcp_ainl_ainl_capabilities"),
+            "Expected MCP dispatch path, got: {}",
+            result.content
         );
     }
 

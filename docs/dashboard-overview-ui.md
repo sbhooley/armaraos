@@ -24,7 +24,7 @@ Order matters for scanability and for the loading skeleton matching the real lay
 5. **Error state** — Connection failure, retry, debug copy (no Quick actions).
 6. **Setup checklist** — When `showSetupChecklist` (see `overview.js`); dismiss uses `localStorage` key `of-checklist-dismissed`.
 7. **Onboarding banner** — When onboarding store says so and checklist was dismissed.
-8. **Main content** (after successful load) — Hero stats, compact stats, observability snapshot, provider badges, panel grid (System health, Security, Channels, MCP), Recent activity, empty states.
+8. **Main content** (after successful load) — Hero stats, compact stats, observability snapshot, provider badges, panel grid (System health, Security, Channels, **MCP Servers**, **MCP readiness** chips from `GET /api/mcp/servers` → `readiness.checks`), Recent activity, empty states.
 
 The duplicate **Quick actions** block that previously appeared after the panel grid was removed; actions exist only in the top region.
 

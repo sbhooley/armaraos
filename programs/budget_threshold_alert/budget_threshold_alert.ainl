@@ -8,7 +8,9 @@
 # Validate: ainl validate programs/budget_threshold_alert/budget_threshold_alert.ainl --strict
 
 budget_threshold_alert:
-  budget = http.GET "http://127.0.0.1:4200/api/budget"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  budget_url = core.CONCAT api_base "/api/budget"
+  budget = http.GET budget_url
   ts = core.NOW 0
 
   spent = core.GET budget total_spent_usd

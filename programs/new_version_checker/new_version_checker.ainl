@@ -10,10 +10,12 @@
 
 new_version_checker:
   ts = core.NOW 0
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  local_version_url = core.CONCAT api_base "/api/version"
 
   armaraos_release = http.GET "https://api.github.com/repos/sbhooley/armaraos/releases/latest"
   ainl_release = http.GET "https://pypi.org/pypi/ainativelang/json"
-  local_version = http.GET "http://127.0.0.1:4200/api/version"
+  local_version = http.GET local_version_url
 
   armaraos_latest = core.GET armaraos_release tag_name
   ainl_latest = core.GET ainl_release info version

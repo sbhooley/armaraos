@@ -169,6 +169,20 @@ fn ainl_allow_ir_declared_adapters_from_manifest(manifest: &AgentManifest) -> bo
     }
 }
 
+/// Build a loopback-safe daemon base URL for scheduled `ainl run` jobs.
+///
+/// Uses the configured API listen address, but rewrites wildcard binds to
+/// localhost so child AINL graphs can reliably call `/api/*`.
+fn scheduled_ainl_api_base_url(api_listen: &str) -> String {
+    let mut addr = api_listen.trim().to_string();
+    if let Some(rest) = addr.strip_prefix("0.0.0.0:") {
+        addr = format!("127.0.0.1:{rest}");
+    } else if let Some(rest) = addr.strip_prefix("[::]:") {
+        addr = format!("127.0.0.1:{rest}");
+    }
+    format!("http://{addr}")
+}
+
 /// Env var names passed through to scheduled `ainl run` when the credential resolver has a value.
 /// See [`AINL_CRON_RESOLVE_ENV_KEYS_EXTENSION`] for niche keys; enable `trace` on target
 /// `openfang_kernel::ainl_cron_env` to log which extension keys actually resolve in your install.
@@ -6310,6 +6324,11 @@ impl OpenFangKernel {
             "AINL_ALLOW_IR_DECLARED_ADAPTERS",
             if relax { "1" } else { "0" },
         );
+        // Give curated/embedded graphs a stable way to call the daemon API
+        // without hardcoding port 4200.
+        let daemon_base = scheduled_ainl_api_base_url(&self.config.api_listen);
+        cmd.env("ARMARAOS_DAEMON_BASE_URL", &daemon_base);
+        cmd.env("OPENFANG_DAEMON_BASE_URL", &daemon_base);
     }
 
     /// JSON for API/dashboard: how scheduled `ainl run` sets `AINL_HOST_ADAPTER_ALLOWLIST`

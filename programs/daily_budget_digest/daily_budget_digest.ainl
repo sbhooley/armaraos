@@ -8,8 +8,11 @@
 # Validate: ainl validate programs/daily_budget_digest/daily_budget_digest.ainl --strict
 
 daily_budget_digest:
-  budget = http.GET "http://127.0.0.1:4200/api/budget"
-  top_agents = http.GET "http://127.0.0.1:4200/api/budget/agents"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  budget_url = core.CONCAT api_base "/api/budget"
+  top_agents_url = core.CONCAT api_base "/api/budget/agents"
+  budget = http.GET budget_url
+  top_agents = http.GET top_agents_url
   ts = core.NOW 0
 
   total_spent = core.GET budget total_spent_usd

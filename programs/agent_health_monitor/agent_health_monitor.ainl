@@ -8,8 +8,11 @@
 # Validate: ainl validate programs/agent_health_monitor/agent_health_monitor.ainl --strict
 
 agent_health_monitor:
-  health = http.GET "http://127.0.0.1:4200/api/health"
-  agents = http.GET "http://127.0.0.1:4200/api/agents"
+  api_base = core.ENV "ARMARAOS_DAEMON_BASE_URL"
+  health_url = core.CONCAT api_base "/api/health"
+  agents_url = core.CONCAT api_base "/api/agents"
+  health = http.GET health_url
+  agents = http.GET agents_url
 
   daemon_status = core.GET health status
   agent_count = core.LEN agents
