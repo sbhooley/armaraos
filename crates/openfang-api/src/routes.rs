@@ -1213,6 +1213,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .and_then(Result::ok)
         .unwrap_or_else(|| serde_json::json!({"window":"7d","modes":{},"agents":[]}));
 
+    let adaptive_eco = state.kernel.adaptive_eco_config();
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1230,14 +1231,14 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "openfang_runtime_ainl": openfang_runtime_ainl,
         "eco_compression": eco_compression,
         "adaptive_eco": {
-            "enabled": state.kernel.config.adaptive_eco.enabled,
-            "enforce": state.kernel.config.adaptive_eco.enforce,
-            "enforce_min_consecutive_turns": state.kernel.config.adaptive_eco.enforce_min_consecutive_turns,
-            "allow_aggressive_on_structured": state.kernel.config.adaptive_eco.allow_aggressive_on_structured,
-            "semantic_floor": state.kernel.config.adaptive_eco.semantic_floor,
-            "circuit_breaker_enabled": state.kernel.config.adaptive_eco.circuit_breaker_enabled,
-            "circuit_breaker_window": state.kernel.config.adaptive_eco.circuit_breaker_window,
-            "circuit_breaker_min_below_floor": state.kernel.config.adaptive_eco.circuit_breaker_min_below_floor,
+            "enabled": adaptive_eco.enabled,
+            "enforce": adaptive_eco.enforce,
+            "enforce_min_consecutive_turns": adaptive_eco.enforce_min_consecutive_turns,
+            "allow_aggressive_on_structured": adaptive_eco.allow_aggressive_on_structured,
+            "semantic_floor": adaptive_eco.semantic_floor,
+            "circuit_breaker_enabled": adaptive_eco.circuit_breaker_enabled,
+            "circuit_breaker_window": adaptive_eco.circuit_breaker_window,
+            "circuit_breaker_min_below_floor": adaptive_eco.circuit_breaker_min_below_floor,
         },
     }))
 }

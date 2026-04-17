@@ -272,6 +272,8 @@ impl Drop for AgentTurnInflightGuard<'_> {
 pub struct OpenFangKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
+    /// Live `[adaptive_eco]` policy — updated on successful [`OpenFangKernel::reload_config`].
+    adaptive_eco_live: std::sync::RwLock<openfang_types::adaptive_eco::AdaptiveEcoConfig>,
     /// Live `[runtime_limits]` (hot-reloaded); in-flight agent loops keep the snapshot from turn start.
     pub runtime_limits_live:
         std::sync::Arc<std::sync::RwLock<openfang_types::runtime_limits::RuntimeLimitsConfig>>,
@@ -787,7 +789,8 @@ impl OpenFangKernel {
                 serde_json::Value::String(self.config.efficient_mode.clone())
             });
 
-        if !self.config.adaptive_eco.enabled {
+        let ae = self.adaptive_eco_live.read().unwrap();
+        if !ae.enabled {
             return;
         }
 
@@ -801,29 +804,21 @@ impl OpenFangKernel {
         let mut mode_after_circuit = base_mode.clone();
         let mut circuit_tripped = false;
         let cap_label = cache_capability_label(manifest.model.provider.trim());
-        let extra_cb_window = if self
-            .config
-            .adaptive_eco
-            .circuit_breaker_extra_window_when_prompt_cache
-            > 0
+        let extra_cb_window = if ae.circuit_breaker_extra_window_when_prompt_cache > 0
             && prompt_cache_capability_label(cap_label)
         {
-            self.config
-                .adaptive_eco
-                .circuit_breaker_extra_window_when_prompt_cache as usize
+            ae.circuit_breaker_extra_window_when_prompt_cache as usize
         } else {
             0
         };
-        if self.config.adaptive_eco.circuit_breaker_enabled {
-            let w = (self.config.adaptive_eco.circuit_breaker_window.max(1) as usize)
-                .saturating_add(extra_cb_window);
+        if ae.circuit_breaker_enabled {
+            let w = (ae.circuit_breaker_window.max(1) as usize).saturating_add(extra_cb_window);
             let scores = self
                 .memory
                 .usage()
                 .query_recent_semantic_scores(llm_billing_id, w)
                 .unwrap_or_default();
-            let (m, trip) =
-                circuit_breaker_adjust_base(&base_mode, &self.config.adaptive_eco, &scores);
+            let (m, trip) = circuit_breaker_adjust_base(&base_mode, &ae, &scores);
             mode_after_circuit = m;
             circuit_tripped = trip;
         }
@@ -834,8 +829,7 @@ impl OpenFangKernel {
         );
 
         let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-        let mut snap =
-            resolve_adaptive_eco_turn(&self.config.adaptive_eco, manifest, message, &catalog);
+        let mut snap = resolve_adaptive_eco_turn(&ae, manifest, message, &catalog);
         drop(catalog);
 
         snap.base_mode_before_circuit = Some(base_mode.clone());
@@ -846,15 +840,15 @@ impl OpenFangKernel {
         }
 
         let now = std::time::Instant::now();
-        if circuit_tripped && self.config.adaptive_eco.post_circuit_cooldown_secs > 0 {
+        if circuit_tripped && ae.post_circuit_cooldown_secs > 0 {
             self.adaptive_eco_last_circuit_trip_at
                 .insert(llm_billing_id, now);
             self.adaptive_eco_circuit_cooldown_floor
                 .insert(llm_billing_id, mode_after_circuit.clone());
         }
 
-        if self.config.adaptive_eco.enforce {
-            let min_n = self.config.adaptive_eco.enforce_min_consecutive_turns;
+        if ae.enforce {
+            let min_n = ae.enforce_min_consecutive_turns;
             let (mut eff, mut blocked) = hysteresis_resolve_adaptive_effective(
                 &self.adaptive_eco_hysteresis,
                 llm_billing_id,
@@ -864,7 +858,7 @@ impl OpenFangKernel {
             );
             let tier_base = compression_tier_rank(&mode_after_circuit);
 
-            let min_gap_secs = self.config.adaptive_eco.min_secs_between_enforced_changes;
+            let min_gap_secs = ae.min_secs_between_enforced_changes;
             if min_gap_secs > 0 && eff != mode_after_circuit {
                 if let Some(last) = self
                     .adaptive_eco_last_enforced_switch_at
@@ -879,16 +873,11 @@ impl OpenFangKernel {
                 }
             }
 
-            if self.config.adaptive_eco.cache_ttl_dampens_raises
+            if ae.cache_ttl_dampens_raises
                 && prompt_cache_capability_label(snap.cache_capability.as_str())
                 && compression_tier_rank(&eff) > tier_base
             {
-                let ttl = Duration::from_secs(
-                    self.config
-                        .adaptive_eco
-                        .provider_prompt_cache_ttl_secs
-                        .max(1),
-                );
+                let ttl = Duration::from_secs(ae.provider_prompt_cache_ttl_secs.max(1));
                 if let Some(last) = self.adaptive_eco_last_raise_at.get(&llm_billing_id) {
                     if now.duration_since(*last) < ttl {
                         eff.clone_from(&mode_after_circuit);
@@ -900,14 +889,13 @@ impl OpenFangKernel {
 
             // After a circuit-breaker step-down, block raising compression above the trip floor
             // until `post_circuit_cooldown_secs` elapses (pairs with `AdaptiveEcoConfig::post_circuit_cooldown_secs`).
-            if self.config.adaptive_eco.post_circuit_cooldown_secs > 0 {
+            if ae.post_circuit_cooldown_secs > 0 {
                 if let (Some(last_trip), Some(floor_entry)) = (
                     self.adaptive_eco_last_circuit_trip_at.get(&llm_billing_id),
                     self.adaptive_eco_circuit_cooldown_floor
                         .get(&llm_billing_id),
                 ) {
-                    let cd =
-                        Duration::from_secs(self.config.adaptive_eco.post_circuit_cooldown_secs);
+                    let cd = Duration::from_secs(ae.post_circuit_cooldown_secs);
                     if now.duration_since(*last_trip) < cd {
                         let floor_s = floor_entry.value().as_str();
                         if compression_tier_rank(&eff) > compression_tier_rank(floor_s) {
@@ -953,7 +941,7 @@ impl OpenFangKernel {
         adaptive_confidence: Option<f32>,
         counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     ) {
-        if !self.config.adaptive_eco.enabled {
+        if !self.adaptive_eco_live.read().unwrap().enabled {
             return;
         }
         let Some(v) = manifest.metadata.get("adaptive_eco") else {
@@ -1557,9 +1545,11 @@ impl OpenFangKernel {
 
         let runtime_limits_live =
             std::sync::Arc::new(std::sync::RwLock::new(config.runtime_limits.clone()));
+        let adaptive_eco_live = std::sync::RwLock::new(config.adaptive_eco.clone());
         let agent_home = config.home_dir.clone();
         let kernel = Self {
             config,
+            adaptive_eco_live,
             runtime_limits_live,
             registry: AgentRegistry::with_agent_home(agent_home),
             capabilities: CapabilityManager::new(),
@@ -5031,6 +5021,11 @@ impl OpenFangKernel {
         chrono::DateTime::from_timestamp_millis(ms as i64).map(|d| d.to_rfc3339())
     }
 
+    /// Current `[adaptive_eco]` policy (updates on successful [`OpenFangKernel::reload_config`]).
+    pub fn adaptive_eco_config(&self) -> openfang_types::adaptive_eco::AdaptiveEcoConfig {
+        self.adaptive_eco_live.read().unwrap().clone()
+    }
+
     /// Reload configuration: read the config file, diff against current, and
     /// apply hot-reloadable actions. Returns the reload plan for API response.
     pub fn reload_config(&self) -> Result<crate::config_reload::ReloadPlan, String> {
@@ -5052,6 +5047,8 @@ impl OpenFangKernel {
         if let Err(errors) = validate_config_for_reload(&new_config) {
             return Err(format!("Validation failed: {}", errors.join("; ")));
         }
+
+        *self.adaptive_eco_live.write().unwrap() = new_config.adaptive_eco.clone();
 
         // Build the reload plan
         let plan = build_reload_plan(&self.config, &new_config);
@@ -10015,5 +10012,172 @@ model = "x"
             false,
             Some(true)
         ));
+    }
+
+    #[test]
+    fn test_post_circuit_cooldown_clamps_enforced_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("kernel-eco-cooldown");
+        std::fs::create_dir_all(&home_dir).unwrap();
+
+        let mut config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: home_dir.join("data"),
+            ..KernelConfig::default()
+        };
+        config.adaptive_eco.enabled = true;
+        config.adaptive_eco.enforce = true;
+        config.adaptive_eco.enforce_min_consecutive_turns = 1;
+        config.adaptive_eco.post_circuit_cooldown_secs = 3600;
+        config.adaptive_eco.circuit_breaker_enabled = false;
+
+        let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
+        let billing_id = AgentId::new();
+
+        kernel
+            .adaptive_eco_last_circuit_trip_at
+            .insert(billing_id, std::time::Instant::now());
+        kernel
+            .adaptive_eco_circuit_cooldown_floor
+            .insert(billing_id, "balanced".to_string());
+
+        let mut manifest = AgentManifest::default();
+        manifest.model.provider = "ollama".to_string();
+        manifest.model.model = "test".to_string();
+        manifest.metadata.insert(
+            "efficient_mode".to_string(),
+            serde_json::Value::String("aggressive".to_string()),
+        );
+
+        kernel.apply_efficient_mode_and_adaptive_eco(
+            &mut manifest,
+            "plain short message",
+            &None,
+            billing_id,
+        );
+
+        let eff = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(
+            eff, "balanced",
+            "post-circuit cooldown should clamp aggressive down to trip floor"
+        );
+
+        let adaptive = manifest
+            .metadata
+            .get("adaptive_eco")
+            .expect("adaptive_eco snapshot");
+        let snap: openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot =
+            serde_json::from_value(adaptive.clone()).unwrap();
+        assert!(
+            snap.reason_codes
+                .iter()
+                .any(|c| c == "policy:post_circuit_cooldown"),
+            "expected policy:post_circuit_cooldown in {:?}",
+            snap.reason_codes
+        );
+
+        kernel.shutdown();
+    }
+
+    #[test]
+    fn test_post_circuit_cooldown_skips_without_trip_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("kernel-eco-cooldown-no-trip");
+        std::fs::create_dir_all(&home_dir).unwrap();
+
+        let mut config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: home_dir.join("data"),
+            ..KernelConfig::default()
+        };
+        config.adaptive_eco.enabled = true;
+        config.adaptive_eco.enforce = true;
+        config.adaptive_eco.enforce_min_consecutive_turns = 1;
+        config.adaptive_eco.post_circuit_cooldown_secs = 3600;
+        config.adaptive_eco.circuit_breaker_enabled = false;
+
+        let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
+        let billing_id = AgentId::new();
+
+        kernel
+            .adaptive_eco_circuit_cooldown_floor
+            .insert(billing_id, "balanced".to_string());
+
+        let mut manifest = AgentManifest::default();
+        manifest.model.provider = "ollama".to_string();
+        manifest.model.model = "test".to_string();
+        manifest.metadata.insert(
+            "efficient_mode".to_string(),
+            serde_json::Value::String("aggressive".to_string()),
+        );
+
+        kernel.apply_efficient_mode_and_adaptive_eco(
+            &mut manifest,
+            "plain short message",
+            &None,
+            billing_id,
+        );
+
+        let eff = manifest
+            .metadata
+            .get("efficient_mode")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(eff, "aggressive");
+
+        let adaptive = manifest
+            .metadata
+            .get("adaptive_eco")
+            .expect("adaptive_eco snapshot");
+        let snap: openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot =
+            serde_json::from_value(adaptive.clone()).unwrap();
+        assert!(
+            !snap
+                .reason_codes
+                .iter()
+                .any(|c| c == "policy:post_circuit_cooldown"),
+            "cooldown should not apply without trip timestamp: {:?}",
+            snap.reason_codes
+        );
+
+        kernel.shutdown();
+    }
+
+    #[test]
+    fn test_apply_adaptive_eco_skipped_when_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home_dir = tmp.path().join("kernel-eco-off");
+        std::fs::create_dir_all(&home_dir).unwrap();
+
+        let config = KernelConfig {
+            home_dir: home_dir.clone(),
+            data_dir: home_dir.join("data"),
+            ..KernelConfig::default()
+        };
+
+        let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
+        assert!(!kernel.adaptive_eco_config().enabled);
+
+        let billing_id = AgentId::new();
+        let mut manifest = AgentManifest::default();
+        manifest.model.provider = "ollama".to_string();
+        manifest.model.model = "test".to_string();
+        manifest.metadata.insert(
+            "efficient_mode".to_string(),
+            serde_json::Value::String("balanced".to_string()),
+        );
+
+        kernel.apply_efficient_mode_and_adaptive_eco(&mut manifest, "hi", &None, billing_id);
+
+        assert!(
+            !manifest.metadata.contains_key("adaptive_eco"),
+            "adaptive eco metadata should not be attached when disabled"
+        );
+
+        kernel.shutdown();
     }
 }

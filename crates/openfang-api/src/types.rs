@@ -152,3 +152,50 @@ pub struct ClawHubInstallRequest {
     /// ClawHub skill slug (e.g., "github-helper").
     pub slug: String,
 }
+
+#[cfg(test)]
+mod message_response_contract_tests {
+    use super::MessageResponse;
+    use openfang_types::message::ToolTurnRecord;
+
+    #[test]
+    fn message_response_serializes_adaptive_eco_explainability_fields() {
+        let msg = MessageResponse {
+            response: "ok".to_string(),
+            input_tokens: 1,
+            output_tokens: 2,
+            iterations: 1,
+            cost_usd: None,
+            latency_ms: Some(10),
+            llm_fallback_note: None,
+            skill_draft_path: None,
+            compression_savings_pct: 0,
+            compressed_input: None,
+            compression_semantic_score: None,
+            adaptive_confidence: Some(0.88),
+            eco_counterfactual: None,
+            adaptive_eco_effective_mode: Some("balanced".to_string()),
+            adaptive_eco_recommended_mode: Some("aggressive".to_string()),
+            adaptive_eco_reason_codes: Some(vec![
+                "adaptive_eco:v1".to_string(),
+                "policy:post_circuit_cooldown".to_string(),
+            ]),
+            tools: Vec::<ToolTurnRecord>::new(),
+            ainl_runtime_telemetry: None,
+        };
+
+        let v = serde_json::to_value(&msg).expect("serialize MessageResponse");
+        assert_eq!(v["adaptive_eco_effective_mode"], "balanced");
+        assert_eq!(v["adaptive_eco_recommended_mode"], "aggressive");
+        let codes = v["adaptive_eco_reason_codes"]
+            .as_array()
+            .expect("codes array");
+        assert!(codes
+            .iter()
+            .any(|x| x.as_str() == Some("policy:post_circuit_cooldown")));
+        let conf = v["adaptive_confidence"]
+            .as_f64()
+            .expect("adaptive_confidence number");
+        assert!((conf - 0.88_f64).abs() < 1e-4);
+    }
+}

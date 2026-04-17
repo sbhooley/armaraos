@@ -80,7 +80,7 @@ circuit_breaker_extra_window_when_prompt_cache = 6
 
 **Rollout:** enable `adaptive_eco.enabled` first with `enforce = false` to populate `adaptive_eco` metadata and `GET /api/usage/adaptive-eco`. **Staging:** follow [operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md](operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md) and run **`scripts/verify-adaptive-eco-usage.sh`** against your daemon. When satisfied, set `enforce = true` and tune `enforce_min_consecutive_turns`, **`min_secs_between_enforced_changes`**, circuit breaker fields, and (if needed) **`provider_prompt_cache_ttl_secs`** / **`cache_ttl_dampens_raises`**. Run **`cargo test -p openfang-runtime --test adaptive_eco_eval_harness`** before broad enforcement; see [operations/ADAPTIVE_ECO_EVAL_HARNESS.md](operations/ADAPTIVE_ECO_EVAL_HARNESS.md). API reference: [api-reference.md](api-reference.md#get-apiusageadaptive-eco).
 
-Hot-reload: use **`POST /api/config/set`** with `path: "efficient_mode"` (full contract: [api-reference.md](api-reference.md#post-apiconfigset)) or edit the file and **`POST /api/config/reload`** where applicable.
+Hot-reload: use **`POST /api/config/set`** with `path: "efficient_mode"` (full contract: [api-reference.md](api-reference.md#post-apiconfigset)) or edit the file and **`POST /api/config/reload`** where applicable. For **`[adaptive_eco]`** keys, **`POST /api/config/set`** with a two-segment path (e.g. **`adaptive_eco.enabled`**) writes **`config.toml`** and, after a successful in-process **`reload_config()`**, updates the **live** adaptive policy used by the kernel and reflected in **`GET /api/status`** → **`adaptive_eco`** (no separate “stale `config` struct” for this section).
 
 ### Per-agent override
 
@@ -157,10 +157,33 @@ cargo test -p openfang-runtime -- prompt_compressor
 
 Includes gap tests between Balanced and Aggressive on mixed prose and regression tests for dashboards, HTTP/AINL prompts, and preserve markers.
 
-**HTTP smoke (adaptive-eco usage routes):**
+**Adaptive eco policy (resolver + kernel):**
 
 ```bash
-cargo test -p openfang-api --test api_integration_test test_usage_adaptive_eco_and_replay_endpoints -- --nocapture
+cargo test -p openfang-runtime --test adaptive_eco_eval_harness
+cargo test -p openfang-kernel --lib post_circuit
+cargo test -p openfang-kernel --lib test_apply_adaptive_eco_skipped_when_disabled
+```
+
+**HTTP / API integration (usage routes, `GET /api/status` adaptive block, `POST /api/config/set` for `adaptive_eco.enabled`, Budget HTML markers):**
+
+```bash
+cargo test -p openfang-api --test api_integration_test test_usage_
+cargo test -p openfang-api --test api_integration_test adaptive_eco_reflects
+cargo test -p openfang-api --test api_integration_test config_set_persists_adaptive
+cargo test -p openfang-api --test api_integration_test dashboard_html_includes
+```
+
+**SQLite telemetry (counterfactual JSON + replay summaries):**
+
+```bash
+cargo test -p openfang-memory --lib test_adaptive_eco
+```
+
+**HTTP `MessageResponse` JSON (adaptive explainability fields):**
+
+```bash
+cargo test -p openfang-api --lib message_response_serializes
 ```
 
 ---

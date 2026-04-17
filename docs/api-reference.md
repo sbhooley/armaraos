@@ -1229,6 +1229,17 @@ Set a **single** configuration value, write it to **`{home_dir}/config.toml`**, 
 }
 ```
 
+**Example — Adaptive eco (`[adaptive_eco]` table):**
+
+Two-segment paths map to TOML `section.key` (e.g. `adaptive_eco.enabled` → `[adaptive_eco]` / `enabled`). After a successful reload, the running kernel applies the updated **`[adaptive_eco]`** policy for new turns; **`GET /api/status`** includes the current values under **`adaptive_eco`**.
+
+```json
+{
+  "path": "adaptive_eco.enabled",
+  "value": false
+}
+```
+
 **Response** `200 OK`:
 
 ```json

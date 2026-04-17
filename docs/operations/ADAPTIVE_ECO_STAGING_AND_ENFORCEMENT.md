@@ -31,7 +31,7 @@ cache_ttl_dampens_raises = true
 circuit_breaker_extra_window_when_prompt_cache = 6
 ```
 
-Apply: **`POST /api/config/reload`** after editing, or restart the daemon.
+Apply: **`POST /api/config/reload`** after editing, **`POST /api/config/set`** for a single key (e.g. `adaptive_eco.enabled`), or restart the daemon. A successful **`reload_config()`** updates live **`[adaptive_eco]`** policy in the kernel (see [prompt-compression-efficient-mode.md](../prompt-compression-efficient-mode.md#configuration)).
 
 ### 2. Generate traffic
 

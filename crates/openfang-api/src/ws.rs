@@ -164,6 +164,42 @@ fn try_acquire_ws_slot(ip: IpAddr) -> Option<WsConnectionGuard> {
     Some(WsConnectionGuard { ip })
 }
 
+/// Returns `true` when the WebSocket upgrade should proceed from an API-key perspective.
+///
+/// When `api_key_trimmed` is empty (after trim), all clients are allowed (local dev mode).
+/// Otherwise the client must present `Authorization: Bearer <key>` or `?token=<key>`.
+pub(crate) fn ws_upgrade_api_key_allowed(
+    api_key_trimmed: &str,
+    headers: &axum::http::HeaderMap,
+    uri: &axum::http::Uri,
+) -> bool {
+    if api_key_trimmed.is_empty() {
+        return true;
+    }
+    let ct_eq = |token: &str, key: &str| -> bool {
+        use subtle::ConstantTimeEq;
+        if token.len() != key.len() {
+            return false;
+        }
+        token.as_bytes().ct_eq(key.as_bytes()).into()
+    };
+
+    let header_auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|token| ct_eq(token, api_key_trimmed))
+        .unwrap_or(false);
+
+    let query_auth = uri
+        .query()
+        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
+        .map(|token| ct_eq(token, api_key_trimmed))
+        .unwrap_or(false);
+
+    header_auth || query_auth
+}
+
 // ---------------------------------------------------------------------------
 // WS Upgrade Handler
 // ---------------------------------------------------------------------------
@@ -185,33 +221,9 @@ pub async fn agent_ws(
     // Trim whitespace so empty/whitespace-only api_key disables auth.
     let api_key_raw = &state.kernel.config.api_key;
     let api_key = api_key_raw.trim();
-    if !api_key.is_empty() {
-        // SECURITY: Use constant-time comparison to prevent timing attacks on API key
-        let ct_eq = |token: &str, key: &str| -> bool {
-            use subtle::ConstantTimeEq;
-            if token.len() != key.len() {
-                return false;
-            }
-            token.as_bytes().ct_eq(key.as_bytes()).into()
-        };
-
-        let header_auth = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(|token| ct_eq(token, api_key))
-            .unwrap_or(false);
-
-        let query_auth = uri
-            .query()
-            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
-            .map(|token| ct_eq(token, api_key))
-            .unwrap_or(false);
-
-        if !header_auth && !query_auth {
-            warn!("WebSocket upgrade rejected: invalid auth");
-            return axum::http::StatusCode::UNAUTHORIZED.into_response();
-        }
+    if !ws_upgrade_api_key_allowed(api_key, &headers, &uri) {
+        warn!("WebSocket upgrade rejected: invalid auth");
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
     // SECURITY: Enforce per-IP WebSocket connection limit
@@ -1577,5 +1589,55 @@ mod tests {
         );
         assert_eq!(strip_think_tags("No thinking here"), "No thinking here");
         assert_eq!(strip_think_tags("<think>all thinking</think>"), "");
+    }
+
+
+    #[test]
+    fn ws_upgrade_api_key_allows_when_key_empty_even_with_bogus_bearer() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer nope"),
+        );
+        let uri: axum::http::Uri = "http://x/ws".parse().unwrap();
+        assert!(ws_upgrade_api_key_allowed("", &headers, &uri));
+    }
+
+    #[test]
+    fn ws_upgrade_api_key_accepts_bearer_or_query_token() {
+        let key = "super-secret-key-for-ws-tests";
+        let uri_with_token: axum::http::Uri = format!("http://x/ws?token={key}")
+            .parse()
+            .unwrap();
+        let headers_empty = axum::http::HeaderMap::new();
+        assert!(ws_upgrade_api_key_allowed(key, &headers_empty, &uri_with_token));
+
+        let mut headers_bearer = axum::http::HeaderMap::new();
+        headers_bearer.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_str(&format!("Bearer {key}")).unwrap(),
+        );
+        let uri_no_query: axum::http::Uri = "http://x/ws".parse().unwrap();
+        assert!(ws_upgrade_api_key_allowed(key, &headers_bearer, &uri_no_query));
+
+        let mut headers_wrong = axum::http::HeaderMap::new();
+        headers_wrong.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer wrong"),
+        );
+        assert!(!ws_upgrade_api_key_allowed(key, &headers_wrong, &uri_no_query));
+    }
+
+    #[test]
+    fn ws_per_ip_slot_exhaustion_then_release() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 44));
+        let mut guards = Vec::new();
+        for _ in 0..MAX_WS_PER_IP {
+            guards.push(try_acquire_ws_slot(ip).expect("expected slot"));
+        }
+        assert!(try_acquire_ws_slot(ip).is_none(), "should hit per-IP cap");
+        drop(guards);
+        assert!(try_acquire_ws_slot(ip).is_some());
     }
 }
