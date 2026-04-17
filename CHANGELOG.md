@@ -24,6 +24,7 @@ Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump
 - **Branding:** Refreshed ArmaraOS logos, favicon, and desktop app icons.
 - **CI / release / cross-repo:** **`scripts/check-version-consistency.sh`** (workspace + Tauri + **`README`** + **`docs/api-reference.md`** samples) in **`.github/workflows/ci.yml`**; **[docs/release-candidate-validation.md](docs/release-candidate-validation.md)** (pre-tag checklist, **`verify-dashboard-smoke.sh`**, updater notes, **0.7.5 risk validation**); **[docs/RELEASING.md](docs/RELEASING.md)** version-sample policy; **`.github/pull_request_template.md`** optional **Release PR** checklist; integration tests served via **`build_router`** + merge-gating **dashboard-smoke** CI job; **CONTRIBUTING** / **CLAUDE** integration-test table; **ainativelangweb** **`config/site.ts`** → **`latestArmaraosReleaseTag`: `v0.7.5`** when **`public/downloads/armaraos/latest.json`** is absent.
 - **Embedded AINL wheel:** **`AINL_PYPI_VERSION`** **`1.7.0`** in **`.github/workflows/ci.yml`** / **`release.yml`**, **`xtask bundle-ainl-wheel`** default, and **`programs/**/*.ainl`** validation — matches **PyPI** / **ainativelang.com** **`latestAinlRelease`** (**1.7.0**).
+- **Graph memory SSE diagnostics:** **`graph_memory_context_metrics`** adds **`graph_memory_kernel_notify_ok_total`** / **`graph_memory_kernel_notify_err_total`** (kernel **`notify_graph_memory_write`** outcomes for the dashboard **`GraphMemoryWrite`** path); **`scripts/check-graph-memory-timeline-diagnostics.sh`**; live **`scripts/check-memory-ga-gates.sh`** requires the new metric keys.
 
 ### Changed
 
@@ -39,12 +40,14 @@ Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump
 - **`ainl_runtime_engine` end-to-end:** **`PATCH /api/agents/{id}/config`** writes **`ainl_runtime_engine`** into **`agent.toml`**, restores from SQLite when merging templates at boot, and includes the flag on **`GET /api/agents`** so the dashboard list does not reset the checkbox.
 - **ainl-runtime:** Persona snapshots no longer leak into normal chat replies.
 - **Graph memory UI:** Scroll vs zoom interaction documented and fixed for the graph canvas.
+- **Graph memory live timeline:** Remove stale **`armaraos-kernel-event`** listeners on **`@page-leave`**; ingest **`GraphMemoryWrite`** from **`Alpine.store('kernelEvents')`** (replay + poll) so **Tauri / WebView** sessions see the same events as **`CustomEvent`**; integration test **`test_kernel_events_stream_includes_graph_memory_write`** proves **`GraphMemoryWrite`** appears on **`GET /api/events/stream`** after kernel notify.
 
 ### Documentation
 
 - **`CONTRIBUTING.md`**, **`CLAUDE.md`** — **`api_boundary_contracts_test`**, **`sse_stream_auth`**, WS limits in **`openfang-api`**; test counts aligned with **`cargo test --workspace`**.
 - **`docs/api-reference.md`** — SSE auth parity; **`version` / `tag_name` / release** samples for **0.7.5**; **`GET /api/agents`** (**`workspace`** / **`workspace_rel_home`**); **`GET /api/usage`** + **`/usage/summary`** shapes; **`GET /api/agents/{id}/tools`** default merged allowlist; **`/api/ui-prefs`** **`agent_eco_modes`**; MCP readiness + orchestration cross-links as applicable.
 - **`docs/mcp-a2a.md`**, **`docs/graph-memory.md`**, **`docs/dashboard-*.md`**, **`docs/prompt-compression-efficient-mode.md`**, **`docs/ainl-showcases.md`**, **`docs/launch-roadmap.md`**, **`docs/release-desktop.md`**, **`docs/README.md`** — adaptive eco, graph-memory live timeline, dashboard QA (**eco 7b**, Get started, Home folder preview, **Open workspace**), MCP primary flow on overview, integration-test pointers.
+- **`docs/dashboard-testing.md`** — Graph Memory **`GET /api/events/stream`** verification, **`/api/status`** notify + policy counters, **`check-graph-memory-timeline-diagnostics.sh`**.
 - **`README.md`** — version badge **0.7.5**.
 
 ### Risk notes
