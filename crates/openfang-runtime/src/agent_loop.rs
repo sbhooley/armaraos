@@ -331,6 +331,10 @@ async fn run_ainl_runtime_engine_prelude(
             return None;
         }
     };
+    // `ainl-runtime` writes via a separate SQLite handle, so those mutations do not naturally
+    // pass through GraphMemoryWriter's direct write methods. Emit one observed-write signal so
+    // the dashboard Graph Memory live timeline stays in sync for runtime-engine turns.
+    gm.emit_write_observed("episode");
     crate::ainl_runtime_bridge::log_mapped_end_turn_fields(&manifest.name, &mapped);
     Some(mapped.telemetry.clone())
 }

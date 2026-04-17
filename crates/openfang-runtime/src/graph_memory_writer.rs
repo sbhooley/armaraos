@@ -136,6 +136,15 @@ impl GraphMemoryWriter {
         }
     }
 
+    /// Emit a graph-memory write notification without performing a direct write in this wrapper.
+    ///
+    /// This is used by secondary writers (for example `ainl-runtime` running through a separate
+    /// SQLite handle) so dashboard live timelines still receive `GraphMemoryWrite` events for the
+    /// same agent and can refresh promptly.
+    pub fn emit_write_observed(&self, kind: &str) {
+        self.fire_write_hook(kind);
+    }
+
     /// Import `ainl_graph_memory_inbox.json` (Python `AinlMemorySyncWriter`) into this agent's
     /// SQLite graph, then reset the inbox to an empty envelope.
     pub async fn drain_python_graph_memory_inbox(&self) {
@@ -489,6 +498,7 @@ mod tests {
     #[cfg(feature = "ainl-persona-evolution")]
     use ainl_persona::EVOLUTION_TRAIT_NAME;
     use serde_json::json;
+    use std::sync::Mutex as StdMutex;
 
     #[tokio::test]
     #[cfg(feature = "ainl-persona-evolution")]
@@ -664,6 +674,31 @@ mod tests {
         } else {
             panic!("wrong node type");
         }
+    }
+
+    #[tokio::test]
+    async fn emit_write_observed_triggers_notify_hook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("notify_hook.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writes: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let writes_for_hook = Arc::clone(&writes);
+        let hook: Arc<dyn Fn(String, String) + Send + Sync> =
+            Arc::new(move |_agent_id: String, kind: String| {
+                if let Ok(mut v) = writes_for_hook.lock() {
+                    v.push(kind);
+                }
+            });
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "notify-agent".to_string(),
+            on_write: Some(hook),
+        };
+
+        writer.emit_write_observed("episode");
+
+        let seen = writes.lock().unwrap().clone();
+        assert_eq!(seen, vec!["episode".to_string()]);
     }
 
     #[tokio::test]
