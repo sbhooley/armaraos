@@ -498,6 +498,10 @@ pub async fn build_router(
         // Hands endpoints
         .route("/api/hands", axum::routing::get(routes::list_hands))
         .route(
+            "/api/hands/premium-unlock",
+            axum::routing::post(routes::post_hands_premium_unlock),
+        )
+        .route(
             "/api/hands/install",
             axum::routing::post(routes::install_hand),
         )

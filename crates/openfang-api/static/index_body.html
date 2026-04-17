@@ -246,6 +246,10 @@
               <span class="nav-label">All Agents</span>
               <span class="nav-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread chat activity"></span>
             </a>
+            <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 2.9 6 6.6.6-5 4.4 1.5 6.5L12 16l-6 3.5 1.5-6.5-5-4.4 6.6-.6z"/></svg></span>
+              <span class="nav-label">Premium</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'bookmarks' }" @click="navigate('bookmarks')" :aria-current="page === 'bookmarks' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></span>
               <span class="nav-label">Bookmarks</span>
@@ -377,10 +381,6 @@
             <a class="nav-item" :class="{ active: page === 'channels' }" @click="navigate('channels')" :aria-current="page === 'channels' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
               <span class="nav-label">Channels</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg></span>
-              <span class="nav-label">Hands</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'home-files' }" @click="navigate('home-files')" :aria-current="page === 'home-files' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
@@ -3809,23 +3809,23 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     <template x-if="page === 'hands'">
       <div x-data="handsPage">
         <div class="page-header dashboard-page-header-polish">
-          <h2>Hands</h2>
+          <h2>Premium</h2>
           <p class="dashboard-page-header-sub">Curated autonomous capability packages with prompts, tools, and dashboards — spawn ready-made specialist agents.</p>
         </div>
-        <div class="page-body dashboard-page-body-polish" x-init="loadData()">
+        <div class="page-body dashboard-page-body-polish" x-init="initPremiumGate(); loadData()">
           <div class="info-card">
-            <h4>Hands &mdash; Curated Autonomous Capability Packages</h4>
-            <p>Hands are pre-configured AI agents that autonomously handle specific tasks. Each hand includes a tuned system prompt, required tools, and a dashboard for tracking work.</p>
+            <h4>Premium &mdash; Curated Autonomous Capability Packages</h4>
+            <p>Premium packages are pre-configured AI agents that autonomously handle specific tasks. Each package includes a tuned system prompt, required tools, and a dashboard for tracking work.</p>
           </div>
 
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading hands...</span></div>
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading premium packages...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
             <p x-text="loadError"></p>
             <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
           </div>
 
-          <div x-show="!loading && !loadError">
+          <div x-show="!loading && !loadError" class="premium-page-shell">
             <!-- Tabs -->
             <div class="tabs dashboard-toolbar-tabs">
               <div class="tab" :class="{ active: tab === 'available' }" @click="tab = 'available'">
@@ -3836,7 +3836,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
             </div>
 
-            <!-- TAB: Available Hands -->
+            <!-- TAB: Available Premium -->
             <div x-show="tab === 'available'">
               <div class="card-grid" x-show="hands.length">
                 <template x-for="hand in hands" :key="hand.id">
@@ -3884,10 +3884,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
               <div class="empty-state" x-show="!hands.length">
                 <div class="empty-state-icon">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 2.9 6 6.6.6-5 4.4 1.5 6.5L12 16l-6 3.5 1.5-6.5-5-4.4 6.6-.6z"/></svg>
                 </div>
-                <h3>No hands available</h3>
-                <p>Hands are curated AI capability packages. They will appear once the kernel loads bundled hands.</p>
+                <h3>No premium packages available</h3>
+                <p>Premium packages are curated AI capability bundles. They will appear once the kernel loads bundled packages.</p>
               </div>
             </div>
 
@@ -3941,10 +3941,34 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </template>
               </div>
               <div class="empty-state" x-show="!instances.length && !activeLoading">
-                <h4>No active hands</h4>
-                <p class="hint">Activate a hand from the Available tab to get started. Each hand spawns a dedicated agent.</p>
-                <button class="btn btn-primary mt-4" @click="tab = 'available'">Browse Hands</button>
+                <h4>No active premium packages</h4>
+                <p class="hint">Activate a premium package from the Available tab to get started. Each package spawns a dedicated agent.</p>
+                <button class="btn btn-primary mt-4" @click="tab = 'available'">Browse Premium</button>
               </div>
+            </div>
+
+            <div class="premium-lock-overlay" x-show="!premiumUnlocked">
+              <div class="premium-lock-message">
+                <div class="premium-lock-title">Coming Soon to $AINL Token Holders!</div>
+                <a class="premium-lock-ca"
+                   :href="premiumTokenUrl"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   @click="openPremiumTokenLink($event)">
+                  CA: <span x-text="premiumTokenCa"></span>
+                </a>
+              </div>
+              <form class="premium-admin-unlock" @submit.prevent="submitPremiumUnlock()">
+                <input class="form-input"
+                       type="password"
+                       x-model="premiumUnlockPassword"
+                       placeholder="Admin password">
+                <button class="btn btn-primary btn-sm"
+                        type="submit"
+                        :disabled="premiumUnlockLoading"
+                        x-text="premiumUnlockLoading ? 'Unlocking...' : 'Unlock'"></button>
+                <div class="text-xs" style="color:var(--danger)" x-show="premiumUnlockError" x-text="premiumUnlockError"></div>
+              </form>
             </div>
 
             <!-- Detail Modal -->
@@ -8226,8 +8250,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
   </main>
 
-  <div class="app-powered-by" role="contentinfo" aria-label="Powered by AI Native Lang">
-    <a href="https://ainativelang.com/" target="_blank" rel="noopener noreferrer" title="Open ainativelang.com in your browser" @click="openAinlAttributionUrl($event)">powered by AINativeLang.com</a>
+  <div class="app-powered-by" role="contentinfo" aria-label="Powered by AINativeLang.com, copyright 2026 AINativeLang Inc.">
+    <a href="https://ainativelang.com/" target="_blank" rel="noopener noreferrer" title="Open ainativelang.com in your browser" @click="openAinlAttributionUrl($event)">Powered by AINativeLang.com &copy; 2026 AINativeLang Inc.</a>
   </div>
 </div>
 

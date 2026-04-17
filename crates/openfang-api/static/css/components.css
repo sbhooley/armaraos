@@ -5356,6 +5356,59 @@ button.tool-card-header {
 .quick-action-card .quick-action-label { font-size: 13px; font-weight: 600; }
 .quick-action-card .quick-action-desc { font-size: 11px; color: var(--text-dim); }
 
+/* ── Premium (formerly Hands) lock overlay ── */
+.premium-page-shell {
+  position: relative;
+}
+.premium-lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: all;
+  border-radius: var(--radius-lg);
+  background: rgba(8, 8, 12, 0.42);
+  backdrop-filter: blur(1px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+  padding: 40px 24px 24px;
+}
+.premium-lock-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.premium-lock-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.premium-lock-ca {
+  font-size: 0.95rem;
+  color: var(--accent-light);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  word-break: break-all;
+}
+.premium-admin-unlock {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.premium-admin-unlock .form-input {
+  width: 100%;
+  max-width: 320px;
+}
+
 /* ── Hand Setup Wizard ── */
 .hand-wizard {
   max-width: 680px;

@@ -5107,6 +5107,9 @@ fn clawhub_browse_entry_to_json(
 // Hands endpoints
 // ---------------------------------------------------------------------------
 
+const PREMIUM_UNLOCK_ENV_KEY: &str = "ARMARAOS_PREMIUM_UNLOCK_PASSWORD";
+const PREMIUM_UNLOCK_ENV_KEY_LEGACY: &str = "OPENFANG_PREMIUM_UNLOCK_PASSWORD";
+
 /// Detect the server platform for install command selection.
 fn server_platform() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -5116,6 +5119,113 @@ fn server_platform() -> &'static str {
     } else {
         "linux"
     }
+}
+
+fn parse_env_assignment(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let (k, v) = trimmed.split_once('=')?;
+    if k.trim() != key {
+        return None;
+    }
+    let mut value = v.trim().to_string();
+    if value.len() >= 2 {
+        let quoted = (value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\''));
+        if quoted {
+            value = value[1..value.len() - 1].to_string();
+        }
+    }
+    Some(value)
+}
+
+fn read_env_value_from_file(path: &FsPath, key: &str) -> Option<String> {
+    let body = std::fs::read_to_string(path).ok()?;
+    for line in body.lines() {
+        if let Some(value) = parse_env_assignment(line, key) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn resolve_premium_unlock_password(home_dir: &FsPath) -> Option<String> {
+    if let Ok(v) = std::env::var(PREMIUM_UNLOCK_ENV_KEY) {
+        if !v.trim().is_empty() {
+            return Some(v);
+        }
+    }
+    if let Ok(v) = std::env::var(PREMIUM_UNLOCK_ENV_KEY_LEGACY) {
+        if !v.trim().is_empty() {
+            return Some(v);
+        }
+    }
+    let dot_env = home_dir.join(".env");
+    read_env_value_from_file(&dot_env, PREMIUM_UNLOCK_ENV_KEY)
+        .or_else(|| read_env_value_from_file(&dot_env, PREMIUM_UNLOCK_ENV_KEY_LEGACY))
+}
+
+/// POST /api/hands/premium-unlock — Validate admin password for Premium screen unlock.
+pub async fn post_hands_premium_unlock(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/hands/premium-unlock";
+
+    let entered = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if entered.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Missing password",
+            "JSON body must include non-empty 'password'.".to_string(),
+            Some("Set ARMARAOS_PREMIUM_UNLOCK_PASSWORD in ~/.armaraos/.env."),
+        );
+    }
+
+    let expected = resolve_premium_unlock_password(&state.kernel.config.home_dir)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if expected.is_empty() {
+        return api_json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &rid,
+            PATH,
+            "Premium unlock not configured",
+            "Set ARMARAOS_PREMIUM_UNLOCK_PASSWORD in ~/.armaraos/.env (or process env)."
+                .to_string(),
+            None,
+        );
+    }
+
+    if entered == expected {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "unlocked": true
+            })),
+        );
+    }
+
+    api_json_error(
+        StatusCode::FORBIDDEN,
+        &rid,
+        PATH,
+        "Invalid password",
+        "Password did not match premium unlock secret.".to_string(),
+        None,
+    )
 }
 
 /// GET /api/hands — List all hand definitions (marketplace).

@@ -3,6 +3,12 @@
 
 function handsPage() {
   return {
+    premiumUnlocked: false,
+    premiumUnlockPassword: '',
+    premiumUnlockError: '',
+    premiumUnlockLoading: false,
+    premiumTokenUrl: 'https://pump.fun/coin/56hrCR3n7danhHNjWaU4VeUHpE1eRE9VRBWpHRPKpump',
+    premiumTokenCa: '56hrCR3n7danhHNjWaU4VeUHpE1eRE9VRBWpHRPKpump',
     tab: 'available',
     hands: [],
     instances: [],
@@ -46,7 +52,7 @@ function handsPage() {
         this.hands = data.hands || [];
       } catch(e) {
         this.hands = [];
-        this.loadError = e.message || 'Could not load hands.';
+        this.loadError = e.message || 'Could not load premium packages.';
       }
       this.loading = false;
     },
@@ -63,6 +69,51 @@ function handsPage() {
         this.instances = [];
       }
       this.activeLoading = false;
+    },
+
+    initPremiumGate() {
+      try {
+        this.premiumUnlocked = localStorage.getItem('armaraos-premium-unlocked') === '1';
+      } catch (e) {
+        this.premiumUnlocked = false;
+      }
+    },
+
+    openPremiumTokenLink(ev) {
+      var url = this.premiumTokenUrl;
+      var w = typeof window !== 'undefined' ? window : null;
+      var core = w && w.__TAURI__ && w.__TAURI__.core;
+      if (core && typeof core.invoke === 'function') {
+        if (ev) ev.preventDefault();
+        core.invoke('open_external_url', { url: url }).catch(function() {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        });
+        return;
+      }
+      if (ev) ev.preventDefault();
+      window.open(url, '_blank', 'noopener,noreferrer');
+    },
+
+    async submitPremiumUnlock() {
+      var pass = (this.premiumUnlockPassword || '').trim();
+      this.premiumUnlockError = '';
+      if (!pass) {
+        this.premiumUnlockError = 'Enter admin password to unlock Premium.';
+        return;
+      }
+      this.premiumUnlockLoading = true;
+      try {
+        await OpenFangAPI.post('/api/hands/premium-unlock', { password: pass });
+        this.premiumUnlocked = true;
+        this.premiumUnlockPassword = '';
+        try {
+          localStorage.setItem('armaraos-premium-unlocked', '1');
+        } catch (e0) {}
+        this.showToast('Premium unlocked on this device.');
+      } catch (e) {
+        this.premiumUnlockError = (e && e.message) ? e.message : 'Unlock failed.';
+      }
+      this.premiumUnlockLoading = false;
     },
 
     getHandIcon(handId) {
@@ -409,7 +460,7 @@ function handsPage() {
       this.activatingId = handId;
       try {
         var data = await OpenFangAPI.post('/api/hands/' + handId + '/activate', { config: config });
-        this.showToast('Hand "' + handId + '" activated as ' + (data.agent_name || data.instance_id));
+        this.showToast('Premium package "' + handId + '" activated as ' + (data.agent_name || data.instance_id));
         this.closeSetupWizard();
         await this.loadActive();
         this.tab = 'active';
@@ -459,11 +510,11 @@ function handsPage() {
     async deactivate(inst) {
       var self = this;
       var handName = inst.agent_name || inst.hand_id;
-      OpenFangToast.confirm('Deactivate Hand', 'Deactivate hand "' + handName + '"? This will kill its agent.', async function() {
+      OpenFangToast.confirm('Deactivate Premium', 'Deactivate premium package "' + handName + '"? This will kill its agent.', async function() {
         try {
           await OpenFangAPI.delete('/api/hands/instances/' + inst.instance_id);
           self.instances = self.instances.filter(function(i) { return i.instance_id !== inst.instance_id; });
-          OpenFangToast.success('Hand deactivated.');
+          OpenFangToast.success('Premium package deactivated.');
         } catch(e) {
           OpenFangToast.error('Deactivation failed: ' + openFangErrText(e));
         }
