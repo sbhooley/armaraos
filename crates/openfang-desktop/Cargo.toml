@@ -41,6 +41,9 @@ url = { workspace = true }
 uuid = { workspace = true }
 notify-rust = "4.12"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+
 [features]
 # Tauri uses custom-protocol in production builds
 custom-protocol = ["tauri/custom-protocol"]

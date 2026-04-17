@@ -218,3 +218,18 @@ pub fn save_dashboard_bookmarks_json(app: &AppHandle, json: &str) -> Result<(), 
     }
     fs::write(&path, json).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feed_urls_select_expected_armaraos_json() {
+        assert_eq!(feed_url_for_channel("stable"), STABLE_FEED_URL);
+        assert_eq!(feed_url_for_channel("beta"), BETA_FEED_URL);
+        assert!(STABLE_FEED_URL.ends_with("/latest.json"), "{STABLE_FEED_URL}");
+        assert!(BETA_FEED_URL.ends_with("/beta.json"), "{BETA_FEED_URL}");
+        assert_eq!(feed_url_for_channel("unknown"), STABLE_FEED_URL);
+    }
+}
+

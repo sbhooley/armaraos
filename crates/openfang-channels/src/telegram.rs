@@ -1213,6 +1213,34 @@ mod tests {
         assert!(matches!(msg.content, ChannelContent::Text(ref t) if t == "Edited message!"));
     }
 
+    #[tokio::test]
+    async fn test_parse_telegram_sender_chat_channel_post() {
+        let update = serde_json::json!({
+            "update_id": 999001,
+            "message": {
+                "message_id": 55,
+                "sender_chat": {
+                    "id": -1001234567890_i64,
+                    "title": "My Channel",
+                    "type": "channel"
+                },
+                "chat": {
+                    "id": -1001234567890_i64,
+                    "type": "channel"
+                },
+                "date": 1700000100,
+                "text": "Channel broadcast"
+            }
+        });
+        let client = test_client();
+        let msg = parse_telegram_update(&update, &[], "fake:token", &client, DEFAULT_API_URL, None)
+            .await
+            .expect("sender_chat message");
+        assert_eq!(msg.sender.platform_id, "-1001234567890");
+        assert_eq!(msg.sender.display_name, "My Channel");
+        assert!(matches!(msg.content, ChannelContent::Text(ref t) if t == "Channel broadcast"));
+    }
+
     #[test]
     fn test_backoff_calculation() {
         let b1 = calculate_backoff(Duration::from_secs(1));

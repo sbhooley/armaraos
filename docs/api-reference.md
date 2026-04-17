@@ -3002,6 +3002,8 @@ On the next message, the runtime consumes that pending map before `run_agent_loo
 
 ## SSE Streaming
 
+**Automated auth checks:** `cargo test -p openfang-api --test sse_stream_auth` asserts loopback vs non-loopback behavior and Bearer auth for **`/api/events/stream`**, **`/api/logs/stream`**, and **`/api/logs/daemon/stream`** (middleware must stay aligned with the dashboard and remote clients).
+
 ### POST /api/agents/{id}/message/stream
 
 Send a message and receive the response as a Server-Sent Events stream. This enables real-time token-by-token streaming.

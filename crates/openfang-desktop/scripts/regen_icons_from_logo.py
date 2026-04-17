@@ -2,8 +2,10 @@
 """Regenerate desktop bundle icons and embedded web assets from public/assets/armaraos-logo.png.
 
 Scales the source PNG to **cover** a solid black square (center-crop), then resizes for each bundle asset.
-Using “cover” avoids a visible letterbox frame (scale-to-fit left thick black bars for this wide logo).
-Transparent pixels in the source become black. The Dock/Finder “silver” rim around the tile is system chrome, not this file.
+
+**Opaque RGB output (no alpha):** After compositing, the image is flattened to RGB. If we saved RGBA with
+semi-transparent anti-aliasing, macOS would composite those pixels against its default light plate, which
+looks like a silver border or background behind the black. Fully opaque pixels eliminate that.
 Run from repo root: python3 crates/openfang-desktop/scripts/regen_icons_from_logo.py
 """
 from __future__ import annotations
@@ -35,7 +37,10 @@ def trim_to_content(im: Image.Image, pad: int = 2) -> Image.Image:
 
 
 def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
-    """Scale `im` uniformly to cover `side`×`side`, center-crop, on an opaque black square."""
+    """Scale `im` uniformly to cover `side`×`side`, center-crop, on an opaque black square.
+
+    Returns **RGB** only: transparency is blended onto black so no alpha remains (avoids macOS silver bleed).
+    """
     im = im.convert("RGBA")
     w, h = im.size
     scale = max(side / w, side / h)
@@ -45,9 +50,11 @@ def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
     left = (nw - side) // 2
     top = (nh - side) // 2
     cropped = resized.crop((left, top, left + side, top + side))
-    out = Image.new("RGBA", (side, side), (0, 0, 0, 255))
-    out.paste(cropped, (0, 0), cropped)
-    return out
+    tmp = Image.new("RGBA", (side, side), (0, 0, 0, 255))
+    tmp.paste(cropped, (0, 0), cropped)
+    rgb = Image.new("RGB", (side, side), (0, 0, 0))
+    rgb.paste(tmp, (0, 0), tmp)
+    return rgb
 
 
 def main() -> int:

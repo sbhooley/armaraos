@@ -82,6 +82,24 @@ cargo test -p openfang-runtime
 cargo test -p openfang-memory
 ```
 
+### API integration tests (`crates/openfang-api/tests/`)
+
+These use [`openfang_api::server::build_router`](crates/openfang-api/src/server.rs) (same stack as the daemon). No running daemon required.
+
+| Test binary | What it exercises |
+|-------------|---------------------|
+| [`api_integration_test.rs`](crates/openfang-api/tests/api_integration_test.rs) | Broad REST + JSON shapes (e.g. `json_shape`), optional LLM-gated cases |
+| [`api_boundary_contracts_test.rs`](crates/openfang-api/tests/api_boundary_contracts_test.rs) | MCP HTTP `POST /mcp` (JSON-RPC errors), `/hooks/wake` (disabled / token / success), dashboard `POST /api/auth/login` + `openfang_session` cookie on protected routes |
+| [`sse_stream_auth.rs`](crates/openfang-api/tests/sse_stream_auth.rs) | SSE auth parity for `/api/events/stream`, `/api/logs/stream`, `/api/logs/daemon/stream` (loopback vs remote + Bearer) |
+
+WebSocket auth and per-IP limits are covered by unit tests in [`crates/openfang-api/src/ws.rs`](crates/openfang-api/src/ws.rs) (`ws_upgrade_api_key_allowed`, slot cap).
+
+```bash
+cargo test -p openfang-api --test api_integration_test
+cargo test -p openfang-api --test api_boundary_contracts_test
+cargo test -p openfang-api --test sse_stream_auth
+```
+
 ### Embedded AINL programs (`programs/`)
 
 The kernel embeds the `programs/` tree at build time (`crates/openfang-kernel/build.rs` → `include_bytes!` in `OUT_DIR`). When you add or change `.ainl` files:

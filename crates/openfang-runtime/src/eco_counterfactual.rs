@@ -70,3 +70,82 @@ pub fn build_eco_counterfactual_receipt(
     }
     Some(receipt)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prompt_compressor::Compressed;
+    use openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot;
+
+    #[test]
+    fn receipt_fields_match_balanced_mode_without_adaptive() {
+        let msg = "hello world this is a moderately long user message for eco receipt testing";
+        let applied = Compressed {
+            text: msg.to_string(),
+            original_tokens: 100,
+            compressed_tokens: 72,
+        };
+        let r = build_eco_counterfactual_receipt(
+            msg,
+            EfficientMode::Balanced,
+            &applied,
+            28,
+            None,
+        )
+        .expect("receipt");
+        assert_eq!(r.applied_mode, "balanced");
+        assert_eq!(r.original_tokens_est, 100);
+        assert_eq!(r.applied_compressed_tokens_est, 72);
+        assert_eq!(r.vs_off_tokens_saved, 28);
+        assert_eq!(r.vs_off_savings_pct, 28);
+        assert!(r.recommended_mode.is_none());
+    }
+
+    #[test]
+    fn returns_none_when_off_and_no_adaptive_snapshot() {
+        let msg = "x";
+        let applied = Compressed {
+            text: msg.to_string(),
+            original_tokens: 10,
+            compressed_tokens: 10,
+        };
+        assert!(
+            build_eco_counterfactual_receipt(msg, EfficientMode::Off, &applied, 0, None).is_none()
+        );
+    }
+
+    #[test]
+    fn adaptive_snapshot_sets_recommended_fields_when_modes_differ() {
+        let msg = "token-heavy prompt ".repeat(20);
+        let applied = Compressed {
+            text: msg.clone(),
+            original_tokens: 200,
+            compressed_tokens: 120,
+        };
+        let snap = AdaptiveEcoTurnSnapshot {
+            effective_mode: "balanced".to_string(),
+            recommended_mode: "aggressive".to_string(),
+            base_mode_before_circuit: None,
+            circuit_breaker_tripped: false,
+            hysteresis_blocked: false,
+            reason_codes: vec![],
+            provider: "ollama".to_string(),
+            model: "test-model".to_string(),
+            cache_capability: "none".to_string(),
+            input_price_per_million: None,
+            shadow_only: true,
+            enforce: false,
+        };
+        let r = build_eco_counterfactual_receipt(
+            &msg,
+            EfficientMode::Balanced,
+            &applied,
+            15,
+            Some(&snap),
+        )
+        .expect("receipt");
+        assert_eq!(r.recommended_mode.as_deref(), Some("aggressive"));
+        assert!(r.recommended_compressed_tokens_est.is_some());
+        assert!(r.tokens_saved_delta_recommended_minus_applied.is_some());
+    }
+}

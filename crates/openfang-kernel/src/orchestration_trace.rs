@@ -277,4 +277,50 @@ mod tests {
         assert_eq!(cost.total_tokens, 300);
         assert!(cost.by_agent.iter().any(|l| l.agent_id == worker));
     }
+
+    #[test]
+    fn trace_lifecycle_start_complete_and_cost_non_empty() {
+        let buf = OrchestrationTraceBuffer::new(100);
+        let root = AgentId::new();
+        let worker = AgentId::new();
+        buf.push(OrchestrationTraceEvent {
+            trace_id: "t-life".to_string(),
+            orchestrator_id: root,
+            agent_id: root,
+            parent_agent_id: None,
+            event_type: TraceEventType::OrchestrationStart {
+                pattern: "map_reduce".to_string(),
+                initial_input: "go".to_string(),
+            },
+            timestamp: chrono::Utc::now(),
+            metadata: HashMap::new(),
+        });
+        buf.push(OrchestrationTraceEvent {
+            trace_id: "t-life".to_string(),
+            orchestrator_id: root,
+            agent_id: worker,
+            parent_agent_id: Some(root),
+            event_type: TraceEventType::AgentCompleted {
+                result_size: 12,
+                tokens_in: 5,
+                tokens_out: 7,
+                duration_ms: 9,
+                cost_usd: 0.002,
+            },
+            timestamp: chrono::Utc::now(),
+            metadata: HashMap::new(),
+        });
+        let evs = buf.events_for_trace("t-life");
+        assert!(
+            evs.iter().any(|e| matches!(e.event_type, TraceEventType::OrchestrationStart { .. })),
+            "start event"
+        );
+        assert!(
+            evs.iter().any(|e| matches!(e.event_type, TraceEventType::AgentCompleted { .. })),
+            "completed event"
+        );
+        let cost = buf.trace_cost("t-life").expect("cost");
+        assert_eq!(cost.total_tokens, 12);
+        assert!((cost.total_cost_usd - 0.002).abs() < 1e-9);
+    }
 }

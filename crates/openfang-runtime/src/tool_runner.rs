@@ -5678,4 +5678,46 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[tokio::test]
+    async fn orchestration_shared_merge_applies_with_orchestration_live() {
+        use openfang_types::agent::AgentId;
+        use openfang_types::orchestration::{OrchestrationContext, OrchestrationPattern};
+
+        let aid = AgentId::new();
+        let ctx = OrchestrationContext::new_root(
+            aid,
+            OrchestrationPattern::AdHoc,
+            Some("balanced".to_string()),
+        );
+        let live: OrchestrationLive = std::sync::Arc::new(tokio::sync::RwLock::new(ctx));
+        let input = serde_json::json!({ "patch": { "k": 42 } });
+        let res = execute_tool(
+            "tid",
+            "orchestration_shared_merge",
+            &input,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&live),
+        )
+        .await;
+        assert!(!res.is_error, "{}", res.content);
+        assert!(res.content.contains("Merged 1 key"), "{}", res.content);
+
+        let g = live.read().await;
+        assert_eq!(g.shared_vars.get("k"), Some(&serde_json::json!(42)));
+    }
 }

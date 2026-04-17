@@ -729,4 +729,56 @@ mod tests {
             assert!(episodic.vitals_trust.is_none());
         }
     }
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, val: &std::path::Path) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, val.as_os_str());
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    static ARMARAOS_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[tokio::test]
+    async fn drain_inbox_returns_error_on_malformed_json() {
+        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let inbox_dir = dir.path().join("agents").join(AGENT);
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let inbox_path = inbox_dir.join(INBOX_FILENAME);
+        tokio::fs::write(&inbox_path, b"{ not json").await.unwrap();
+        let err = drain_inbox(&writer).await.err().expect("expected error");
+        assert!(
+            err.contains("inbox json") || err.contains("expected value"),
+            "unexpected err: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_inbox_noops_on_empty_file() {
+        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let inbox_dir = dir.path().join("agents").join(AGENT);
+        tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
+        let inbox_path = inbox_dir.join(INBOX_FILENAME);
+        tokio::fs::write(&inbox_path, b"").await.unwrap();
+        drain_inbox(&writer).await.expect("empty inbox");
+    }
 }

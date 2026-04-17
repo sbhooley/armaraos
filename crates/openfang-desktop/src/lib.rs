@@ -10,6 +10,8 @@ mod ainl_version;
 #[cfg(desktop)]
 mod app_menu;
 mod commands;
+#[cfg(target_os = "macos")]
+mod macos_app_icon;
 mod notification_icon;
 mod os_notify;
 mod product_analytics;
@@ -197,6 +199,10 @@ pub fn run() {
             .visible(true)
             .theme(crate::ui_prefs::window_theme_for_mode(&theme_mode))
             .build()?;
+
+            // macOS 26+: avoid Tahoe’s auto-layered dock icon (silver plate + inset artwork).
+            #[cfg(target_os = "macos")]
+            crate::macos_app_icon::apply_flat_icon_image();
 
             // Set up system tray (desktop only)
             #[cfg(desktop)]

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Next release changes go here -->
 
+### Documentation
+
+- **`CONTRIBUTING.md`**, **`CLAUDE.md`** — document **`api_boundary_contracts_test`**, **`sse_stream_auth`**, and WS unit tests under **`openfang-api`**.
+- **`docs/api-reference.md`** — SSE section points at **`sse_stream_auth`** for loopback / Bearer parity on event and log streams.
+- **`docs/mcp-a2a.md`** — HTTP **`POST /mcp`** verification note + **`api_boundary_contracts_test`**.
+
 ### Changed
 
 - **ainl-runtime-engine defaults:** `openfang-runtime` now includes **`ainl-runtime-engine`** in default Cargo features, and new `AgentManifest` defaults (including wizard-created manifests) set **`ainl_runtime_engine = true`** by default.

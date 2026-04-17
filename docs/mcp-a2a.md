@@ -423,6 +423,8 @@ args = ["-y", "@modelcontextprotocol/server-postgres"]
 | `GET` | `/api/mcp/servers` | List configured and connected MCP servers with their tools |
 | `POST` | `/mcp` | Handle MCP JSON-RPC requests over HTTP (full tool execution) |
 
+**Verification:** With a non-empty `api_key`, `POST /mcp` requires the same Bearer (or loopback rules) as other protected routes. Automated coverage includes `cargo test -p openfang-api --test api_boundary_contracts_test` (e.g. unknown `tools/call` target → JSON-RPC error).
+
 **GET /api/mcp/servers** response:
 
 ```json
