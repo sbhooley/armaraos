@@ -50,7 +50,8 @@ fn extract_facts_crate_primary(
     assistant_response: &str,
     tools: &[String],
 ) -> Vec<ExtractedFact> {
-    let tags = extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools, None);
+    let tags =
+        extract_turn_semantic_tags_for_memory(user_message, Some(assistant_response), tools, None);
     semantic_tags_to_extracted_facts(tags)
 }
 
@@ -226,9 +227,7 @@ pub fn extract_pattern(tool_sequence: &[String]) -> Option<ExtractedPattern> {
     }
 
     // Data pipeline
-    if tools.contains(&"file_read")
-        && tools.contains(&"code_exec")
-        && tools.contains(&"file_write")
+    if tools.contains(&"file_read") && tools.contains(&"code_exec") && tools.contains(&"file_write")
     {
         return Some(ExtractedPattern {
             name: "data_pipeline".to_string(),
@@ -278,8 +277,7 @@ mod tests {
         );
         assert!(
             facts.iter().any(|f| {
-                f.text.to_lowercase().contains("topic:")
-                    && f.text.to_lowercase().contains("rust")
+                f.text.to_lowercase().contains("topic:") && f.text.to_lowercase().contains("rust")
             }),
             "expected topic:rust style fact, got {facts:?}"
         );
@@ -317,7 +315,10 @@ mod tests {
     #[test]
     fn extract_pattern_delegation_prefers_over_research() {
         let p = extract_pattern(&["web_search".to_string(), "agent_send".to_string()]);
-        assert_eq!(p.as_ref().map(|x| x.name.as_str()), Some("agent_delegation"));
+        assert_eq!(
+            p.as_ref().map(|x| x.name.as_str()),
+            Some("agent_delegation")
+        );
     }
 
     #[test]

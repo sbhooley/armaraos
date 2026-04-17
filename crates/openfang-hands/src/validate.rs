@@ -219,7 +219,9 @@ pub fn validate_hand_path(path: &Path) -> ValidationReport {
                                 }
                             }
                         } else {
-                            r.push_warn("ainl.json: could not parse as JSON for schema_version check");
+                            r.push_warn(
+                                "ainl.json: could not parse as JSON for schema_version check",
+                            );
                         }
                     } else {
                         r.push_fail(format!("Entrypoint file unreadable: {}", p.display()));
@@ -338,7 +340,11 @@ entrypoint = "t.ainl.json"
 "#,
         );
         write(root, "t.ainl.json", r#"{"schema_version":"1","labels":{}}"#);
-        write(root, "security.json", r#"{"schema_version":"1","version":"1.0"}"#);
+        write(
+            root,
+            "security.json",
+            r#"{"schema_version":"1","version":"1.0"}"#,
+        );
         let r = validate_hand_path(root);
         assert_eq!(r.errors, 0, "{:?}", r.lines);
     }

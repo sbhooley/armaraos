@@ -54,10 +54,7 @@ fn test_registered_adapter_is_called_for_matching_label() {
             "my_custom"
         }
 
-        fn execute_patch(
-            &self,
-            ctx: &PatchDispatchContext<'_>,
-        ) -> Result<Value, String> {
+        fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
             Ok(serde_json::json!({
                 "ok": true,
                 "label": ctx.patch_label,
@@ -301,10 +298,7 @@ fn graph_patch_adapter_returns_structured_result() {
     assert!(r.skip_reason.is_none());
     assert!(r.fitness_after > r.fitness_before);
     let v = r.adapter_output.as_ref().unwrap();
-    assert_eq!(
-        v.get("label").and_then(|x| x.as_str()),
-        Some("L_metrics")
-    );
+    assert_eq!(v.get("label").and_then(|x| x.as_str()), Some("L_metrics"));
     assert_eq!(v.get("patch_version"), Some(&serde_json::json!(1)));
     let keys = v.get("frame_keys").unwrap().as_array().unwrap();
     assert!(keys.iter().any(|k| k.as_str() == Some("a")));
@@ -343,10 +337,7 @@ fn graph_patch_adapter_host_callback_receives_envelope() {
         .unwrap();
     assert!(out.result().patch_dispatch_results[0].dispatched);
     let got = captured.lock().unwrap().take().expect("host saw summary");
-    assert_eq!(
-        got.get("label").and_then(|x| x.as_str()),
-        Some("L_host")
-    );
+    assert_eq!(got.get("label").and_then(|x| x.as_str()), Some("L_host"));
 }
 
 #[test]
@@ -422,10 +413,7 @@ fn label_specific_adapter_beats_graph_patch_fallback() {
             "echo"
         }
 
-        fn execute_patch(
-            &self,
-            ctx: &PatchDispatchContext<'_>,
-        ) -> Result<Value, String> {
+        fn execute_patch(&self, ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
             Ok(serde_json::json!({
                 "from": "echo",
                 "label": ctx.patch_label,

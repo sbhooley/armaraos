@@ -269,8 +269,7 @@ pub fn orchestration_context_from_claimed_task(
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<AgentId>().ok())
         .or_else(|| {
-            task
-                .get("created_by")
+            task.get("created_by")
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse().ok())
         })
@@ -281,7 +280,8 @@ pub fn orchestration_context_from_claimed_task(
         c.trace_id = trace_id;
         c
     } else {
-        let mut root = OrchestrationContext::new_root(orchestrator_id, OrchestrationPattern::AdHoc, None);
+        let mut root =
+            OrchestrationContext::new_root(orchestrator_id, OrchestrationPattern::AdHoc, None);
         root.trace_id = trace_id;
         root.child(claimant)
     };

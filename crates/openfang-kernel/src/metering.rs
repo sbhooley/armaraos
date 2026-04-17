@@ -174,7 +174,10 @@ impl MeteringEngine {
     }
 
     /// Get compression effectiveness summary by mode and agent.
-    pub fn get_compression_summary(&self, window_days: Option<u32>) -> OpenFangResult<CompressionSummary> {
+    pub fn get_compression_summary(
+        &self,
+        window_days: Option<u32>,
+    ) -> OpenFangResult<CompressionSummary> {
         self.store.query_compression_summary(window_days)
     }
 

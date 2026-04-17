@@ -188,8 +188,7 @@ pub fn infer_topic_tags(text: &str) -> Vec<SemanticTag> {
     for topic in TOPICS {
         for kw in topic.keywords {
             if let Some(c) = keyword_match_confidence(&lower, kw) {
-                best
-                    .entry(topic.slug)
+                best.entry(topic.slug)
                     .and_modify(|v| *v = v.max(c))
                     .or_insert(c);
             }

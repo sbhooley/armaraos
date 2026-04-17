@@ -407,6 +407,10 @@ pub struct OpenFangKernel {
     adaptive_eco_last_enforced_switch_at: dashmap::DashMap<AgentId, std::time::Instant>,
     /// Last time compression tier **increased** under enforcement (prompt-cache TTL dampening).
     adaptive_eco_last_raise_at: dashmap::DashMap<AgentId, std::time::Instant>,
+    /// Last circuit-breaker semantic step-down (for `post_circuit_cooldown_secs`).
+    adaptive_eco_last_circuit_trip_at: dashmap::DashMap<AgentId, std::time::Instant>,
+    /// Conservative mode floor after the last trip (tiers above this are blocked until cooldown elapses).
+    adaptive_eco_circuit_cooldown_floor: dashmap::DashMap<AgentId, String>,
     /// Rate-limits user-facing heartbeat failure logs + `HealthCheckFailed` per agent.
     pub heartbeat_failure_gate: Arc<crate::heartbeat::FailureNotifyGate>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
@@ -797,16 +801,19 @@ impl OpenFangKernel {
         let mut mode_after_circuit = base_mode.clone();
         let mut circuit_tripped = false;
         let cap_label = cache_capability_label(manifest.model.provider.trim());
-        let extra_cb_window =
-            if self.config.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache > 0
-                && prompt_cache_capability_label(cap_label)
-            {
-                self.config
-                    .adaptive_eco
-                    .circuit_breaker_extra_window_when_prompt_cache as usize
-            } else {
-                0
-            };
+        let extra_cb_window = if self
+            .config
+            .adaptive_eco
+            .circuit_breaker_extra_window_when_prompt_cache
+            > 0
+            && prompt_cache_capability_label(cap_label)
+        {
+            self.config
+                .adaptive_eco
+                .circuit_breaker_extra_window_when_prompt_cache as usize
+        } else {
+            0
+        };
         if self.config.adaptive_eco.circuit_breaker_enabled {
             let w = (self.config.adaptive_eco.circuit_breaker_window.max(1) as usize)
                 .saturating_add(extra_cb_window);
@@ -826,24 +833,24 @@ impl OpenFangKernel {
             serde_json::Value::String(mode_after_circuit.clone()),
         );
 
-        let catalog = self
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut snap = resolve_adaptive_eco_turn(
-            &self.config.adaptive_eco,
-            manifest,
-            message,
-            &catalog,
-        );
+        let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
+        let mut snap =
+            resolve_adaptive_eco_turn(&self.config.adaptive_eco, manifest, message, &catalog);
         drop(catalog);
 
         snap.base_mode_before_circuit = Some(base_mode.clone());
         snap.circuit_breaker_tripped = circuit_tripped;
         if circuit_tripped {
-            snap
-                .reason_codes
+            snap.reason_codes
                 .push("circuit_breaker:semantic_floor".to_string());
+        }
+
+        let now = std::time::Instant::now();
+        if circuit_tripped && self.config.adaptive_eco.post_circuit_cooldown_secs > 0 {
+            self.adaptive_eco_last_circuit_trip_at
+                .insert(llm_billing_id, now);
+            self.adaptive_eco_circuit_cooldown_floor
+                .insert(llm_billing_id, mode_after_circuit.clone());
         }
 
         if self.config.adaptive_eco.enforce {
@@ -856,7 +863,6 @@ impl OpenFangKernel {
                 min_n,
             );
             let tier_base = compression_tier_rank(&mode_after_circuit);
-            let now = std::time::Instant::now();
 
             let min_gap_secs = self.config.adaptive_eco.min_secs_between_enforced_changes;
             if min_gap_secs > 0 && eff != mode_after_circuit {
@@ -888,6 +894,28 @@ impl OpenFangKernel {
                         eff.clone_from(&mode_after_circuit);
                         blocked = true;
                         snap.reason_codes.push("cache_ttl:dampen_raise".to_string());
+                    }
+                }
+            }
+
+            // After a circuit-breaker step-down, block raising compression above the trip floor
+            // until `post_circuit_cooldown_secs` elapses (pairs with `AdaptiveEcoConfig::post_circuit_cooldown_secs`).
+            if self.config.adaptive_eco.post_circuit_cooldown_secs > 0 {
+                if let (Some(last_trip), Some(floor_entry)) = (
+                    self.adaptive_eco_last_circuit_trip_at.get(&llm_billing_id),
+                    self.adaptive_eco_circuit_cooldown_floor
+                        .get(&llm_billing_id),
+                ) {
+                    let cd =
+                        Duration::from_secs(self.config.adaptive_eco.post_circuit_cooldown_secs);
+                    if now.duration_since(*last_trip) < cd {
+                        let floor_s = floor_entry.value().as_str();
+                        if compression_tier_rank(&eff) > compression_tier_rank(floor_s) {
+                            eff.clone_from(floor_entry.value());
+                            blocked = true;
+                            snap.reason_codes
+                                .push("policy:post_circuit_cooldown".to_string());
+                        }
                     }
                 }
             }
@@ -931,9 +959,9 @@ impl OpenFangKernel {
         let Some(v) = manifest.metadata.get("adaptive_eco") else {
             return;
         };
-        let Ok(snap) =
-            serde_json::from_value::<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot>(v.clone())
-        else {
+        let Ok(snap) = serde_json::from_value::<
+            openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot,
+        >(v.clone()) else {
             return;
         };
         let rec = openfang_types::adaptive_eco::AdaptiveEcoUsageRecord {
@@ -1596,6 +1624,8 @@ impl OpenFangKernel {
             adaptive_eco_hysteresis: dashmap::DashMap::new(),
             adaptive_eco_last_enforced_switch_at: dashmap::DashMap::new(),
             adaptive_eco_last_raise_at: dashmap::DashMap::new(),
+            adaptive_eco_last_circuit_trip_at: dashmap::DashMap::new(),
+            adaptive_eco_circuit_cooldown_floor: dashmap::DashMap::new(),
             heartbeat_failure_gate: crate::heartbeat::FailureNotifyGate::new(
                 crate::heartbeat::FailureNotifyGate::DEFAULT_MIN_INTERVAL_SECS,
             ),
@@ -3108,6 +3138,9 @@ impl OpenFangKernel {
                     compression_semantic_score: None,
                     adaptive_confidence: None,
                     eco_counterfactual: None,
+                    adaptive_eco_effective_mode: None,
+                    adaptive_eco_recommended_mode: None,
+                    adaptive_eco_reason_codes: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -3192,6 +3225,9 @@ impl OpenFangKernel {
                     compression_semantic_score: None,
                     adaptive_confidence: None,
                     eco_counterfactual: None,
+                    adaptive_eco_effective_mode: None,
+                    adaptive_eco_recommended_mode: None,
+                    adaptive_eco_reason_codes: None,
                     ainl_runtime_telemetry: None,
                 })
             }
@@ -9965,12 +10001,19 @@ model = "x"
 
     #[test]
     fn test_legacy_ainl_runtime_engine_should_promote_to_true_only_when_implicit() {
-        assert!(legacy_ainl_runtime_engine_should_promote_to_true(false, None));
-        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(true, None));
+        assert!(legacy_ainl_runtime_engine_should_promote_to_true(
+            false, None
+        ));
+        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(
+            true, None
+        ));
         assert!(!legacy_ainl_runtime_engine_should_promote_to_true(
             false,
             Some(false)
         ));
-        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(false, Some(true)));
+        assert!(!legacy_ainl_runtime_engine_should_promote_to_true(
+            false,
+            Some(true)
+        ));
     }
 }

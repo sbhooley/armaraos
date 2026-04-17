@@ -80,9 +80,7 @@ async fn evolve_from_turn_impl(
     }
 
     let lookback = crate::graph_memory_writer::PERSONA_PRIOR_LOOKBACK_SECS;
-    let persona_rows: Vec<PersonaNode> = writer
-        .recall_persona_for_agent(agent_id, lookback)
-        .await;
+    let persona_rows: Vec<PersonaNode> = writer.recall_persona_for_agent(agent_id, lookback).await;
 
     tracing::debug!(
         agent_id = %agent_id,
@@ -251,20 +249,18 @@ mod tests {
                 .expect("seed persona so cold passes can persist");
         }
 
-        assert!(
-            writer
-                .record_turn(
-                    vec!["shell_exec".into()],
-                    None,
-                    Some(json!({ "outcome": "success" })),
-                    &[],
-                    None,
-                    None,
-                    None,
-                )
-                .await
-                .is_some()
-        );
+        assert!(writer
+            .record_turn(
+                vec!["shell_exec".into()],
+                None,
+                Some(json!({ "outcome": "success" })),
+                &[],
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_some());
 
         let _ = writer.run_persona_evolution_pass().await;
         let cycle_after_pass = evolution_snapshot_cycle(&writer).await;

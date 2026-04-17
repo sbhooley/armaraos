@@ -122,9 +122,9 @@ fn test_multiple_tool_calls_in_episode() {
     // Create episode with multiple tool uses
     let agent_id = "agent-multi-tool";
     let mut node1 = AinlMemoryNode::new_tool_episode(agent_id.to_string(), "web_fetch".to_string());
-    let mut node2 = AinlMemoryNode::new_tool_episode(agent_id.to_string(), "file_write".to_string());
-    let node3 =
-        AinlMemoryNode::new_tool_episode(agent_id.to_string(), "shell_exec".to_string());
+    let mut node2 =
+        AinlMemoryNode::new_tool_episode(agent_id.to_string(), "file_write".to_string());
+    let node3 = AinlMemoryNode::new_tool_episode(agent_id.to_string(), "shell_exec".to_string());
 
     // Link them in sequence
     node1.add_edge(node2.id, "next");
@@ -178,9 +178,7 @@ fn test_semantic_memory_nodes() {
     store.write_node(&fact_node).expect("Write failed");
 
     // Query semantic nodes
-    let facts = store
-        .query_by_type("semantic")
-        .expect("Query failed");
+    let facts = store.query_by_type("semantic").expect("Query failed");
 
     assert_eq!(facts.len(), 1);
     match &facts[0].node_type {
@@ -189,7 +187,10 @@ fn test_semantic_memory_nodes() {
         } => {
             assert!(fact.contains("Python"));
             assert!(*confidence > 0.9);
-            println!("✓ Semantic memory node: {} (confidence: {})", fact, confidence);
+            println!(
+                "✓ Semantic memory node: {} (confidence: {})",
+                fact, confidence
+            );
         }
         _ => panic!("Expected Semantic node"),
     }

@@ -91,7 +91,13 @@ fn stats_to_json(s: &CompressionStats) -> serde_json::Value {
 }
 
 /// Record one completed turn's compression outcome.
-pub fn record_turn(agent_id: &str, mode: &str, original_text: &str, compressed_text: &str, savings_pct: u8) {
+pub fn record_turn(
+    agent_id: &str,
+    mode: &str,
+    original_text: &str,
+    compressed_text: &str,
+    savings_pct: u8,
+) {
     let mode = mode.trim().to_ascii_lowercase();
     let mode = if mode.is_empty() {
         "off".to_string()
@@ -102,16 +108,12 @@ pub fn record_turn(agent_id: &str, mode: &str, original_text: &str, compressed_t
     let comp_tok = approx_tok(compressed_text);
 
     {
-        let mut entry = mode_totals()
-            .entry(mode.clone())
-            .or_default();
+        let mut entry = mode_totals().entry(mode.clone()).or_default();
         entry.record(orig_tok, comp_tok, savings_pct);
     }
 
     let agent_key = format!("{agent_id}::{mode}");
-    let mut entry = agent_mode_totals()
-        .entry(agent_key)
-        .or_default();
+    let mut entry = agent_mode_totals().entry(agent_key).or_default();
     entry.record(orig_tok, comp_tok, savings_pct);
 }
 
@@ -179,7 +181,9 @@ mod tests {
 
         let agents = j["agents"].as_array().expect("agents array");
         assert!(
-            agents.iter().any(|a| a["agent_id"] == "00000000-0000-0000-0000-0000000000aa"),
+            agents
+                .iter()
+                .any(|a| a["agent_id"] == "00000000-0000-0000-0000-0000000000aa"),
             "expected agent row: {agents:?}"
         );
     }
@@ -197,4 +201,3 @@ mod tests {
         assert_eq!(super::sample_percentile(v2, 0.5), 6);
     }
 }
-

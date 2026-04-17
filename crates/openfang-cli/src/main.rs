@@ -6663,8 +6663,9 @@ fn cmd_security_verify() {
 }
 
 fn cmd_memory_graph_export(agent: &str, output: Option<&std::path::Path>) {
-    match openfang_runtime::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(agent)
-    {
+    match openfang_runtime::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(
+        agent,
+    ) {
         Ok(v) => {
             let s = serde_json::to_string_pretty(&v).unwrap_or_default();
             if let Some(p) = output {

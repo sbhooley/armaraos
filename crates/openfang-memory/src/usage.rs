@@ -266,6 +266,28 @@ impl UsageStore {
         Ok(())
     }
 
+    #[cfg(test)]
+    /// Test helper: read persisted `counterfactual_json` for the latest adaptive eco row.
+    pub fn test_last_adaptive_eco_counterfactual_json(
+        &self,
+        agent_id: AgentId,
+    ) -> OpenFangResult<Option<String>> {
+        use rusqlite::OptionalExtension;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let v = conn
+            .query_row(
+                "SELECT counterfactual_json FROM adaptive_eco_events WHERE agent_id = ?1 ORDER BY timestamp DESC LIMIT 1",
+                rusqlite::params![agent_id.0.to_string()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(v.flatten())
+    }
+
     /// Aggregate adaptive eco events for dashboards.
     pub fn query_adaptive_eco_summary(
         &self,
@@ -348,16 +370,16 @@ impl UsageStore {
             .map(|d| format!("{d}d"))
             .unwrap_or_else(|| "all".to_string());
 
-        let adaptive_eco_events: u64 = conn
-            .query_row(
+        let adaptive_eco_events: u64 =
+            conn.query_row(
                 &format!("SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}"),
                 [],
                 |row| row.get::<_, i64>(0),
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
 
-        let shadow_mismatch_turns: u64 = conn
-            .query_row(
+        let shadow_mismatch_turns: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
                      AND shadow_only = 1 AND recommended_mode != effective_mode"
@@ -367,8 +389,8 @@ impl UsageStore {
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
 
-        let circuit_breaker_trips: u64 = conn
-            .query_row(
+        let circuit_breaker_trips: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
                      AND circuit_breaker_tripped = 1"
@@ -378,8 +400,8 @@ impl UsageStore {
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
 
-        let hysteresis_blocks: u64 = conn
-            .query_row(
+        let hysteresis_blocks: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM adaptive_eco_events WHERE {time_filter}
                      AND hysteresis_blocked = 1"
@@ -389,8 +411,8 @@ impl UsageStore {
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
 
-        let eco_compression_turns: u64 = conn
-            .query_row(
+        let eco_compression_turns: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM eco_compression_events WHERE {time_filter}
                      AND savings_pct > 0"
@@ -431,8 +453,8 @@ impl UsageStore {
             0.0
         };
 
-        let effective_mode_flip_turns: u64 = conn
-            .query_row(
+        let effective_mode_flip_turns: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COUNT(*) FROM (
                         SELECT
@@ -449,8 +471,8 @@ impl UsageStore {
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
 
-        let effective_mode_transition_slots: u64 = conn
-            .query_row(
+        let effective_mode_transition_slots: u64 =
+            conn.query_row(
                 &format!(
                     "SELECT COALESCE(SUM(cnt - 1), 0) FROM (
                         SELECT COUNT(*) AS cnt FROM adaptive_eco_events
@@ -979,12 +1001,12 @@ impl UsageStore {
             .map(|(agent_id, modes)| CompressionAgentSummary { agent_id, modes })
             .collect();
 
-        let (cache_read_tokens, estimated_cache_cost_saved_usd, weighted_input_rate_sum, weighted_rate_tokens): (
-            u64,
-            f64,
-            f64,
-            u64,
-        ) = {
+        let (
+            cache_read_tokens,
+            estimated_cache_cost_saved_usd,
+            weighted_input_rate_sum,
+            weighted_rate_tokens,
+        ): (u64, f64, f64, u64) = {
             let (usage_sql, usage_params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 match window_days {
                     Some(days) => (
@@ -1111,6 +1133,7 @@ fn cache_discount_factor(model: &str) -> f64 {
 mod tests {
     use super::*;
     use crate::pool::open_in_memory_pool;
+    use openfang_types::adaptive_eco::EcoCounterfactualReceipt;
     use openfang_types::config::MemoryConfig;
 
     fn setup() -> UsageStore {
@@ -1439,6 +1462,56 @@ mod tests {
         assert_eq!(s.events, 1);
         assert_eq!(s.shadow_mismatch_turns, 1);
         assert_eq!(s.hysteresis_blocks, 1);
+    }
+
+    #[test]
+    fn test_adaptive_eco_counterfactual_json_roundtrip() {
+        let store = setup();
+        let aid = AgentId::new();
+        let cf = EcoCounterfactualReceipt {
+            applied_mode: "balanced".to_string(),
+            original_tokens_est: 100,
+            applied_compressed_tokens_est: 72,
+            vs_off_tokens_saved: 12,
+            vs_off_savings_pct: 12,
+            recommended_mode: Some("aggressive".to_string()),
+            recommended_compressed_tokens_est: Some(60),
+            tokens_saved_delta_recommended_minus_applied: Some(12),
+            balanced_compressed_tokens_est: Some(70),
+            aggressive_extra_tokens_saved_vs_balanced: Some(10),
+        };
+        store
+            .record_adaptive_eco(&AdaptiveEcoUsageRecord {
+                agent_id: aid,
+                effective_mode: "balanced".to_string(),
+                recommended_mode: "aggressive".to_string(),
+                base_mode_before_circuit: None,
+                circuit_breaker_tripped: false,
+                hysteresis_blocked: false,
+                shadow_only: true,
+                enforce: false,
+                provider: "openrouter".to_string(),
+                model: "x".to_string(),
+                cache_capability: "routed".to_string(),
+                input_price_per_million: Some(1.5),
+                reason_codes: vec!["adaptive_eco:v1".to_string()],
+                semantic_preservation_score: Some(0.9),
+                adaptive_confidence: Some(0.66),
+                counterfactual: Some(cf.clone()),
+            })
+            .unwrap();
+        let json = store
+            .test_last_adaptive_eco_counterfactual_json(aid)
+            .unwrap()
+            .expect("counterfactual_json persisted");
+        let back: EcoCounterfactualReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.applied_mode, cf.applied_mode);
+        assert_eq!(back.vs_off_tokens_saved, cf.vs_off_tokens_saved);
+        assert_eq!(back.recommended_mode, cf.recommended_mode);
+        assert_eq!(
+            back.tokens_saved_delta_recommended_minus_applied,
+            cf.tokens_saved_delta_recommended_minus_applied
+        );
     }
 
     #[test]

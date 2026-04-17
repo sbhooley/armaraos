@@ -321,7 +321,9 @@ impl LlmDriver for AnthropicDriver {
             let response = convert_response(api_response);
 
             // Log prompt caching statistics when caching is active
-            if response.usage.cache_creation_input_tokens > 0 || response.usage.cache_read_input_tokens > 0 {
+            if response.usage.cache_creation_input_tokens > 0
+                || response.usage.cache_read_input_tokens > 0
+            {
                 debug!(
                     cache_write = response.usage.cache_creation_input_tokens,
                     cache_read = response.usage.cache_read_input_tokens,
@@ -483,10 +485,14 @@ impl LlmDriver for AnthropicDriver {
                             if let Some(it) = json["message"]["usage"]["input_tokens"].as_u64() {
                                 usage.input_tokens = it;
                             }
-                            if let Some(ct) = json["message"]["usage"]["cache_creation_input_tokens"].as_u64() {
+                            if let Some(ct) =
+                                json["message"]["usage"]["cache_creation_input_tokens"].as_u64()
+                            {
                                 usage.cache_creation_input_tokens = ct;
                             }
-                            if let Some(rt) = json["message"]["usage"]["cache_read_input_tokens"].as_u64() {
+                            if let Some(rt) =
+                                json["message"]["usage"]["cache_read_input_tokens"].as_u64()
+                            {
                                 usage.cache_read_input_tokens = rt;
                             }
                         }

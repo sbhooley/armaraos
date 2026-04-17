@@ -417,7 +417,9 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                     .clone()
                     .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
                     .ok_or_else(|| {
-                        LlmError::MissingApiKey("Set OPENROUTER_API_KEY environment variable".to_string())
+                        LlmError::MissingApiKey(
+                            "Set OPENROUTER_API_KEY environment variable".to_string(),
+                        )
                     })?;
 
                 let base_url = config

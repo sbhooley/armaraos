@@ -4074,8 +4074,13 @@ impl KernelConfig {
         } else if self.adaptive_eco.provider_prompt_cache_ttl_secs > 86_400 * 7 {
             self.adaptive_eco.provider_prompt_cache_ttl_secs = 86_400 * 7;
         }
-        if self.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache > 256 {
-            self.adaptive_eco.circuit_breaker_extra_window_when_prompt_cache = 256;
+        if self
+            .adaptive_eco
+            .circuit_breaker_extra_window_when_prompt_cache
+            > 256
+        {
+            self.adaptive_eco
+                .circuit_breaker_extra_window_when_prompt_cache = 256;
         }
     }
 }

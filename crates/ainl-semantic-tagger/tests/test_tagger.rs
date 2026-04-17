@@ -11,8 +11,12 @@ fn tag_turn_covers_preferences_tools_and_topics() {
     );
     let canonical: Vec<String> = tags.iter().map(|t| t.to_canonical_string()).collect();
     assert!(canonical.iter().any(|c| c == PREFERENCE_BREVITY));
-    assert!(tags.iter().any(|t| t.namespace == TagNamespace::Topic && t.value == "rust"));
-    assert!(tags.iter().any(|t| t.namespace == TagNamespace::Tool && t.value == "file_read"));
+    assert!(tags
+        .iter()
+        .any(|t| t.namespace == TagNamespace::Topic && t.value == "rust"));
+    assert!(tags
+        .iter()
+        .any(|t| t.namespace == TagNamespace::Tool && t.value == "file_read"));
 }
 
 #[test]

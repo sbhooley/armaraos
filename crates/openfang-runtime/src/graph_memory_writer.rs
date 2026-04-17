@@ -16,9 +16,9 @@
 
 #[cfg(feature = "ainl-extractor")]
 use ainl_graph_extractor::GraphExtractorTask;
+use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
-use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -244,11 +244,8 @@ impl GraphMemoryWriter {
     ) {
         let res = {
             let inner = self.inner.lock().await;
-            let mut node = AinlMemoryNode::new_procedural_tools(
-                name.to_string(),
-                tool_sequence,
-                confidence,
-            );
+            let mut node =
+                AinlMemoryNode::new_procedural_tools(name.to_string(), tool_sequence, confidence);
             node.agent_id = self.agent_id.clone();
             if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
                 procedural.trace_id = trace_id;
@@ -413,7 +410,10 @@ impl GraphMemoryWriter {
             let inner = self.inner.lock().await;
             let store = inner.sqlite_store();
             let had_persona_before_pass = inner
-                .recall_by_type(ainl_memory::AinlNodeKind::Persona, PERSONA_PRIOR_LOOKBACK_SECS)
+                .recall_by_type(
+                    ainl_memory::AinlNodeKind::Persona,
+                    PERSONA_PRIOR_LOOKBACK_SECS,
+                )
                 .unwrap_or_default()
                 .iter()
                 .any(|n| n.agent_id == self.agent_id);
@@ -520,20 +520,18 @@ mod tests {
                 .expect("seed baseline persona so evolution can persist on cold signal passes");
         }
 
-        assert!(
-            writer
-                .record_turn(
-                    vec!["shell_exec".into()],
-                    None,
-                    Some(json!({ "outcome": "success" })),
-                    &[],
-                    None,
-                    None,
-                    None,
-                )
-                .await
-                .is_some()
-        );
+        assert!(writer
+            .record_turn(
+                vec!["shell_exec".into()],
+                None,
+                Some(json!({ "outcome": "success" })),
+                &[],
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_some());
         let evolve_report = writer.run_persona_evolution_pass().await;
         assert!(
             !evolve_report.has_errors(),
@@ -644,20 +642,18 @@ mod tests {
             on_write: None,
         };
 
-        assert!(
-            writer
-                .record_turn(
-                    vec!["web_search".to_string(), "file_read".to_string()],
-                    None,
-                    None,
-                    &[],
-                    None,
-                    None,
-                    None,
-                )
-                .await
-                .is_some()
-        );
+        assert!(writer
+            .record_turn(
+                vec!["web_search".to_string(), "file_read".to_string()],
+                None,
+                None,
+                &[],
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_some());
 
         let recent = writer.recall_recent(60).await;
         assert_eq!(recent.len(), 1);
@@ -705,12 +701,18 @@ mod tests {
             on_write: None,
         };
         let trace = json!({"agent_id": "export-agent", "trace_id": "tr-abc"});
-        assert!(
-            writer
-                .record_turn(vec!["shell_exec".into()], None, Some(trace.clone()), &[], None, None, None)
-                .await
-                .is_some()
-        );
+        assert!(writer
+            .record_turn(
+                vec!["shell_exec".into()],
+                None,
+                Some(trace.clone()),
+                &[],
+                None,
+                None,
+                None
+            )
+            .await
+            .is_some());
         let v = writer.export_graph_json().await.expect("export");
         assert_eq!(v["agent_id"], "export-agent");
         assert_eq!(v["schema_version"], "1.0");

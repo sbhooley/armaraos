@@ -246,7 +246,8 @@ impl TokenUsage {
     /// Cache hit rate percentage (0-100).
     /// Returns the percentage of input tokens that were read from cache.
     pub fn cache_hit_rate(&self) -> u8 {
-        let total_input = self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens;
+        let total_input =
+            self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens;
         if total_input == 0 {
             return 0;
         }

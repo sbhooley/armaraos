@@ -35,15 +35,26 @@ fn with_env<T>(key: &str, val: Option<&str>, f: impl FnOnce() -> T) -> T {
 #[test]
 fn test_evolution_enabled_by_default() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let result = with_env("AINL_PERSONA_EVOLUTION", None, persona_turn_evolution_env_enabled);
-    assert!(result, "persona evolution must be on by default when env var is absent");
+    let result = with_env(
+        "AINL_PERSONA_EVOLUTION",
+        None,
+        persona_turn_evolution_env_enabled,
+    );
+    assert!(
+        result,
+        "persona evolution must be on by default when env var is absent"
+    );
 }
 
 /// Opt-out via AINL_PERSONA_EVOLUTION=0 must disable evolution at runtime.
 #[test]
 fn test_env_opt_out_zero_disables_evolution() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let result = with_env("AINL_PERSONA_EVOLUTION", Some("0"), persona_turn_evolution_env_enabled);
+    let result = with_env(
+        "AINL_PERSONA_EVOLUTION",
+        Some("0"),
+        persona_turn_evolution_env_enabled,
+    );
     assert!(!result, "AINL_PERSONA_EVOLUTION=0 should disable evolution");
 }
 
@@ -51,16 +62,30 @@ fn test_env_opt_out_zero_disables_evolution() {
 #[test]
 fn test_env_opt_out_false_string_disables_evolution() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let result = with_env("AINL_PERSONA_EVOLUTION", Some("false"), persona_turn_evolution_env_enabled);
-    assert!(!result, "AINL_PERSONA_EVOLUTION=false should disable evolution");
+    let result = with_env(
+        "AINL_PERSONA_EVOLUTION",
+        Some("false"),
+        persona_turn_evolution_env_enabled,
+    );
+    assert!(
+        !result,
+        "AINL_PERSONA_EVOLUTION=false should disable evolution"
+    );
 }
 
 /// An arbitrary non-falsy value (e.g. "1") must keep evolution enabled.
 #[test]
 fn test_env_truthy_value_keeps_evolution_enabled() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let result = with_env("AINL_PERSONA_EVOLUTION", Some("1"), persona_turn_evolution_env_enabled);
-    assert!(result, "AINL_PERSONA_EVOLUTION=1 should keep evolution enabled");
+    let result = with_env(
+        "AINL_PERSONA_EVOLUTION",
+        Some("1"),
+        persona_turn_evolution_env_enabled,
+    );
+    assert!(
+        result,
+        "AINL_PERSONA_EVOLUTION=1 should keep evolution enabled"
+    );
 }
 
 /// evolve_from_turn with a mismatched agent_id must return Err and not panic.
@@ -88,8 +113,12 @@ async fn test_persona_evolution_nonfatal_on_agent_id_mismatch() {
         delegation_to: None,
     };
 
-    let result = PersonaEvolutionHook::evolve_from_turn(&writer, "WRONG-agent-mismatch", &turn).await;
-    assert!(result.is_err(), "agent_id mismatch should return Err; got Ok");
+    let result =
+        PersonaEvolutionHook::evolve_from_turn(&writer, "WRONG-agent-mismatch", &turn).await;
+    assert!(
+        result.is_err(),
+        "agent_id mismatch should return Err; got Ok"
+    );
 }
 
 /// TurnOutcome with no tool calls and no delegation must return Ok without panic.
@@ -103,10 +132,10 @@ async fn test_persona_evolution_noop_no_signals_no_panic() {
     } // lock released before await
 
     let agent_id = format!("noop-no-signals-{}", std::process::id());
-    let writer =
-        openfang_runtime::graph_memory_writer::GraphMemoryWriter::open(&agent_id).unwrap_or_else(
-            |_| panic!("GraphMemoryWriter::open failed — ensure writable home directory"),
-        );
+    let writer = openfang_runtime::graph_memory_writer::GraphMemoryWriter::open(&agent_id)
+        .unwrap_or_else(|_| {
+            panic!("GraphMemoryWriter::open failed — ensure writable home directory")
+        });
 
     let turn = TurnOutcome {
         tool_calls: vec![],
@@ -114,5 +143,8 @@ async fn test_persona_evolution_noop_no_signals_no_panic() {
     };
 
     let result = PersonaEvolutionHook::evolve_from_turn(&writer, &agent_id, &turn).await;
-    assert!(result.is_ok(), "empty turn should produce Ok, not {result:?}");
+    assert!(
+        result.is_ok(),
+        "empty turn should produce Ok, not {result:?}"
+    );
 }

@@ -157,11 +157,13 @@ pub enum StreamEvent {
         adaptive_confidence: Option<f32>,
         /// Optional counterfactual receipt (applied vs recommendation / baselines).
         counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
+        /// Effective eco mode after kernel policy (when adaptive metadata is present).
+        adaptive_eco_effective_mode: Option<String>,
+        adaptive_eco_recommended_mode: Option<String>,
+        adaptive_eco_reason_codes: Option<Vec<String>>,
     },
     /// Structured telemetry emitted when a turn is handled by the embedded ainl-runtime path.
-    AinlRuntimeTelemetry {
-        payload: serde_json::Value,
-    },
+    AinlRuntimeTelemetry { payload: serde_json::Value },
 }
 
 /// Trait for LLM drivers.

@@ -160,7 +160,10 @@ fn sanitize_agent_id(raw: &str) -> Result<String, String> {
 }
 
 fn graph_db_path(home_dir: &Path, agent_id: &str) -> PathBuf {
-    home_dir.join("agents").join(agent_id).join("ainl_memory.db")
+    home_dir
+        .join("agents")
+        .join(agent_id)
+        .join("ainl_memory.db")
 }
 
 fn governance_dir(home_dir: &Path, agent_id: &str) -> PathBuf {
@@ -200,7 +203,12 @@ fn sanitize_snapshot_id(raw: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
-fn append_audit(home_dir: &Path, agent_id: &str, action: &str, detail: Value) -> Result<(), String> {
+fn append_audit(
+    home_dir: &Path,
+    agent_id: &str,
+    action: &str,
+    detail: Value,
+) -> Result<(), String> {
     let dir = governance_dir(home_dir, agent_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("create governance dir: {e}"))?;
     let path = audit_log_path(home_dir, agent_id);
@@ -222,8 +230,9 @@ fn append_audit(home_dir: &Path, agent_id: &str, action: &str, detail: Value) ->
         .map_err(|e| format!("write audit log: {e}"))
 }
 
-static GRAPH_MEMORY_AGENT_LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
-    OnceLock::new();
+static GRAPH_MEMORY_AGENT_LOCKS: OnceLock<
+    std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = OnceLock::new();
 
 fn lock_map() -> &'static std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
     GRAPH_MEMORY_AGENT_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
@@ -386,38 +395,34 @@ fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
                 })),
             )
         }
-        AinlNodeType::Persona { persona } => {
-            (
-                format!("{} ({:.2})", persona.trait_name, persona.strength),
-                Some(persona.strength),
-                None,
-                None,
-                None,
-                Some(json!({
-                    "trait_name": persona.trait_name,
-                    "strength": persona.strength,
-                    "source": persona.source,
-                    "dominant_axes": persona.dominant_axes,
-                    "layer": persona.layer,
-                })),
-            )
-        }
-        AinlNodeType::RuntimeState { runtime_state } => {
-            (
-                format!(
-                    "Runtime state · turns {} · last extract {}",
-                    runtime_state.turn_count, runtime_state.last_extraction_at_turn
-                ),
-                None,
-                None,
-                None,
-                None,
-                Some(json!({
-                    "turn_count": runtime_state.turn_count,
-                    "last_extraction_at_turn": runtime_state.last_extraction_at_turn,
-                })),
-            )
-        }
+        AinlNodeType::Persona { persona } => (
+            format!("{} ({:.2})", persona.trait_name, persona.strength),
+            Some(persona.strength),
+            None,
+            None,
+            None,
+            Some(json!({
+                "trait_name": persona.trait_name,
+                "strength": persona.strength,
+                "source": persona.source,
+                "dominant_axes": persona.dominant_axes,
+                "layer": persona.layer,
+            })),
+        ),
+        AinlNodeType::RuntimeState { runtime_state } => (
+            format!(
+                "Runtime state · turns {} · last extract {}",
+                runtime_state.turn_count, runtime_state.last_extraction_at_turn
+            ),
+            None,
+            None,
+            None,
+            None,
+            Some(json!({
+                "turn_count": runtime_state.turn_count,
+                "last_extraction_at_turn": runtime_state.last_extraction_at_turn,
+            })),
+        ),
     }
 }
 
@@ -470,7 +475,8 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
         let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) else {
             continue;
         };
-        let (label, strength, vitals_gate, vitals_phase, vitals_trust, meta) = label_for_node(&node);
+        let (label, strength, vitals_gate, vitals_phase, vitals_trust, meta) =
+            label_for_node(&node);
         id_set.insert(id.clone());
         nodes_out.push(GraphMemoryNodeOut {
             id,
@@ -616,7 +622,12 @@ pub async fn post_graph_memory_snapshot(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let home = state.kernel.config.home_dir.clone();
     let src = graph_db_path(&home, &agent_id);
@@ -683,11 +694,21 @@ pub async fn post_graph_memory_rollback(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let snapshot_id = match sanitize_snapshot_id(&req.snapshot_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let home = state.kernel.config.home_dir.clone();
     let live_db = graph_db_path(&home, &agent_id);
@@ -721,9 +742,13 @@ pub async fn post_graph_memory_rollback(
         }
     };
     let tx_res: Result<(), String> = (|| {
-        conn.execute_batch("BEGIN IMMEDIATE;").map_err(|e| e.to_string())?;
-        conn.execute("ATTACH DATABASE ?1 AS snap", rusqlite::params![src.to_string_lossy().to_string()])
+        conn.execute_batch("BEGIN IMMEDIATE;")
             .map_err(|e| e.to_string())?;
+        conn.execute(
+            "ATTACH DATABASE ?1 AS snap",
+            rusqlite::params![src.to_string_lossy().to_string()],
+        )
+        .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM ainl_graph_edges", [])
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM ainl_graph_nodes", [])
@@ -763,7 +788,10 @@ pub async fn post_graph_memory_rollback(
         .ok()
         .map(|c| count_nodes_by_kind(&c))
         .unwrap_or_else(|| json!({}));
-    (StatusCode::OK, Json(json!({ "ok": true, "counts": counts })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "counts": counts })),
+    )
 }
 
 /// POST /api/graph-memory/reset
@@ -773,7 +801,12 @@ pub async fn post_graph_memory_reset(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let home = state.kernel.config.home_dir.clone();
     let db = graph_db_path(&home, &agent_id);
@@ -800,7 +833,8 @@ pub async fn post_graph_memory_reset(
         }
     };
     let tx_res: Result<(), String> = (|| {
-        conn.execute_batch("BEGIN IMMEDIATE;").map_err(|e| e.to_string())?;
+        conn.execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM ainl_graph_edges", [])
             .map_err(|e| e.to_string())?;
         conn.execute("DELETE FROM ainl_graph_nodes", [])
@@ -831,7 +865,12 @@ pub async fn post_graph_memory_delete_node(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let node_id = req.node_id.trim().to_string();
     if node_id.is_empty() {

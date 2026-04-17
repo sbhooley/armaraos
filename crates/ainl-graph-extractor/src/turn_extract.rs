@@ -110,9 +110,9 @@ mod tests {
         };
         let tags = extract_turn_semantic_tags_for_memory("Hello", None, &[], Some(&v));
         assert!(
-            tags.iter()
-                .any(|t| t.namespace == TagNamespace::Behavior
-                    && t.value == "vitals:reasoning:pass"),
+            tags.iter().any(
+                |t| t.namespace == TagNamespace::Behavior && t.value == "vitals:reasoning:pass"
+            ),
             "expected vitals:reasoning:pass tag"
         );
         assert!(

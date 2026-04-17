@@ -64,9 +64,9 @@ pub use engine::{
     EMIT_TO_EDGE,
 };
 pub use graph_cell::SqliteStoreRef;
-pub use hooks::{NoOpHooks, TurnHooks};
 #[cfg(feature = "async")]
 pub use hooks::{NoOpAsyncHooks, TurnHooksAsync};
+pub use hooks::{NoOpHooks, TurnHooks};
 pub use runtime::AinlRuntime;
 
 use ainl_memory::{GraphMemory, GraphStore};

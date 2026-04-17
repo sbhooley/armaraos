@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Regenerate desktop bundle icons and embedded web assets from public/assets/armaraos-logo.png.
 
-Letterboxes the source PNG onto a transparent square, then resizes for each bundle asset.
+Scales the source PNG to **cover** a solid black square (center-crop), then resizes for each bundle asset.
+Using “cover” avoids a visible letterbox frame (scale-to-fit left thick black bars for this wide logo).
+Transparent pixels in the source become black. The Dock/Finder “silver” rim around the tile is system chrome, not this file.
 Run from repo root: python3 crates/openfang-desktop/scripts/regen_icons_from_logo.py
 """
 from __future__ import annotations
@@ -18,18 +20,33 @@ ICONS = REPO / "crates" / "openfang-desktop" / "icons"
 LOGO = REPO / "public" / "assets" / "armaraos-logo.png"
 
 
-def fit_transparent_square(im: Image.Image, side: int = 1024) -> Image.Image:
-    """Scale `im` uniformly to fit inside `side`×`side`, centered on a transparent square."""
+def trim_to_content(im: Image.Image, pad: int = 2) -> Image.Image:
+    """Crop to the bounding box of non-empty pixels (alpha), with optional padding."""
+    im = im.convert("RGBA")
+    bbox = im.getbbox()
+    if not bbox:
+        return im
+    x0, y0, x1, y1 = bbox
+    x0 = max(0, x0 - pad)
+    y0 = max(0, y0 - pad)
+    x1 = min(im.width, x1 + pad)
+    y1 = min(im.height, y1 + pad)
+    return im.crop((x0, y0, x1, y1))
+
+
+def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
+    """Scale `im` uniformly to cover `side`×`side`, center-crop, on an opaque black square."""
     im = im.convert("RGBA")
     w, h = im.size
-    scale = min(side / w, side / h)
+    scale = max(side / w, side / h)
     nw = max(1, int(round(w * scale)))
     nh = max(1, int(round(h * scale)))
     resized = im.resize((nw, nh), Image.Resampling.LANCZOS)
-    out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    x = (side - nw) // 2
-    y = (side - nh) // 2
-    out.paste(resized, (x, y), resized)
+    left = (nw - side) // 2
+    top = (nh - side) // 2
+    cropped = resized.crop((left, top, left + side, top + side))
+    out = Image.new("RGBA", (side, side), (0, 0, 0, 255))
+    out.paste(cropped, (0, 0), cropped)
     return out
 
 
@@ -39,7 +56,7 @@ def main() -> int:
         return 1
 
     with Image.open(LOGO) as raw:
-        src = fit_transparent_square(raw, 1024)
+        src = cover_on_black_square(trim_to_content(raw), 1024)
 
     try:
         for path in sorted(ICONS.rglob("*.png")):

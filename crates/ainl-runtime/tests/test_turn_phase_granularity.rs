@@ -37,7 +37,8 @@ fn test_pattern_persistence_failure_maps_to_correct_turn_phase() {
     store.write_node(&ep).unwrap();
 
     let mut rt = AinlRuntime::new(rt_cfg(ag), store);
-    rt.test_extractor_mut().test_inject_pattern_error_once("injected pattern persistence");
+    rt.test_extractor_mut()
+        .test_inject_pattern_error_once("injected pattern persistence");
 
     let out = rt
         .run_turn(TurnInput {
@@ -79,7 +80,8 @@ fn test_persona_evolution_failure_maps_to_correct_turn_phase() {
     store.write_node(&ep).unwrap();
 
     let mut rt = AinlRuntime::new(rt_cfg(ag), store);
-    rt.test_extractor_mut().test_inject_persona_error_once("injected persona evolution");
+    rt.test_extractor_mut()
+        .test_inject_persona_error_once("injected persona evolution");
 
     let out = rt
         .run_turn(TurnInput {
@@ -121,8 +123,10 @@ fn test_extract_and_persona_both_fail_two_warnings_in_outcome() {
     store.write_node(&ep).unwrap();
 
     let mut rt = AinlRuntime::new(rt_cfg(ag), store);
-    rt.test_extractor_mut().test_inject_extract_error_once("injected extract");
-    rt.test_extractor_mut().test_inject_persona_error_once("injected persona");
+    rt.test_extractor_mut()
+        .test_inject_extract_error_once("injected extract");
+    rt.test_extractor_mut()
+        .test_inject_persona_error_once("injected persona");
 
     let out = rt
         .run_turn(TurnInput {

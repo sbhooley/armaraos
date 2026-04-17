@@ -5323,6 +5323,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
                 <div class="text-xs text-dim" style="margin-top:10px;line-height:1.6" x-show="!adaptiveEcoLoading && adaptiveEcoReplay">
                   <span>Replay — mismatch rate <strong x-text="fmtMismatchRate(adaptiveEcoReplay.shadow_mismatch_rate)"></strong></span>
+                  <span> · mode flip rate <strong x-text="fmtMismatchRate(adaptiveEcoReplay.effective_mode_flip_rate)"></strong></span>
                   <span> · eco compression turns <span x-text="adaptiveEcoReplay.eco_compression_turns ?? 0"></span></span>
                   <span> · semantic p50 / p95 / mean </span>
                   <span x-text="fmtSemantic(adaptiveEcoReplay.compression_semantic_p50)"></span>
@@ -5331,6 +5332,20 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <span> / </span>
                   <span x-text="fmtSemantic(adaptiveEcoReplay.compression_semantic_mean)"></span>
                 </div>
+                <div class="text-xs text-dim" style="margin-top:8px;line-height:1.6" x-show="!adaptiveEcoLoading && adaptiveEcoReplay && (adaptiveEcoReplay.adaptive_confidence_samples > 0)">
+                  <span>Adaptive confidence p50 / p95 / mean </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.adaptive_confidence_p50)"></span>
+                  <span> / </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.adaptive_confidence_p95)"></span>
+                  <span> / </span>
+                  <span x-text="fmtSemantic(adaptiveEcoReplay.adaptive_confidence_mean)"></span>
+                  <span> · samples </span><span x-text="adaptiveEcoReplay.adaptive_confidence_samples ?? 0"></span>
+                  <span> · buckets (low/mid/high) </span>
+                  <span x-text="(adaptiveEcoReplay.adaptive_confidence_bucket_low ?? 0) + '/' + (adaptiveEcoReplay.adaptive_confidence_bucket_mid ?? 0) + '/' + (adaptiveEcoReplay.adaptive_confidence_bucket_high ?? 0)"></span>
+                </div>
+                <p class="text-xs text-dim" style="margin-top:8px;line-height:1.6;margin-bottom:0" x-show="!adaptiveEcoLoading && (adaptiveEcoSummary || adaptiveEcoReplay)">
+                  Per-turn <strong>eco_counterfactual</strong> receipts and <strong>adaptive_eco_reason_codes</strong> are attached to chat responses (HTTP/WS) for shadow vs applied deltas and policy audit.
+                </p>
                 <div class="text-xs text-dim" style="margin-top:8px" x-show="!adaptiveEcoLoading && !adaptiveEcoSummary && !adaptiveEcoReplay">Adaptive eco endpoints unavailable or returned no data.</div>
               </div>
             </div>

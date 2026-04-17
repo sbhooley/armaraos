@@ -109,13 +109,7 @@ fn map_normalized_phrase(phrase: &str) -> SemanticTag {
     let slug = phrase
         .to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect::<String>()
         .split('_')
         .filter(|s| !s.is_empty())

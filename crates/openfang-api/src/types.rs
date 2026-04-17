@@ -89,6 +89,15 @@ pub struct MessageResponse {
     /// Optional counterfactual compression receipt (applied vs recommendation / baselines).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
+    /// Effective eco mode after kernel adaptive policy (when present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_eco_effective_mode: Option<String>,
+    /// Resolver recommendation (may differ in shadow mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_eco_recommended_mode: Option<String>,
+    /// Machine-readable adaptive policy reason codes for this turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adaptive_eco_reason_codes: Option<Vec<String>>,
     /// Tool calls from this turn (HTTP clients without WebSocket tool events).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolTurnRecord>,

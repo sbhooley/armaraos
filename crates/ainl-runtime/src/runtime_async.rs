@@ -17,15 +17,15 @@ use ainl_memory::{
 };
 use uuid::Uuid;
 
-use crate::adapters::GraphPatchAdapter;
-use crate::engine::{
-    AinlRuntimeError, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
-    TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning, EMIT_TO_EDGE,
-};
 use super::{
     compile_persona_from_nodes, emit_target_name, normalize_tools_for_episode,
     persona_snapshot_if_evolved, procedural_label, record_turn_episode,
     try_export_graph_json_armaraos,
+};
+use crate::adapters::GraphPatchAdapter;
+use crate::engine::{
+    AinlRuntimeError, MemoryContext, PatchDispatchContext, PatchDispatchResult, PatchSkipReason,
+    TurnInput, TurnOutcome, TurnPhase, TurnResult, TurnStatus, TurnWarning, EMIT_TO_EDGE,
 };
 
 async fn graph_spawn<T, F>(arc: Arc<Mutex<GraphMemory>>, f: F) -> Result<T, AinlRuntimeError>
@@ -49,7 +49,10 @@ impl super::AinlRuntime {
     /// does not switch that inner lock to `tokio::sync::Mutex`.
     ///
     /// Requires the `async` crate feature and a Tokio runtime (multi-thread recommended).
-    pub async fn run_turn_async(&mut self, input: TurnInput) -> Result<TurnOutcome, AinlRuntimeError> {
+    pub async fn run_turn_async(
+        &mut self,
+        input: TurnInput,
+    ) -> Result<TurnOutcome, AinlRuntimeError> {
         let depth = self.current_depth.fetch_add(1, Ordering::SeqCst);
         let cd = Arc::clone(&self.current_depth);
         let _depth_guard = scopeguard::guard((), move |()| {
@@ -127,11 +130,7 @@ impl super::AinlRuntime {
         } else {
             let nodes = graph_spawn(Arc::clone(&arc), {
                 let agent_id = agent_id.clone();
-                move |m| {
-                    m.sqlite_store()
-                        .query(&agent_id)
-                        .persona_nodes()
-                }
+                move |m| m.sqlite_store().query(&agent_id).persona_nodes()
             })
             .await?;
             let compiled = compile_persona_from_nodes(&nodes).map_err(AinlRuntimeError::from)?;
@@ -183,8 +182,13 @@ impl super::AinlRuntime {
 
         let t_patches = Instant::now();
         let patch_dispatch_results = if self.config.enable_graph_memory {
-            self.dispatch_patches_collect_async(&memory_context.active_patches, &input.frame, &arc, &mut turn_warnings)
-                .await?
+            self.dispatch_patches_collect_async(
+                &memory_context.active_patches,
+                &input.frame,
+                &arc,
+                &mut turn_warnings,
+            )
+            .await?
         } else {
             Vec::new()
         };

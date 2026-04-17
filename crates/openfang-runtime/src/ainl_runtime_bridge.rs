@@ -117,10 +117,7 @@ pub fn log_mapped_end_turn_fields(agent_name: &str, mapped: &TurnOutcome) {
 }
 
 /// Maps **ainl-runtime** output into [`TurnOutcome`] and logs anything we do not forward to the dashboard yet.
-pub fn map_ainl_turn_outcome(
-    ainl: &AinlTurnOutcome,
-    turn_ctx: &TurnContext,
-) -> TurnOutcome {
+pub fn map_ainl_turn_outcome(ainl: &AinlTurnOutcome, turn_ctx: &TurnContext) -> TurnOutcome {
     let r = ainl.result();
     let output = build_output_text(r);
     let mut tool_calls = turn_ctx.tools_invoked.clone();
@@ -161,7 +158,10 @@ fn build_output_text(r: &AinlTurnResult) -> String {
     )
 }
 
-fn collect_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, r: &AinlTurnResult) -> AinlBridgeTelemetry {
+fn collect_ainl_bridge_telemetry(
+    ainl: &AinlTurnOutcome,
+    r: &AinlTurnResult,
+) -> AinlBridgeTelemetry {
     let patch_dispatch_adapter_output_count = r
         .patch_dispatch_results
         .iter()
@@ -256,7 +256,9 @@ impl AinlRuntimeBridge {
     /// Opens **ainl-runtime** on the same SQLite file as `graph_writer` (second connection).
     /// Delegation cap defaults to `8`; prefer [`Self::with_delegation_cap`] from the agent loop so it
     /// matches `[runtime_limits].max_agent_call_depth`.
-    pub fn new(graph_writer: Arc<Mutex<GraphMemoryWriter>>) -> Result<Self, AinlRuntimeBridgeInitError> {
+    pub fn new(
+        graph_writer: Arc<Mutex<GraphMemoryWriter>>,
+    ) -> Result<Self, AinlRuntimeBridgeInitError> {
         Self::with_delegation_cap(graph_writer, 8)
     }
 
@@ -275,8 +277,8 @@ impl AinlRuntimeBridge {
             .to_string();
         let path = GraphMemoryWriter::sqlite_database_path_for_agent(&agent_id)
             .map_err(AinlRuntimeBridgeInitError::GraphPathResolve)?;
-        let store =
-            SqliteGraphStore::open(&path).map_err(|e| AinlRuntimeBridgeInitError::SqliteOpen(e.to_string()))?;
+        let store = SqliteGraphStore::open(&path)
+            .map_err(|e| AinlRuntimeBridgeInitError::SqliteOpen(e.to_string()))?;
         let max_delegation_depth = max_delegation_depth.max(1);
         let cfg = RuntimeConfig {
             agent_id: agent_id.clone(),
@@ -298,11 +300,7 @@ impl AinlRuntimeBridge {
         })
     }
 
-    fn build_turn_input(
-        _agent_id: &str,
-        user_message: &str,
-        ctx: &TurnContext,
-    ) -> TurnInput {
+    fn build_turn_input(_agent_id: &str, user_message: &str, ctx: &TurnContext) -> TurnInput {
         let mut frame = ctx.frame.clone();
         // Inject cognitive vitals as AINL frame keys so programs can branch on them
         // via `core.GET result "_vitals_gate"` without any syntax changes.
@@ -412,7 +410,11 @@ mod tests {
         let writer = GraphMemoryWriter::open(&agent).expect("open graph memory");
         let bridge = AinlRuntimeBridge::new(Arc::new(Mutex::new(writer))).expect("bridge");
         let out = bridge
-            .run_turn(&agent, "evolution write guard check", TurnContext::default())
+            .run_turn(
+                &agent,
+                "evolution write guard check",
+                TurnContext::default(),
+            )
             .expect("run_turn");
         assert!(
             !out.output.trim().is_empty(),

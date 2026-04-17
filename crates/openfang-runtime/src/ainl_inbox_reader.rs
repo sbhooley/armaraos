@@ -65,10 +65,7 @@ fn skip_semantic_for_tagger_policy(
     if cfg_tagger {
         return false;
     }
-    source_features
-        .iter()
-        .any(|s| s == REQUIRES_AINL_TAGGER)
-        && !tags.is_empty()
+    source_features.iter().any(|s| s == REQUIRES_AINL_TAGGER) && !tags.is_empty()
 }
 
 fn value_as_str(v: Option<&Value>) -> Option<&str> {
@@ -129,7 +126,10 @@ fn convert_one_inbox_node(
         .unwrap_or(writer_agent_id)
         .to_string();
     let label = value_as_str(obj.get("label")).unwrap_or("").to_string();
-    let payload = obj.get("payload").cloned().unwrap_or(Value::Object(Map::new()));
+    let payload = obj
+        .get("payload")
+        .cloned()
+        .unwrap_or(Value::Object(Map::new()));
     let tags = value_string_vec(obj.get("tags"));
     let created_at = value_as_f32(obj.get("created_at"), 0.0);
 
@@ -140,8 +140,11 @@ fn convert_one_inbox_node(
 
     let mut node = match node_type.as_str() {
         "semantic" => {
-            if skip_semantic_for_tagger_policy(source_features, &tags, cfg!(feature = "ainl-tagger"))
-            {
+            if skip_semantic_for_tagger_policy(
+                source_features,
+                &tags,
+                cfg!(feature = "ainl-tagger"),
+            ) {
                 debug!(
                     agent_id = %writer_agent_id,
                     inbox_id = %id_str,
@@ -173,8 +176,7 @@ fn convert_one_inbox_node(
         }
         "episodic" | "episode" => {
             let turn_id = parse_uuid_or_stable(map.get("turn_id"), id_str);
-            let timestamp = value_as_i64(map.get("timestamp"))
-                .unwrap_or(created_at as i64);
+            let timestamp = value_as_i64(map.get("timestamp")).unwrap_or(created_at as i64);
             let tool_calls = value_string_vec(map.get("tool_calls").or_else(|| map.get("tools")));
             let delegation_to = map
                 .get("delegation_to")
@@ -191,10 +193,8 @@ fn convert_one_inbox_node(
             n.id = parse_uuid_or_stable(Some(&Value::String(id_str.to_string())), id_str);
             if let AinlNodeType::Episode { ref mut episodic } = n.node_type {
                 episodic.tags.clone_from(&tags);
-                episodic.turn_index = map
-                    .get("turn_index")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
+                episodic.turn_index =
+                    map.get("turn_index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 episodic.user_message_tokens = map
                     .get("user_message_tokens")
                     .and_then(|v| v.as_u64())
@@ -205,7 +205,10 @@ fn convert_one_inbox_node(
                     .unwrap_or(0) as u32;
                 episodic.persona_signals_emitted =
                     value_string_vec(map.get("persona_signals_emitted"));
-                episodic.flagged = map.get("flagged").and_then(|v| v.as_bool()).unwrap_or(false);
+                episodic.flagged = map
+                    .get("flagged")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 episodic.conversation_id = map
                     .get("conversation_id")
                     .and_then(|v| v.as_str())
@@ -249,7 +252,8 @@ fn convert_one_inbox_node(
                 .to_string();
             let tool_sequence = value_string_vec(map.get("tool_sequence"));
             let confidence = value_as_f32(map.get("confidence"), 0.75);
-            let mut n = AinlMemoryNode::new_procedural_tools(pattern_name, tool_sequence, confidence);
+            let mut n =
+                AinlMemoryNode::new_procedural_tools(pattern_name, tool_sequence, confidence);
             if let AinlNodeType::Procedural { ref mut procedural } = n.node_type {
                 procedural.compiled_graph = map
                     .get("compiled_graph")
@@ -283,11 +287,7 @@ fn convert_one_inbox_node(
         }
         "persona" => {
             let trait_name = value_as_str(map.get("trait_name"))
-                .unwrap_or_else(|| {
-                    label
-                        .strip_prefix("persona:")
-                        .unwrap_or(label.as_str())
-                })
+                .unwrap_or_else(|| label.strip_prefix("persona:").unwrap_or(label.as_str()))
                 .to_string();
             let strength = value_as_f32(map.get("strength"), 0.5);
             let learned_from: Vec<Uuid> = map
@@ -326,16 +326,10 @@ fn convert_one_inbox_node(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1)
                 .max(1) as u32;
-            let retired = map
-                .get("retired_at")
-                .map(|v| !v.is_null())
-                .unwrap_or(false);
+            let retired = map.get("retired_at").map(|v| !v.is_null()).unwrap_or(false);
             let source_episode_ids = value_string_vec(map.get("source_episode_ids"));
-            let mut n = AinlMemoryNode::new_procedural_tools(
-                pattern_name,
-                source_episode_ids,
-                0.75,
-            );
+            let mut n =
+                AinlMemoryNode::new_procedural_tools(pattern_name, source_episode_ids, 0.75);
             if let AinlNodeType::Procedural { ref mut procedural } = n.node_type {
                 procedural.patch_version = patch_version;
                 procedural.label = label_name;
@@ -373,10 +367,10 @@ fn convert_one_inbox_node(
 
 fn convert_inbox_edge(raw: &Value) -> Option<SnapshotEdge> {
     let obj = raw.as_object()?;
-    let src = value_as_str(obj.get("src"))
-        .or_else(|| obj.get("source_id").and_then(|v| v.as_str()))?;
-    let dst = value_as_str(obj.get("dst"))
-        .or_else(|| obj.get("target_id").and_then(|v| v.as_str()))?;
+    let src =
+        value_as_str(obj.get("src")).or_else(|| obj.get("source_id").and_then(|v| v.as_str()))?;
+    let dst =
+        value_as_str(obj.get("dst")).or_else(|| obj.get("target_id").and_then(|v| v.as_str()))?;
     let edge_type = value_as_str(obj.get("edge_type"))
         .or_else(|| obj.get("label").and_then(|v| v.as_str()))
         .unwrap_or("references");
@@ -393,7 +387,9 @@ fn convert_inbox_edge(raw: &Value) -> Option<SnapshotEdge> {
 }
 
 async fn atomic_write_inbox(path: &Path, value: &Value) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "inbox path has no parent".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "inbox path has no parent".to_string())?;
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(|e| format!("create_dir_all inbox parent: {e}"))?;
@@ -419,8 +415,7 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<(), String> {
     if bytes.is_empty() || bytes.iter().all(|u| u.is_ascii_whitespace()) {
         return Ok(());
     }
-    let root: Value =
-        serde_json::from_slice(&bytes).map_err(|e| format!("inbox json: {e}"))?;
+    let root: Value = serde_json::from_slice(&bytes).map_err(|e| format!("inbox json: {e}"))?;
     let source_features = parse_source_features(&root);
     let nodes_raw = root
         .get("nodes")
@@ -496,12 +491,16 @@ mod tests {
 
     const AGENT: &str = "inbox-vitals-test";
 
-    fn open_writer_in_mem() -> (crate::graph_memory_writer::GraphMemoryWriter, tempfile::TempDir) {
+    fn open_writer_in_mem() -> (
+        crate::graph_memory_writer::GraphMemoryWriter,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = dir.path().join("ainl_memory.db");
         let memory = GraphMemory::new(&db).expect("GraphMemory");
-        let writer =
-            crate::graph_memory_writer::GraphMemoryWriter::from_memory_for_tests(memory, AGENT, None);
+        let writer = crate::graph_memory_writer::GraphMemoryWriter::from_memory_for_tests(
+            memory, AGENT, None,
+        );
         (writer, dir)
     }
 
@@ -513,7 +512,10 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         let mut payload = serde_json::Map::new();
         payload.insert("tool_calls".into(), json!(["shell_exec"]));
-        payload.insert("turn_id".into(), json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+        payload.insert(
+            "turn_id".into(),
+            json!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        );
         payload.insert("timestamp".into(), json!(now));
         if let Some(g) = vitals_gate {
             payload.insert("vitals_gate".into(), json!(g));
@@ -540,10 +542,7 @@ mod tests {
         raw_inbox: &Value,
     ) {
         let tmpdir = tempfile::tempdir().expect("tempdir");
-        let inbox_dir = tmpdir
-            .path()
-            .join("agents")
-            .join(writer.agent_id());
+        let inbox_dir = tmpdir.path().join("agents").join(writer.agent_id());
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let path = inbox_dir.join(INBOX_FILENAME);
         let body = serde_json::to_vec_pretty(raw_inbox).unwrap();
@@ -591,9 +590,9 @@ mod tests {
         drain_raw_into_writer(&writer, &inbox).await;
 
         let nodes = writer.recall_recent(60 * 60 * 24 * 365).await;
-        let ep = nodes.iter().find(|n| {
-            matches!(&n.node_type, AinlNodeType::Episode { .. })
-        });
+        let ep = nodes
+            .iter()
+            .find(|n| matches!(&n.node_type, AinlNodeType::Episode { .. }));
         assert!(ep.is_some(), "no episodic node after drain");
         if let AinlNodeType::Episode { episodic } = &ep.unwrap().node_type {
             assert_eq!(episodic.vitals_gate.as_deref(), Some("pass"));
@@ -638,17 +637,26 @@ mod tests {
         let procedural = snapshot.nodes.iter().find(|n| {
             matches!(&n.node_type, AinlNodeType::Procedural { procedural } if procedural.patch_version >= 1)
         });
-        assert!(procedural.is_some(), "no procedural node found after patch import");
+        assert!(
+            procedural.is_some(),
+            "no procedural node found after patch import"
+        );
         if let AinlNodeType::Procedural { procedural } = &procedural.unwrap().node_type {
             assert_eq!(procedural.patch_version, 2);
             assert_eq!(procedural.label.as_str(), "L_my_patch");
-            assert!(!procedural.retired, "should not be retired (retired_at was null)");
+            assert!(
+                !procedural.retired,
+                "should not be retired (retired_at was null)"
+            );
             assert_eq!(
                 procedural.trace_id.as_deref(),
                 Some("parent-patch-xyz"),
                 "parent_patch_id should be stored as trace_id"
             );
-            assert!(procedural.pattern_name == "my_pattern", "pattern_name mismatch");
+            assert!(
+                procedural.pattern_name == "my_pattern",
+                "pattern_name mismatch"
+            );
         }
     }
 
@@ -686,9 +694,15 @@ mod tests {
         let procedural = snapshot.nodes.iter().find(|n| {
             matches!(&n.node_type, AinlNodeType::Procedural { procedural } if procedural.patch_version >= 1)
         });
-        assert!(procedural.is_some(), "no procedural node after retired patch import");
+        assert!(
+            procedural.is_some(),
+            "no procedural node after retired patch import"
+        );
         if let AinlNodeType::Procedural { procedural } = &procedural.unwrap().node_type {
-            assert!(procedural.retired, "retired_at present should set retired=true");
+            assert!(
+                procedural.retired,
+                "retired_at present should set retired=true"
+            );
         }
     }
 
@@ -705,9 +719,9 @@ mod tests {
         drain_raw_into_writer(&writer, &inbox).await;
 
         let nodes = writer.recall_recent(60 * 60 * 24 * 365).await;
-        let ep = nodes.iter().find(|n| {
-            matches!(&n.node_type, AinlNodeType::Episode { .. })
-        });
+        let ep = nodes
+            .iter()
+            .find(|n| matches!(&n.node_type, AinlNodeType::Episode { .. }));
         assert!(ep.is_some(), "episode without vitals failed to drain");
         if let AinlNodeType::Episode { episodic } = &ep.unwrap().node_type {
             assert!(episodic.vitals_gate.is_none());

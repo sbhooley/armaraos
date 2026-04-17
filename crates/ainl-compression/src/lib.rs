@@ -390,8 +390,8 @@ pub fn compress_with_metrics(
 ) -> (Compressed, CompressionMetrics) {
     let t0 = Instant::now();
     let result = compress(text, mode);
-    let semantic_preservation_score =
-        semantic_preservation_score.or_else(|| Some(estimate_semantic_preservation_score(text, &result.text)));
+    let semantic_preservation_score = semantic_preservation_score
+        .or_else(|| Some(estimate_semantic_preservation_score(text, &result.text)));
     let metrics = CompressionMetrics::from_result(
         mode,
         text,
@@ -889,6 +889,9 @@ mod tests {
             agg_median.saturating_sub(bal_median)
         );
 
-        assert!(agg_median >= bal_median, "aggressive should not underperform balanced median");
+        assert!(
+            agg_median >= bal_median,
+            "aggressive should not underperform balanced median"
+        );
     }
 }

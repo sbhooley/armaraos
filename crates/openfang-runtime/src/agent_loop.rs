@@ -213,8 +213,11 @@ fn get_or_create_ainl_runtime_bridge(
     ainl_runtime_bridge_cache_misses_counter().fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let gw = std::sync::Arc::new(tokio::sync::Mutex::new(gm.clone()));
     let bridge = std::sync::Arc::new(
-        crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(gw, max_delegation_depth)
-            .map_err(|e| e.to_string())?,
+        crate::ainl_runtime_bridge::AinlRuntimeBridge::with_delegation_cap(
+            gw,
+            max_delegation_depth,
+        )
+        .map_err(|e| e.to_string())?,
     );
     ainl_runtime_bridge_cache().insert(key, std::sync::Arc::clone(&bridge));
     Ok(bridge)
@@ -712,6 +715,12 @@ pub struct AgentLoopResult {
     pub adaptive_confidence: Option<f32>,
     /// Counterfactual compression comparison (applied vs baselines / recommendation).
     pub eco_counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
+    /// Effective eco mode after kernel policy (when `adaptive_eco` metadata is present).
+    pub adaptive_eco_effective_mode: Option<String>,
+    /// Resolver recommendation (may differ in shadow mode).
+    pub adaptive_eco_recommended_mode: Option<String>,
+    /// Machine-readable policy reasons for this turn.
+    pub adaptive_eco_reason_codes: Option<Vec<String>>,
     /// Structured telemetry from ainl-runtime-engine, when that path handled the turn.
     pub ainl_runtime_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry>,
 }
@@ -1044,6 +1053,9 @@ pub async fn run_agent_loop(
         compression_savings_pct,
         adaptive_snap.as_ref(),
     );
+    let adaptive_eco_effective_mode = adaptive_snap.as_ref().map(|s| s.effective_mode.clone());
+    let adaptive_eco_recommended_mode = adaptive_snap.as_ref().map(|s| s.recommended_mode.clone());
+    let adaptive_eco_reason_codes = adaptive_snap.as_ref().map(|s| s.reason_codes.clone());
     let session_user_message: &str = _compressed_msg.as_deref().unwrap_or(user_message);
 
     // Add the user message to session history.
@@ -1381,6 +1393,9 @@ pub async fn run_agent_loop(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
+                        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -1695,6 +1710,9 @@ pub async fn run_agent_loop(
                     compression_semantic_score,
                     adaptive_confidence,
                     eco_counterfactual,
+                    adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                    adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                    adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                     ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -1999,6 +2017,9 @@ pub async fn run_agent_loop(
                             compression_semantic_score,
                             adaptive_confidence,
                             eco_counterfactual,
+                            adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                            adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                            adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                             ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -2124,6 +2145,9 @@ pub async fn run_agent_loop(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
+                        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -2193,6 +2217,9 @@ pub async fn run_agent_loop(
         compression_semantic_score,
         adaptive_confidence,
         eco_counterfactual,
+        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -2987,6 +3014,9 @@ pub async fn run_agent_loop_streaming(
         compression_savings_pct,
         adaptive_snap_s.as_ref(),
     );
+    let adaptive_eco_effective_mode = adaptive_snap_s.as_ref().map(|s| s.effective_mode.clone());
+    let adaptive_eco_recommended_mode = adaptive_snap_s.as_ref().map(|s| s.recommended_mode.clone());
+    let adaptive_eco_reason_codes = adaptive_snap_s.as_ref().map(|s| s.reason_codes.clone());
     let session_user_message_s: &str = _compressed_msg_s.as_deref().unwrap_or(user_message);
 
     // Emit compression stats as the first stream event so the client can display
@@ -3000,6 +3030,9 @@ pub async fn run_agent_loop_streaming(
                 semantic_score: compression_semantic_score,
                 adaptive_confidence,
                 counterfactual: eco_counterfactual.clone(),
+                adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
             })
             .await;
     }
@@ -3376,6 +3409,9 @@ pub async fn run_agent_loop_streaming(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
+                        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -3683,6 +3719,9 @@ pub async fn run_agent_loop_streaming(
                     compression_semantic_score,
                     adaptive_confidence,
                     eco_counterfactual,
+                    adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                    adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                    adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                     ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -4023,6 +4062,9 @@ pub async fn run_agent_loop_streaming(
                             compression_semantic_score,
                             adaptive_confidence,
                             eco_counterfactual,
+                            adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                            adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                            adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                             ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -4144,6 +4186,9 @@ pub async fn run_agent_loop_streaming(
                         compression_semantic_score,
                         adaptive_confidence,
                         eco_counterfactual,
+                        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
                         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -4218,6 +4263,9 @@ pub async fn run_agent_loop_streaming(
         compression_semantic_score,
         adaptive_confidence,
         eco_counterfactual,
+        adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+        adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+        adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
         ainl_runtime_telemetry: {
                         #[cfg(feature = "ainl-runtime-engine")]
                         {
@@ -5185,12 +5233,7 @@ mod tests {
     #[test]
     #[cfg(feature = "ainl-extractor")]
     fn canonicalize_turn_tool_names_shell_aliases_to_single_bash() {
-        let raw = vec![
-            "bash".into(),
-            "Bash".into(),
-            "shell".into(),
-            "sh".into(),
-        ];
+        let raw = vec!["bash".into(), "Bash".into(), "shell".into(), "sh".into()];
         assert_eq!(
             canonicalize_turn_tool_names_for_graph_storage(&raw),
             vec!["bash".to_string()]
@@ -5399,8 +5442,8 @@ mod tests {
                     stop_reason: StopReason::EndTurn,
                     tool_calls: vec![],
                     usage: TokenUsage::default(),
-                                vitals: None,
-})
+                    vitals: None,
+                })
             }
         }
 
@@ -5450,7 +5493,10 @@ mod tests {
         .await
         .expect("loop");
 
-        assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 0);
+        assert_eq!(
+            crate::ainl_runtime_bridge::test_hooks::bridge_new_count(),
+            0
+        );
         assert!(DRIVER_USED.load(Ordering::SeqCst));
     }
 
@@ -5472,7 +5518,10 @@ mod tests {
         let b2 = get_or_create_ainl_runtime_bridge(&agent, &writer, depth).expect("bridge 2");
 
         assert!(std::sync::Arc::ptr_eq(&b1, &b2));
-        assert_eq!(crate::ainl_runtime_bridge::test_hooks::bridge_new_count(), 1);
+        assert_eq!(
+            crate::ainl_runtime_bridge::test_hooks::bridge_new_count(),
+            1
+        );
         let (hits, misses, construct_failures, run_failures) =
             ainl_runtime_bridge_cache_metrics_snapshot();
         assert_eq!(hits, 1);
@@ -5529,8 +5578,8 @@ mod tests {
                         output_tokens: 5,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             } else {
                 // Second call: LLM returns EndTurn with EMPTY text (the bug)
                 Ok(CompletionResponse {
@@ -5542,8 +5591,8 @@ mod tests {
                         output_tokens: 0,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             }
         }
     }
@@ -5567,8 +5616,8 @@ mod tests {
                     output_tokens: 0,
                     ..Default::default()
                 },
-                        vitals: None,
-})
+                vitals: None,
+            })
         }
     }
 
@@ -5593,8 +5642,8 @@ mod tests {
                     output_tokens: 8,
                     ..Default::default()
                 },
-                        vitals: None,
-})
+                vitals: None,
+            })
         }
     }
 
@@ -5920,8 +5969,8 @@ mod tests {
                         output_tokens: 0,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             } else {
                 // Second call (retry): normal response
                 Ok(CompletionResponse {
@@ -5936,8 +5985,8 @@ mod tests {
                         output_tokens: 8,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             }
         }
     }
@@ -5961,8 +6010,8 @@ mod tests {
                     output_tokens: 0,
                     ..Default::default()
                 },
-                        vitals: None,
-})
+                vitals: None,
+            })
         }
     }
 
@@ -7001,8 +7050,8 @@ mod tests {
                         output_tokens: 8,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             }
         }
     }
@@ -7044,8 +7093,8 @@ mod tests {
                         output_tokens: 12,
                         ..Default::default()
                     },
-                                vitals: None,
-})
+                    vitals: None,
+                })
             }
         }
     }

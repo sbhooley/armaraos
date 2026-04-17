@@ -734,6 +734,9 @@ pub async fn send_message(
                     compression_semantic_score: result.compression_semantic_score,
                     adaptive_confidence: result.adaptive_confidence,
                     eco_counterfactual: result.eco_counterfactual.clone(),
+                    adaptive_eco_effective_mode: result.adaptive_eco_effective_mode.clone(),
+                    adaptive_eco_recommended_mode: result.adaptive_eco_recommended_mode.clone(),
+                    adaptive_eco_reason_codes: result.adaptive_eco_reason_codes.clone(),
                     tools: Vec::new(),
                     ainl_runtime_telemetry,
                 })),
@@ -7750,20 +7753,43 @@ pub async fn usage_compression(
                 w.parse::<u32>().ok()
             }
         });
-    match state.kernel.memory.usage().query_compression_summary(window_days) {
+    match state
+        .kernel
+        .memory
+        .usage()
+        .query_compression_summary(window_days)
+    {
         Ok(summary) => Json(serde_json::to_value(summary).unwrap_or_default()),
-        Err(_) => Json(serde_json::json!({
-            "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),
-            "modes": {},
-            "agents": [],
-            "estimated_compression_tokens_saved": 0,
-            "cache_read_input_tokens": 0,
-            "estimated_total_input_tokens_saved": 0,
-            "estimated_cache_cost_saved_usd": 0.0,
-            "estimated_compression_cost_saved_usd": 0.0,
-            "estimated_total_cost_saved_usd": 0.0,
-            "adaptive_eco": null
-        })),
+        Err(_) => {
+            // Compression rollups failed — still try adaptive-eco aggregates so Budget isn't blind.
+            let adaptive_eco = match (
+                state.kernel.metering.get_adaptive_eco_summary(window_days),
+                state
+                    .kernel
+                    .metering
+                    .get_adaptive_eco_replay_report(window_days),
+            ) {
+                (Ok(ref summary), Ok(ref replay)) => Some(serde_json::json!({
+                    "summary": serde_json::to_value(summary).unwrap_or_default(),
+                    "replay": serde_json::to_value(replay).unwrap_or_default(),
+                })),
+                _ => None,
+            };
+            Json(serde_json::json!({
+                "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),
+                "modes": {},
+                "agents": [],
+                "estimated_compression_tokens_saved": 0,
+                "cache_read_input_tokens": 0,
+                "estimated_total_input_tokens_saved": 0,
+                "estimated_cache_cost_saved_usd": 0.0,
+                "estimated_compression_cost_saved_usd": 0.0,
+                "estimated_total_cost_saved_usd": 0.0,
+                "adaptive_eco": adaptive_eco,
+                "compression_summary_error": true,
+                "adaptive_eco_filled_from_fallback": adaptive_eco.is_some(),
+            }))
+        }
     }
 }
 
@@ -7815,7 +7841,11 @@ pub async fn usage_adaptive_eco_replay(
                 w.parse::<u32>().ok()
             }
         });
-    match state.kernel.metering.get_adaptive_eco_replay_report(window_days) {
+    match state
+        .kernel
+        .metering
+        .get_adaptive_eco_replay_report(window_days)
+    {
         Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()),
         Err(_) => Json(serde_json::json!({
             "window": query.get("window").cloned().unwrap_or_else(|| "all".to_string()),

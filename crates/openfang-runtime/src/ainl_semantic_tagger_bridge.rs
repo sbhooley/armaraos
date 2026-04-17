@@ -73,7 +73,8 @@ mod tests {
         std::env::set_var("AINL_TAGGER_ENABLED", "1");
         let tags = SemanticTaggerBridge::tag_fact("I need help with rust serde and async traits");
         assert!(
-            tags.iter().any(|t| t.contains("rust") || t.starts_with("topic:")),
+            tags.iter()
+                .any(|t| t.contains("rust") || t.starts_with("topic:")),
             "expected topic-style tags, got {tags:?}"
         );
         std::env::remove_var("AINL_TAGGER_ENABLED");
@@ -85,7 +86,8 @@ mod tests {
         let tools = vec!["web_search".to_string(), "file_read".to_string()];
         let tags = SemanticTaggerBridge::tag_episode(&tools);
         assert!(
-            tags.iter().any(|t| t.contains("search_web") || t.contains("file_read")),
+            tags.iter()
+                .any(|t| t.contains("search_web") || t.contains("file_read")),
             "expected tool-derived tags, got {tags:?}"
         );
         std::env::remove_var("AINL_TAGGER_ENABLED");

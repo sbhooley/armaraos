@@ -587,6 +587,9 @@ async fn handle_text_message(
                         let mut eco_counterfactual_ws: Option<
                             openfang_types::adaptive_eco::EcoCounterfactualReceipt,
                         > = None;
+                        let mut adaptive_eco_effective_mode_ws: Option<String> = None;
+                        let mut adaptive_eco_recommended_mode_ws: Option<String> = None;
+                        let mut adaptive_eco_reason_codes_ws: Option<Vec<String>> = None;
                         let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
                         let mut flush_deadline = far_future;
 
@@ -623,6 +626,9 @@ async fn handle_text_message(
                                                 semantic_score,
                                                 adaptive_confidence,
                                                 counterfactual,
+                                                adaptive_eco_effective_mode,
+                                                adaptive_eco_recommended_mode,
+                                                adaptive_eco_reason_codes,
                                             } = &ev
                                             {
                                                 compression_savings_pct = *savings_pct;
@@ -632,6 +638,12 @@ async fn handle_text_message(
                                                 compression_semantic_score = *semantic_score;
                                                 adaptive_confidence_ws = *adaptive_confidence;
                                                 eco_counterfactual_ws = counterfactual.clone();
+                                                adaptive_eco_effective_mode_ws =
+                                                    adaptive_eco_effective_mode.clone();
+                                                adaptive_eco_recommended_mode_ws =
+                                                    adaptive_eco_recommended_mode.clone();
+                                                adaptive_eco_reason_codes_ws =
+                                                    adaptive_eco_reason_codes.clone();
                                                 continue;
                                             }
 
@@ -720,6 +732,9 @@ async fn handle_text_message(
                             compression_semantic_score,
                             adaptive_confidence_ws,
                             eco_counterfactual_ws,
+                            adaptive_eco_effective_mode_ws,
+                            adaptive_eco_recommended_mode_ws,
+                            adaptive_eco_reason_codes_ws,
                         )
                     });
 
@@ -774,6 +789,9 @@ async fn handle_text_message(
                             compression_semantic_score,
                             adaptive_confidence_ws,
                             eco_counterfactual_ws,
+                            adaptive_eco_effective_mode_ws,
+                            adaptive_eco_recommended_mode_ws,
+                            adaptive_eco_reason_codes_ws,
                         )) => {
                             let user_message = content.clone();
                             let agent_id_str = agent_id.to_string();
@@ -817,13 +835,26 @@ async fn handle_text_message(
                                     silent_payload["compressed_input"] = serde_json::json!(ci);
                                 }
                                 if let Some(score) = compression_semantic_score {
-                                    silent_payload["compression_semantic_score"] = serde_json::json!(score);
+                                    silent_payload["compression_semantic_score"] =
+                                        serde_json::json!(score);
                                 }
                                 if let Some(ac) = adaptive_confidence_ws {
                                     silent_payload["adaptive_confidence"] = serde_json::json!(ac);
                                 }
                                 if let Some(ref cf) = eco_counterfactual_ws {
                                     silent_payload["eco_counterfactual"] = serde_json::json!(cf);
+                                }
+                                if let Some(ref m) = adaptive_eco_effective_mode_ws {
+                                    silent_payload["adaptive_eco_effective_mode"] =
+                                        serde_json::json!(m);
+                                }
+                                if let Some(ref m) = adaptive_eco_recommended_mode_ws {
+                                    silent_payload["adaptive_eco_recommended_mode"] =
+                                        serde_json::json!(m);
+                                }
+                                if let Some(ref c) = adaptive_eco_reason_codes_ws {
+                                    silent_payload["adaptive_eco_reason_codes"] =
+                                        serde_json::json!(c);
                                 }
                                 let _ = send_json(sender, &silent_payload).await;
                                 return;
@@ -887,13 +918,26 @@ async fn handle_text_message(
                                 response_payload["compressed_input"] = serde_json::json!(ci);
                             }
                             if let Some(score) = compression_semantic_score {
-                                response_payload["compression_semantic_score"] = serde_json::json!(score);
+                                response_payload["compression_semantic_score"] =
+                                    serde_json::json!(score);
                             }
                             if let Some(ac) = adaptive_confidence_ws {
                                 response_payload["adaptive_confidence"] = serde_json::json!(ac);
                             }
                             if let Some(ref cf) = eco_counterfactual_ws {
                                 response_payload["eco_counterfactual"] = serde_json::json!(cf);
+                            }
+                            if let Some(ref m) = adaptive_eco_effective_mode_ws {
+                                response_payload["adaptive_eco_effective_mode"] =
+                                    serde_json::json!(m);
+                            }
+                            if let Some(ref m) = adaptive_eco_recommended_mode_ws {
+                                response_payload["adaptive_eco_recommended_mode"] =
+                                    serde_json::json!(m);
+                            }
+                            if let Some(ref c) = adaptive_eco_reason_codes_ws {
+                                response_payload["adaptive_eco_reason_codes"] =
+                                    serde_json::json!(c);
                             }
                             let _ = send_json(sender, &response_payload).await;
                         }

@@ -32,7 +32,10 @@ fn test_env_opt_out_disables_crate_path() {
         Some(v) => std::env::set_var(key, v),
         None => std::env::remove_var(key),
     }
-    assert!(!result, "AINL_EXTRACTOR_ENABLED=0 should disable crate path");
+    assert!(
+        !result,
+        "AINL_EXTRACTOR_ENABLED=0 should disable crate path"
+    );
 }
 
 /// Opt-out via AINL_EXTRACTOR_ENABLED=false must also disable.
@@ -48,7 +51,10 @@ fn test_env_opt_out_false_string() {
         Some(v) => std::env::set_var(key, v),
         None => std::env::remove_var(key),
     }
-    assert!(!result, "AINL_EXTRACTOR_ENABLED=false should disable crate path");
+    assert!(
+        !result,
+        "AINL_EXTRACTOR_ENABLED=false should disable crate path"
+    );
 }
 
 /// Non-falsy value must keep the crate path enabled.
@@ -64,7 +70,10 @@ fn test_crate_primary_path_enabled_by_default() {
         Some(v) => std::env::set_var(key, v),
         None => std::env::remove_var(key),
     }
-    assert!(result, "crate primary path must be enabled when env var is absent");
+    assert!(
+        result,
+        "crate primary path must be enabled when env var is absent"
+    );
 }
 
 /// When the feature is on, a meaningful turn produces facts from the crate tagger path.
@@ -72,7 +81,6 @@ fn test_crate_primary_path_enabled_by_default() {
 #[test]
 #[cfg(feature = "ainl-extractor")]
 fn test_crate_primary_path_fires_when_feature_enabled() {
-
     let (facts, _pattern) = graph_memory_turn_extraction(
         "Help me debug my Rust project — borrow checker and cargo errors",
         "Sure, run `cargo clippy` to surface borrow checker diagnostics.",
@@ -115,7 +123,9 @@ fn test_heuristic_fallback_fires_when_crate_yields_nothing() {
     // Either the crate path tagged something (e.g. preference: work) or the heuristic
     // captured the Contoso self-disclosure — both are acceptable outcomes.
     assert!(
-        facts.iter().any(|f| f.text.contains("Contoso") || f.text.contains("topic") || f.text.contains("preference")),
+        facts.iter().any(|f| f.text.contains("Contoso")
+            || f.text.contains("topic")
+            || f.text.contains("preference")),
         "expected Contoso, topic, or preference fact; got {facts:?}"
     );
 }
@@ -137,8 +147,7 @@ fn test_user_self_disclosure_still_extracted() {
 /// Empty inputs must not panic and must return an empty fact list.
 #[test]
 fn test_extractor_does_not_panic_on_empty_turn() {
-    let (facts, pattern) =
-        graph_memory_turn_extraction("", "", &[], &[], "test-agent-empty");
+    let (facts, pattern) = graph_memory_turn_extraction("", "", &[], &[], "test-agent-empty");
     // No panic is the primary assertion; emptiness is expected but not required.
     let _ = (facts, pattern);
 }

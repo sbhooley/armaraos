@@ -289,10 +289,7 @@ async fn test_get_ainl_runtime_version_json_shape() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let resp = client
-        .get(format!(
-            "{}/api/ainl/runtime-version",
-            server.base_url
-        ))
+        .get(format!("{}/api/ainl/runtime-version", server.base_url))
         .timeout(std::time::Duration::from_secs(45))
         .send()
         .await
@@ -552,8 +549,14 @@ async fn test_agents_runtime_effective_state_fields_present() {
 
     assert!(!forced, "tests should not force AINL runtime via env");
     assert!(!disabled, "tests should not disable AINL runtime via env");
-    assert!(compiled, "openfang-runtime default features should compile runtime");
-    assert_eq!(effective, compiled && !disabled && (manifest_flag || forced));
+    assert!(
+        compiled,
+        "openfang-runtime default features should compile runtime"
+    );
+    assert_eq!(
+        effective,
+        compiled && !disabled && (manifest_flag || forced)
+    );
 }
 
 #[tokio::test]
@@ -574,7 +577,10 @@ async fn test_send_message_includes_ainl_runtime_telemetry_field() {
         .to_string();
 
     let resp = client
-        .post(format!("{}/api/agents/{}/message", server.base_url, agent_id))
+        .post(format!(
+            "{}/api/agents/{}/message",
+            server.base_url, agent_id
+        ))
         .json(&serde_json::json!({"message":"ping"}))
         .send()
         .await
@@ -1561,10 +1567,7 @@ async fn test_get_daemon_resources_json_shape() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let resp = client
-        .get(format!(
-            "{}/api/system/daemon-resources",
-            server.base_url
-        ))
+        .get(format!("{}/api/system/daemon-resources", server.base_url))
         .send()
         .await
         .unwrap();
@@ -1629,7 +1632,10 @@ async fn test_session_digest_json_shape() {
     let v: serde_json::Value = resp.json().await.unwrap();
     assert!(v.get("session_id").is_some(), "expected session_id: {v}");
     assert!(v.get("agent_id").is_some(), "expected agent_id: {v}");
-    assert!(v.get("message_count").is_some(), "expected message_count: {v}");
+    assert!(
+        v.get("message_count").is_some(),
+        "expected message_count: {v}"
+    );
     assert!(
         v.get("assistant_message_count").is_some(),
         "expected assistant_message_count: {v}"
@@ -1654,6 +1660,13 @@ async fn test_usage_compression_json_shape() {
     assert_eq!(v.get("window").and_then(|x| x.as_str()), Some("7d"));
     assert!(v.get("modes").is_some(), "expected modes: {v}");
     assert!(v.get("agents").is_some(), "expected agents: {v}");
+    // Degraded path should surface flags (only when compression rollup query fails).
+    if v.get("compression_summary_error").and_then(|x| x.as_bool()) == Some(true) {
+        assert!(
+            v.get("adaptive_eco_filled_from_fallback").is_some(),
+            "expected fallback flag when degraded: {v}"
+        );
+    }
 }
 
 /// GET /api/orchestration/traces — recent trace summaries (empty vec is valid).
@@ -1691,10 +1704,7 @@ async fn test_btw_returns_409_when_agent_idle() {
     let agent_id = body["agent_id"].as_str().unwrap();
 
     let resp = client
-        .post(format!(
-            "{}/api/agents/{}/btw",
-            server.base_url, agent_id
-        ))
+        .post(format!("{}/api/agents/{}/btw", server.base_url, agent_id))
         .json(&serde_json::json!({"text": "injected context"}))
         .send()
         .await
@@ -1720,7 +1730,10 @@ async fn test_graph_memory_snapshot_reset_and_rollback_flow() {
         .json()
         .await
         .unwrap();
-    let before_nodes = graph_before["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let before_nodes = graph_before["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert!(before_nodes > 0, "expected seeded graph nodes");
 
     let snap_resp: serde_json::Value = client
@@ -1752,7 +1765,10 @@ async fn test_graph_memory_snapshot_reset_and_rollback_flow() {
         .json()
         .await
         .unwrap();
-    let preview_nodes = preview_graph["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let preview_nodes = preview_graph["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert!(
         preview_nodes >= before_nodes,
         "expected preview snapshot nodes >= before nodes"
@@ -1844,7 +1860,10 @@ async fn test_graph_memory_delete_node_and_audit() {
         .json()
         .await
         .unwrap();
-    let before_nodes = graph_before["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let before_nodes = graph_before["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert!(before_nodes > 0, "expected nodes before deletion");
     let target_node_id = graph_before["nodes"][0]["id"]
         .as_str()
@@ -1877,7 +1896,10 @@ async fn test_graph_memory_delete_node_and_audit() {
         .json()
         .await
         .unwrap();
-    let after_nodes = graph_after["nodes"].as_array().map(|a| a.len()).unwrap_or(0);
+    let after_nodes = graph_after["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert!(
         after_nodes < before_nodes,
         "expected fewer nodes after delete (before={before_nodes}, after={after_nodes})"
@@ -2167,6 +2189,19 @@ async fn test_usage_adaptive_eco_and_replay_endpoints() {
         "compression response should embed adaptive_eco bundle: {comp_body}"
     );
     let bundle = comp_body.get("adaptive_eco").unwrap();
-    assert!(bundle.get("summary").and_then(|s| s.get("events")).is_some());
-    assert!(bundle.get("replay").and_then(|r| r.get("shadow_mismatch_rate")).is_some());
+    assert!(bundle
+        .get("summary")
+        .and_then(|s| s.get("events"))
+        .is_some());
+    assert!(bundle
+        .get("replay")
+        .and_then(|r| r.get("shadow_mismatch_rate"))
+        .is_some());
+    assert_ne!(
+        comp_body
+            .get("compression_summary_error")
+            .and_then(|x| x.as_bool()),
+        Some(true),
+        "integration server should return full compression summary (not degraded): {comp_body}"
+    );
 }

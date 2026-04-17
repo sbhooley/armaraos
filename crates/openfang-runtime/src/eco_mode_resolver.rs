@@ -144,7 +144,10 @@ pub fn resolve_adaptive_eco_turn(
 
     let mut recommended = base.to_string();
 
-    if structured_payload_heavy(user_message) && recommended == "aggressive" && !cfg.allow_aggressive_on_structured {
+    if structured_payload_heavy(user_message)
+        && recommended == "aggressive"
+        && !cfg.allow_aggressive_on_structured
+    {
         recommended = "balanced".to_string();
         reason_codes.push("structured_payload_guard:cap_aggressive".to_string());
     }
@@ -226,8 +229,8 @@ pub fn hysteresis_resolve_adaptive_effective(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openfang_types::agent::AgentManifest;
     use openfang_types::adaptive_eco::AdaptiveEcoConfig;
+    use openfang_types::agent::AgentManifest;
 
     fn manifest_with(mode: &str, provider: &str, model: &str) -> AgentManifest {
         let mut m = AgentManifest::default();

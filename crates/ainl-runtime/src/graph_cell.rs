@@ -70,7 +70,10 @@ impl GraphCell {
         }
     }
 
-    pub(crate) fn read_runtime_state(&self, agent_id: &str) -> Result<Option<RuntimeStateNode>, String> {
+    pub(crate) fn read_runtime_state(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<RuntimeStateNode>, String> {
         self.with(|m| m.read_runtime_state(agent_id))
     }
 
@@ -92,11 +95,7 @@ impl GraphCell {
         }
         #[cfg(feature = "async")]
         {
-            SqliteStoreRef::from_guard(
-                self.inner
-                    .lock()
-                    .expect("graph mutex"),
-            )
+            SqliteStoreRef::from_guard(self.inner.lock().expect("graph mutex"))
         }
     }
 

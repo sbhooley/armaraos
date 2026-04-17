@@ -53,7 +53,9 @@ fn lower_contains_any(hay: &str, needles: &[&str]) -> bool {
 }
 
 fn push_if_new(out: &mut Vec<SemanticTag>, tag: SemanticTag) {
-    let dup = out.iter().any(|t| t.namespace == tag.namespace && t.value == tag.value);
+    let dup = out
+        .iter()
+        .any(|t| t.namespace == tag.namespace && t.value == tag.value);
     if !dup {
         out.push(tag);
     }
@@ -61,9 +63,9 @@ fn push_if_new(out: &mut Vec<SemanticTag>, tag: SemanticTag) {
 
 /// Detects an explicit brevity preference (including legacy `EXPLICIT_BREVITY` substring cues).
 pub fn infer_brevity_preference(user_text: &str) -> Option<SemanticTag> {
-    tag_user_message(user_text).into_iter().find(|t| {
-        t.namespace == TagNamespace::Preference && t.value == "brevity"
-    })
+    tag_user_message(user_text)
+        .into_iter()
+        .find(|t| t.namespace == TagNamespace::Preference && t.value == "brevity")
 }
 
 /// Runs all preference detectors; multiple matches return multiple tags.
@@ -71,7 +73,9 @@ pub fn tag_user_message(text: &str) -> Vec<SemanticTag> {
     let mut out = Vec::new();
     let l = text.to_lowercase();
 
-    if BREVITY_PHRASES.iter().any(|p| l.contains(p)) || LEGACY_BREVITY_KEYWORDS.iter().any(|k| l.contains(k)) {
+    if BREVITY_PHRASES.iter().any(|p| l.contains(p))
+        || LEGACY_BREVITY_KEYWORDS.iter().any(|k| l.contains(k))
+    {
         push_if_new(
             &mut out,
             SemanticTag {

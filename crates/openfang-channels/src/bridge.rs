@@ -833,7 +833,7 @@ async fn dispatch_message(
                         if let Ok((name, _aid, result)) = jh.await {
                             match result {
                                 Ok(r) if !r.is_empty() => responses.push(format!("[{name}]: {r}")),
-                                Ok(_) => {}, // Skip empty (silent) responses
+                                Ok(_) => {} // Skip empty (silent) responses
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
                         }
@@ -844,7 +844,7 @@ async fn dispatch_message(
                         if let Some(aid) = maybe_id {
                             match handle.send_message(*aid, &text).await {
                                 Ok(r) if !r.is_empty() => responses.push(format!("[{name}]: {r}")),
-                                Ok(_) => {}, // Skip empty (silent) responses
+                                Ok(_) => {} // Skip empty (silent) responses
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
                         }
@@ -1014,8 +1014,14 @@ async fn dispatch_message(
                         }
                         // Skip sending empty responses (agent chose NO_REPLY/[[silent]])
                         if !response.is_empty() {
-                            send_response(adapter, &message.sender, response, thread_id, output_format)
-                                .await;
+                            send_response(
+                                adapter,
+                                &message.sender,
+                                response,
+                                thread_id,
+                                output_format,
+                            )
+                            .await;
                         }
                         handle
                             .record_delivery(

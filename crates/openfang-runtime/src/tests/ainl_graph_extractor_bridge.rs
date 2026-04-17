@@ -8,9 +8,7 @@ async fn extract_facts_writes_semantic_row_via_graph_memory_hook() {
     use ainl_memory::GraphMemory;
     use serde_json::json;
 
-    use crate::ainl_graph_extractor_bridge::{
-        format_turn_payload, AinlExtractorBridge,
-    };
+    use crate::ainl_graph_extractor_bridge::{format_turn_payload, AinlExtractorBridge};
     use crate::graph_memory_writer::GraphMemoryWriter;
 
     let fact_writes = Arc::new(AtomicUsize::new(0));

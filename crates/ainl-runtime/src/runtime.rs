@@ -27,9 +27,9 @@ use crate::engine::{
     EMIT_TO_EDGE,
 };
 use crate::graph_cell::{GraphCell, SqliteStoreRef};
-use crate::hooks::{NoOpHooks, TurnHooks};
 #[cfg(feature = "async")]
 use crate::hooks::TurnHooksAsync;
+use crate::hooks::{NoOpHooks, TurnHooks};
 use crate::RuntimeConfig;
 
 /// Orchestrates ainl-memory, persona snapshot state, and graph extraction for one agent.
@@ -325,24 +325,21 @@ impl AinlRuntime {
             return Err("RuntimeConfig.agent_id must be set".to_string());
         }
         self.memory.with(|m| {
-        let store = m.sqlite_store();
-        let q = store.query(&self.config.agent_id);
-        let recent_episodes = q.recent_episodes(5)?;
-        let all_semantic = q.semantic_nodes()?;
-        let relevant_semantic = self.relevant_semantic_nodes(
-            user_message.unwrap_or(""),
-            all_semantic,
-            10,
-        );
-        let active_patches = q.active_patches()?;
-        let persona_snapshot = persona_snapshot_if_evolved(&self.extractor);
-        Ok(MemoryContext {
-            recent_episodes,
-            relevant_semantic,
-            active_patches,
-            persona_snapshot,
-            compiled_at: chrono::Utc::now(),
-        })
+            let store = m.sqlite_store();
+            let q = store.query(&self.config.agent_id);
+            let recent_episodes = q.recent_episodes(5)?;
+            let all_semantic = q.semantic_nodes()?;
+            let relevant_semantic =
+                self.relevant_semantic_nodes(user_message.unwrap_or(""), all_semantic, 10);
+            let active_patches = q.active_patches()?;
+            let persona_snapshot = persona_snapshot_if_evolved(&self.extractor);
+            Ok(MemoryContext {
+                recent_episodes,
+                relevant_semantic,
+                active_patches,
+                persona_snapshot,
+                compiled_at: chrono::Utc::now(),
+            })
         })
     }
 
@@ -513,9 +510,10 @@ impl AinlRuntime {
 
         let t_episode = Instant::now();
         let tools_canonical = normalize_tools_for_episode(&input.tools_invoked);
-        let episode_id = match self.memory.with(|m| {
-            record_turn_episode(m, &self.config.agent_id, &input, &tools_canonical)
-        }) {
+        let episode_id = match self
+            .memory
+            .with(|m| record_turn_episode(m, &self.config.agent_id, &input, &tools_canonical))
+        {
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(
@@ -676,9 +674,10 @@ impl AinlRuntime {
             (None, false)
         };
 
-        if let Err(e) = self.memory.with(|m| {
-            try_export_graph_json_armaraos(m.sqlite_store(), &self.config.agent_id)
-        }) {
+        if let Err(e) = self
+            .memory
+            .with(|m| try_export_graph_json_armaraos(m.sqlite_store(), &self.config.agent_id))
+        {
             tracing::warn!(
                 phase = ?TurnPhase::ExportRefresh,
                 error = %e,

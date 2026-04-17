@@ -54,13 +54,13 @@ pub struct HostAinlToolchainProbe {
 #[must_use]
 pub fn probe_host_ainl_toolchain() -> HostAinlToolchainProbe {
     let pip_stdout = pip_show_ainativelang_stdout();
-    let pip_version = pip_stdout
-        .as_deref()
-        .and_then(parse_pip_version_line);
+    let pip_version = pip_stdout.as_deref().and_then(parse_pip_version_line);
     let pip_excerpt = pip_stdout
         .as_ref()
         .map(|raw| cap_str(&filter_pip_show(raw), 900))
-        .unwrap_or_else(|| "not installed or pip not found (try: python3 -m pip show ainativelang)".into());
+        .unwrap_or_else(|| {
+            "not installed or pip not found (try: python3 -m pip show ainativelang)".into()
+        });
     HostAinlToolchainProbe {
         ainl_cli_line: ainl_cli_version(),
         pip_version,
@@ -122,7 +122,9 @@ fn ainl_cli_version() -> String {
 fn pip_show_ainativelang() -> String {
     pip_show_ainativelang_stdout()
         .map(|raw| cap_str(&filter_pip_show(&raw), 900))
-        .unwrap_or_else(|| "not installed or pip not found (try: python3 -m pip show ainativelang)".into())
+        .unwrap_or_else(|| {
+            "not installed or pip not found (try: python3 -m pip show ainativelang)".into()
+        })
 }
 
 fn filter_pip_show(stdout: &str) -> String {

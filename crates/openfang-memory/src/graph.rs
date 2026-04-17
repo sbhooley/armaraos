@@ -200,12 +200,7 @@ impl GraphStore for SqliteGraphStore {
             .execute(
                 "INSERT OR REPLACE INTO ainl_graph_nodes (id, node_type, payload, timestamp)
                  VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    node.id.to_string(),
-                    type_name,
-                    payload,
-                    node.timestamp,
-                ],
+                rusqlite::params![node.id.to_string(), type_name, payload, node.timestamp,],
             )
             .map_err(|e| e.to_string())?;
 
@@ -215,11 +210,7 @@ impl GraphStore for SqliteGraphStore {
                 .execute(
                     "INSERT OR REPLACE INTO ainl_graph_edges (from_id, to_id, label)
                      VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        node.id.to_string(),
-                        edge.target_id.to_string(),
-                        edge.label,
-                    ],
+                    rusqlite::params![node.id.to_string(), edge.target_id.to_string(), edge.label,],
                 )
                 .map_err(|e| e.to_string())?;
         }
@@ -242,8 +233,7 @@ impl GraphStore for SqliteGraphStore {
 
         match payload {
             Some(p) => {
-                let node: AinlMemoryNode =
-                    serde_json::from_str(&p).map_err(|e| e.to_string())?;
+                let node: AinlMemoryNode = serde_json::from_str(&p).map_err(|e| e.to_string())?;
                 Ok(Some(node))
             }
             None => Ok(None),
@@ -253,7 +243,9 @@ impl GraphStore for SqliteGraphStore {
     fn query_by_type(&self, type_name: &str) -> Result<Vec<AinlMemoryNode>, String> {
         let mut stmt = self
             .db
-            .prepare("SELECT payload FROM ainl_graph_nodes WHERE node_type = ?1 ORDER BY timestamp DESC")
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes WHERE node_type = ?1 ORDER BY timestamp DESC",
+            )
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
@@ -266,8 +258,7 @@ impl GraphStore for SqliteGraphStore {
         let mut nodes = Vec::new();
         for row in rows {
             let payload = row.map_err(|e| e.to_string())?;
-            let node: AinlMemoryNode =
-                serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
             nodes.push(node);
         }
 
@@ -299,8 +290,7 @@ impl GraphStore for SqliteGraphStore {
         let mut nodes = Vec::new();
         for row in rows {
             let payload = row.map_err(|e| e.to_string())?;
-            let node: AinlMemoryNode =
-                serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            let node: AinlMemoryNode = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
 
             // Filter by agent_id in the Episode variant
             if let AinlNodeType::Episode {

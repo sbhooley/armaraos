@@ -8,9 +8,7 @@
 //! This is the **regression harness** comparing representative traces under fixed config: it does not
 //! hit the network or full kernel — use it to validate policy changes before enabling **`enforce`**.
 
-use openfang_runtime::eco_mode_resolver::{
-    circuit_breaker_adjust_base, resolve_adaptive_eco_turn,
-};
+use openfang_runtime::eco_mode_resolver::{circuit_breaker_adjust_base, resolve_adaptive_eco_turn};
 use openfang_runtime::model_catalog::ModelCatalog;
 use openfang_types::adaptive_eco::AdaptiveEcoConfig;
 use openfang_types::agent::AgentManifest;
@@ -56,7 +54,9 @@ fn adaptive_eco_eval_trace_matrix_smoke() {
         let man = manifest(base, "anthropic");
         let snap = resolve_adaptive_eco_turn(&cfg, &man, msg, &cat);
         assert!(
-            snap.reason_codes.iter().any(|s| s.contains("adaptive_eco:v1")),
+            snap.reason_codes
+                .iter()
+                .any(|s| s.contains("adaptive_eco:v1")),
             "{name}: expected resolver version tag"
         );
         if *name == "structured_json" {

@@ -53,11 +53,7 @@ pub fn classify(tokens: &[TokenLogprob]) -> Option<CognitiveVitals> {
 
     // Entropy estimate: average over positions of H = -sum(p * log(p)) across top alternatives.
     // When top alternatives are unavailable for a position, use a fallback from logprob alone.
-    let entropy: f32 = sample
-        .iter()
-        .map(position_entropy)
-        .sum::<f32>()
-        / n;
+    let entropy: f32 = sample.iter().map(position_entropy).sum::<f32>() / n;
 
     // Trust: inverse normalisation of entropy and mean logprob combined.
     // High trust = low entropy + logprob close to 0.
@@ -86,14 +82,17 @@ fn position_entropy(tok: &TokenLogprob) -> f32 {
     if !tok.top_alternatives.is_empty() {
         // Convert logprobs → probabilities, compute H = -Σ p·ln(p).
         let log_sum = log_sum_exp(
-            std::iter::once(tok.logprob)
-                .chain(tok.top_alternatives.iter().map(|(_, lp)| *lp)),
+            std::iter::once(tok.logprob).chain(tok.top_alternatives.iter().map(|(_, lp)| *lp)),
         );
         let entropy: f32 = std::iter::once(tok.logprob)
             .chain(tok.top_alternatives.iter().map(|(_, lp)| *lp))
             .map(|lp| {
                 let p = (lp - log_sum).exp();
-                if p > 1e-9 { -p * lp } else { 0.0 }
+                if p > 1e-9 {
+                    -p * lp
+                } else {
+                    0.0
+                }
             })
             .sum();
         return entropy.max(0.0);
@@ -131,14 +130,27 @@ fn compute_trust(mean_logprob: f32, entropy: f32) -> f32 {
 /// Known prompt-injection phrase starters — any single token that, when normalised, matches one
 /// of these prefixes strongly suggests the model is outputting a prompt-injection pattern.
 const ADVERSARIAL_LEAD_TOKENS: &[&str] = &[
-    "ignore", "disregard", "forget", "override", "bypass",
-    "jailbreak", "pretend", "roleplay",
+    "ignore",
+    "disregard",
+    "forget",
+    "override",
+    "bypass",
+    "jailbreak",
+    "pretend",
+    "roleplay",
 ];
 
 /// Secondary words that, when appearing within 5 tokens of an adversarial lead, confirm injection.
 const ADVERSARIAL_FOLLOW_TOKENS: &[&str] = &[
-    "previous", "above", "prior", "instructions", "system",
-    "prompt", "rules", "context", "constraints",
+    "previous",
+    "above",
+    "prior",
+    "instructions",
+    "system",
+    "prompt",
+    "rules",
+    "context",
+    "constraints",
 ];
 
 /// Classify the dominant cognitive phase from the token window.
@@ -256,8 +268,17 @@ pub fn classify_from_text(text: &str, tool_calls_count: usize) -> Option<Cogniti
 
     // Refusal detection: look for strong refusal openers in the first 10 words.
     let refusal_openers = [
-        "sorry", "i'm sorry", "i cannot", "i can't", "i am unable", "i'm unable",
-        "unfortunately", "i apologize", "apologies", "i won't", "i will not",
+        "sorry",
+        "i'm sorry",
+        "i cannot",
+        "i can't",
+        "i am unable",
+        "i'm unable",
+        "unfortunately",
+        "i apologize",
+        "apologies",
+        "i won't",
+        "i will not",
     ];
     let first_chunk: String = words.iter().take(10).cloned().collect::<Vec<_>>().join(" ");
     if refusal_openers.iter().any(|r| first_chunk.contains(r)) {
@@ -272,8 +293,23 @@ pub fn classify_from_text(text: &str, tool_calls_count: usize) -> Option<Cogniti
     }
 
     // Adversarial vocabulary detection: same n-gram logic as logprob path.
-    let adv_leads = ["ignore", "disregard", "forget", "override", "bypass", "jailbreak"];
-    let adv_follows = ["previous", "above", "prior", "instructions", "system", "prompt", "rules"];
+    let adv_leads = [
+        "ignore",
+        "disregard",
+        "forget",
+        "override",
+        "bypass",
+        "jailbreak",
+    ];
+    let adv_follows = [
+        "previous",
+        "above",
+        "prior",
+        "instructions",
+        "system",
+        "prompt",
+        "rules",
+    ];
     let has_adv_lead = adv_leads.iter().any(|w| lower.contains(w));
     let has_adv_follow = adv_follows.iter().any(|w| lower.contains(w));
     if has_adv_lead && has_adv_follow {
@@ -424,9 +460,7 @@ mod tests {
     #[test]
     fn hallucination_high_entropy_low_logprob() {
         let alts: Vec<(&str, f32)> = (0..5).map(|i| ("y", -2.0 - i as f32 * 0.2)).collect();
-        let tokens: Vec<TokenLogprob> = (0..6)
-            .map(|_| tok("word", -2.5, &alts))
-            .collect();
+        let tokens: Vec<TokenLogprob> = (0..6).map(|_| tok("word", -2.5, &alts)).collect();
         let v = classify(&tokens).expect("should classify");
         assert!(
             matches!(v.gate, VitalsGate::Warn | VitalsGate::Fail),

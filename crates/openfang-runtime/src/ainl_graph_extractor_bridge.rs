@@ -36,7 +36,11 @@ pub fn ainl_extractor_runtime_enabled() -> bool {
 }
 
 /// Build the canonical turn payload consumed by [`AinlExtractorBridge::extract_facts`].
-pub fn format_turn_payload(user_message: &str, assistant_response: &str, tools: &[String]) -> String {
+pub fn format_turn_payload(
+    user_message: &str,
+    assistant_response: &str,
+    tools: &[String],
+) -> String {
     let mut s = String::with_capacity(
         user_message.len() + assistant_response.len() + 32 + tools.len() * 16,
     );
@@ -104,10 +108,7 @@ impl AinlExtractorBridge {
         {
             let (user, assistant, tools) = parse_turn_payload(turn_text);
             let tags = ainl_graph_extractor::extract_turn_semantic_tags_for_memory(
-                user,
-                assistant,
-                &tools,
-                None,
+                user, assistant, &tools, None,
             );
             tags.into_iter()
                 .map(|t| {
@@ -130,9 +131,8 @@ impl AinlExtractorBridge {
     pub fn extract_pattern(tool_sequence: &[String], _agent_id: &str) -> Option<String> {
         #[cfg(feature = "ainl-extractor")]
         {
-            repeated_subsequence_pattern(tool_sequence).or_else(|| {
-                crate::graph_extractor::extract_pattern(tool_sequence).map(|p| p.name)
-            })
+            repeated_subsequence_pattern(tool_sequence)
+                .or_else(|| crate::graph_extractor::extract_pattern(tool_sequence).map(|p| p.name))
         }
         #[cfg(not(feature = "ainl-extractor"))]
         {
