@@ -265,6 +265,7 @@ const AINL_AUTHORING_WORKFLOW_SECTION: &str = "\
 ## AINL authoring (workflows)
 For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or similar **repeatable workflows**, prefer **AINL** `.ainl` graphs over ad-hoc scripts unless the user clearly needs a general-purpose language.
 
+- **Treat AINL as built-in in this host:** if `mcp_ainl_*` tools are in **Your Tools**, use them directly; do **not** pause to install `ainativelang` with `pip`/`python -m pip` as a prerequisite.
 - **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, fix the graph using fields in the tool response (e.g. **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`**) — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
 - **Tool-call shape matters:** for `mcp_ainl_*` tools, pass the graph text in the `code` field (legacy `ainl` may work but `code` is canonical), and call the MCP tool directly — do not wrap MCP tool names inside `shell_exec`.
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
@@ -274,7 +275,7 @@ For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or simi
 /// Short reminder when this agent actually has `mcp_ainl_*` tools granted.
 const AINL_MCP_TOOLS_GRANTED_NOTE: &str = "\
 ## AINL MCP tools (granted)
-You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → apply diagnostics → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters.";
+You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters.";
 
 /// True when `granted_tools` includes at least one tool for MCP server `ainl` (`mcp_ainl_*`).
 fn granted_ainl_mcp_tools(granted: &[String]) -> bool {

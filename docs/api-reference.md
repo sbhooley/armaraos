@@ -342,7 +342,11 @@ Update visual / personality identity only. Uses the **same merge rules** as the 
 
 Returns the agent’s explicit tool **allowlist** and **blocklist** (manifest fields). An empty allowlist means “no extra restriction” — effective tools come from the agent’s named **profile** and capabilities.
 
-**Non-empty allowlists (kernel merge):** When an allowlist is **non-empty**, the kernel merges a fixed “just works” set into the in-memory manifest (case-insensitive dedupe) so operators do not have to wire these by hand: **`file_write`**, **`file_read`**, **`shell_exec`**, **`web_search`**, **`channel_send`**, **`event_publish`**, **`web_fetch`**, **`mcp_ainl_ainl_list_ecosystem`**, **`mcp_ainl_ainl_capabilities`**, **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_run`**. An **empty** allowlist skips this merge (profile defaults apply).
+**Non-empty allowlists (kernel merge):** When an allowlist is **non-empty**, the kernel merges a fixed “just works” set into the in-memory manifest (case-insensitive dedupe) so operators do not have to wire these by hand: **`file_write`**, **`file_read`**, **`shell_exec`**, **`web_search`**, **`channel_send`**, **`event_publish`**, **`web_fetch`**, **`mcp_ainl_ainl_list_ecosystem`**, **`mcp_ainl_ainl_capabilities`**, **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_compile`**, **`mcp_ainl_ainl_run`**, and a wildcard entry **`mcp_ainl_*`** so every **`mcp_ainl_…`** tool from the connected MCP server stays eligible when operators use a restricted allowlist. An **empty** allowlist skips this merge (profile defaults apply).
+
+**Glob-style filters:** For both allowlist and blocklist, entries are matched **case-insensitively**. A pattern may include **`*`** as a wildcard (for example **`mcp_github_*`** or **`mcp_ainl_*`**). This matches how the kernel filters tools sent to the LLM and how delegation maps tools to agents.
+
+**Non-empty MCP server allowlists (kernel merge):** When **`mcp_servers`** on the agent is **non-empty** (restricting which MCP servers apply), the kernel merges **`ainl`** into that list if missing, so the **AINL** MCP toolchain remains available unless the operator explicitly removes it after connect. Empty **`mcp_servers`** still means “all connected servers” (unchanged).
 
 **Response** `200 OK`:
 

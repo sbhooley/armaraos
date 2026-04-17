@@ -72,6 +72,8 @@ Scheduled **`ainl run`** jobs and the **desktop** embedded server set **`AINL_AL
 
 When the desktop app or `ainl install armaraos` configures **`ainl-mcp`**, agents with MCP access can validate, compile, and run graphs against `~/.armaraos/ainl-library/`. Prefer **AINL** for new automation unless a concrete constraint requires another language ([ainl-first-language.md](ainl-first-language.md)).
 
+**Defaults (kernel):** If you set a **non-empty** per-agent tool allowlist, the kernel still merges core file/web/channel tools plus **`mcp_ainl_*`** patterns and explicit names such as **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_compile`**, and **`mcp_ainl_ainl_run`** so dashboards do not have to list every AINL MCP tool by hand. If you set a **non-empty** MCP **server** allowlist, **`ainl`** is merged in when absent so the AINL MCP namespace stays connected. Agents should call **`mcp_ainl_*`** tools directly when present; they do **not** need to `pip install ainativelang` first — the host exposes the toolchain via MCP. See **GET `/api/agents/{id}/tools`** in [api-reference.md](api-reference.md).
+
 ## Dashboard
 
 `GET /api/ainl/library` lists `.ainl` / `.lang` files under `ainl-library`, with **`armaraos-programs`** grouped first when present.

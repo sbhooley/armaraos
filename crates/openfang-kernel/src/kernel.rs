@@ -59,7 +59,9 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "mcp_ainl_ainl_list_ecosystem",
     "mcp_ainl_ainl_capabilities",
     "mcp_ainl_ainl_validate",
+    "mcp_ainl_ainl_compile",
     "mcp_ainl_ainl_run",
+    "mcp_ainl_*",
 ];
 
 fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
@@ -71,6 +73,67 @@ fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
             allowlist.push((*required).to_string());
         }
     }
+}
+
+/// Default MCP servers that should be retained when a non-empty per-agent
+/// server allowlist is configured.
+const DEFAULT_AGENT_MCP_SERVERS: &[&str] = &["ainl"];
+
+fn merge_default_agent_mcp_servers(servers: &mut Vec<String>) {
+    if servers.is_empty() {
+        return;
+    }
+    for required in DEFAULT_AGENT_MCP_SERVERS {
+        if !servers.iter().any(|s| s.eq_ignore_ascii_case(required)) {
+            servers.push((*required).to_string());
+        }
+    }
+}
+
+/// Case-insensitive glob-style matcher for per-agent tool filters.
+///
+/// Supports `*` wildcards (for example `mcp_ainl_*`).
+fn tool_name_matches_filter(pattern: &str, tool_name: &str) -> bool {
+    let pattern = pattern.trim().to_ascii_lowercase();
+    let tool_name = tool_name.to_ascii_lowercase();
+
+    if pattern == "*" {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return pattern == tool_name;
+    }
+
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 2 {
+        let prefix = parts[0];
+        let suffix = parts[1];
+        return tool_name.starts_with(prefix)
+            && tool_name.ends_with(suffix)
+            && tool_name.len() >= prefix.len() + suffix.len();
+    }
+
+    let mut pos = 0;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !tool_name.starts_with(part) {
+                return false;
+            }
+            pos = part.len();
+        } else if i == parts.len() - 1 {
+            if !tool_name[pos..].ends_with(part) {
+                return false;
+            }
+        } else if let Some(found) = tool_name[pos..].find(part) {
+            pos += found + part.len();
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// Applies `capabilities.shell` patterns from a manifest into its effective exec policy.
@@ -2025,6 +2088,7 @@ impl OpenFangKernel {
         // whether to upgrade Allowlist → Full for shell_exec agents.
         let mut manifest = manifest;
         merge_default_agent_allowlist_tools(&mut manifest.tool_allowlist);
+        merge_default_agent_mcp_servers(&mut manifest.mcp_servers);
         let manifest_had_explicit_exec_policy = manifest.exec_policy.is_some();
         if manifest.exec_policy.is_none() {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
@@ -4221,8 +4285,9 @@ impl OpenFangKernel {
     pub fn set_agent_mcp_servers(
         &self,
         agent_id: AgentId,
-        servers: Vec<String>,
+        mut servers: Vec<String>,
     ) -> KernelResult<()> {
+        merge_default_agent_mcp_servers(&mut servers);
         // Validate server names if allowlist is non-empty
         if !servers.is_empty() {
             if let Ok(mcp_tools) = self.mcp_tools.lock() {
@@ -4317,6 +4382,7 @@ impl OpenFangKernel {
             manifest.workspace = entry.manifest.workspace.clone();
         }
         merge_default_agent_allowlist_tools(&mut manifest.tool_allowlist);
+        merge_default_agent_mcp_servers(&mut manifest.mcp_servers);
         apply_budget_defaults(&self.config.budget, &mut manifest.resources);
         apply_shell_caps_to_exec_policy(&mut manifest);
 
@@ -6938,7 +7004,7 @@ impl OpenFangKernel {
 
         // Look up agent entry for profile, skill/MCP allowlists, and declared tools
         let entry = self.registry.get(agent_id);
-        let (skill_allowlist, mcp_allowlist, tool_profile) = entry
+        let (skill_allowlist, mut mcp_allowlist, tool_profile) = entry
             .as_ref()
             .map(|e| {
                 (
@@ -6948,6 +7014,7 @@ impl OpenFangKernel {
                 )
             })
             .unwrap_or_default();
+        merge_default_agent_mcp_servers(&mut mcp_allowlist);
 
         // Extract the agent's declared tool list from capabilities.tools.
         // This is the primary mechanism: only send declared tools to the LLM.
@@ -7071,14 +7138,14 @@ impl OpenFangKernel {
             all_tools.retain(|t| {
                 tool_allowlist
                     .iter()
-                    .any(|a| a.to_lowercase() == t.name.to_lowercase())
+                    .any(|a| tool_name_matches_filter(a, &t.name))
             });
         }
         if !tool_blocklist.is_empty() {
             all_tools.retain(|t| {
                 !tool_blocklist
                     .iter()
-                    .any(|b| b.to_lowercase() == t.name.to_lowercase())
+                    .any(|b| tool_name_matches_filter(b, &t.name))
             });
         }
 
@@ -8075,6 +8142,9 @@ fn delegate_combined_score(entry: &AgentEntry, task: &str, preferred_tags: &[Str
 fn build_tool_to_agents_map(entries: &[AgentEntry]) -> HashMap<String, HashSet<AgentId>> {
     let mut m: HashMap<String, HashSet<AgentId>> = HashMap::new();
     for e in entries {
+        let mut allowlist = e.manifest.tool_allowlist.clone();
+        merge_default_agent_allowlist_tools(&mut allowlist);
+
         // Get the effective tool list after applying allowlist/blocklist filters
         let effective_tools: Vec<&String> = e
             .manifest
@@ -8083,11 +8153,17 @@ fn build_tool_to_agents_map(entries: &[AgentEntry]) -> HashMap<String, HashSet<A
             .iter()
             .filter(|tool| {
                 // If allowlist is non-empty, tool must be in it
-                let allowed_by_allowlist = e.manifest.tool_allowlist.is_empty()
-                    || e.manifest.tool_allowlist.contains(tool);
+                let allowed_by_allowlist = allowlist.is_empty()
+                    || allowlist
+                        .iter()
+                        .any(|a| tool_name_matches_filter(a, tool));
 
                 // Tool must NOT be in blocklist
-                let not_blocked = !e.manifest.tool_blocklist.contains(tool);
+                let not_blocked = !e
+                    .manifest
+                    .tool_blocklist
+                    .iter()
+                    .any(|b| tool_name_matches_filter(b, tool));
 
                 allowed_by_allowlist && not_blocked
             })
@@ -9993,6 +10069,39 @@ mod tests {
             validate_count, 1,
             "mcp_ainl_ainl_validate should not be duplicated when already present"
         );
+    }
+
+    #[test]
+    fn test_merge_default_agent_mcp_servers_noop_for_empty_allowlist() {
+        let mut servers: Vec<String> = vec![];
+        merge_default_agent_mcp_servers(&mut servers);
+        assert!(
+            servers.is_empty(),
+            "empty MCP server allowlist should remain empty (means unrestricted MCP servers)"
+        );
+    }
+
+    #[test]
+    fn test_merge_default_agent_mcp_servers_adds_ainl() {
+        let mut servers = vec!["github".to_string()];
+        merge_default_agent_mcp_servers(&mut servers);
+        assert!(
+            servers.iter().any(|s| s.eq_ignore_ascii_case("ainl")),
+            "ainl MCP server should be preserved for non-empty allowlists"
+        );
+    }
+
+    #[test]
+    fn test_tool_name_matches_filter_supports_case_insensitive_globs() {
+        assert!(tool_name_matches_filter("mcp_ainl_*", "mcp_ainl_ainl_validate"));
+        assert!(tool_name_matches_filter(
+            "MCP_AINL_AINL_COMPILE",
+            "mcp_ainl_ainl_compile"
+        ));
+        assert!(!tool_name_matches_filter(
+            "mcp_github_*",
+            "mcp_ainl_ainl_run"
+        ));
     }
 
     #[test]
