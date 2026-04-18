@@ -424,6 +424,24 @@ impl GraphMemoryWriter {
         serde_json::to_value(&snap).map_err(|e| format!("export_graph json: {e}"))
     }
 
+    /// Write nodes produced by `ainl_agent_snapshot::apply_graph_writes` using a **synchronous**
+    /// SQLite connection (same file as [`Self::open`]).
+    ///
+    /// Used from sync [`ainl_runtime::GraphPatchHostDispatch::on_patch_dispatch`] where the host
+    /// cannot `.await` the async [`GraphMemoryWriter`] mutex. Dashboard live hooks are not fired
+    /// here; the next graph-memory read sees the new rows.
+    pub fn write_snapshot_nodes_sync_for_agent(
+        agent_id: &str,
+        nodes: &[AinlMemoryNode],
+    ) -> Result<(), String> {
+        let path = Self::db_path(agent_id)?;
+        let memory = GraphMemory::new(&path).map_err(|e| format!("open graph memory: {e}"))?;
+        for node in nodes {
+            memory.write_node(node).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Record an A2A delegation as an EpisodeNode with delegation_to set.
     pub async fn record_delegation(&self, target_agent_id: &str, tool_calls: Vec<String>) {
         let _ = self

@@ -12,6 +12,8 @@
 //!   patterns that evade single-hash counting.
 //! - **Poll tool handling**: relaxed thresholds for tools expected to be called
 //!   repeatedly (e.g. `shell_exec` status checks).
+//! - **AINL MCP tools** (`mcp_ainl_*`): same relaxed thresholds as poll tools — small
+//!   models often retry the same `ainl_run`/`validate` call while fixing graph text.
 //! - **Backoff suggestions**: recommends increasing wait times for polling.
 //! - **Warning bucket**: prevents spam by upgrading to Block after repeated
 //!   warnings for the same call.
@@ -25,6 +27,13 @@ use std::collections::{HashMap, HashSet};
 const POLL_TOOLS: &[&str] = &[
     "shell_exec", // checking command output
 ];
+
+/// AINL MCP tools (`mcp_ainl_*`) — small models often retry with the same bad `code` until they
+/// read the file; identical parameters + identical error should not trip the loop guard as fast
+/// as generic tools. Uses the same multiplier as [`POLL_TOOLS`].
+fn is_mcp_ainl_tool(tool_name: &str) -> bool {
+    tool_name.starts_with("mcp_ainl_")
+}
 
 /// Maximum recent call history size for ping-pong detection.
 const HISTORY_SIZE: usize = 30;
@@ -181,9 +190,9 @@ impl LoopGuard {
         *count += 1;
         let count_val = *count;
 
-        // Determine effective thresholds (poll tools get relaxed thresholds)
+        // Determine effective thresholds (poll tools + AINL MCP get relaxed thresholds)
         let is_poll = Self::is_poll_call(tool_name, params);
-        let multiplier = if is_poll {
+        let multiplier = if is_poll || is_mcp_ainl_tool(tool_name) {
             self.config.poll_multiplier
         } else {
             1
@@ -206,13 +215,17 @@ impl LoopGuard {
             let warning_count = self.warnings_emitted.entry(hash.clone()).or_insert(0);
             *warning_count += 1;
             if *warning_count > self.config.max_warnings_per_call {
-                // Upgrade to block after too many warnings
-                self.blocked_calls += 1;
-                return LoopGuardVerdict::Block(format!(
-                    "Blocked: tool '{}' called {} times with identical parameters \
-                     (warnings exhausted). Try a different approach.",
-                    tool_name, count_val
-                ));
+                // AINL MCP tools: do not upgrade warnings to block — small models need many retries
+                // with the same bad `code` until they read the file; rely on `effective_block` only.
+                if !is_mcp_ainl_tool(tool_name) {
+                    // Upgrade to block after too many warnings
+                    self.blocked_calls += 1;
+                    return LoopGuardVerdict::Block(format!(
+                        "Blocked: tool '{}' called {} times with identical parameters \
+                         (warnings exhausted). Try a different approach.",
+                        tool_name, count_val
+                    ));
+                }
             }
             return LoopGuardVerdict::Warn(format!(
                 "Warning: tool '{}' has been called {} times with identical parameters. \
@@ -261,7 +274,15 @@ impl LoopGuard {
         *count += 1;
         let count_val = *count;
 
-        if count_val >= self.config.outcome_block_threshold {
+        let mut outcome_warn_th = self.config.outcome_warn_threshold;
+        let mut outcome_block_th = self.config.outcome_block_threshold;
+        if is_mcp_ainl_tool(tool_name) {
+            outcome_block_th = self.config.outcome_block_threshold.saturating_mul(self.config.poll_multiplier);
+            // One warning just before block (avoid spamming from outcome_warn_threshold=2)
+            outcome_warn_th = outcome_block_th.saturating_sub(1).max(1);
+        }
+
+        if count_val >= outcome_block_th {
             // Mark the call hash so the NEXT check() auto-blocks it
             self.blocked_outcomes.insert(call_hash);
             return Some(format!(
@@ -270,7 +291,7 @@ impl LoopGuard {
             ));
         }
 
-        if count_val >= self.config.outcome_warn_threshold {
+        if count_val >= outcome_warn_th {
             return Some(format!(
                 "Tool '{}' is returning identical results — the approach isn't working.",
                 tool_name
@@ -642,6 +663,38 @@ mod tests {
         if let LoopGuardVerdict::Block(msg) = v {
             assert!(msg.contains("identical results"));
         }
+    }
+
+    #[test]
+    fn mcp_ainl_tool_uses_relaxed_identical_call_threshold() {
+        let mut guard = LoopGuard::new(LoopGuardConfig::default());
+        let params = serde_json::json!({"code": "bad"});
+        // Relaxed: block_threshold 5 * poll_multiplier 3 = 15
+        for _ in 0..14 {
+            let v = guard.check("mcp_ainl_ainl_run", &params);
+            assert!(
+                !matches!(v, LoopGuardVerdict::Block(_)),
+                "unexpected block before 15th call: {:?}",
+                v
+            );
+        }
+        assert!(matches!(
+            guard.check("mcp_ainl_ainl_run", &params),
+            LoopGuardVerdict::Block(_)
+        ));
+    }
+
+    #[test]
+    fn mcp_ainl_outcome_requires_more_identical_results() {
+        let mut guard = LoopGuard::new(LoopGuardConfig::default());
+        let params = serde_json::json!({"code": "x"});
+        let result = "same error";
+        // outcome_block 3 * 3 = 9; outcome_warn 8 — first Some on 8th repeat
+        for _ in 0..7 {
+            assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_none());
+        }
+        assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_some());
+        assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_some());
     }
 
     // ========================================================================

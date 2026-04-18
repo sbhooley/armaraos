@@ -9,6 +9,7 @@ use tracing::debug;
 pub mod anthropic;
 pub mod claude_code;
 pub mod copilot;
+pub mod native_infer;
 pub mod factory;
 pub mod fallback;
 pub mod gemini;

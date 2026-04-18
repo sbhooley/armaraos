@@ -522,7 +522,9 @@ pub async fn execute_tool(
 
         // Media understanding tools
         "media_describe" => tool_media_describe(input, media_engine).await,
-        "media_transcribe" => tool_media_transcribe(input, media_engine).await,
+        "media_transcribe" => {
+            tool_media_transcribe(input, media_engine, workspace_root, ainl_library_root).await
+        }
 
         // Image generation tool
         "image_generate" => tool_image_generate(input, workspace_root).await,
@@ -1368,14 +1370,15 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "media_transcribe".to_string(),
-            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript.".to_string(),
+            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript. For dashboard/voice uploads, use file_id (UUID from the user message hint), not the display filename — the bytes live in a temp upload dir, not under workspace.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Path to the audio file (relative to workspace). Supported: mp3, wav, ogg, flac, m4a, webm." },
+                    "path": { "type": "string", "description": "Path to the audio file (workspace-relative or absolute). Supported extensions: mp3, wav, ogg, flac, m4a, webm." },
+                    "file_id": { "type": "string", "description": "Upload UUID from chat (openfang_uploads). Use this for voice messages instead of path when the hint lists a file_id." },
+                    "content_type": { "type": "string", "description": "MIME type when using file_id (e.g. audio/webm). Defaults to audio/webm if omitted." },
                     "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
-                },
-                "required": ["path"]
+                }
             }),
         },
         // --- Image generation tool ---
@@ -4091,39 +4094,68 @@ async fn tool_media_describe(
 async fn tool_media_transcribe(
     input: &serde_json::Value,
     media_engine: Option<&crate::media_understanding::MediaEngine>,
+    workspace_root: Option<&std::path::Path>,
+    ainl_library_root: Option<&std::path::Path>,
 ) -> Result<String, String> {
     use base64::Engine;
+    use std::path::PathBuf;
     let engine = media_engine.ok_or("Media engine not available. Check media configuration.")?;
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let _ = validate_path(path)?;
+
+    let file_id = input["file_id"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let path_str = input["path"].as_str().map(str::trim).filter(|s| !s.is_empty());
+
+    let (resolved, mime): (PathBuf, String) = match (file_id, path_str) {
+        (Some(fid), _) => {
+            if uuid::Uuid::parse_str(fid).is_err() {
+                return Err("Invalid file_id: expected a UUID from the chat upload hint.".to_string());
+            }
+            let p = std::env::temp_dir().join("openfang_uploads").join(fid);
+            let ct = input["content_type"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("audio/webm")
+                .to_string();
+            (p, ct)
+        }
+        (None, Some(p)) => {
+            let _ = validate_path(p)?;
+            let resolved = resolve_file_path_read(p, workspace_root, ainl_library_root)?;
+            let ext = resolved
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let mime = match ext.as_str() {
+                "mp3" => "audio/mpeg",
+                "wav" => "audio/wav",
+                "ogg" => "audio/ogg",
+                "flac" => "audio/flac",
+                "m4a" => "audio/mp4",
+                "webm" => "audio/webm",
+                _ => return Err(format!("Unsupported audio format: .{ext}")),
+            };
+            (resolved, mime.to_string())
+        }
+        (None, None) => {
+            return Err(
+                "Missing 'path' or 'file_id'. For voice uploads use file_id from the message hint."
+                    .to_string(),
+            );
+        }
+    };
 
     // Read audio file
-    let data = tokio::fs::read(path)
+    let data = tokio::fs::read(&resolved)
         .await
         .map_err(|e| format!("Failed to read audio file: {e}"))?;
 
-    // Detect MIME type from extension
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
-        "webm" => "audio/webm",
-        _ => return Err(format!("Unsupported audio format: .{ext}")),
-    };
-
     let attachment = openfang_types::media::MediaAttachment {
         media_type: openfang_types::media::MediaType::Audio,
-        mime_type: mime.to_string(),
+        mime_type: mime.clone(),
         source: openfang_types::media::MediaSource::Base64 {
             data: base64::engine::general_purpose::STANDARD.encode(&data),
-            mime_type: mime.to_string(),
+            mime_type: mime,
         },
         size_bytes: data.len() as u64,
     };
@@ -4948,6 +4980,86 @@ async fn tool_email_draft(
     }
 
     Err("Draft creation requires an MCP email integration (Gmail, Outlook). Raw IMAP does not support drafts reliably.".to_string())
+}
+
+// ── Planner mode (deterministic plan) tool dispatch — mirrors `agent_loop` timeouts ─────────────
+
+const PLANNER_TOOL_TIMEOUT_SECS: u64 = 300;
+const PLANNER_AGENT_TOOL_TIMEOUT_SECS: u64 = 600;
+
+/// Wall-clock timeout for a single tool invocation (same caps as `agent_loop::tool_timeout_for`).
+pub fn tool_execution_timeout(tool_name: &str) -> std::time::Duration {
+    use std::time::Duration;
+    match tool_name {
+        "agent_send" | "agent_spawn" => Duration::from_secs(PLANNER_AGENT_TOOL_TIMEOUT_SECS),
+        "document_extract" | "spreadsheet_build" => Duration::from_secs(180),
+        "channel_send" | "channel_stream" => Duration::from_secs(30),
+        "image_generate" | "text_to_speech" | "speech_to_text" | "media_describe"
+        | "media_transcribe" => Duration::from_secs(300),
+        "a2a_send" | "a2a_discover" => Duration::from_secs(300),
+        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
+            Duration::from_secs(30)
+        }
+        "shell_exec" => Duration::from_secs(PLANNER_TOOL_TIMEOUT_SECS),
+        _ => Duration::from_secs(PLANNER_TOOL_TIMEOUT_SECS),
+    }
+}
+
+/// Dispatch one planner step through the same path as the interactive tool loop.
+#[allow(clippy::too_many_arguments)]
+pub async fn dispatch_planned_tool_call(
+    step_id: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    allowed_tools: Option<&[String]>,
+    caller_agent_id: Option<&str>,
+    skill_registry: Option<&SkillRegistry>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+    web_ctx: Option<&WebToolsContext>,
+    browser_ctx: Option<&crate::browser::BrowserManager>,
+    allowed_env_vars: Option<&[String]>,
+    workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    exec_policy: Option<&openfang_types::config::ExecPolicy>,
+    tts_engine: Option<&crate::tts::TtsEngine>,
+    docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    orchestration_live: Option<&OrchestrationLive>,
+) -> Result<serde_json::Value, ainl_agent_snapshot::PlanStepError> {
+    let timeout = tool_execution_timeout(tool_name);
+    let fut = execute_tool(
+        step_id,
+        tool_name,
+        input,
+        kernel,
+        allowed_tools,
+        caller_agent_id,
+        skill_registry,
+        mcp_connections,
+        web_ctx,
+        browser_ctx,
+        allowed_env_vars,
+        workspace_root,
+        ainl_library_root,
+        media_engine,
+        exec_policy,
+        tts_engine,
+        docker_config,
+        process_manager,
+        orchestration_live,
+    );
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(tr) => {
+            if tr.is_error {
+                Err(ainl_agent_snapshot::PlanStepError::Deterministic(tr.content))
+            } else {
+                Ok(serde_json::json!({ "output": tr.content }))
+            }
+        }
+        Err(_) => Err(ainl_agent_snapshot::PlanStepError::Timeout),
+    }
 }
 
 #[cfg(test)]

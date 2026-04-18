@@ -18,6 +18,8 @@ openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
 ainl-compression = { path = "../ainl-compression", version = "0.1.0-alpha" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
+ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
+armara-provider-api = { path = "../../../ainl-inference-server/crates/armara-provider-api" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6", optional = true }
 ainl-persona = { path = "../ainl-persona", version = "0.1.6", optional = true }
@@ -56,6 +58,7 @@ pdf-extract = "0.10.0"
 rust_xlsxwriter = "0.94.0"
 zip = { workspace = true }
 lru = "0.12"
+jsonschema = "0.28"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

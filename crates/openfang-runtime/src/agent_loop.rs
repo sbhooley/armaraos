@@ -20,6 +20,8 @@ use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::{CompletionRequest, DriverConfig, LlmDriver, LlmError, StreamEvent};
+use crate::plan_executor::{PlanEpisodeRecorder, PlanExecutionTrace, PlanExecutor, PlanStepDispatch};
+use crate::planner_mode::{native_infer_base_url, resolve_planner_mode};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -37,14 +39,24 @@ use openfang_types::message::{
 };
 use openfang_types::runtime_limits::EffectiveRuntimeLimits;
 use openfang_types::tool::{ToolCall, ToolDefinition};
+use ainl_agent_snapshot::{
+    self, PolicyCaps, SnapshotPolicy, STRUCTURED_KIND_DETERMINISTIC_PLAN,
+    STRUCTURED_KIND_PLANNER_INVALID_PLAN,
+};
+use armara_provider_api::{
+    ChatMessage as InferChatMessage, InferRequest, ModelHint, Policy as InferPolicy, SessionRef,
+};
+use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::graph_memory_writer::GraphMemoryWriteNotifyFn;
+use crate::graph_memory_writer::{GraphMemoryWriteNotifyFn, GraphMemoryWriter};
 
 /// When a kernel handle is present, graph-memory writes publish `SystemEvent::GraphMemoryWrite` for dashboard SSE.
 fn graph_memory_sse_hook(
@@ -429,17 +441,6 @@ const MAX_RETRIES: u32 = 3;
 /// Base delay for exponential backoff (milliseconds).
 const BASE_RETRY_DELAY_MS: u64 = 1000;
 
-/// Timeout for individual tool executions (seconds).
-/// Raised from 120s to 300s so that shell_exec commands with a user-specified
-/// timeout_seconds up to 300 are not silently capped by the outer tokio wrapper.
-/// Long-running jobs (>300s) should use process_start/process_poll instead.
-const TOOL_TIMEOUT_SECS: u64 = 300;
-
-/// Timeout for inter-agent tool calls (seconds).
-/// Agent delegation (agent_send, agent_spawn) can involve a full agent loop on the
-/// target, so these need a significantly longer timeout than regular tools.
-const AGENT_TOOL_TIMEOUT_SECS: u64 = 600;
-
 /// Classifies a tool call after the synchronous pre-pass (loop guard + hooks).
 /// `Resolved` carries a pre-built error block; `Pending` holds a call ready for
 /// parallel async execution.
@@ -454,28 +455,7 @@ enum ToolDispatch<'a> {
 /// Returns the appropriate timeout duration for a given tool name.
 /// Inter-agent calls get a longer timeout since they may trigger full agent loops.
 fn tool_timeout_for(tool_name: &str) -> Duration {
-    match tool_name {
-        // Inter-agent: can trigger a full nested agent loop
-        "agent_send" | "agent_spawn" => Duration::from_secs(AGENT_TOOL_TIMEOUT_SECS),
-        // Document processing: large files can be slow
-        "document_extract" | "spreadsheet_build" => Duration::from_secs(180),
-        // Channel messaging: network round-trip to external service
-        "channel_send" | "channel_stream" => Duration::from_secs(30),
-        // Media generation / external AI APIs: network + model latency
-        "image_generate" | "text_to_speech" | "speech_to_text" | "media_describe"
-        | "media_transcribe" => Duration::from_secs(300),
-        // External A2A: remote agent may need time to process
-        "a2a_send" | "a2a_discover" => Duration::from_secs(300),
-        // Persistent process tools: process_start is fast (just spawns), poll/write/kill are instant
-        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
-            Duration::from_secs(30)
-        }
-        // shell_exec: the inner tool respects LLM-specified timeout_seconds (up to 300s).
-        // This outer cap must be at least as large as the inner maximum so the agent loop
-        // wrapper never kills a command that the model legitimately asked to run longer.
-        "shell_exec" => Duration::from_secs(TOOL_TIMEOUT_SECS),
-        _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
-    }
+    tool_runner::tool_execution_timeout(tool_name)
 }
 
 /// Detect when the LLM claims to have performed an action (sent, posted, emailed)
@@ -869,6 +849,236 @@ fn loop_time_system_prompt_from_manifest(manifest: &AgentManifest) -> String {
     system_prompt
 }
 
+/// Dispatches deterministic-plan tool steps through the same path as the interactive tool loop.
+struct PlannerLoopDispatch<'a> {
+    kernel: Option<&'a Arc<dyn KernelHandle>>,
+    allowed_tool_names: &'a [String],
+    caller_id_str: &'a str,
+    skill_registry: Option<&'a SkillRegistry>,
+    mcp_connections: Option<&'a tokio::sync::Mutex<Vec<McpConnection>>>,
+    web_ctx: Option<&'a WebToolsContext>,
+    browser_ctx: Option<&'a crate::browser::BrowserManager>,
+    hand_allowed_env: &'a [String],
+    workspace_root: Option<&'a Path>,
+    ainl_library_root: Option<&'a Path>,
+    media_engine: Option<&'a crate::media_understanding::MediaEngine>,
+    exec_policy: Option<&'a openfang_types::config::ExecPolicy>,
+    tts_engine: Option<&'a crate::tts::TtsEngine>,
+    docker_config: Option<&'a openfang_types::config::DockerSandboxConfig>,
+    process_manager: Option<&'a crate::process_manager::ProcessManager>,
+    orchestration_live: Option<&'a tool_runner::OrchestrationLive>,
+}
+
+struct PlannerEpisodeRecorder<'a> {
+    graph_memory: &'a GraphMemoryWriter,
+    /// Stable identifier for the whole plan execution (shared across all steps in this turn).
+    plan_id: uuid::Uuid,
+    /// Causal sequence counter — monotonically increments so receivers can reconstruct step order.
+    step_seq: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[async_trait]
+impl<'a> PlanEpisodeRecorder for PlannerEpisodeRecorder<'a> {
+    async fn record_step_completed(
+        &self,
+        step_id: &str,
+        tool: &str,
+        args: &Value,
+        output: &Value,
+    ) -> Result<(), String> {
+        let seq = self
+            .step_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let trace_event = serde_json::json!({
+            "kind": "planner_step_completed",
+            "plan_id": self.plan_id,
+            "step_seq": seq,
+            "step_id": step_id,
+            "tool": tool,
+            "args": args,
+            "output": output,
+        });
+        let tags = vec![tool.to_string(), format!("plan:{}", self.plan_id)];
+        let lock = self.graph_memory.inner.lock().await;
+        lock.write_episode(tags, None, Some(trace_event))
+            .map(|_| ())
+    }
+}
+
+#[async_trait]
+impl<'a> PlanStepDispatch for PlannerLoopDispatch<'a> {
+    async fn dispatch(
+        &self,
+        step_id: &str,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Value, ainl_agent_snapshot::PlanStepError> {
+        tool_runner::dispatch_planned_tool_call(
+            step_id,
+            tool,
+            args,
+            self.kernel,
+            Some(self.allowed_tool_names),
+            Some(self.caller_id_str),
+            self.skill_registry,
+            self.mcp_connections,
+            self.web_ctx,
+            self.browser_ctx,
+            if self.hand_allowed_env.is_empty() {
+                None
+            } else {
+                Some(self.hand_allowed_env)
+            },
+            self.workspace_root,
+            self.ainl_library_root,
+            self.media_engine,
+            self.exec_policy,
+            self.tts_engine,
+            self.docker_config,
+            self.process_manager,
+            self.orchestration_live,
+        )
+        .await
+    }
+}
+
+fn infer_message_body(m: &Message) -> String {
+    use openfang_types::message::{ContentBlock, MessageContent};
+    match &m.content {
+        MessageContent::Text(s) => s.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for b in blocks {
+                match b {
+                    ContentBlock::Text { text, .. } => parts.push(text.clone()),
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        parts.push(format!("[tool_use {name}] {}", input));
+                    }
+                    ContentBlock::ToolResult { content, .. } => parts.push(content.clone()),
+                    ContentBlock::Thinking { thinking } => parts.push(thinking.clone()),
+                    _ => {}
+                }
+            }
+            parts.join("\n")
+        }
+    }
+}
+
+/// Build a human-readable summary of a completed plan instead of a raw JSON dump.
+///
+/// Iterates completed steps in plan order, appending the last non-trivial output value
+/// as the "result". Falls back to a simple "Plan completed N steps." message when no
+/// meaningful output is present.
+fn synthesize_plan_summary(
+    plan: &ainl_agent_snapshot::DeterministicPlan,
+    exec_res: &crate::plan_executor::PlanExecutionResult,
+) -> String {
+    use std::fmt::Write as _;
+
+    let completed_count = exec_res.completed.len();
+    let skipped_count = exec_res.skipped.len();
+
+    // Walk steps in declared order (not HashMap iteration order) to find the last output.
+    let last_output = plan
+        .steps
+        .iter()
+        .rev()
+        .find_map(|s| exec_res.outputs.get(&s.id));
+
+    let mut out = String::new();
+    match last_output {
+        Some(v) if !v.is_null() => {
+            // Pretty-print the final step output as the result; prefix with a short header.
+            let _ = writeln!(
+                out,
+                "Plan completed ({completed_count} steps{skipped_suffix}).",
+                skipped_suffix = if skipped_count > 0 {
+                    format!(", {skipped_count} skipped")
+                } else {
+                    String::new()
+                }
+            );
+            match v {
+                serde_json::Value::String(s) => out.push_str(s),
+                other => {
+                    let _ = write!(
+                        out,
+                        "{}",
+                        serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string())
+                    );
+                }
+            }
+        }
+        _ => {
+            let _ = write!(
+                out,
+                "Plan completed {completed_count} step(s){}.",
+                if skipped_count > 0 {
+                    format!(", {skipped_count} skipped")
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+    out
+}
+
+fn snapshot_policy_caps(runtime_limits: &EffectiveRuntimeLimits) -> PolicyCaps {
+    PolicyCaps {
+        max_steps: runtime_limits.max_iterations,
+        max_depth: runtime_limits.max_agent_call_depth,
+        max_wall_ms: runtime_limits
+            .planner_max_wall_ms
+            .unwrap_or(ainl_agent_snapshot::DEFAULT_MAX_WALL_MS),
+        max_replan_calls: runtime_limits
+            .planner_max_replan_calls
+            .unwrap_or(ainl_agent_snapshot::DEFAULT_MAX_REPLAN_CALLS),
+        deny_tools: vec![],
+    }
+}
+
+fn snapshot_policy_from_runtime_limits(runtime_limits: &EffectiveRuntimeLimits) -> SnapshotPolicy {
+    SnapshotPolicy {
+        episodic_window_secs: runtime_limits.snapshot_episodic_window_secs,
+        episodic_max: runtime_limits.snapshot_episodic_max,
+        semantic_top_n: runtime_limits.snapshot_semantic_top_n,
+        procedural_top_n: runtime_limits.snapshot_procedural_top_n,
+        persona_top_n: runtime_limits.snapshot_persona_top_n,
+        non_episodic_window_secs: runtime_limits
+            .snapshot_non_episodic_window_secs
+            .unwrap_or(ainl_agent_snapshot::DEFAULT_NON_EPISODIC_WINDOW_SECS),
+    }
+}
+
+fn messages_to_infer_chat(messages: &[Message], system: Option<&str>) -> Vec<InferChatMessage> {
+    let mut out = Vec::new();
+    if let Some(s) = system {
+        if !s.is_empty() {
+            out.push(InferChatMessage {
+                role: "system".into(),
+                content: s.to_string(),
+            });
+        }
+    }
+    for m in messages {
+        let role = match m.role {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+            Role::System => "system",
+        };
+        let content = infer_message_body(m);
+        if content.is_empty() {
+            continue;
+        }
+        out.push(InferChatMessage {
+            role: role.to_string(),
+            content,
+        });
+    }
+    out
+}
+
 /// Run the agent execution loop for a single user message.
 ///
 /// This is the core of OpenFang: it loads session context, recalls memories,
@@ -901,6 +1111,8 @@ pub async fn run_agent_loop(
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     runtime_limits: EffectiveRuntimeLimits,
+    // Resolved once by the kernel from ModelCatalog (Copy); avoids holding a catalog lock across `.await`.
+    planner_model_tier: Option<openfang_types::model_catalog::ModelTier>,
     orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
     orchestration_live: Option<&tool_runner::OrchestrationLive>,
 ) -> OpenFangResult<AgentLoopResult> {
@@ -1037,6 +1249,46 @@ pub async fn run_agent_loop(
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
+    let planner_mode_on =
+        resolve_planner_mode(&manifest.metadata, &manifest.model.model, planner_model_tier);
+    let native_infer_url = native_infer_base_url();
+    let planner_path_eligible =
+        planner_mode_on && native_infer_url.is_some() && graph_memory.is_some();
+
+    let mut suppress_persona_for_planner = false;
+    if planner_path_eligible {
+        if let Some(ref gm) = graph_memory {
+            let tool_allowlist: Vec<String> =
+                available_tools.iter().map(|t| t.name.clone()).collect();
+            let caps = snapshot_policy_caps(&runtime_limits);
+            let snapshot_policy = snapshot_policy_from_runtime_limits(&runtime_limits);
+            let snap = tokio::time::timeout(
+                std::time::Duration::from_millis(5_000),
+                async {
+                    let lock = gm.inner.lock().await;
+                    ainl_agent_snapshot::build_snapshot(
+                        &lock,
+                        &agent_id_str,
+                        &snapshot_policy,
+                        tool_allowlist,
+                        caps,
+                    )
+                },
+            )
+            .await;
+            match snap {
+                Ok(Ok(s)) => suppress_persona_for_planner = !s.persona.is_empty(),
+                Ok(Err(_)) => {}
+                Err(_) => {
+                    tracing::warn!(
+                        agent = %agent_id_str,
+                        "snapshot preflight lock timed out (5s) — skipping persona suppression"
+                    );
+                }
+            }
+        }
+    }
+
     // Persona hook: query AINL graph memory for PersonaNodes and prepend
     // to system prompt so the agent's learned traits affect every LLM call.
     if memory_policy.allow_reads() {
@@ -1055,42 +1307,42 @@ pub async fn run_agent_loop(
             }
         }
     }
-    if memory_policy.allow_reads() {
+    if memory_policy.allow_reads() && !suppress_persona_for_planner {
         if let Some(ref gm) = graph_memory {
-        let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await; // 90 days
-        if !persona_nodes.is_empty() {
-            let traits: Vec<String> = persona_nodes
-                .iter()
-                .filter_map(|n| {
-                    if let ainl_memory::AinlNodeType::Persona { persona } = &n.node_type {
-                        if persona.strength >= 0.1 {
-                            Some(format!(
-                                "{} (strength={:.2})",
-                                persona.trait_name, persona.strength
-                            ))
+            let persona_nodes = gm.recall_persona(60 * 60 * 24 * 90).await; // 90 days
+            if !persona_nodes.is_empty() {
+                let traits: Vec<String> = persona_nodes
+                    .iter()
+                    .filter_map(|n| {
+                        if let ainl_memory::AinlNodeType::Persona { persona } = &n.node_type {
+                            if persona.strength >= 0.1 {
+                                Some(format!(
+                                    "{} (strength={:.2})",
+                                    persona.trait_name, persona.strength
+                                ))
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if !traits.is_empty() {
-                let persona_instruction = format!(
-                    "\n\n[Persona traits active: {}]",
-                    traits.join(", ")
-                );
-                system_prompt.push_str(&persona_instruction);
-                debug!(
-                    agent_id = %session.agent_id,
-                    trait_count = traits.len(),
-                    "AINL persona hook: injected {} trait(s) into system prompt",
-                    traits.len()
-                );
+                    })
+                    .collect();
+                if !traits.is_empty() {
+                    let persona_instruction = format!(
+                        "\n\n[Persona traits active: {}]",
+                        traits.join(", ")
+                    );
+                    system_prompt.push_str(&persona_instruction);
+                    debug!(
+                        agent_id = %session.agent_id,
+                        trait_count = traits.len(),
+                        "AINL persona hook: injected {} trait(s) into system prompt",
+                        traits.len()
+                    );
+                }
             }
         }
-    }
     }
 
     let graph_memory_for_mcp = if memory_policy.allow_writes() {
@@ -1403,6 +1655,351 @@ pub async fn run_agent_loop(
 
         // Strip provider prefix: "openrouter/google/gemini-2.5-flash" → "google/gemini-2.5-flash"
         let api_model = strip_provider_prefix(&manifest.model.model, &manifest.model.provider);
+
+        // Native `/armara/v1/infer` planner path (structured DeterministicPlan + executor), once per turn.
+        if iteration == 0 && planner_path_eligible {
+            if let (Some(ref gm), Some(ref infer_base)) = (&graph_memory, &native_infer_url) {
+                let plan_trace = kernel.as_ref().map(|kh| {
+                    let agent_id = session.agent_id;
+                    if let Some(ref octx) = orchestration_ctx {
+                        let parent_agent_id = if octx.call_chain.len() >= 2 {
+                            octx.call_chain.get(octx.call_chain.len() - 2).copied()
+                        } else {
+                            None
+                        };
+                        PlanExecutionTrace {
+                            kernel: kh,
+                            agent_id,
+                            trace_id: octx.trace_id.clone(),
+                            orchestrator_id: octx.orchestrator_id,
+                            parent_agent_id,
+                        }
+                    } else {
+                        PlanExecutionTrace {
+                            kernel: kh,
+                            agent_id,
+                            trace_id: Uuid::new_v4().to_string(),
+                            orchestrator_id: agent_id,
+                            parent_agent_id: None,
+                        }
+                    }
+                });
+                let allowed_tool_names: Vec<String> =
+                    available_tools.iter().map(|t| t.name.clone()).collect();
+                let caller_id_str = agent_id_str.clone();
+                let dispatch = PlannerLoopDispatch {
+                    kernel: kernel.as_ref(),
+                    allowed_tool_names: &allowed_tool_names,
+                    caller_id_str: caller_id_str.as_str(),
+                    skill_registry,
+                    mcp_connections,
+                    web_ctx,
+                    browser_ctx,
+                    hand_allowed_env: &hand_allowed_env,
+                    workspace_root,
+                    ainl_library_root,
+                    media_engine,
+                    exec_policy: manifest.exec_policy.as_ref(),
+                    tts_engine,
+                    docker_config,
+                    process_manager,
+                    orchestration_live,
+                };
+                let tool_allowlist_snap: Vec<String> =
+                    available_tools.iter().map(|t| t.name.clone()).collect();
+                let caps_snap = snapshot_policy_caps(&runtime_limits);
+                let snapshot_policy = snapshot_policy_from_runtime_limits(&runtime_limits);
+                // Bounded wait for the graph memory lock to avoid hanging the planner turn.
+                let snapshot_timeout_ms = runtime_limits
+                    .planner_max_wall_ms
+                    .unwrap_or(ainl_agent_snapshot::DEFAULT_MAX_WALL_MS)
+                    .min(10_000);
+                let agent_snap = tokio::time::timeout(
+                    std::time::Duration::from_millis(snapshot_timeout_ms),
+                    async {
+                        let lock = gm.inner.lock().await;
+                        ainl_agent_snapshot::build_snapshot(
+                            &lock,
+                            &agent_id_str,
+                            &snapshot_policy,
+                            tool_allowlist_snap,
+                            caps_snap,
+                        )
+                    },
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    warn!(
+                        agent = %agent_id_str,
+                        "snapshot build lock timed out ({}ms) — skipping planner this turn",
+                        snapshot_timeout_ms
+                    );
+                    Err(ainl_agent_snapshot::SnapshotError::Graph(
+                        "lock timeout".into(),
+                    ))
+                });
+                if let Ok(mut agent_snapshot) = agent_snap {
+                    agent_snapshot.tool_allowlist = allowed_tool_names.clone();
+                    agent_snapshot.policy_caps = snapshot_policy_caps(&runtime_limits);
+                    let infer_messages =
+                        messages_to_infer_chat(&messages, Some(system_prompt.as_str()));
+                    let tool_contracts: Vec<armara_provider_api::ToolContract> = available_tools
+                        .iter()
+                        .map(|t| armara_provider_api::ToolContract {
+                            name: t.name.clone(),
+                            input_schema: Some(t.input_schema.clone()),
+                        })
+                        .collect();
+                    let infer_req = InferRequest {
+                        request_id: Uuid::new_v4(),
+                        tenant_id: None,
+                        session: Some(SessionRef {
+                            agent_id: Some(agent_id_str.clone()),
+                            turn_id: None,
+                        }),
+                        model: ModelHint {
+                            policy: None,
+                            hint: Some(api_model.clone()),
+                        },
+                        messages: infer_messages.clone(),
+                        graph_context: None,
+                        constraints: armara_provider_api::Constraints {
+                            json_schema: None,
+                            grammar: None,
+                            tool_contracts,
+                        },
+                        policy: InferPolicy {
+                            allow_tools: allowed_tool_names.clone(),
+                            deny_tools: vec![],
+                            max_repair_attempts: Some(
+                                runtime_limits
+                                    .planner_max_repair_attempts
+                                    .unwrap_or(1),
+                            ),
+                        },
+                        backend_preference: vec![],
+                        agent_snapshot: Some(agent_snapshot.clone()),
+                        repair_context: None,
+                    };
+                    let http = reqwest::Client::builder()
+                        .user_agent(crate::USER_AGENT)
+                        .build()
+                        .unwrap_or_default();
+                    let api_key = std::env::var("ARMARA_NATIVE_INFER_API_KEY").ok();
+                    let ni = crate::drivers::native_infer::NativeInferDriver::new(
+                        infer_base.clone(),
+                        api_key,
+                        http,
+                    );
+                    crate::planner_metrics::record_native_infer_attempt();
+                    match ni.infer(infer_req).await {
+                    Ok(infer_out) => {
+                        let mut usage_acc = total_usage;
+                        usage_acc.input_tokens += infer_out.usage.input_tokens;
+                        usage_acc.output_tokens += infer_out.usage.output_tokens;
+
+                        // Guard: if the server flagged validation failures, do not execute the plan.
+                        // This catches cases where kind=deterministic_plan but tool_calls_ok=false
+                        // (e.g. PLAN_UNDECLARED_TOOL, PLAN_POLICY_CAPS) — fall back to legacy loop
+                        // instead of surfacing runtime errors from PlanExecutor dispatch.
+                        if !infer_out.validation.tool_calls_ok {
+                            let codes: Vec<&str> = infer_out
+                                .validation
+                                .violation_details
+                                .iter()
+                                .map(|d| d.code.as_str())
+                                .collect();
+                            warn!(
+                                agent = %manifest.name,
+                                violation_codes = ?codes,
+                                "Infer server validation failed (tool_calls_ok=false) — skipping planner, using legacy loop"
+                            );
+                            crate::planner_metrics::record_plan_invalid_or_unstructured();
+                            if let Some(t) = plan_trace.as_ref() {
+                                t.emit(
+                                    openfang_types::orchestration_trace::TraceEventType::PlanFallback {
+                                        reason: format!("server_validation_failed: {}", codes.join(",")),
+                                    },
+                                );
+                            }
+                        } else if let Some(st) = infer_out.output.structured.clone() {
+                            if st.get("kind").and_then(|k| k.as_str())
+                                == Some(STRUCTURED_KIND_PLANNER_INVALID_PLAN)
+                            {
+                                crate::planner_metrics::record_plan_invalid_or_unstructured();
+                                if let Some(t) = plan_trace.as_ref() {
+                                    t.emit(
+                                        openfang_types::orchestration_trace::TraceEventType::PlanFallback {
+                                            reason: st
+                                                .get("reason")
+                                                .and_then(|r| r.as_str())
+                                                .unwrap_or("infer_planner_invalid_plan")
+                                                .to_string(),
+                                        },
+                                    );
+                                }
+                                warn!(
+                                    agent = %manifest.name,
+                                    "Infer server returned planner_invalid_plan — using legacy tool loop"
+                                );
+                            } else if st.get("kind").and_then(|k| k.as_str())
+                                == Some(STRUCTURED_KIND_DETERMINISTIC_PLAN)
+                            {
+                                let plan_val = st.get("plan").cloned().unwrap_or(Value::Null);
+                                if let Ok(plan) = serde_json::from_value::<
+                                    ainl_agent_snapshot::DeterministicPlan,
+                                >(plan_val)
+                                {
+                                    match PlanExecutor::execute(
+                                        &plan,
+                                        &agent_snapshot.policy_caps,
+                                        &dispatch,
+                                        Some(&PlannerEpisodeRecorder {
+                                            graph_memory: gm,
+                                            plan_id: Uuid::new_v4(),
+                                            step_seq: std::sync::Arc::new(
+                                                std::sync::atomic::AtomicU32::new(0),
+                                            ),
+                                        }),
+                                        Some(&*driver),
+                                        Some(&ni),
+                                        api_model.as_str(),
+                                        &agent_snapshot,
+                                        infer_messages,
+                                        plan_trace.as_ref(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(exec_res) => {
+                                            if exec_res.fell_back_to_legacy {
+                                                crate::planner_metrics::record_plan_executor_legacy_fallback();
+                                                // plan.graph_writes are atomic-only: they are NOT applied
+                                                // when fell_back_to_legacy=true (partial-success plans
+                                                // write no graph nodes). This is intentional to avoid
+                                                // partially-written state, but means any graph_writes in
+                                                // the plan are silently skipped on fallback.
+                                                if !plan.graph_writes.is_empty() {
+                                                    warn!(
+                                                        agent = %manifest.name,
+                                                        skipped_graph_writes = plan.graph_writes.len(),
+                                                        "Plan fell back to legacy loop — plan.graph_writes were NOT applied (atomic-only policy)"
+                                                    );
+                                                }
+                                                warn!(
+                                                    agent = %manifest.name,
+                                                    completed_steps = exec_res.completed.len(),
+                                                    skipped_steps = exec_res.skipped.len(),
+                                                    "Plan executor requested legacy fallback"
+                                                );
+                                            } else {
+                                                crate::planner_metrics::record_plan_executor_completed();
+                                                let now_ms = chrono::Utc::now().timestamp_millis();
+                                                if !plan.graph_writes.is_empty() {
+                                                    match ainl_agent_snapshot::apply_graph_writes(
+                                                        &plan.graph_writes,
+                                                        &agent_id_str,
+                                                        now_ms,
+                                                    ) {
+                                                        Ok(nodes) => {
+                                                            match tokio::time::timeout(
+                                                                std::time::Duration::from_millis(5_000),
+                                                                gm.inner.lock(),
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(lock) => {
+                                                                    for n in nodes {
+                                                                        let _ = lock.write_node(&n);
+                                                                    }
+                                                                }
+                                                                Err(_) => {
+                                                                    warn!(agent = %manifest.name, "graph_writes lock timed out — nodes not persisted");
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            warn!(agent = %manifest.name, error = %e, "apply_graph_writes failed");
+                                                        }
+                                                    }
+                                                }
+                                                let summary = synthesize_plan_summary(
+                                                    &plan,
+                                                    &exec_res,
+                                                );
+                                                session
+                                                    .messages
+                                                    .push(Message::assistant(summary.clone()));
+                                                memory
+                                                    .save_session_async(session)
+                                                    .await
+                                                    .map_err(|e| {
+                                                        OpenFangError::Memory(e.to_string())
+                                                    })?;
+                                                return Ok(AgentLoopResult {
+                                                    response: summary,
+                                                    total_usage: usage_acc,
+                                                    iterations: 1,
+                                                    cost_usd: None,
+                                                    silent: false,
+                                                    directives: Default::default(),
+                                                    latency_ms: Some(
+                                                        loop_t0.elapsed().as_millis() as u64,
+                                                    ),
+                                                    llm_fallback_note: None,
+                                                    compression_savings_pct,
+                                                    compressed_input: compressed_input.clone(),
+                                                    compression_semantic_score,
+                                                    adaptive_confidence,
+                                                    eco_counterfactual,
+                                                    adaptive_eco_effective_mode:
+                                                        adaptive_eco_effective_mode.clone(),
+                                                    adaptive_eco_recommended_mode:
+                                                        adaptive_eco_recommended_mode.clone(),
+                                                    adaptive_eco_reason_codes:
+                                                        adaptive_eco_reason_codes.clone(),
+                                                    ainl_runtime_telemetry: {
+                                                        #[cfg(feature = "ainl-runtime-engine")]
+                                                        {
+                                                            ainl_prelude_telemetry.clone()
+                                                        }
+                                                        #[cfg(not(feature = "ainl-runtime-engine"))]
+                                                        {
+                                                            None
+                                                        }
+                                                    },
+                                                });
+                                            }
+                                        }
+                                        Err(e) => {
+                                            crate::planner_metrics::record_plan_executor_error();
+                                            if !plan.graph_writes.is_empty() {
+                                                warn!(
+                                                    agent = %manifest.name,
+                                                    skipped_graph_writes = plan.graph_writes.len(),
+                                                    error = %e,
+                                                    "PlanExecutor error — plan.graph_writes were NOT applied (atomic-only policy)"
+                                                );
+                                            }
+                                            warn!(agent = %manifest.name, error = %e, "PlanExecutor failed — falling back to legacy loop");
+                                        }
+                                    }
+                                } else {
+                                    crate::planner_metrics::record_plan_body_deserialize_failed();
+                                }
+                            } else {
+                                crate::planner_metrics::record_plan_invalid_or_unstructured();
+                            }
+                        } else {
+                            crate::planner_metrics::record_plan_invalid_or_unstructured();
+                        }
+                    }
+                    Err(_e) => {
+                        crate::planner_metrics::record_native_infer_http_error();
+                    }
+                    }
+                }
+            }
+        }
 
         let request = CompletionRequest {
             model: api_model,
@@ -2928,6 +3525,7 @@ pub async fn run_agent_loop_streaming(
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     runtime_limits: EffectiveRuntimeLimits,
+    _planner_model_tier: Option<openfang_types::model_catalog::ModelTier>,
     orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
     orchestration_live: Option<&tool_runner::OrchestrationLive>,
 ) -> OpenFangResult<AgentLoopResult> {
@@ -5518,8 +6116,8 @@ mod tests {
 
     #[test]
     fn test_tool_timeout_constant() {
-        assert_eq!(TOOL_TIMEOUT_SECS, 300);
-        assert_eq!(AGENT_TOOL_TIMEOUT_SECS, 600);
+        assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(300));
+        assert_eq!(tool_timeout_for("agent_spawn"), Duration::from_secs(600));
     }
 
     #[test]
@@ -5679,6 +6277,7 @@ mod tests {
             None,
             None,
             EffectiveRuntimeLimits::legacy_defaults(),
+            None,
             None,
             None,
         )
@@ -5879,6 +6478,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -5938,6 +6538,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6000,6 +6601,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6059,6 +6661,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6111,6 +6714,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6247,6 +6851,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6300,6 +6905,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -6356,6 +6962,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -7346,6 +7953,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -7422,6 +8030,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -7500,6 +8109,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )
@@ -7569,6 +8179,7 @@ mod tests {
             None, // btw_rx
             None, // redirect_rx
             EffectiveRuntimeLimits::legacy_defaults(),
+            None, // planner_model_tier
             None, // orchestration_ctx
             None, // orchestration_live
         )

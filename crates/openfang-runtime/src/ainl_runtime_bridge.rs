@@ -18,7 +18,7 @@ use ainl_runtime::{
     AinlRuntime, AinlRuntimeError, GraphPatchAdapter, GraphPatchHostDispatch, RuntimeConfig,
     TurnInput, TurnOutcome as AinlTurnOutcome, TurnResult as AinlTurnResult, TurnStatus,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -212,16 +212,42 @@ fn log_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, telemetry: &AinlBridgeTelem
     );
 }
 
-struct GraphPatchLogHost {
+/// Applies optional `graph_writes` from the patch envelope (sync path — uses a direct SQLite handle).
+struct GraphPatchWriteHost {
     agent_id: String,
 }
 
-impl GraphPatchHostDispatch for GraphPatchLogHost {
+impl GraphPatchHostDispatch for GraphPatchWriteHost {
     fn on_patch_dispatch(&self, envelope: Value) -> Result<Value, String> {
+        crate::planner_metrics::record_graph_patch_adapter_dispatch();
+        let write_count = envelope
+            .get("graph_writes")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        if let Some(arr) = envelope.get("graph_writes").and_then(|v| v.as_array()) {
+            if !arr.is_empty() {
+                let writes: Vec<ainl_agent_snapshot::GraphWrite> =
+                    serde_json::from_value(json!(arr)).map_err(|e| {
+                        crate::planner_metrics::record_graph_patch_adapter_error();
+                        e.to_string()
+                    })?;
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let nodes = ainl_agent_snapshot::apply_graph_writes(&writes, &self.agent_id, now_ms)
+                    .map_err(|e| {
+                        crate::planner_metrics::record_graph_patch_adapter_error();
+                        e.to_string()
+                    })?;
+                GraphMemoryWriter::write_snapshot_nodes_sync_for_agent(&self.agent_id, &nodes)
+                    .inspect_err(|_| {
+                        crate::planner_metrics::record_graph_patch_adapter_error();
+                    })?;
+            }
+        }
         info!(
             agent_id = %self.agent_id,
-            patch = %envelope,
-            "ainl-runtime GraphPatchAdapter host dispatch (graph writer shared via same DB path)"
+            graph_write_count = write_count,
+            "ainl-runtime GraphPatchAdapter host dispatch (graph_writes applied when present)"
         );
         Ok(envelope)
     }
@@ -290,7 +316,7 @@ impl AinlRuntimeBridge {
         if runtime.evolution_writes_enabled() {
             return Err(AinlRuntimeBridgeInitError::EvolutionWriteInvariant);
         }
-        runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(GraphPatchLogHost {
+        runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(GraphPatchWriteHost {
             agent_id,
         })));
 
