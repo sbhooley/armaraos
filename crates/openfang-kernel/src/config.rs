@@ -158,33 +158,34 @@ fn apply_config_schema_migrations(config: &mut KernelConfig, config_path: &Path)
     }
 }
 
-/// Append or replace the `config_schema_version = N` line in the root config file.
+/// Set or update root-level `config_schema_version` in `config.toml`.
 ///
-/// Preserves other lines and comments; does not rewrite the whole file.
+/// Parses the full file as TOML, updates the key, and writes it back. This avoids corrupting
+/// multiline strings or other constructs that a line-based rewriter could break.
 pub fn persist_config_schema_version_line(path: &Path, version: u32) -> std::io::Result<()> {
     let raw = std::fs::read_to_string(path)?;
-    let mut replaced = false;
-    let mut out_lines: Vec<String> = Vec::new();
-    for line in raw.lines() {
-        let t = line.trim();
-        if !t.starts_with('#') && t.starts_with("config_schema_version") && t.contains('=') {
-            out_lines.push(format!("config_schema_version = {}", version));
-            replaced = true;
-        } else {
-            out_lines.push(line.to_string());
-        }
-    }
-    let mut out = out_lines.join("\n");
-    if raw.ends_with('\n') && !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    if !replaced {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("\n# ArmaraOS: config schema version (updated automatically on upgrade)\n");
-        out.push_str(&format!("config_schema_version = {}\n", version));
-    }
+    let mut root: toml::Value = toml::from_str(&raw).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("config.toml is not valid TOML: {e}"),
+        )
+    })?;
+    let Some(tbl) = root.as_table_mut() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "config root must be a TOML table",
+        ));
+    };
+    tbl.insert(
+        "config_schema_version".to_string(),
+        toml::Value::Integer(i64::from(version)),
+    );
+    let out = toml::to_string_pretty(&root).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("config serialize failed: {e}"),
+        )
+    })?;
     atomic_write(path, &out)
 }
 
@@ -629,5 +630,32 @@ mod tests {
             .count(),
             1
         );
+    }
+
+    /// Regression: a line-based rewriter must not touch `config_schema_version` text inside multiline strings.
+    #[test]
+    fn test_persist_config_schema_version_preserves_multiline_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let tricky = r#"note = """
+line with config_schema_version = 0 inside
+"""
+log_level = "info"
+"#;
+        std::fs::write(&path, tricky).unwrap();
+        super::persist_config_schema_version_line(&path, super::CONFIG_SCHEMA_VERSION).unwrap();
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            disk.contains("line with config_schema_version = 0 inside"),
+            "substring inside multiline string must survive: {disk:?}"
+        );
+        assert!(
+            disk.contains(&format!(
+                "config_schema_version = {}",
+                super::CONFIG_SCHEMA_VERSION
+            )),
+            "root schema key must be set: {disk:?}"
+        );
+        toml::from_str::<toml::Value>(&disk).expect("result must be valid TOML");
     }
 }

@@ -22,7 +22,7 @@ use openfang_runtime::workspace_sandbox::resolve_sandbox_path;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
 use openfang_types::message::Role;
 use openfang_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -9080,6 +9080,12 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             .unwrap_or_else(|e| e.into_inner());
         catalog.list_providers().to_vec()
     };
+    let builtin_provider_ids: HashSet<String> =
+        openfang_runtime::model_catalog::ModelCatalog::new()
+            .list_providers()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect();
 
     // Collect local providers that need probing
     let local_providers: Vec<(usize, String, String)> = provider_list
@@ -9117,6 +9123,7 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             "key_required": p.key_required,
             "api_key_env": p.api_key_env,
             "base_url": p.base_url,
+            "is_custom": !builtin_provider_ids.contains(&p.id),
         });
 
         // For local providers, attach the probe result
@@ -11262,6 +11269,187 @@ pub async fn set_provider_url(
     (StatusCode::OK, Json(resp))
 }
 
+/// DELETE /api/providers/{name} — Remove a user-added OpenAI-compatible provider (models, URL override, API key).
+pub async fn delete_custom_provider(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name";
+
+    if openfang_runtime::model_catalog::ModelCatalog::new()
+        .get_provider(&name)
+        .is_some()
+    {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            PATH,
+            "Cannot delete built-in provider",
+            format!("'{name}' is a built-in provider."),
+            Some("Remove URL override or API key from Settings instead."),
+        );
+    }
+
+    let (exists, env_var) = {
+        let catalog = state
+            .kernel
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let exists = catalog.get_provider(&name).is_some();
+        let env_var = catalog
+            .get_provider(&name)
+            .map(|p| p.api_key_env.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{}_API_KEY", name.to_uppercase().replace('-', "_")));
+        (exists, env_var)
+    };
+
+    if !exists {
+        return api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Provider not found",
+            format!("No provider '{name}' in the catalog."),
+            None,
+        );
+    }
+
+    let config_path = state.kernel.config.home_dir.join("config.toml");
+    if let Err(e) = remove_provider_url_override(&config_path, &name) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to update config",
+            format!("{e}"),
+            Some("Check config.toml permissions."),
+        );
+    }
+
+    let custom_path = state.kernel.config.home_dir.join("custom_models.json");
+    let models_removed = {
+        let mut catalog = state
+            .kernel
+            .model_catalog
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let n = catalog.remove_all_models_for_provider(&name);
+        if let Err(e) = catalog.save_custom_models(&custom_path) {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Failed to save custom models",
+                e,
+                None,
+            );
+        }
+        catalog.remove_provider_url(&name);
+        n
+    };
+
+    state.kernel.remove_credential(&env_var);
+    let secrets_path = state.kernel.config.home_dir.join("secrets.env");
+    if let Err(e) = remove_secret_env(&secrets_path, &env_var) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to update secrets.env",
+            format!("{e}"),
+            Some("Check file permissions."),
+        );
+    }
+    std::env::remove_var(&env_var);
+
+    state
+        .kernel
+        .model_catalog
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .detect_auth();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "removed",
+            "provider": name,
+            "models_removed": models_removed,
+        })),
+    )
+}
+
+/// DELETE /api/providers/{name}/url — Remove a custom base URL for a provider.
+pub async fn delete_provider_url(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/providers/:name/url";
+
+    let config_path = state.kernel.config.home_dir.join("config.toml");
+    let removed_override = match remove_provider_url_override(&config_path, &name) {
+        Ok(removed) => removed,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Failed to save config",
+                format!("{e}"),
+                Some("Check config.toml permissions."),
+            );
+        }
+    };
+
+    let (provider_removed, base_url) = {
+        let mut catalog = state
+            .kernel
+            .model_catalog
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let provider_removed = catalog.remove_provider_url(&name);
+        let base_url = catalog.get_provider(&name).map(|p| p.base_url.clone());
+        (provider_removed, base_url)
+    };
+
+    if !removed_override && !provider_removed {
+        return api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Provider URL override not found",
+            format!("No URL override found for provider '{name}'."),
+            Some("Use PUT /api/providers/:name/url to create one."),
+        );
+    }
+
+    let reachable = if let Some(url) = base_url.as_ref().filter(|u| !u.is_empty()) {
+        openfang_runtime::provider_health::probe_provider(&name, url)
+            .await
+            .reachable
+    } else {
+        false
+    };
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "removed",
+            "provider": name,
+            "config_override_removed": removed_override,
+            "provider_removed": provider_removed && base_url.is_none(),
+            "base_url": base_url,
+            "reachable": reachable,
+        })),
+    )
+}
+
 /// Upsert a provider URL in the `[provider_urls]` section of config.toml.
 fn upsert_provider_url(
     config_path: &std::path::Path,
@@ -11303,6 +11491,37 @@ fn upsert_provider_url(
     std::fs::write(&tmp, toml::to_string_pretty(&doc)?)?;
     std::fs::rename(&tmp, config_path)?;
     Ok(())
+}
+
+/// Remove a provider URL from the `[provider_urls]` section of config.toml.
+fn remove_provider_url_override(
+    config_path: &std::path::Path,
+    provider: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if !config_path.exists() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(config_path)?;
+    if content.trim().is_empty() {
+        return Ok(false);
+    }
+    let mut doc: toml::Value = toml::from_str(&content)?;
+    let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
+    let Some(urls_table) = root.get_mut("provider_urls").and_then(|v| v.as_table_mut()) else {
+        return Ok(false);
+    };
+
+    let removed = urls_table.remove(provider).is_some();
+    if !removed {
+        return Ok(false);
+    }
+    if urls_table.is_empty() {
+        root.remove("provider_urls");
+    }
+    let tmp = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp, toml::to_string_pretty(&doc)?)?;
+    std::fs::rename(&tmp, config_path)?;
+    Ok(true)
 }
 
 /// POST /api/skills/create — Create a local prompt-only skill.
@@ -15579,10 +15798,22 @@ pub async fn config_set(
 
     let config_path = state.kernel.config.home_dir.join("config.toml");
 
-    // Read existing config as a TOML table, or start fresh
+    // Read existing config as a TOML table, or start fresh. Never treat a parse error as
+    // "empty config" — that would wipe the file on the next save.
     let mut table: toml::value::Table = if config_path.exists() {
         match std::fs::read_to_string(&config_path) {
-            Ok(content) => toml::from_str(&content).unwrap_or_default(),
+            Ok(content) => match toml::from_str(&content) {
+                Ok(t) => t,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "status": "error",
+                            "error": format!("config.toml is not valid TOML (fix syntax before saving): {e}"),
+                        })),
+                    );
+                }
+            },
             Err(_) => toml::value::Table::new(),
         }
     } else {

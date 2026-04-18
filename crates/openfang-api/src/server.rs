@@ -727,6 +727,10 @@ pub async fn build_router(
         )
         .route("/api/models/{*id}", axum::routing::get(routes::get_model))
         .route("/api/providers", axum::routing::get(routes::list_providers))
+        .route(
+            "/api/providers/{name}",
+            axum::routing::delete(routes::delete_custom_provider),
+        )
         // Copilot OAuth (must be before parametric {name} routes)
         .route(
             "/api/providers/github-copilot/oauth/start",
@@ -746,7 +750,7 @@ pub async fn build_router(
         )
         .route(
             "/api/providers/{name}/url",
-            axum::routing::put(routes::set_provider_url),
+            axum::routing::put(routes::set_provider_url).delete(routes::delete_provider_url),
         )
         .route(
             "/api/skills/create",

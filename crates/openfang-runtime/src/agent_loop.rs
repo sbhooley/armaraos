@@ -44,16 +44,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+use crate::graph_memory_writer::GraphMemoryWriteNotifyFn;
+
 /// When a kernel handle is present, graph-memory writes publish `SystemEvent::GraphMemoryWrite` for dashboard SSE.
 fn graph_memory_sse_hook(
     kernel: &Option<Arc<dyn KernelHandle>>,
-) -> Option<
-    Arc<
-        dyn Fn(String, String, Option<openfang_types::event::GraphMemoryWriteProvenance>)
-            + Send
-            + Sync,
-    >,
-> {
+) -> Option<GraphMemoryWriteNotifyFn> {
     kernel.as_ref().map(|k| {
         let k = Arc::clone(k);
         Arc::new(

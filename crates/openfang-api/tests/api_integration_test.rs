@@ -1792,9 +1792,7 @@ async fn test_kernel_events_stream_includes_graph_memory_write() {
             let tail: String = tail.chars().rev().collect();
             panic!("timed out waiting for GraphMemoryWrite on SSE; tail={tail}");
         }
-        match tokio::time::timeout(Duration::from_millis(700), sse_resp.chunk())
-            .await
-        {
+        match tokio::time::timeout(Duration::from_millis(700), sse_resp.chunk()).await {
             Ok(Ok(Some(bytes))) => {
                 accumulated.push_str(&String::from_utf8_lossy(&bytes));
             }

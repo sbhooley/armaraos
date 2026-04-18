@@ -879,28 +879,29 @@ mod tests {
 
     #[test]
     fn test_recall_task_scoped_episodes_prefers_conversation_then_topic() {
-        let path = std::env::temp_dir().join(format!(
-            "ainl_query_task_scope_{}.db",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ainl_query_task_scope_{}.db", uuid::Uuid::new_v4()));
         let _ = std::fs::remove_file(&path);
         let store = SqliteGraphStore::open(&path).expect("open");
         let now = chrono::Utc::now().timestamp();
         let ag = "agent-task-scope";
 
-        let mut ep_conv = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now, vec![], None, None);
+        let mut ep_conv =
+            AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now, vec![], None, None);
         ep_conv.agent_id = ag.into();
         if let AinlNodeType::Episode { ref mut episodic } = ep_conv.node_type {
             episodic.conversation_id = "conv-1".into();
             episodic.tags = vec!["topic:tax".into()];
         }
-        let mut ep_topic = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 10, vec![], None, None);
+        let mut ep_topic =
+            AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 10, vec![], None, None);
         ep_topic.agent_id = ag.into();
         if let AinlNodeType::Episode { ref mut episodic } = ep_topic.node_type {
             episodic.conversation_id = "conv-2".into();
             episodic.tags = vec!["topic:tax".into()];
         }
-        let mut ep_other = AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 20, vec![], None, None);
+        let mut ep_other =
+            AinlMemoryNode::new_episode(uuid::Uuid::new_v4(), now - 20, vec![], None, None);
         ep_other.agent_id = ag.into();
         if let AinlNodeType::Episode { ref mut episodic } = ep_other.node_type {
             episodic.conversation_id = "conv-3".into();
@@ -910,14 +911,9 @@ mod tests {
         store.write_node(&ep_topic).expect("w2");
         store.write_node(&ep_other).expect("w3");
 
-        let rows = recall_task_scoped_episodes(
-            &store,
-            ag,
-            Some("conv-1"),
-            &["topic:tax".to_string()],
-            2,
-        )
-        .expect("query");
+        let rows =
+            recall_task_scoped_episodes(&store, ag, Some("conv-1"), &["topic:tax".to_string()], 2)
+                .expect("query");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].conversation_id, "conv-1");
         assert!(rows[1].tags.iter().any(|t| t == "topic:tax"));

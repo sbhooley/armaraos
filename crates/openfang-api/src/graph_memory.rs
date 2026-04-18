@@ -1229,7 +1229,12 @@ pub async fn get_graph_memory_controls(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&q.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let path = controls_path(&state.kernel.config.home_dir, &agent_id);
     if !path.exists() {
@@ -1251,7 +1256,10 @@ pub async fn get_graph_memory_controls(
         }
     };
     let controls: GraphMemoryControlsPayload = serde_json::from_str(&raw).unwrap_or_default();
-    (StatusCode::OK, Json(json!({ "ok": true, "controls": controls })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "controls": controls })),
+    )
 }
 
 /// PUT /api/graph-memory/controls
@@ -1261,7 +1269,12 @@ pub async fn put_graph_memory_controls(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let controls = GraphMemoryControlsPayload {
         memory_enabled: req.memory_enabled,
@@ -1310,7 +1323,10 @@ pub async fn put_graph_memory_controls(
             "include_procedural_hints": controls.include_procedural_hints,
         }),
     );
-    (StatusCode::OK, Json(json!({ "ok": true, "controls": controls })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "controls": controls })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -1339,11 +1355,21 @@ pub async fn post_graph_memory_remember(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let scope = match normalize_scope(&req.scope) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let fact = req.fact.trim();
     if fact.is_empty() {
@@ -1399,7 +1425,12 @@ pub async fn post_graph_memory_forget(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let fact = req.fact.trim();
     if fact.is_empty() {
@@ -1433,7 +1464,10 @@ pub async fn post_graph_memory_forget(
         "memory_forget",
         json!({ "fact": fact, "deleted": deleted }),
     );
-    (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "deleted": deleted })),
+    )
 }
 
 /// GET /api/graph-memory/inspect?agent_id=...&scope=...&limit=...
@@ -1443,11 +1477,21 @@ pub async fn get_graph_memory_inspect(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&q.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let scope = match normalize_scope(&q.scope) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
     let conn = match open_conn_with_fk(&db) {
@@ -1506,11 +1550,21 @@ pub async fn post_graph_memory_clear_scope(
 ) -> (StatusCode, Json<Value>) {
     let agent_id = match sanitize_agent_id(&req.agent_id) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let scope = match normalize_scope(&req.scope) {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
     };
     let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
     let conn = match open_conn_with_fk(&db) {
@@ -1540,7 +1594,10 @@ pub async fn post_graph_memory_clear_scope(
         "memory_clear_scope",
         json!({ "scope": scope, "deleted": deleted, "reason": req.reason.unwrap_or_default() }),
     );
-    (StatusCode::OK, Json(json!({ "ok": true, "deleted": deleted })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "deleted": deleted })),
+    )
 }
 
 #[cfg(test)]
@@ -1584,7 +1641,8 @@ mod tests {
         let memory = GraphMemory::new(&db).expect("memory");
         let agent_id = "agent-sla";
 
-        let mut node = AinlMemoryNode::new_fact("user likes rust".to_string(), 0.91, Uuid::new_v4());
+        let mut node =
+            AinlMemoryNode::new_fact("user likes rust".to_string(), 0.91, Uuid::new_v4());
         node.agent_id = agent_id.to_string();
         if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
             semantic.tags.push("scope:agent_private".to_string());
@@ -1605,7 +1663,9 @@ mod tests {
             )
             .expect("prepare inspect");
         let before: i64 = inspect_stmt
-            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| {
+                row.get(0)
+            })
             .expect("count before");
         assert!(before >= 1);
 
@@ -1618,9 +1678,14 @@ mod tests {
         )
         .expect("forget delete");
         let after_forget: i64 = inspect_stmt
-            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| {
+                row.get(0)
+            })
             .expect("count after forget");
-        assert_eq!(after_forget, 0, "forget should remove recall candidates immediately");
+        assert_eq!(
+            after_forget, 0,
+            "forget should remove recall candidates immediately"
+        );
 
         // Reinsert and verify clear-scope semantics.
         memory.write_node(&node).expect("rewrite");
@@ -1636,8 +1701,13 @@ mod tests {
         )
         .expect("clear scope delete");
         let after_clear: i64 = inspect_stmt
-            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| row.get(0))
+            .query_row(rusqlite::params![agent_id, "scope:agent_private"], |row| {
+                row.get(0)
+            })
             .expect("count after clear");
-        assert_eq!(after_clear, 0, "clear-scope should remove scoped facts immediately");
+        assert_eq!(
+            after_clear, 0,
+            "clear-scope should remove scoped facts immediately"
+        );
     }
 }

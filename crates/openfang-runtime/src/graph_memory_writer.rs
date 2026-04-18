@@ -28,6 +28,10 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+/// Hook invoked after graph writes: `(agent_id, kind, provenance)`.
+pub(crate) type GraphMemoryWriteNotifyFn =
+    Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>;
+
 /// Result of [`GraphMemoryWriter::run_persona_evolution_pass`].
 #[cfg(feature = "ainl-extractor")]
 pub type PersonaEvolutionExtractionReport = ainl_graph_extractor::ExtractionReport;
@@ -79,8 +83,7 @@ pub fn armaraos_graph_memory_export_json_path(agent_id: &str) -> PathBuf {
 pub struct GraphMemoryWriter {
     pub(crate) inner: Arc<Mutex<GraphMemory>>,
     pub(crate) agent_id: String,
-    pub(crate) on_write:
-        Option<Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>>,
+    pub(crate) on_write: Option<GraphMemoryWriteNotifyFn>,
 }
 
 impl GraphMemoryWriter {
@@ -100,9 +103,7 @@ impl GraphMemoryWriter {
     /// `delegation`, `fact`, `procedural`, `persona`.
     pub fn open_with_notify(
         agent_id: &str,
-        on_write: Option<
-            Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>,
-        >,
+        on_write: Option<GraphMemoryWriteNotifyFn>,
     ) -> Result<Self, String> {
         let path = Self::db_path(agent_id)?;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| format!("create dir: {e}"))?;
@@ -119,9 +120,7 @@ impl GraphMemoryWriter {
     pub(crate) fn from_memory_for_tests(
         memory: GraphMemory,
         agent_id: impl Into<String>,
-        on_write: Option<
-            Arc<dyn Fn(String, String, Option<GraphMemoryWriteProvenance>) + Send + Sync>,
-        >,
+        on_write: Option<GraphMemoryWriteNotifyFn>,
     ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(memory)),
@@ -335,7 +334,7 @@ impl GraphMemoryWriter {
                         node_kind: Some("procedural".to_string()),
                         reason: Some("pattern_persisted".to_string()),
                         summary: Some(summary),
-                        trace_id: trace_id,
+                        trace_id,
                     }),
                 );
             }
@@ -620,16 +619,16 @@ impl GraphMemoryWriter {
                         return None;
                     }
                     match &n.node_type {
-                        AinlNodeType::Semantic { semantic } => {
-                            Some((semantic.confidence, semantic.fact.trim().to_ascii_lowercase(), n.id))
-                        }
+                        AinlNodeType::Semantic { semantic } => Some((
+                            semantic.confidence,
+                            semantic.fact.trim().to_ascii_lowercase(),
+                            n.id,
+                        )),
                         _ => None,
                     }
                 })
                 .collect();
-            rows.sort_by(|a, b| {
-                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             for (_conf, key, id) in rows {
                 if key.is_empty() {
                     continue;
@@ -658,7 +657,9 @@ impl GraphMemoryWriter {
                     node_ids: vec![],
                     node_kind: Some("semantic".to_string()),
                     reason: Some("background_consolidation".to_string()),
-                    summary: Some(format!("Consolidation removed {deleted} duplicate semantic row(s)")),
+                    summary: Some(format!(
+                        "Consolidation removed {deleted} duplicate semantic row(s)"
+                    )),
                     trace_id: None,
                 }),
             );

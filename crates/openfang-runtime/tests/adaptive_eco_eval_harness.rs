@@ -45,9 +45,11 @@ fn adaptive_eco_eval_trace_matrix_smoke() {
         ),
     ];
 
-    let mut cfg = AdaptiveEcoConfig::default();
-    cfg.enabled = true;
-    cfg.allow_aggressive_on_structured = false;
+    let cfg = AdaptiveEcoConfig {
+        enabled: true,
+        allow_aggressive_on_structured: false,
+        ..Default::default()
+    };
 
     let mut structured_recommendation_ok = false;
     for (name, base, msg) in traces {
@@ -72,11 +74,13 @@ fn adaptive_eco_eval_trace_matrix_smoke() {
 
 #[test]
 fn adaptive_eco_eval_circuit_breaker_semantic_regression() {
-    let mut cfg = AdaptiveEcoConfig::default();
-    cfg.circuit_breaker_enabled = true;
-    cfg.semantic_floor = 0.85;
-    cfg.circuit_breaker_window = 6;
-    cfg.circuit_breaker_min_below_floor = 2;
+    let cfg = AdaptiveEcoConfig {
+        circuit_breaker_enabled: true,
+        semantic_floor: 0.85,
+        circuit_breaker_window: 6,
+        circuit_breaker_min_below_floor: 2,
+        ..Default::default()
+    };
     let scores_bad = vec![0.70_f32, 0.71_f32, 0.72_f32];
     let (m, trip) = circuit_breaker_adjust_base("aggressive", &cfg, &scores_bad);
     assert!(

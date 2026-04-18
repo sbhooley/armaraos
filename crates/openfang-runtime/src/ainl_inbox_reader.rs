@@ -481,9 +481,8 @@ pub async fn drain_inbox(writer: &GraphMemoryWriter) -> Result<usize, String> {
     let root: Value = serde_json::from_slice(&bytes).map_err(|e| format!("inbox json: {e}"))?;
     if let Some(v) = schema_version(&root) {
         if v != INBOX_SCHEMA_VERSION {
-            let reason = format!(
-                "unsupported schema_version '{v}' (expected '{INBOX_SCHEMA_VERSION}')"
-            );
+            let reason =
+                format!("unsupported schema_version '{v}' (expected '{INBOX_SCHEMA_VERSION}')");
             let _ = quarantine_inbox(&path, &reason).await;
             return Err(reason);
         }
@@ -840,14 +839,17 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_returns_error_on_malformed_json() {
-        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-        let (writer, dir) = open_writer_in_mem();
-        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let (writer, dir, _g) = {
+            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+            let (w, d) = open_writer_in_mem();
+            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
+            (w, d, g)
+        };
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
         tokio::fs::write(&inbox_path, b"{ not json").await.unwrap();
-        let err = drain_inbox(&writer).await.err().expect("expected error");
+        let err = drain_inbox(&writer).await.expect_err("expected error");
         assert!(
             err.contains("inbox json") || err.contains("expected value"),
             "unexpected err: {err}"
@@ -856,9 +858,12 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_noops_on_empty_file() {
-        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-        let (writer, dir) = open_writer_in_mem();
-        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let (writer, dir, _g) = {
+            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+            let (w, d) = open_writer_in_mem();
+            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
+            (w, d, g)
+        };
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -868,9 +873,12 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_quarantines_unsupported_schema_version() {
-        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-        let (writer, dir) = open_writer_in_mem();
-        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let (writer, dir, _g) = {
+            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+            let (w, d) = open_writer_in_mem();
+            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
+            (w, d, g)
+        };
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -883,7 +891,7 @@ mod tests {
         tokio::fs::write(&inbox_path, serde_json::to_vec(&payload).unwrap())
             .await
             .unwrap();
-        let err = drain_inbox(&writer).await.err().expect("expected error");
+        let err = drain_inbox(&writer).await.expect_err("expected error");
         assert!(err.contains("unsupported schema_version"), "err={err}");
         let mut quarantined = false;
         let mut rd = tokio::fs::read_dir(&inbox_dir).await.unwrap();
@@ -899,9 +907,12 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_accepts_missing_schema_version_for_backcompat() {
-        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-        let (writer, dir) = open_writer_in_mem();
-        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let (writer, dir, _g) = {
+            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+            let (w, d) = open_writer_in_mem();
+            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
+            (w, d, g)
+        };
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -926,14 +937,20 @@ mod tests {
             .await
             .unwrap();
         let imported = drain_inbox(&writer).await.expect("drain");
-        assert_eq!(imported, 1, "missing schema_version should remain backward compatible");
+        assert_eq!(
+            imported, 1,
+            "missing schema_version should remain backward compatible"
+        );
     }
 
     #[tokio::test]
     async fn drain_inbox_ignores_unknown_fields_without_drift_failure() {
-        let _home_lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-        let (writer, dir) = open_writer_in_mem();
-        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
+        let (writer, dir, _g) = {
+            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
+            let (w, d) = open_writer_in_mem();
+            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
+            (w, d, g)
+        };
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -981,6 +998,9 @@ mod tests {
             "created_at": 0.0
         });
         let out = convert_one_inbox_node(&raw, AGENT, &[]);
-        assert!(out.is_none(), "node with invalid scope tag should be skipped");
+        assert!(
+            out.is_none(),
+            "node with invalid scope tag should be skipped"
+        );
     }
 }

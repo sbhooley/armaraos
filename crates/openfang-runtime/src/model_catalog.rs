@@ -338,6 +338,31 @@ impl ModelCatalog {
         }
     }
 
+    /// Remove a provider URL override.
+    ///
+    /// Built-in providers are reset to their catalog default URL. Custom providers
+    /// are removed entirely when they have no models; otherwise their URL is cleared.
+    pub fn remove_provider_url(&mut self, provider: &str) -> bool {
+        let Some(idx) = self.providers.iter().position(|p| p.id == provider) else {
+            return false;
+        };
+
+        // Built-in provider: restore default URL from builtin catalog.
+        if let Some(default) = builtin_providers().into_iter().find(|p| p.id == provider) {
+            self.providers[idx].base_url = default.base_url;
+            return true;
+        }
+
+        // Custom provider: keep it if models still reference it, otherwise remove it.
+        let has_models = self.models.iter().any(|m| m.provider == provider);
+        if has_models {
+            self.providers[idx].base_url.clear();
+        } else {
+            self.providers.remove(idx);
+        }
+        true
+    }
+
     /// Apply a batch of provider URL overrides from config.
     ///
     /// Each entry maps a provider ID to a custom base URL.
@@ -454,6 +479,21 @@ impl ModelCatalog {
         self.models
             .retain(|m| !(m.id.to_lowercase() == lower && m.tier == ModelTier::Custom));
         self.models.len() < before
+    }
+
+    /// Remove every model row for `provider` (any tier). Used when deleting a custom provider.
+    pub fn remove_all_models_for_provider(&mut self, provider: &str) -> usize {
+        let before = self.models.len();
+        self.models.retain(|m| m.provider != provider);
+        let removed = before - self.models.len();
+        if let Some(p) = self.providers.iter_mut().find(|p| p.id == provider) {
+            p.model_count = self
+                .models
+                .iter()
+                .filter(|m| m.provider == provider)
+                .count();
+        }
+        removed
     }
 
     /// Load custom models from a JSON file.
@@ -4318,6 +4358,34 @@ mod tests {
             catalog.get_provider("my-custom-llm").unwrap().base_url,
             "http://localhost:9999"
         );
+    }
+
+    #[test]
+    fn test_remove_provider_url_builtin_resets_default() {
+        let mut catalog = ModelCatalog::new();
+        catalog.set_provider_url("ollama", "http://127.0.0.1:9999/v1");
+        assert_eq!(
+            catalog.get_provider("ollama").unwrap().base_url,
+            "http://127.0.0.1:9999/v1"
+        );
+
+        let removed = catalog.remove_provider_url("ollama");
+        assert!(removed);
+        assert_eq!(
+            catalog.get_provider("ollama").unwrap().base_url,
+            OLLAMA_BASE_URL
+        );
+    }
+
+    #[test]
+    fn test_remove_provider_url_custom_without_models_removes_provider() {
+        let mut catalog = ModelCatalog::new();
+        catalog.set_provider_url("my-custom-llm", "http://localhost:9999/v1");
+        assert!(catalog.get_provider("my-custom-llm").is_some());
+
+        let removed = catalog.remove_provider_url("my-custom-llm");
+        assert!(removed);
+        assert!(catalog.get_provider("my-custom-llm").is_none());
     }
 
     #[test]

@@ -23,6 +23,7 @@ function settingsPage() {
     providerKeyInputs: {},
     providerUrlInputs: {},
     providerUrlSaving: {},
+    providerDeleting: {},
     providerTesting: {},
     providerTestResults: {},
     copilotOAuth: { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 },
@@ -438,7 +439,7 @@ function settingsPage() {
         this.providers = data.providers || [];
         for (var i = 0; i < this.providers.length; i++) {
           var p = this.providers[i];
-          if (p.is_local) {
+          if (this.canEditProviderUrl(p)) {
             if (!this.providerUrlInputs[p.id]) {
               this.providerUrlInputs[p.id] = p.base_url || '';
             }
@@ -915,6 +916,18 @@ function settingsPage() {
       return 'no-key';
     },
 
+    isCustomProvider(p) {
+      return !!(p && p.is_custom);
+    },
+
+    canEditProviderUrl(p) {
+      return !!(p && (p.is_local || this.isCustomProvider(p)));
+    },
+
+    canRemoveProviderUrl(p) {
+      return this.canEditProviderUrl(p) && !!((p.base_url || '').trim());
+    },
+
     tierBadgeClass(tier) {
       if (!tier) return '';
       var t = tier.toLowerCase();
@@ -1060,6 +1073,44 @@ function settingsPage() {
         await this.loadProviders();
       } catch(e) {
         OpenFangToast.error('Failed to save URL: ' + openFangErrText(e));
+      }
+      this.providerUrlSaving[provider.id] = false;
+    },
+
+    async deleteCustomProvider(provider) {
+      if (!this.isCustomProvider(provider)) return;
+      if (!confirm('Permanently delete custom provider "' + provider.id + '"? This removes its base URL, stored API key, and all catalog models for this provider.')) return;
+      this.providerDeleting[provider.id] = true;
+      try {
+        await OpenFangAPI.del('/api/providers/' + encodeURIComponent(provider.id));
+        OpenFangToast.success('Deleted provider "' + provider.id + '"');
+        delete this.providerUrlInputs[provider.id];
+        await this.loadProviders();
+        await this.loadModels();
+      } catch (e) {
+        OpenFangToast.error('Failed to delete provider: ' + openFangErrText(e));
+      }
+      this.providerDeleting[provider.id] = false;
+    },
+
+    async removeProviderUrl(provider) {
+      if (!this.canRemoveProviderUrl(provider)) {
+        OpenFangToast.error('No custom URL to remove for ' + provider.display_name);
+        return;
+      }
+      if (!confirm('Remove URL override for "' + provider.display_name + '"?')) return;
+      this.providerUrlSaving[provider.id] = true;
+      try {
+        var result = await OpenFangAPI.del('/api/providers/' + encodeURIComponent(provider.id) + '/url');
+        if (result.provider_removed) {
+          OpenFangToast.success('Removed custom provider "' + provider.id + '"');
+        } else {
+          OpenFangToast.success('URL override removed for ' + provider.display_name);
+        }
+        await this.loadProviders();
+        await this.loadModels();
+      } catch(e) {
+        OpenFangToast.error('Failed to remove URL: ' + openFangErrText(e));
       }
       this.providerUrlSaving[provider.id] = false;
     },

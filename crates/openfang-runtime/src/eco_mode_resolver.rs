@@ -246,9 +246,11 @@ mod tests {
     #[test]
     fn shadow_keeps_base_mode() {
         let cat = ModelCatalog::new();
-        let mut cfg = AdaptiveEcoConfig::default();
-        cfg.enabled = true;
-        cfg.enforce = false;
+        let cfg = AdaptiveEcoConfig {
+            enabled: true,
+            enforce: false,
+            ..Default::default()
+        };
         let man = manifest_with("balanced", "openrouter", "claude-sonnet-4-20250514");
         let snap = resolve_adaptive_eco_turn(&cfg, &man, "plain short", &cat);
         assert_eq!(snap.effective_mode, "balanced");
@@ -258,11 +260,13 @@ mod tests {
 
     #[test]
     fn circuit_breaker_steps_down_when_semantics_bad() {
-        let mut cfg = AdaptiveEcoConfig::default();
-        cfg.circuit_breaker_enabled = true;
-        cfg.circuit_breaker_window = 8;
-        cfg.circuit_breaker_min_below_floor = 2;
-        cfg.semantic_floor = 0.9;
+        let cfg = AdaptiveEcoConfig {
+            circuit_breaker_enabled: true,
+            circuit_breaker_window: 8,
+            circuit_breaker_min_below_floor: 2,
+            semantic_floor: 0.9,
+            ..Default::default()
+        };
         let scores = vec![0.5_f32, 0.4_f32];
         let (m, trip) = circuit_breaker_adjust_base("aggressive", &cfg, &scores);
         assert_eq!(m, "balanced");
@@ -294,9 +298,11 @@ mod tests {
     #[test]
     fn structured_guard_caps_aggressive_recommendation() {
         let cat = ModelCatalog::new();
-        let mut cfg = AdaptiveEcoConfig::default();
-        cfg.enabled = true;
-        cfg.allow_aggressive_on_structured = false;
+        let cfg = AdaptiveEcoConfig {
+            enabled: true,
+            allow_aggressive_on_structured: false,
+            ..Default::default()
+        };
         let man = manifest_with("aggressive", "anthropic", "claude-sonnet-4-20250514");
         let msg = format!(
             "{}\n```json\n{{\"x\":1}}\n```\n```sql\nSELECT 1;\n```\n",

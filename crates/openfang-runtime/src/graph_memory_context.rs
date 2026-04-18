@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
-use ainl_memory::{
-    recall_task_scoped_episodes, AinlNodeKind, AinlNodeType, AinlMemoryNode,
-};
+use ainl_memory::{recall_task_scoped_episodes, AinlMemoryNode, AinlNodeKind, AinlNodeType};
 use openfang_types::agent::AgentManifest;
 use tracing::debug;
 
@@ -208,38 +206,51 @@ impl MemoryContextPolicy {
     }
 
     pub fn from_manifest_for_agent(manifest: &AgentManifest, agent_id: Option<&str>) -> Self {
-        let mut policy = Self::default();
-        policy.enabled = metadata_bool(&manifest.metadata, "memory_enabled", true);
-        policy.temporary_mode = metadata_bool(&manifest.metadata, "memory_temporary_mode", false);
-        policy.include_provenance = metadata_bool(&manifest.metadata, "memory_include_provenance", true);
-        policy.include_episodic_hints =
-            metadata_bool(&manifest.metadata, "memory_include_episodic_hints", true);
-        policy.include_semantic_facts =
-            metadata_bool(&manifest.metadata, "memory_include_semantic_facts", true);
-        policy.include_conflicts = metadata_bool(&manifest.metadata, "memory_include_conflicts", true);
-        policy.include_procedural_hints =
-            metadata_bool(&manifest.metadata, "memory_include_procedural_hints", true);
+        let mut policy = MemoryContextPolicy {
+            enabled: metadata_bool(&manifest.metadata, "memory_enabled", true),
+            temporary_mode: metadata_bool(&manifest.metadata, "memory_temporary_mode", false),
+            include_provenance: metadata_bool(&manifest.metadata, "memory_include_provenance", true),
+            include_episodic_hints: metadata_bool(
+                &manifest.metadata,
+                "memory_include_episodic_hints",
+                true,
+            ),
+            include_semantic_facts: metadata_bool(
+                &manifest.metadata,
+                "memory_include_semantic_facts",
+                true,
+            ),
+            include_conflicts: metadata_bool(&manifest.metadata, "memory_include_conflicts", true),
+            include_procedural_hints: metadata_bool(
+                &manifest.metadata,
+                "memory_include_procedural_hints",
+                true,
+            ),
+            ..Default::default()
+        };
 
-        if let Some(v) = std::env::var("AINL_MEMORY_ENABLED").ok() {
+        if let Ok(v) = std::env::var("AINL_MEMORY_ENABLED") {
             policy.enabled = parse_bool_with_default(Some(v.as_str()), policy.enabled);
         }
-        if let Some(v) = std::env::var("AINL_MEMORY_TEMPORARY_MODE").ok() {
-            policy.temporary_mode = parse_bool_with_default(Some(v.as_str()), policy.temporary_mode);
+        if let Ok(v) = std::env::var("AINL_MEMORY_TEMPORARY_MODE") {
+            policy.temporary_mode =
+                parse_bool_with_default(Some(v.as_str()), policy.temporary_mode);
         }
-        if let Some(v) = std::env::var("AINL_MEMORY_INCLUDE_PROCEDURAL_HINTS").ok() {
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_PROCEDURAL_HINTS") {
             policy.include_procedural_hints =
                 parse_bool_with_default(Some(v.as_str()), policy.include_procedural_hints);
         }
-        if let Some(v) = std::env::var("AINL_MEMORY_INCLUDE_EPISODIC_HINTS").ok() {
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_EPISODIC_HINTS") {
             policy.include_episodic_hints =
                 parse_bool_with_default(Some(v.as_str()), policy.include_episodic_hints);
         }
-        if let Some(v) = std::env::var("AINL_MEMORY_INCLUDE_SEMANTIC_FACTS").ok() {
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_SEMANTIC_FACTS") {
             policy.include_semantic_facts =
                 parse_bool_with_default(Some(v.as_str()), policy.include_semantic_facts);
         }
-        if let Some(v) = std::env::var("AINL_MEMORY_INCLUDE_CONFLICTS").ok() {
-            policy.include_conflicts = parse_bool_with_default(Some(v.as_str()), policy.include_conflicts);
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_CONFLICTS") {
+            policy.include_conflicts =
+                parse_bool_with_default(Some(v.as_str()), policy.include_conflicts);
         }
         policy.ab_variant = manifest
             .metadata
@@ -318,11 +329,13 @@ impl MemoryContextPolicy {
         if let Some(temporary) = v.get("temporary_mode").and_then(|x| x.as_bool()) {
             self.temporary_mode = temporary;
         }
-        if let Some(include_episodic_hints) = v.get("include_episodic_hints").and_then(|x| x.as_bool())
+        if let Some(include_episodic_hints) =
+            v.get("include_episodic_hints").and_then(|x| x.as_bool())
         {
             self.include_episodic_hints = include_episodic_hints;
         }
-        if let Some(include_semantic_facts) = v.get("include_semantic_facts").and_then(|x| x.as_bool())
+        if let Some(include_semantic_facts) =
+            v.get("include_semantic_facts").and_then(|x| x.as_bool())
         {
             self.include_semantic_facts = include_semantic_facts;
         }
@@ -360,7 +373,9 @@ pub async fn build_prompt_memory_context(
     let (recent_episodes_raw, recent_semantic, recent_procedural) = {
         let inner = gm.inner.lock().await;
         (
-            inner.recall_recent(policy.recall_window_secs).unwrap_or_default(),
+            inner
+                .recall_recent(policy.recall_window_secs)
+                .unwrap_or_default(),
             inner
                 .recall_by_type(AinlNodeKind::Semantic, policy.recall_window_secs)
                 .unwrap_or_default(),
@@ -407,40 +422,40 @@ pub async fn build_prompt_memory_context(
         recent_episodes
             .iter()
             .filter_map(|n| {
-            let AinlNodeType::Episode { episodic } = &n.node_type else {
-                return None;
-            };
-            let mut score = 0.0_f32;
-            let age = (now_ts - episodic.timestamp).max(0);
-            score += 1.0 / ((age / 60) as f32 + 1.0);
-            if episodic.flagged {
-                score -= 0.4;
-            }
-            if let Some(active) = &active_conversation {
-                if &episodic.conversation_id == active {
-                    score += 0.3;
+                let AinlNodeType::Episode { episodic } = &n.node_type else {
+                    return None;
+                };
+                let mut score = 0.0_f32;
+                let age = (now_ts - episodic.timestamp).max(0);
+                score += 1.0 / ((age / 60) as f32 + 1.0);
+                if episodic.flagged {
+                    score -= 0.4;
                 }
-            }
-            let mut detail = format!(
-                "ep:{} tools={}",
-                short_id(n.id),
-                join_tools(episodic.effective_tools())
-            );
-            if let Some(to) = &episodic.delegation_to {
-                detail.push_str(&format!(" delegated_to={to}"));
-            }
-            if let Some(v) = &episodic.vitals_gate {
-                detail.push_str(&format!(" trust_gate={v}"));
-            }
-            if policy.include_provenance {
-                if !episodic.conversation_id.is_empty() {
-                    detail.push_str(&format!(" [conv:{}]", episodic.conversation_id));
+                if let Some(active) = &active_conversation {
+                    if &episodic.conversation_id == active {
+                        score += 0.3;
+                    }
                 }
-                if let Some(prev) = &episodic.follows_episode_id {
-                    detail.push_str(&format!(" [follows:{}]", short_id_str(prev)));
+                let mut detail = format!(
+                    "ep:{} tools={}",
+                    short_id(n.id),
+                    join_tools(episodic.effective_tools())
+                );
+                if let Some(to) = &episodic.delegation_to {
+                    detail.push_str(&format!(" delegated_to={to}"));
                 }
-            }
-            Some((score, episodic.timestamp, detail))
+                if let Some(v) = &episodic.vitals_gate {
+                    detail.push_str(&format!(" trust_gate={v}"));
+                }
+                if policy.include_provenance {
+                    if !episodic.conversation_id.is_empty() {
+                        detail.push_str(&format!(" [conv:{}]", episodic.conversation_id));
+                    }
+                    if let Some(prev) = &episodic.follows_episode_id {
+                        detail.push_str(&format!(" [follows:{}]", short_id_str(prev)));
+                    }
+                }
+                Some((score, episodic.timestamp, detail))
             })
             .collect()
     } else {
@@ -493,12 +508,11 @@ pub async fn build_prompt_memory_context(
             } else {
                 0.0
             };
-            let score =
-                (semantic.confidence * 0.45)
-                    + (recurrence * 0.20)
-                    + (referenced * 0.20)
-                    + (recency_score * 0.15)
-                    - stale_penalty;
+            let score = (semantic.confidence * 0.45)
+                + (recurrence * 0.20)
+                + (referenced * 0.20)
+                + (recency_score * 0.15)
+                - stale_penalty;
             let mut line = semantic.fact.clone();
             if policy.include_provenance {
                 line.push_str(&format!(
@@ -592,7 +606,10 @@ pub async fn build_prompt_memory_context(
                 if procedural.retired {
                     return None;
                 }
-                let base = procedural.fitness.unwrap_or(procedural.success_rate).clamp(0.0, 1.0);
+                let base = procedural
+                    .fitness
+                    .unwrap_or(procedural.success_rate)
+                    .clamp(0.0, 1.0);
                 let freshness = if procedural.last_invoked_at == 0 {
                     0.1
                 } else {
@@ -694,8 +711,10 @@ pub async fn build_prompt_memory_context(
 
 fn metadata_bool(meta: &HashMap<String, serde_json::Value>, key: &str, default: bool) -> bool {
     let v = meta.get(key).and_then(|v| {
-        v.as_bool()
-            .or_else(|| v.as_str().map(|s| parse_bool_with_default(Some(s), default)))
+        v.as_bool().or_else(|| {
+            v.as_str()
+                .map(|s| parse_bool_with_default(Some(s), default))
+        })
     });
     v.unwrap_or(default)
 }
@@ -861,7 +880,9 @@ mod tests {
         let ctx = build_prompt_memory_context(&writer, &policy).await;
         assert_eq!(ctx.semantic_lines.len(), 2);
         assert!(
-            ctx.semantic_lines[0].to_ascii_lowercase().contains("alpha fact"),
+            ctx.semantic_lines[0]
+                .to_ascii_lowercase()
+                .contains("alpha fact"),
             "expected alpha fact first, got {:?}",
             ctx.semantic_lines
         );
@@ -905,16 +926,14 @@ mod tests {
         write_procedure(&writer, "retired_proc", 0.99, Some(0.99), true).await;
 
         let ctx = build_prompt_memory_context(&writer, &MemoryContextPolicy::default()).await;
-        assert!(
-            ctx.procedural_lines
-                .iter()
-                .any(|line| line.contains("good_proc"))
-        );
-        assert!(
-            ctx.procedural_lines
-                .iter()
-                .all(|line| !line.contains("retired_proc"))
-        );
+        assert!(ctx
+            .procedural_lines
+            .iter()
+            .any(|line| line.contains("good_proc")));
+        assert!(ctx
+            .procedural_lines
+            .iter()
+            .all(|line| !line.contains("retired_proc")));
     }
 
     #[tokio::test]
@@ -989,6 +1008,8 @@ mod tests {
         assert!(metrics.get("conflict_ratio").is_some());
         assert!(metrics.get("contradiction_gate_pass").is_some());
         assert!(metrics.get("graph_memory_kernel_notify_ok_total").is_some());
-        assert!(metrics.get("graph_memory_kernel_notify_err_total").is_some());
+        assert!(metrics
+            .get("graph_memory_kernel_notify_err_total")
+            .is_some());
     }
 }
