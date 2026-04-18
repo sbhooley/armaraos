@@ -655,6 +655,28 @@
 .orchestration-traces-page-root .orch-gantt-seg.orch-kind-marker {
   background: hsla(var(--orch-hue, 200), 45%, 55%, 0.5);
 }
+/* Deterministic planner (PlanExecutor) trace segments */
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan {
+  background: hsla(160, 58%, 46%, 0.82);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-step {
+  background: hsla(200, 62%, 52%, 0.72);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-step-done {
+  background: hsla(145, 50%, 48%, 0.78);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-warn {
+  background: hsla(12, 72%, 52%, 0.85);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-reason {
+  background: hsla(265, 45%, 58%, 0.72);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-patch {
+  background: hsla(32, 70%, 52%, 0.8);
+}
+.orchestration-traces-page-root .orch-gantt-seg.orch-kind-plan-fallback {
+  background: hsla(38, 78%, 50%, 0.88);
+}
 .orchestration-traces-page-root .orch-heatmap-block {
   margin-top: 4px;
 }

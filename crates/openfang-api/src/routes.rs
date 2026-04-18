@@ -515,6 +515,48 @@ pub fn workspace_upload_hints(workspace_root: &FsPath, attachments: &[Attachment
     }
 }
 
+/// Voice/audio chat uploads are stored under the temp upload dir as a UUID (no workspace copy).
+/// Append this so the model calls `media_transcribe` with `file_id`, not the display `voice_*.webm` name.
+pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for att in attachments {
+        if uuid::Uuid::parse_str(&att.file_id).is_err() {
+            continue;
+        }
+
+        let meta = UPLOAD_REGISTRY.get(&att.file_id);
+        let content_type = meta
+            .as_ref()
+            .map(|m| m.content_type.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(att.content_type.as_str());
+
+        if !content_type.starts_with("audio/") {
+            continue;
+        }
+
+        let orig = meta
+            .as_ref()
+            .map(|m| m.filename.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| att.filename.as_str());
+
+        lines.push(format!(
+            "- **file_id** `{}`, display name `{}`, MIME `{}` — call **media_transcribe** with `{{\"file_id\":\"{}\",\"content_type\":\"{}\"}}` (the display filename is not a path on disk).",
+            att.file_id, orig, content_type, att.file_id, content_type
+        ));
+    }
+
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n**Voice/audio attachments** (server temp store, not workspace/uploads):\n{}\n",
+            lines.join("\n")
+        )
+    }
+}
+
 /// Pre-insert image attachments into an agent's session so the LLM can see them.
 ///
 /// This injects image content blocks into the session BEFORE the kernel
@@ -624,6 +666,10 @@ pub async fn send_message(
                     message_for_agent.push_str(&hint);
                 }
             }
+        }
+        let audio_hint = audio_upload_tool_hints(&req.attachments);
+        if !audio_hint.is_empty() {
+            message_for_agent.push_str(&audio_hint);
         }
     }
 
@@ -2298,6 +2344,10 @@ pub async fn send_message_stream(
                     message_for_agent.push_str(&hint);
                 }
             }
+        }
+        let audio_hint = audio_upload_tool_hints(&req.attachments);
+        if !audio_hint.is_empty() {
+            message_for_agent.push_str(&audio_hint);
         }
     }
 
@@ -4475,6 +4525,8 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
     ));
 
     out.push_str(&state.kernel.llm_factory.prometheus_snippet());
+
+    out.push_str(&openfang_runtime::planner_metrics::render_prometheus());
 
     // AINL runtime bridge cache behavior (only increments when ainl-runtime-engine path is used).
     let arm = openfang_runtime::ainl_runtime_bridge_metrics();

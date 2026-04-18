@@ -52,6 +52,8 @@ if-addrs = { workspace = true }
 sysinfo = { workspace = true }
 
 [dev-dependencies]
+serial_test = "3"
 tokio-test = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
+wiremock = "0.6"

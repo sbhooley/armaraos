@@ -352,6 +352,57 @@
         var lx2 = ((t - t0) / span) * 100;
         placeSegment(e.agent_id, lx2, 0.45, 'delegate', 'delegated');
         placeSegment(e.event_type.target_agent, lx2 + 0.1, 0.45, 'delegate-target', 'received delegation');
+      } else if (typ === 'plan_started' && e.event_type) {
+        var lx4 = ((t - t0) / span) * 100;
+        var sc = e.event_type.step_count != null ? e.event_type.step_count : '?';
+        var cf = e.event_type.confidence != null ? e.event_type.confidence : '';
+        placeSegment(
+          e.agent_id,
+          lx4,
+          0.55,
+          'plan',
+          'plan started · ' + sc + ' steps · conf ' + cf
+        );
+      } else if (typ === 'plan_step_started' && e.event_type) {
+        var lx5 = ((t - t0) / span) * 100;
+        var sid = e.event_type.step_id != null ? String(e.event_type.step_id) : '';
+        var tool = e.event_type.tool != null ? String(e.event_type.tool) : '';
+        placeSegment(e.agent_id, lx5, 0.45, 'plan-step', 'step ' + sid + ' · ' + tool);
+      } else if (typ === 'plan_step_completed' && e.event_type) {
+        var lx6 = ((t - t0) / span) * 100;
+        placeSegment(
+          e.agent_id,
+          lx6,
+          0.42,
+          'plan-step-done',
+          'step done · ' + (e.event_type.step_id || '') + ' · ' + (e.event_type.tool || '')
+        );
+      } else if (typ === 'plan_step_failed' && e.event_type) {
+        var lx7 = ((t - t0) / span) * 100;
+        var err = e.event_type.error != null ? String(e.event_type.error).slice(0, 72) : '';
+        placeSegment(e.agent_id, lx7, 0.5, 'plan-warn', 'step failed · ' + err);
+      } else if (typ === 'plan_reasoning_reentry' && e.event_type) {
+        var lx8 = ((t - t0) / span) * 100;
+        placeSegment(
+          e.agent_id,
+          lx8,
+          0.42,
+          'plan-reason',
+          'reasoning re-entry · ' + (e.event_type.step_id || '')
+        );
+      } else if (typ === 'plan_local_patch' && e.event_type) {
+        var lx9 = ((t - t0) / span) * 100;
+        placeSegment(
+          e.agent_id,
+          lx9,
+          0.45,
+          'plan-patch',
+          'local patch · step ' + (e.event_type.step_id || '') + ' · attempt ' + (e.event_type.replan_attempt ?? '')
+        );
+      } else if (typ === 'plan_fallback' && e.event_type) {
+        var lxa = ((t - t0) / span) * 100;
+        var rsn = e.event_type.reason != null ? String(e.event_type.reason).slice(0, 96) : '';
+        placeSegment(e.agent_id, lxa, 0.55, 'plan-fallback', 'fallback · ' + rsn);
       } else {
         var lx3 = ((t - t0) / span) * 100;
         placeSegment(e.agent_id, lx3, 0.4, 'marker', typ || 'event');
@@ -488,6 +539,20 @@
         clearDateFilters() {
           this.traceDateFrom = '';
           this.traceDateTo = '';
+        },
+
+        /** @param {'' | 'delegation' | 'planner'} preset */
+        applyEventFilterPreset(preset) {
+          if (preset === 'planner') {
+            this.eventTypeFilter =
+              'plan_started, plan_step_started, plan_step_completed, plan_step_failed, plan_fallback, plan_local_patch, plan_reasoning_reentry';
+          } else if (preset === 'delegation') {
+            this.eventTypeFilter =
+              'orchestration_start, orchestration_complete, agent_delegated, agent_completed, agent_failed';
+          } else {
+            this.eventTypeFilter = '';
+          }
+          this.refreshViz();
         },
 
         copyAgentId(id) {

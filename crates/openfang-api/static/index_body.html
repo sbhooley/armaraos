@@ -8086,11 +8086,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="orchestrationTracesPage" x-init="init()" class="orchestration-traces-page-root">
         <div class="page-header dashboard-page-header-polish">
           <h2>Orchestration traces</h2>
-          <p class="dashboard-page-header-sub">Observe multi-agent delegations: delegation graph, Gantt timeline, token heatmap, and quota usage. Traces are held in a ring buffer (not persisted). Matching events also appear on the event stream as <code class="text-xs">OrchestrationTrace</code>.</p>
+          <p class="dashboard-page-header-sub">Observe orchestration in one place: <strong style="font-weight:600">multi-agent delegation</strong> (spawn/delegate tools) and <strong style="font-weight:600">deterministic planner</strong> runs (native infer plan steps). Delegation shows in the tree/Gantt; planner emits <code class="text-xs">plan_*</code> events. Traces are held in a ring buffer (not persisted). Matching events also appear on the event stream as <code class="text-xs">OrchestrationTrace</code>.</p>
         </div>
         <div class="page-body dashboard-page-body-polish" style="padding:0 20px 32px">
           <div class="card orch-intro-card" style="margin-top:16px">
-            <p class="text-sm text-dim" style="margin:0;line-height:1.55"><strong style="font-weight:600;color:var(--text)">How to use this page.</strong> Refresh the list, filter by trace id or time range (<code class="text-xs">last_event_at</code>), then select a trace to load delegation detail. Use <strong>Quota tree</strong> with an agent UUID to inspect inherited limits without selecting a trace.</p>
+            <p class="text-sm text-dim" style="margin:0;line-height:1.55"><strong style="font-weight:600;color:var(--text)">How to use this page.</strong> Refresh the list, filter by trace id or time range (<code class="text-xs">last_event_at</code>), then select a trace. Use <strong>Event type filter</strong> presets to show only delegation-related types vs planner (<code class="text-xs">plan_*</code>) events. Use <strong>Quota tree</strong> with an agent UUID to inspect inherited limits without selecting a trace.</p>
           </div>
 
           <div class="dashboard-inline-filters orch-filter-bar">
@@ -8154,7 +8154,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <template x-if="selectedTraceId && detailEvents">
                   <div class="mb-3">
                     <label class="text-xs font-semibold block mb-1">Event type filter</label>
-                    <input type="text" class="form-input text-xs w-full" style="padding:6px 10px;max-width:420px" placeholder="e.g. agent_completed, agent_failed (comma-separated; empty = all)" x-model="eventTypeFilter" @input="refreshViz()" autocomplete="off" />
+                    <div class="flex flex-wrap gap-2 items-center mb-2">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="applyEventFilterPreset('delegation')">Delegation</button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="applyEventFilterPreset('planner')">Planner (plan_*)</button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="applyEventFilterPreset('')">All events</button>
+                    </div>
+                    <input type="text" class="form-input text-xs w-full" style="padding:6px 10px;max-width:420px" placeholder="e.g. agent_completed, plan_step_started, plan_fallback (comma-separated; empty = all)" x-model="eventTypeFilter" @input="refreshViz()" autocomplete="off" />
                     <p class="text-dim text-xs" style="margin:4px 0 0">Narrows Gantt + events JSON below. Uses snake_case event <code class="text-xs">type</code> names.</p>
                   </div>
                 </template>

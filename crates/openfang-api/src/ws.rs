@@ -506,6 +506,10 @@ async fn handle_text_message(
                         }
                     }
                 }
+                let audio_hint = crate::routes::audio_upload_tool_hints(&attachment_refs);
+                if !audio_hint.is_empty() {
+                    content.push_str(&audio_hint);
+                }
             }
 
             // Resolve file attachments into image content blocks
