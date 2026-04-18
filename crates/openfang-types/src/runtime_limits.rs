@@ -24,6 +24,9 @@ pub const UNBOUNDED_MAX_HISTORY_MESSAGES: usize = 4096;
 pub const UNBOUNDED_MAX_WORKFLOW_RUNS: usize = 10_000;
 /// Cap TTL even in unbounded mode (90 days).
 pub const UNBOUNDED_MAX_WORKFLOW_TTL_SECS: u64 = 90 * 24 * 3600;
+/// Snapshot clamp: no more than 90 days of episodic window.
+pub const MAX_SNAPSHOT_EPISODIC_WINDOW_SECS: i64 = 90 * 24 * 3600;
+pub const MAX_SNAPSHOT_TOP_N: usize = 1024;
 
 /// `true` when config allows and the process environment opts in.
 pub fn unbounded_runtime_mode_active(cfg: &RuntimeLimitsConfig) -> bool {
@@ -54,6 +57,29 @@ pub struct RuntimeLimitsConfig {
     /// `None` leaves the budget unset (no wall-clock cap). TOML: `[runtime_limits] orchestration_default_budget_ms`.
     #[serde(default)]
     pub orchestration_default_budget_ms: Option<u64>,
+    /// Planner snapshot: episodic recall window in seconds.
+    pub snapshot_episodic_window_secs: i64,
+    /// Planner snapshot: max episodic nodes.
+    pub snapshot_episodic_max: usize,
+    /// Planner snapshot: max semantic nodes.
+    pub snapshot_semantic_top_n: usize,
+    /// Planner snapshot: max procedural nodes.
+    pub snapshot_procedural_top_n: usize,
+    /// Planner snapshot: max persona nodes.
+    pub snapshot_persona_top_n: usize,
+    /// Planner snapshot: lookup window (seconds) for non-episodic node types (semantic, procedural, persona).
+    /// Defaults to 30 days. Operators can tighten for privacy or extend for long-lived agents.
+    #[serde(default)]
+    pub snapshot_non_episodic_window_secs: Option<i64>,
+    /// Planner executor: total plan wall-clock budget in milliseconds. Defaults to 60 000 ms (60 s).
+    #[serde(default)]
+    pub planner_max_wall_ms: Option<u64>,
+    /// Planner executor: max `LocalPatch` replan calls per plan execution. Defaults to 3.
+    #[serde(default)]
+    pub planner_max_replan_calls: Option<u32>,
+    /// Planner infer: max server-side repair attempts for a plan request. Defaults to 1.
+    #[serde(default)]
+    pub planner_max_repair_attempts: Option<u32>,
 }
 
 impl Default for RuntimeLimitsConfig {
@@ -67,6 +93,15 @@ impl Default for RuntimeLimitsConfig {
             workflow_run_ttl_secs: None,
             allow_unbounded_agent_loop: false,
             orchestration_default_budget_ms: None,
+            snapshot_episodic_window_secs: 1800,
+            snapshot_episodic_max: 10,
+            snapshot_semantic_top_n: 20,
+            snapshot_procedural_top_n: 10,
+            snapshot_persona_top_n: 5,
+            snapshot_non_episodic_window_secs: None,
+            planner_max_wall_ms: None,
+            planner_max_replan_calls: None,
+            planner_max_repair_attempts: None,
         }
     }
 }
@@ -103,6 +138,21 @@ impl RuntimeLimitsConfig {
         }
         if self.workflow_max_retained_runs == 0 {
             self.workflow_max_retained_runs = 1;
+        }
+        if self.snapshot_episodic_window_secs <= 0 {
+            self.snapshot_episodic_window_secs = 1800;
+        }
+        if self.snapshot_episodic_max == 0 {
+            self.snapshot_episodic_max = 1;
+        }
+        if self.snapshot_semantic_top_n == 0 {
+            self.snapshot_semantic_top_n = 1;
+        }
+        if self.snapshot_procedural_top_n == 0 {
+            self.snapshot_procedural_top_n = 1;
+        }
+        if self.snapshot_persona_top_n == 0 {
+            self.snapshot_persona_top_n = 1;
         }
         if let Some(0) = self.workflow_run_ttl_secs {
             self.workflow_run_ttl_secs = None;
@@ -153,6 +203,14 @@ impl RuntimeLimitsConfig {
                 self.orchestration_default_budget_ms = Some(ms.min(MAX_MS));
             }
         }
+        self.snapshot_episodic_window_secs = self
+            .snapshot_episodic_window_secs
+            .clamp(1, MAX_SNAPSHOT_EPISODIC_WINDOW_SECS);
+        self.snapshot_episodic_max = self.snapshot_episodic_max.clamp(1, MAX_SNAPSHOT_TOP_N);
+        self.snapshot_semantic_top_n = self.snapshot_semantic_top_n.clamp(1, MAX_SNAPSHOT_TOP_N);
+        self.snapshot_procedural_top_n =
+            self.snapshot_procedural_top_n.clamp(1, MAX_SNAPSHOT_TOP_N);
+        self.snapshot_persona_top_n = self.snapshot_persona_top_n.clamp(1, MAX_SNAPSHOT_TOP_N);
     }
 }
 
@@ -165,6 +223,19 @@ pub struct EffectiveRuntimeLimits {
     pub max_agent_call_depth: u32,
     pub workflow_max_retained_runs: usize,
     pub workflow_run_ttl_secs: Option<u64>,
+    pub snapshot_episodic_window_secs: i64,
+    pub snapshot_episodic_max: usize,
+    pub snapshot_semantic_top_n: usize,
+    pub snapshot_procedural_top_n: usize,
+    pub snapshot_persona_top_n: usize,
+    /// Lookup window (seconds) for non-episodic snapshot types. `None` = 30-day default.
+    pub snapshot_non_episodic_window_secs: Option<i64>,
+    /// Plan executor wall-clock budget ms. `None` = [`DEFAULT_MAX_WALL_MS`](ainl_agent_snapshot::DEFAULT_MAX_WALL_MS).
+    pub planner_max_wall_ms: Option<u64>,
+    /// Max `LocalPatch` replans per plan. `None` = [`DEFAULT_MAX_REPLAN_CALLS`](ainl_agent_snapshot::DEFAULT_MAX_REPLAN_CALLS).
+    pub planner_max_replan_calls: Option<u32>,
+    /// Max server-side repair attempts per infer request. `None` = 1 (kernel default).
+    pub planner_max_repair_attempts: Option<u32>,
 }
 
 impl EffectiveRuntimeLimits {
@@ -177,6 +248,15 @@ impl EffectiveRuntimeLimits {
             max_agent_call_depth: 5,
             workflow_max_retained_runs: 200,
             workflow_run_ttl_secs: None,
+            snapshot_episodic_window_secs: 1800,
+            snapshot_episodic_max: 10,
+            snapshot_semantic_top_n: 20,
+            snapshot_procedural_top_n: 10,
+            snapshot_persona_top_n: 5,
+            snapshot_non_episodic_window_secs: None,
+            planner_max_wall_ms: None,
+            planner_max_replan_calls: None,
+            planner_max_repair_attempts: None,
         }
     }
 
@@ -188,6 +268,15 @@ impl EffectiveRuntimeLimits {
             max_agent_call_depth: global.max_agent_call_depth,
             workflow_max_retained_runs: global.workflow_max_retained_runs,
             workflow_run_ttl_secs: global.workflow_run_ttl_secs,
+            snapshot_episodic_window_secs: global.snapshot_episodic_window_secs,
+            snapshot_episodic_max: global.snapshot_episodic_max,
+            snapshot_semantic_top_n: global.snapshot_semantic_top_n,
+            snapshot_procedural_top_n: global.snapshot_procedural_top_n,
+            snapshot_persona_top_n: global.snapshot_persona_top_n,
+            snapshot_non_episodic_window_secs: global.snapshot_non_episodic_window_secs,
+            planner_max_wall_ms: global.planner_max_wall_ms,
+            planner_max_replan_calls: global.planner_max_replan_calls,
+            planner_max_repair_attempts: global.planner_max_repair_attempts,
         }
     }
 
@@ -221,6 +310,33 @@ impl EffectiveRuntimeLimits {
         if let Some(v) = meta_u64_optional(metadata, "runtime_workflow_run_ttl_secs") {
             self.workflow_run_ttl_secs = v;
         }
+        if let Some(v) = meta_i64(metadata, "runtime_snapshot_episodic_window_secs") {
+            self.snapshot_episodic_window_secs = v;
+        }
+        if let Some(v) = meta_usize(metadata, "runtime_snapshot_episodic_max") {
+            self.snapshot_episodic_max = v;
+        }
+        if let Some(v) = meta_usize(metadata, "runtime_snapshot_semantic_top_n") {
+            self.snapshot_semantic_top_n = v;
+        }
+        if let Some(v) = meta_usize(metadata, "runtime_snapshot_procedural_top_n") {
+            self.snapshot_procedural_top_n = v;
+        }
+        if let Some(v) = meta_usize(metadata, "runtime_snapshot_persona_top_n") {
+            self.snapshot_persona_top_n = v;
+        }
+        if let Some(v) = meta_i64(metadata, "runtime_snapshot_non_episodic_window_secs") {
+            self.snapshot_non_episodic_window_secs = Some(v);
+        }
+        if let Some(v) = meta_u64(metadata, "runtime_planner_max_wall_ms") {
+            self.planner_max_wall_ms = Some(v);
+        }
+        if let Some(v) = meta_u32(metadata, "runtime_planner_max_replan_calls") {
+            self.planner_max_replan_calls = Some(v);
+        }
+        if let Some(v) = meta_u32(metadata, "runtime_planner_max_repair_attempts") {
+            self.planner_max_repair_attempts = Some(v);
+        }
     }
 
     fn clamp_merged(&mut self, allow_unbounded_cfg: bool) {
@@ -233,6 +349,15 @@ impl EffectiveRuntimeLimits {
             workflow_run_ttl_secs: self.workflow_run_ttl_secs,
             allow_unbounded_agent_loop: allow_unbounded_cfg,
             orchestration_default_budget_ms: None,
+            snapshot_episodic_window_secs: self.snapshot_episodic_window_secs,
+            snapshot_episodic_max: self.snapshot_episodic_max,
+            snapshot_semantic_top_n: self.snapshot_semantic_top_n,
+            snapshot_procedural_top_n: self.snapshot_procedural_top_n,
+            snapshot_persona_top_n: self.snapshot_persona_top_n,
+            snapshot_non_episodic_window_secs: self.snapshot_non_episodic_window_secs,
+            planner_max_wall_ms: self.planner_max_wall_ms,
+            planner_max_replan_calls: self.planner_max_replan_calls,
+            planner_max_repair_attempts: self.planner_max_repair_attempts,
         };
         tmp.sanitize_minima();
         let unbounded = unbounded_runtime_mode_active(&tmp);
@@ -243,6 +368,16 @@ impl EffectiveRuntimeLimits {
         self.max_agent_call_depth = tmp.max_agent_call_depth;
         self.workflow_max_retained_runs = tmp.workflow_max_retained_runs;
         self.workflow_run_ttl_secs = tmp.workflow_run_ttl_secs;
+        self.snapshot_episodic_window_secs = tmp.snapshot_episodic_window_secs;
+        self.snapshot_episodic_max = tmp.snapshot_episodic_max;
+        self.snapshot_semantic_top_n = tmp.snapshot_semantic_top_n;
+        self.snapshot_procedural_top_n = tmp.snapshot_procedural_top_n;
+        self.snapshot_persona_top_n = tmp.snapshot_persona_top_n;
+        // Planner-specific fields are passed through without clamping (operator-tunable, no ceiling).
+        self.snapshot_non_episodic_window_secs = tmp.snapshot_non_episodic_window_secs;
+        self.planner_max_wall_ms = tmp.planner_max_wall_ms;
+        self.planner_max_replan_calls = tmp.planner_max_replan_calls;
+        self.planner_max_repair_attempts = tmp.planner_max_repair_attempts;
     }
 
     /// Re-apply global ceilings after caller-side numeric overrides (e.g. workflow adaptive step).
@@ -286,6 +421,31 @@ fn meta_u32(metadata: &HashMap<String, Value>, key: &str) -> Option<u32> {
     let v = metadata.get(key)?;
     if let Some(n) = v.as_u64() {
         return u32::try_from(n).ok();
+    }
+    if let Some(s) = v.as_str() {
+        return s.trim().parse().ok();
+    }
+    None
+}
+
+fn meta_i64(metadata: &HashMap<String, Value>, key: &str) -> Option<i64> {
+    let v = metadata.get(key)?;
+    if let Some(n) = v.as_i64() {
+        return Some(n);
+    }
+    if let Some(n) = v.as_u64() {
+        return i64::try_from(n).ok();
+    }
+    if let Some(s) = v.as_str() {
+        return s.trim().parse().ok();
+    }
+    None
+}
+
+fn meta_u64(metadata: &HashMap<String, Value>, key: &str) -> Option<u64> {
+    let v = metadata.get(key)?;
+    if let Some(n) = v.as_u64() {
+        return Some(n);
     }
     if let Some(s) = v.as_str() {
         return s.trim().parse().ok();
@@ -337,6 +497,15 @@ mod tests {
             workflow_run_ttl_secs: Some(999_999_999),
             allow_unbounded_agent_loop: false,
             orchestration_default_budget_ms: None,
+            snapshot_episodic_window_secs: 999_999_999,
+            snapshot_episodic_max: 99_999,
+            snapshot_semantic_top_n: 99_999,
+            snapshot_procedural_top_n: 99_999,
+            snapshot_persona_top_n: 99_999,
+            snapshot_non_episodic_window_secs: None,
+            planner_max_wall_ms: None,
+            planner_max_replan_calls: None,
+            planner_max_repair_attempts: None,
         };
         c.clamp_bounds();
         assert_eq!(c.max_iterations, BOUNDED_CEILING_ITERATIONS);
@@ -344,6 +513,14 @@ mod tests {
         assert_eq!(c.max_history_messages, BOUNDED_CEILING_HISTORY_MESSAGES);
         assert_eq!(c.max_agent_call_depth, BOUNDED_CEILING_AGENT_DEPTH);
         assert_eq!(c.workflow_max_retained_runs, BOUNDED_CEILING_WORKFLOW_RUNS);
+        assert_eq!(
+            c.snapshot_episodic_window_secs,
+            MAX_SNAPSHOT_EPISODIC_WINDOW_SECS
+        );
+        assert_eq!(c.snapshot_episodic_max, MAX_SNAPSHOT_TOP_N);
+        assert_eq!(c.snapshot_semantic_top_n, MAX_SNAPSHOT_TOP_N);
+        assert_eq!(c.snapshot_procedural_top_n, MAX_SNAPSHOT_TOP_N);
+        assert_eq!(c.snapshot_persona_top_n, MAX_SNAPSHOT_TOP_N);
     }
 
     #[test]
@@ -355,7 +532,12 @@ mod tests {
         let mut m = AgentManifest::default();
         m.metadata
             .insert("runtime_max_iterations".to_string(), Value::from(100_i64));
+        m.metadata.insert(
+            "runtime_snapshot_semantic_top_n".to_string(),
+            Value::from(77_i64),
+        );
         let eff = EffectiveRuntimeLimits::from_global_and_manifest(&global, &m);
         assert_eq!(eff.max_iterations, BOUNDED_CEILING_ITERATIONS);
+        assert_eq!(eff.snapshot_semantic_top_n, 77);
     }
 }

@@ -113,6 +113,35 @@ pub enum TraceEventType {
         total_duration_ms: u64,
         agents_used: Vec<AgentId>,
     },
+    /// Deterministic planner (`InferRequest` + `AgentSnapshot`) started executing a plan.
+    PlanStarted {
+        step_count: usize,
+        confidence: f32,
+        reasoning_step_ids: Vec<String>,
+    },
+    PlanStepStarted {
+        step_id: String,
+        tool: String,
+    },
+    PlanStepCompleted {
+        step_id: String,
+        tool: String,
+    },
+    PlanStepFailed {
+        step_id: String,
+        tool: String,
+        error: String,
+    },
+    PlanReasoningReentry {
+        step_id: String,
+    },
+    PlanLocalPatch {
+        step_id: String,
+        replan_attempt: u32,
+    },
+    PlanFallback {
+        reason: String,
+    },
 }
 
 impl TraceEventType {
@@ -125,6 +154,13 @@ impl TraceEventType {
             Self::AgentCompleted { .. } => "agent_completed",
             Self::AgentFailed { .. } => "agent_failed",
             Self::OrchestrationComplete { .. } => "orchestration_complete",
+            Self::PlanStarted { .. } => "plan_started",
+            Self::PlanStepStarted { .. } => "plan_step_started",
+            Self::PlanStepCompleted { .. } => "plan_step_completed",
+            Self::PlanStepFailed { .. } => "plan_step_failed",
+            Self::PlanReasoningReentry { .. } => "plan_reasoning_reentry",
+            Self::PlanLocalPatch { .. } => "plan_local_patch",
+            Self::PlanFallback { .. } => "plan_fallback",
         }
     }
 }
