@@ -55,10 +55,13 @@ fn build_summary(ctx: &PatchDispatchContext<'_>) -> Result<Value, String> {
     }
     let mut frame_keys: Vec<String> = ctx.frame.keys().cloned().collect();
     frame_keys.sort_unstable();
+    // Optional `graph_writes` may be merged by the host (e.g. planner `DeterministicPlan`) before
+    // `on_patch_dispatch`; default empty keeps the envelope shape stable for forward compatibility.
     Ok(json!({
         "label": ctx.patch_label,
         "patch_version": proc.patch_version,
         "frame_keys": frame_keys,
+        "graph_writes": [],
     }))
 }
 

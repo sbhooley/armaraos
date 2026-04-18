@@ -47,6 +47,18 @@ pub trait TurnHooksAsync: Send + Sync {
         Ok(serde_json::Value::Null)
     }
 
+    /// Dispatch a single planner step (e.g. `file_write`, MCP tools). Default: no-op error.
+    async fn on_plan_step_execute(
+        &self,
+        _step_id: &str,
+        _tool: &str,
+        _args: &serde_json::Value,
+    ) -> Result<serde_json::Value, ainl_agent_snapshot::PlanStepError> {
+        Err(ainl_agent_snapshot::PlanStepError::ToolNotFound(
+            "on_plan_step_execute not implemented".into(),
+        ))
+    }
+
     async fn on_turn_complete(&self, _outcome: &TurnOutcome) {}
 }
 
