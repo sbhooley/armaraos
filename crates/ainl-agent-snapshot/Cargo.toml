@@ -1,0 +1,15 @@
+[package]
+name = "ainl-agent-snapshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AgentSnapshot and DeterministicPlan types for AINL planner protocol"
+
+[dependencies]
+ainl-memory = { path = "../ainl-memory" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }

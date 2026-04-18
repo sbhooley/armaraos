@@ -20,6 +20,7 @@ members = [
     "crates/ainl-graph-extractor",
     "crates/ainl-semantic-tagger",
     "crates/ainl-runtime",
+    "crates/ainl-agent-snapshot",
     "xtask",
 ]
 
@@ -197,3 +198,4 @@ ainl-memory = { path = "crates/ainl-memory" }
 ainl-persona = { path = "crates/ainl-persona" }
 ainl-semantic-tagger = { path = "crates/ainl-semantic-tagger" }
 ainl-runtime = { path = "crates/ainl-runtime" }
+ainl-agent-snapshot = { path = "crates/ainl-agent-snapshot" }
