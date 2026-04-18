@@ -2904,6 +2904,12 @@ impl OpenFangKernel {
                 .as_ref()
                 .map(|ctx| Arc::new(tokio::sync::RwLock::new(ctx.clone())));
 
+            let planner_model_tier = kernel_clone
+                .model_catalog
+                .read()
+                .ok()
+                .and_then(|c| c.find_model(&manifest.model.model).map(|e| e.tier));
+
             let result = run_agent_loop_streaming(
                 &manifest,
                 &message_owned,
@@ -2939,6 +2945,7 @@ impl OpenFangKernel {
                 Some(btw_rx),
                 Some(redirect_rx),
                 runtime_limits_turn,
+                planner_model_tier,
                 orchestration_for_turn,
                 orchestration_live.as_ref(),
             )
@@ -3733,6 +3740,12 @@ impl OpenFangKernel {
             }
         }
 
+        let planner_model_tier = self
+            .model_catalog
+            .read()
+            .ok()
+            .and_then(|c| c.find_model(&manifest.model.model).map(|e| e.tier));
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -3767,6 +3780,7 @@ impl OpenFangKernel {
             Some(btw_rx),
             Some(redirect_rx),
             runtime_limits_turn,
+            planner_model_tier,
             orchestration_for_turn,
             orchestration_live.as_ref(),
         )
