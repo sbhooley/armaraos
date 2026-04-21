@@ -823,3 +823,39 @@ The dashboard **LLM error banner** maps errors with **`humanizeChatError`** (`st
 **Having OpenRouter credits does not rule out 401** (missing/wrong key in the daemon environment) **or 403** (model policy). Hover the banner for the **raw** provider string, or check **Logs / Audit** and **[Support diagnostics](dashboard-testing.md)**.
 
 Legacy agent manifests may still reference **`stepfun/step-3.5-flash:free`**; OpenRouter returns **404** (“no endpoints”) for some deprecated free routes — update **`[model]`** or pick a current id from [openrouter.ai](https://openrouter.ai).
+
+### OpenRouter key is set, but chat still says "sign-in failed"
+
+If **Settings → Providers** shows OpenRouter as configured, but chat still throws a 401-style sign-in error, verify the **exact key source ArmaraOS uses**:
+
+- ArmaraOS desktop/daemon loads credentials from **`~/.armaraos/.env`** and **`~/.armaraos/secrets.env`**.
+- A valid key in **`~/.openclaw/.env`** does **not** help unless the same value exists under `~/.armaraos/*`.
+- The dashboard key save endpoint (`POST /api/providers/openrouter/key`) writes to `~/.armaraos/secrets.env` and updates the running process.
+
+Quick checks:
+
+1. `POST /api/providers/openrouter/test` — confirms whether the running daemon can authenticate now.
+2. Compare `OPENROUTER_API_KEY` in `~/.armaraos/.env` / `~/.armaraos/secrets.env` (length/prefix only; do not paste full keys in logs).
+3. Restart ArmaraOS after key migration/repair so the credential resolver reloads cleanly.
+
+If your OpenRouter request still returns 401 with a known-good key, test the key directly against `https://openrouter.ai/api/v1/chat/completions` and rotate the key in OpenRouter if needed.
+
+### Custom provider (`ainl-inference-server`) gives 404 / model not found
+
+When a custom provider URL is wrong, ArmaraOS often surfaces:
+
+- provider test: **404** on `POST /api/providers/:name/test`
+- chat: **"Model not found. Check the model name."**
+
+For `ainl-inference-server`, verify that `provider_urls` points to the **actual inference API**, not a static/reverse-proxy route that serves unrelated paths.
+
+- Expected OpenAI-compatible endpoint: `http://127.0.0.1:<port>/v1/chat/completions`
+- Expected model listing endpoint: `http://127.0.0.1:<port>/v1/models`
+
+If another service (for example Caddy serving a workspace site) is bound to that port, `/v1/*` may return 404 even though ArmaraOS shows the provider as configured.
+
+Fix path:
+
+1. Start/confirm `ainl-inference-server` on its real port.
+2. Update `[provider_urls]` in `~/.armaraos/config.toml` (or via Settings) to that base URL.
+3. Re-run `POST /api/providers/ainl-inference-server/test`.
