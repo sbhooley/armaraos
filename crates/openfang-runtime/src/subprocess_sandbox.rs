@@ -37,9 +37,11 @@ pub const SAFE_ENV_VARS_WINDOWS: &[&str] = &[
 ///
 /// Variables that are not set in the current process environment are silently
 /// skipped (rather than being set to empty strings).
-/// PATH for subprocess tools (`shell_exec`, `process_*`, etc.). Daemons launched by launchd often
-/// have a minimal PATH without Homebrew (`/opt/homebrew/bin`), so `ffmpeg` / `brew` appear
-/// missing even when installed. Prepend standard macOS Homebrew locations when not already present.
+/// PATH for subprocess tools (`shell_exec`, `process_*`, etc.).
+///
+/// - **macOS:** launchd often omits Homebrew; prepend `/opt/homebrew/bin:/usr/local/bin`.
+/// - **Windows:** bundled FFmpeg lives under `{openfang_home}/voice/ffmpeg_win/bin` — prepend so
+///   `shell_exec` can run `ffmpeg` the same way `media_transcribe` does via absolute path.
 fn path_for_sandboxed_child() -> Option<String> {
     let base = std::env::var("PATH").unwrap_or_default();
     #[cfg(target_os = "macos")]
@@ -52,13 +54,29 @@ fn path_for_sandboxed_child() -> Option<String> {
                 base
             });
         }
-        Some(if base.is_empty() {
+        return Some(if base.is_empty() {
             format!("{brew}:/usr/bin:/bin")
         } else {
             format!("{brew}:{base}")
-        })
+        });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let bundled = openfang_types::config::openfang_home_dir()
+            .join("voice")
+            .join("ffmpeg_win")
+            .join("bin");
+        if bundled.join("ffmpeg.exe").is_file() {
+            let p = bundled.to_string_lossy().to_string();
+            return Some(if base.is_empty() {
+                p
+            } else {
+                format!("{p};{base}")
+            });
+        }
+        return if base.is_empty() { None } else { Some(base) };
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         if base.is_empty() {
             None
