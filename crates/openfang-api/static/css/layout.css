@@ -580,7 +580,7 @@
 /* Persistent notification center (bell) — sibling of main, fixed top-right (sits in main-content’s reserved padding) */
 .notify-center-root {
   position: fixed;
-  top: 8px;
+  top: 16px;
   right: calc(16px + env(safe-area-inset-right, 0px));
   z-index: 102;
   pointer-events: none;
@@ -590,7 +590,7 @@
 }
 .notify-bell-wrap {
   position: relative;
-  width: 40px;
+  width: 30px;
   display: flex;
   justify-content: flex-end;
 }
@@ -603,28 +603,25 @@
 .notify-bell-btn {
   position: relative;
   z-index: 103;
-  width: 38px;
-  min-width: 38px;
+  width: 30px;
+  min-width: 30px;
+  min-height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 10px !important;
-  border-radius: var(--radius-md, 8px);
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent) !important;
-  background: color-mix(in srgb, var(--surface2) 62%, transparent) !important;
-  box-shadow: var(--shadow-xs), var(--shadow-inset);
-  transition: background 0.14s var(--ease-smooth), border-color 0.14s var(--ease-smooth), box-shadow 0.14s var(--ease-smooth), transform 0.14s var(--ease-smooth);
+  padding: 0 !important;
+  border-radius: 8px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none;
+  transition: color 0.14s var(--ease-smooth), transform 0.14s var(--ease-smooth);
 }
 .notify-bell-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-subtle)) !important;
-  background: color-mix(in srgb, var(--surface2) 82%, var(--bg-elevated)) !important;
-  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  color: var(--accent);
   transform: translateY(-1px);
 }
 .notify-bell-btn[aria-expanded="true"] {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border)) !important;
-  background: color-mix(in srgb, var(--accent-subtle) 62%, var(--surface2)) !important;
-  box-shadow: var(--shadow-sm), 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent) inset;
+  color: var(--accent);
 }
 .notify-bell-badge {
   position: absolute;
