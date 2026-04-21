@@ -87,6 +87,8 @@ function graphMemoryPanel() {
     memoryDiagnostics: null,
     memorySelectionDebug: [],
     showWhySelectedDrawer: false,
+    /** Collapsible "Memory operations (advanced)" card — default closed to reduce noise for casual users. */
+    memoryOperationsAdvancedOpen: false,
     /** Bound handler for `armaraos-kernel-event` — removed in {@link cleanupKernelListener}. */
     _graphMemoryKernelHandler: null,
     /** Dedupe `GraphMemoryWrite` by kernel event id (window listener + store watch + replay). */

@@ -8033,11 +8033,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </div>
         </div>
         <div class="card" style="margin-top:12px;padding:12px 14px">
-          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
-            <p style="margin:0;font-size:0.86rem;font-weight:600">Graph memory operations</p>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:4px 8px;font-weight:600;font-size:0.86rem;justify-content:flex-start;text-align:left;max-width:100%"
+              :aria-expanded="memoryOperationsAdvancedOpen"
+              @click="memoryOperationsAdvancedOpen = !memoryOperationsAdvancedOpen">
+              <span style="display:inline-flex;align-items:center;gap:8px">
+                <span aria-hidden="true" style="font-size:0.65rem;opacity:0.85" x-text="memoryOperationsAdvancedOpen ? '▼' : '▶'"></span>
+                <span>Memory operations (advanced)</span>
+              </span>
+            </button>
             <button type="button" class="btn btn-ghost btn-sm" @click="refreshGovernanceData()">Refresh data</button>
           </div>
-          <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+          <div x-show="memoryOperationsAdvancedOpen" style="margin-top:10px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
             <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
               <p class="text-xs text-dim" style="margin:0 0 6px">Snapshots & rollback</p>
               <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -8215,6 +8223,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </template>
             </div>
+          </div>
           </div>
         </div>
       </div>
