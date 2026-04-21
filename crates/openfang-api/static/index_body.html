@@ -153,25 +153,30 @@
   <!-- Sidebar -->
   <nav class="sidebar" :class="{ collapsed: sidebarCollapsed, 'mobile-open': mobileMenuOpen }">
     <div class="sidebar-header">
-      <div class="sidebar-header-text">
-        <div class="sidebar-logo">
-          <img src="/logo.png" alt="ArmaraOS" width="28" height="28">
-          <div>
-            <h1>ARMARAOS</h1>
-            <div class="version" x-text="'v' + version"></div>
+      <div class="sidebar-header-expanded">
+        <div class="sidebar-header-text">
+          <div class="sidebar-logo">
+            <img src="/logo.png" alt="ArmaraOS" width="28" height="28">
+            <div>
+              <h1>ARMARAOS</h1>
+              <div class="version" x-text="'v' + version"></div>
+            </div>
           </div>
         </div>
+        <div class="theme-switcher">
+          <button class="theme-opt" :class="{ active: themeMode === 'light' }" @click="setTheme('light')" title="Light">&#9788;</button>
+          <button class="theme-opt" :class="{ active: themeMode === 'system' }" @click="setTheme('system')" title="System">&#9675;</button>
+          <button class="theme-opt" :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')" title="Dark">&#9790;</button>
+        </div>
       </div>
-      <div class="theme-switcher">
-        <button class="theme-opt" :class="{ active: themeMode === 'light' }" @click="setTheme('light')" title="Light">&#9788;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'system' }" @click="setTheme('system')" title="System">&#9675;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')" title="Dark">&#9790;</button>
+      <div class="sidebar-header-collapsed-logo" aria-hidden="true">
+        <img src="/armaraos-logo.png" alt="" width="44" height="44" decoding="async">
       </div>
     </div>
 
     <div class="sidebar-status" :class="{ offline: !connected && !$store.app.booting }">
       <span class="status-dot"></span>
-      <span class="sidebar-label" x-show="connected" x-text="agentCount + ' agent(s)'"></span>
+      <span class="sidebar-label sidebar-agent-count" x-show="connected" x-text="agentCount + ' agent(s)'"></span>
       <span class="sidebar-label" x-show="$store.app.booting && !connected" class="conn-reconnecting">Connecting...</span>
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState === 'reconnecting'" class="conn-reconnecting">Reconnecting...</span>
       <span class="sidebar-label" x-show="!connected && !$store.app.booting && $store.app.connectionState !== 'reconnecting'" x-text="'disconnected' + ($store.app.lastError ? ' — ' + $store.app.lastError : '')">disconnected</span>
@@ -416,8 +421,8 @@
         <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
-      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K · All Agents | Ctrl+N new</div>
-      <div class="sidebar-footer-desktop-hint text-xs text-dim" style="padding:4px 16px 12px;line-height:1.5" x-show="isDesktopShell()">
+      <div class="text-xs text-dim sidebar-footer-shortcuts" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K · All Agents | Ctrl+N new</div>
+      <div class="sidebar-footer-desktop-hint text-xs text-dim" style="padding:4px 16px 12px;line-height:1.5" x-show="isDesktopShell() && !sidebarCollapsed">
         Support and community links are in the app <strong style="color:var(--text-secondary)">Help</strong> menu.
       </div>
       <div class="sidebar-footer-links" style="padding:0 16px 12px;display:flex;flex-direction:column;gap:6px" x-show="!isDesktopShell()">
@@ -482,7 +487,7 @@
               <div class="notify-row-detail text-dim text-sm" x-show="row.detail" x-text="row.detail"></div>
             </div>
             <div class="notify-row-actions">
-              <a class="btn btn-ghost btn-sm" x-show="row.href" :href="row.href" @click="$store.notifyCenter.close()">Open</a>
+              <a class="btn btn-ghost btn-sm" x-show="row.href" :href="row.href" @click="$store.notifyCenter.openRow($event, row)">Open</a>
               <button type="button" class="btn btn-ghost btn-sm" @click="$store.notifyCenter.dismiss(row.id)">Dismiss</button>
             </div>
           </div>

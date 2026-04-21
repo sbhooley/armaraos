@@ -23,8 +23,19 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.sidebar.collapsed .sidebar-label,
-.sidebar.collapsed .sidebar-header-text { display: none; }
+/* Collapsed: show agent count + collapsed logo; hide other labels / expanded header */
+.sidebar.collapsed .sidebar-label:not(.sidebar-agent-count):not(.sidebar-footer-shortcuts) {
+  display: none !important;
+}
+.sidebar.collapsed .sidebar-agent-count {
+  display: inline !important;
+}
+.sidebar.collapsed .sidebar-header-expanded {
+  display: none !important;
+}
+.sidebar.collapsed .sidebar-header-collapsed-logo {
+  display: flex !important;
+}
 
 .nav-label {
   transition:
@@ -54,7 +65,39 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   min-height: 60px;
+}
+
+.sidebar-header-expanded {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-header-collapsed-logo {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 4px 2px 2px;
+  box-sizing: border-box;
+}
+
+.sidebar-header-collapsed-logo img {
+  width: min(44px, calc(var(--sidebar-collapsed) - 14px));
+  height: auto;
+  max-height: 48px;
+  object-fit: contain;
+  display: block;
+  opacity: 0.95;
+}
+
+[data-theme="light"] .sidebar-header-collapsed-logo img {
+  filter: invert(1);
 }
 
 .sidebar-logo {
@@ -121,7 +164,8 @@
   align-items: center;
   gap: 4px;
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -235,6 +279,19 @@
 
 .sidebar.collapsed .sidebar-agent-list {
   display: none !important;
+}
+
+/* Icon-only rail: hide connection badge row (too wide); agent count stays on the status line */
+.sidebar.collapsed .sidebar-conn-badges {
+  display: none !important;
+}
+
+.sidebar.collapsed .sidebar-status {
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 8px;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .nav-item {
@@ -379,11 +436,34 @@
 
 .sidebar-toggle:hover { color: var(--text); }
 
+/* Footer — shortcut line wraps safely when the rail is collapsed */
+.sidebar-footer-shortcuts {
+  letter-spacing: 0.35px;
+  hyphens: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.sidebar.collapsed .sidebar-footer-shortcuts {
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+  padding-bottom: 8px !important;
+  text-align: center;
+  font-size: 9px !important;
+  line-height: 1.35;
+}
+
+.sidebar.collapsed .sidebar-footer-desktop-hint {
+  display: none !important;
+}
+
 /* Horizontal space for fixed notification bell (viewport top-right) so page headers and actions never sit underneath it */
 :root {
-  --sidebar-width: 228px;
-  --sidebar-collapsed: 68px;
+  --sidebar-width: 252px;
+  --sidebar-collapsed: 72px;
   --notify-bell-reserve: 56px;
+  /* Leave horizontal room for fixed `.app-powered-by` above chat tips */
+  --app-powered-by-clearance: min(280px, 42vw);
 }
 
 /* Main content area */
@@ -506,9 +586,10 @@
   box-shadow: 0 0 0 2px var(--bg, #0f0f14);
 }
 .notify-panel {
-  position: absolute;
-  top: 48px;
-  right: 0;
+  /* Fixed to the viewport so a narrow `.notify-bell-wrap` cannot clip the dropdown */
+  position: fixed;
+  top: 52px;
+  right: calc(16px + env(safe-area-inset-right, 0px));
   z-index: 103;
   width: min(380px, calc(100vw - 28px));
   max-height: min(70vh, 520px);

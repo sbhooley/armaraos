@@ -5357,6 +5357,12 @@ button.tool-card-header {
   background: var(--surface2);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
+  box-sizing: border-box;
+  /* Stay left of fixed `.app-powered-by` in the bottom-right corner */
+  width: fit-content;
+  max-width: min(720px, calc(100% - var(--app-powered-by-clearance, 240px)));
+  margin-left: auto;
+  margin-right: auto;
 }
 .tip-bar-dismiss { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
 .tip-bar-dismiss:hover { color: var(--text); }
