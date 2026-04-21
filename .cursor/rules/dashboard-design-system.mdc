@@ -1,0 +1,15 @@
+---
+description: ArmaraOS embedded dashboard UI/UX — tokens, chromatic neutrals, and surface policy (mandatory for static/dashboard edits).
+globs: crates/openfang-api/static/**/*
+alwaysApply: false
+---
+
+# Dashboard design system (ArmaraOS)
+
+- **Canonical doc:** `docs/dashboard-design-system.md` (read before styling changes).
+- **Neutrals:** Use **warm chromatic surfaces** via `theme.css` tokens — no scattered `#rgb` grays for core UI.
+- **Brand:** Gold/amber (`--accent` family) is for **signal** (selection, primary actions, focus, key metrics), not for every border/panel.
+- **Light / dark:** Light canvases stay **warm off-white / paper**; dark canvases stay **true black + warm charcoal** steps in `--surface*`.
+- **Edits:** Prefer changing **tokens** in `crates/openfang-api/static/css/theme.css` before adding one-off component colors.
+
+See **“Color palette and surfaces (conformance)”** in `docs/dashboard-design-system.md` for the full checklist.

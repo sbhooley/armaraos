@@ -35,6 +35,54 @@ Applies to the embedded dashboard under:
    - Preserve keyboard focus states, hover states, contrast, and motion clarity.
    - New controls must include usable focus-visible styles.
 
+## Color palette and surfaces (conformance — “2026-tier” product UI)
+
+These rules keep the dashboard feeling **premium, intentional, and cohesive** with the **gold/amber brand** while preserving **near-white** light canvases and **true / near-black** dark canvases.
+
+### Principles (mandatory)
+
+1. **Chromatic neutrals, not flat “web gray”**  
+   Surfaces and borders use **warm-tinted neutrals** (slight brown/amber bias) so panels read as *designed*, not default gray boxes. Gold is the product accent; neutrals should harmonize with it.
+
+2. **Few named layers; clear steps**  
+   Do not introduce many similar mid-grays. Use the **semantic roles** below and change only via `crates/openfang-api/static/css/theme.css` tokens unless a new reusable token is warranted.
+
+3. **Gold is for signal, not wallpaper**  
+   Reserve `--accent` and amber mixes for **selection, primary actions, focus, key metrics, and brand emphasis**. Everyday chrome (borders, quiet panels, disabled states) stays in the **neutral ramp**.
+
+4. **Depth from structure, not heavy fills**  
+   Prefer **hairline borders** (`--border`, `--border-subtle`) and existing **shadow tokens** over large jumps in gray L\* for hierarchy. Cards should feel *lifted* (border + subtle shadow/inset already in system), not *mud-flats*.
+
+5. **Semantic status colors stay separate**  
+   Success/error/warning/info use their tokens; do not tint whole cards with brand amber unless the pattern already exists for that component.
+
+6. **Light mode warmth**  
+   Page/canvas may be **warm off-white**; cards may be **white** or warm-tinted neutrals. Primary text stays **warm ink** (`--text`), not cold pure `#000000`, unless contrast requires it.
+
+7. **Dark mode depth**  
+   Default dark canvas may be **true black** for OLED-style depth; surfaces step up in **warm charcoal** layers (never a single muddy gray).
+
+### Semantic surface roles (token map)
+
+| Role | Variable | Use |
+|------|----------|-----|
+| App canvas | `--bg` | Outermost background (light: warm off-white; dark: black/near-black). |
+| Chrome / sidebars / large panels | `--bg-primary` | Structural regions below modals, distinct from canvas. |
+| Elevated shell | `--bg-elevated` | Sticky headers, popover-ish regions — between primary and cards. |
+| Primary card / panel fill | `--surface` | Default card and panel body. |
+| Secondary inset / striped rows | `--surface2` | Secondary blocks, dense lists, input well. |
+| Tertiary / sunken | `--surface3` | Muted wells, subtle differentiation — use sparingly. |
+| Hairline / medium / strong borders | `--border`, `--border-subtle`, `--border-light`, `--border-strong` | Dividers, card strokes, separators. |
+
+**Implementation:** all semantic colors for the dashboard ship from **`theme.css`** (`[data-theme="light"]` and `:root` dark defaults). Agents must **not** scatter one-off `#rgb` neutrals in new CSS.
+
+### Checklist before merging UI changes
+
+- [ ] New neutrals go through **tokens** in `theme.css` (or a documented new token in this file).
+- [ ] Light mode stays **warm off-white / white** family; dark mode stays **black canvas + warm charcoal** surfaces.
+- [ ] **Gold** use is **hierarchical** (signal vs chrome).
+- [ ] Focus/hover/contrast and reduced-motion behavior remain intact.
+
 ## Canonical Typography Scale
 
 Use this scale for dashboard UI text:

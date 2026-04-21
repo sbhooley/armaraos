@@ -1,4 +1,6 @@
-/* ArmaraOS Theme — Premium design system */
+/* ArmaraOS Theme — Premium design system
+ * Neutral + surface policy: docs/dashboard-design-system.md ("Color palette and surfaces")
+ */
 
 /* Font imports in index_head.html: Montserrat (body) + Geist Mono (code) */
 
@@ -17,22 +19,22 @@
 }
 
 [data-theme="light"] {
-  /* Backgrounds — layered depth */
-  --bg: #F5F4F2;
-  --bg-primary: #EDECEB;
-  --bg-elevated: #F8F7F6;
-  --surface: #FFFFFF;
-  --surface2: #F0EEEC;
-  --surface3: #E8E6E3;
-  --border: #D5D2CF;
-  --border-light: #C8C4C0;
-  --border-subtle: #E0DEDA;
+  /* Backgrounds — warm chromatic neutrals (premium “ink + paper”; matches gold family) */
+  --bg: #F7F5F2;
+  --bg-primary: #EEEBE7;
+  --bg-elevated: #F9F7F4;
+  --surface: #FFFCF8;
+  --surface2: #F1EDE8;
+  --surface3: #E6E2DC;
+  --border: #D7D3CD;
+  --border-light: #C9C4BE;
+  --border-subtle: #E4E0DA;
 
   /* Text hierarchy */
-  --text: #1A1817;
-  --text-secondary: #3D3935;
-  --text-dim: #6B6560;
-  --text-muted: #9A958F;
+  --text: #141210;
+  --text-secondary: #3A3632;
+  --text-dim: #6A6460;
+  --text-muted: #958F89;
 
   /* Brand — gold (primary = amber-500, ainativelang.com) */
   --accent: var(--color-amber-500);
@@ -58,12 +60,12 @@
   --error-muted: rgba(239, 68, 68, 0.15);
   --warning-muted: rgba(245, 158, 11, 0.15);
   --info-muted: rgba(59, 130, 246, 0.15);
-  --border-strong: #B0ACA8;
+  --border-strong: #ADA8A2;
   --card-highlight: rgba(0, 0, 0, 0.02);
 
   /* Chat-specific */
-  --agent-bg: #F5F4F2;
-  --user-bg: #fffbeb;
+  --agent-bg: #F3F1ED;
+  --user-bg: #fff7e8;
 
   /* Layout */
   --sidebar-width: 252px;
@@ -102,22 +104,24 @@
 }
 
 :root {
-  --sidebar-width: 228px;
-  --sidebar-collapsed: 68px;
+  /* Layout tokens — keep in sync with [data-theme="light"] above */
+  --sidebar-width: 252px;
+  --sidebar-collapsed: 72px;
   --header-height: 48px;
-  --bg: #080706;
-  --bg-primary: #0F0E0E;
-  --bg-elevated: #161413;
-  --surface: #1F1D1C;
-  --surface2: #2A2725;
-  --surface3: #1A1817;
-  --border: #2D2A28;
-  --border-light: #3D3A38;
-  --border-subtle: #232120;
-  --text: #F0EFEE;
-  --text-secondary: #C4C0BC;
-  --text-dim: #8A8380;
-  --text-muted: #5C5754;
+  /* Dark — black canvas + warm graphite surfaces (chromatic neutrals, gold-adjacent) */
+  --bg: #000000;
+  --bg-primary: #0A0908;
+  --bg-elevated: #141210;
+  --surface: #1B1917;
+  --surface2: #252220;
+  --surface3: #121110;
+  --border: #302C29;
+  --border-light: #3B3733;
+  --border-subtle: #1C1A18;
+  --text: #F1EFED;
+  --text-secondary: #C6C1BC;
+  --text-dim: #8C8680;
+  --text-muted: #5F5954;
   --accent: var(--color-amber-500);
   --accent-light: var(--color-amber-400);
   --accent-dim: var(--color-amber-600);
@@ -139,10 +143,10 @@
   --error-muted: rgba(239, 68, 68, 0.25);
   --warning-muted: rgba(245, 158, 11, 0.25);
   --info-muted: rgba(59, 130, 246, 0.25);
-  --border-strong: #4A4644;
-  --card-highlight: rgba(255, 255, 255, 0.04);
-  --agent-bg: #1A1817;
-  --user-bg: #2a2418;
+  --border-strong: #4A4540;
+  --card-highlight: rgba(255, 255, 255, 0.045);
+  --agent-bg: #161412;
+  --user-bg: #2a2218;
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.3);
