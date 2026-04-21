@@ -411,6 +411,13 @@ fn resolve_ffmpeg() -> Option<PathBuf> {
             return Some(pb);
         }
     }
+    #[cfg(windows)]
+    {
+        let bundled = openfang_types::config::openfang_home_dir().join("voice/ffmpeg_win/bin/ffmpeg.exe");
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
     // Homebrew default symlink and Cellar layout (when `brew` is not on daemon PATH).
     for p in [
         "/opt/homebrew/bin/ffmpeg",
@@ -423,20 +430,45 @@ fn resolve_ffmpeg() -> Option<PathBuf> {
             return Some(pb);
         }
     }
-    let out = std::process::Command::new("sh")
-        .arg("-lc")
-        .arg("command -v ffmpeg 2>/dev/null || true")
-        .output()
-        .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("where")
+            .arg("ffmpeg")
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let first = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !first.is_empty() {
+                let p = PathBuf::from(first);
+                if p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
         return None;
     }
-    let p = PathBuf::from(s);
-    if p.is_file() {
-        Some(p)
-    } else {
-        None
+    #[cfg(not(windows))]
+    {
+        let out = std::process::Command::new("sh")
+            .arg("-lc")
+            .arg("command -v ffmpeg 2>/dev/null || true")
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() {
+            return None;
+        }
+        let p = PathBuf::from(s);
+        if p.is_file() {
+            Some(p)
+        } else {
+            None
+        }
     }
 }
 

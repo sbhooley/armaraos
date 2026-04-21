@@ -2443,15 +2443,34 @@ function chatPage() {
       catch(e) { return text; }
     },
 
+    // Prefer codecs whisper.cpp accepts natively (ogg/mp3/wav/flac) to avoid server-side ffmpeg;
+    // fall back to WebM Opus (Chrome), then audio/mp4 (Safari often). See MediaRecorder MIME support per browser/OS.
+    chooseVoiceRecordingMimeType: function() {
+      var candidates = [
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4'
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(candidates[i])) {
+          return candidates[i];
+        }
+      }
+      return '';
+    },
+
     // Voice: start recording
     startRecording: async function() {
       if (this.recording) return;
       try {
         var stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' :
-                       MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+        var mimeType = this.chooseVoiceRecordingMimeType();
         this._audioChunks = [];
-        this._mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+        this._mediaRecorder = mimeType
+          ? new MediaRecorder(stream, { mimeType: mimeType })
+          : new MediaRecorder(stream);
         var self = this;
         this._mediaRecorder.ondataavailable = function(e) {
           if (e.data.size > 0) self._audioChunks.push(e.data);
@@ -2496,8 +2515,13 @@ function chatPage() {
       this.scrollToBottom(true);
 
       try {
-        // Upload audio file
-        var ext = blob.type.includes('webm') ? 'webm' : blob.type.includes('ogg') ? 'ogg' : 'mp3';
+        // Upload audio file — extension must match container (upload MIME normalization on server).
+        var t = (blob.type || '').toLowerCase();
+        var ext = 'webm';
+        if (t.indexOf('ogg') !== -1) ext = 'ogg';
+        else if (t.indexOf('webm') !== -1) ext = 'webm';
+        else if (t.indexOf('mp4') !== -1 || t.indexOf('m4a') !== -1) ext = 'mp4';
+        else if (t.indexOf('audio/mpeg') !== -1 || t.indexOf('mp3') !== -1) ext = 'mp3';
         var file = new File([blob], 'voice_' + Date.now() + '.' + ext, { type: blob.type });
         var upload = await OpenFangAPI.upload(this.currentAgent.id, file);
 

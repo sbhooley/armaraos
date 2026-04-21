@@ -1,11 +1,11 @@
 //! First-launch download of local Whisper + Piper assets into `~/.armaraos/voice/`.
 //!
-//! Windows: ships `whisper-cli.exe` + DLLs from upstream `whisper-bin-x64.zip`.
-//! macOS: when Homebrew is present at the usual paths (`/opt/homebrew` or `/usr/local`), runs
-//! `brew install whisper-cpp` once if `whisper-cli` was not found, and `brew install ffmpeg` if
-//! `ffmpeg` is missing (needed to transcode browser WebM voice uploads to WAV for whisper-cli).
-//! Skipped in CI or when `ARMARAOS_SKIP_BREW_WHISPER` / `ARMARAOS_SKIP_BREW_FFMPEG` is set.
-//! Linux: reuses `whisper-cli` / `ffmpeg` from PATH or distro installs; no automatic brew install.
+//! Windows: ships `whisper-cli.exe` + DLLs from `whisper-bin-x64.zip`, and `ffmpeg.exe` from the
+//! Gyan FFmpeg essentials build (extracted to `voice/ffmpeg_win/bin/`) when missing.
+//! macOS: Homebrew at `/opt/homebrew` or `/usr/local` runs `brew install whisper-cpp` and
+//! `brew install ffmpeg` when those binaries are missing (WebM→WAV transcoding for whisper-cli).
+//! Skipped in CI or when `ARMARAOS_SKIP_BREW_*` env vars are set.
+//! Linux: no bundled ffmpeg download yet — use distro packages or set `FFMPEG_PATH`.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -134,6 +134,17 @@ fn run_bootstrap(
                 }
             }
         }
+
+    #[cfg(windows)]
+    {
+        if !probe_ffmpeg_windows(voice_root) {
+            if let Err(e) = ensure_ffmpeg_windows(client, voice_root) {
+                warn!(error = %e, "local_voice: automatic Windows ffmpeg download failed");
+            } else {
+                info!("local_voice: ffmpeg.exe ready under voice/ffmpeg_win/");
+            }
+        }
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -270,6 +281,71 @@ fn ensure_whisper_windows(
     }
     if exe.is_file() {
         cfg.whisper_cli = Some(exe);
+    }
+    Ok(())
+}
+
+/// Gyan FFmpeg essentials (win64): `bin/ffmpeg.exe` under a `*-essentials_build` folder. Redirects to a versioned zip.
+#[cfg(windows)]
+const FFMPEG_WIN_ESSENTIALS_ZIP: &str =
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+
+#[cfg(windows)]
+fn probe_ffmpeg_windows(voice_root: &Path) -> bool {
+    let local = voice_root.join("ffmpeg_win/bin/ffmpeg.exe");
+    if local.is_file() {
+        return true;
+    }
+    for p in [
+        PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        PathBuf::from(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+    ] {
+        if p.is_file() {
+            return true;
+        }
+    }
+    let out = std::process::Command::new("where")
+        .arg("ffmpeg")
+        .output()
+        .ok();
+    out.map(|o| o.status.success()).unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn ensure_ffmpeg_windows(client: &Client, voice_root: &Path) -> Result<(), String> {
+    let bin_dir = voice_root.join("ffmpeg_win/bin");
+    let exe = bin_dir.join("ffmpeg.exe");
+    if exe.is_file() {
+        return Ok(());
+    }
+    info!("local_voice: downloading FFmpeg for Windows (essentials build)…");
+    let bytes = client
+        .get(FFMPEG_WIN_ESSENTIALS_ZIP)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("GET ffmpeg zip: {e}"))?
+        .bytes()
+        .map_err(|e| format!("body: {e}"))?;
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("mkdir ffmpeg_win: {e}"))?;
+    let cursor = std::io::Cursor::new(bytes);
+    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("ffmpeg zip: {e}"))?;
+    let mut got = false;
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i).map_err(|e| format!("zip idx: {e}"))?;
+        let name = file.name().replace('\\', "/");
+        if !name.to_lowercase().ends_with("/bin/ffmpeg.exe") {
+            continue;
+        }
+        let mut out = std::fs::File::create(&exe).map_err(|e| format!("create ffmpeg.exe: {e}"))?;
+        std::io::copy(&mut file, &mut out).map_err(|e| format!("write ffmpeg: {e}"))?;
+        got = true;
+        break;
+    }
+    if !got {
+        return Err(
+            "ffmpeg-release-essentials.zip did not contain bin/ffmpeg.exe (upstream layout changed?)"
+                .into(),
+        );
     }
     Ok(())
 }
