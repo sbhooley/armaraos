@@ -11,6 +11,15 @@ cd crates/openfang-desktop
 cargo tauri build
 ```
 
+**macOS DMG / `bundle_dmg.sh` failed after a successful `.app` bundle?** The create-dmg step first writes the image as `target/<triple>/release/bundle/macos/<Product>_<version>_<arch>.dmg`, then Tauri moves it into `bundle/dmg/`. If an **older file with the same name is already under `bundle/macos/`** (leftover from a partial run, a manual copy, or a stuck `rw.*.dmg`), `hdiutil convert` can fail with **`File exists`** and Tauri only reports `error running bundle_dmg.sh` (stderr is not printed). **Fix:** remove stale artifacts, then rebuild (fix the `cd` line—there must be a space before `cargo`):
+
+```bash
+cd crates/openfang-desktop
+# Adjust the triple if you build for Intel (x86_64-apple-darwin) or omit --target when building for the host.
+rm -f ../../target/*/release/bundle/macos/*.dmg ../../target/*/release/bundle/macos/rw.*.dmg
+cargo tauri build --target aarch64-apple-darwin
+```
+
 Install the produced artifact on a **physical machine** (not only CI): run the app, confirm the window loads the dashboard.
 
 ## Updater manifests on ainativelang.com
