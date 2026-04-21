@@ -15525,7 +15525,7 @@ pub async fn upload_file(
         .unwrap_or_else(|| "upload".to_string());
 
     let content_type = match normalize_upload_content_type(&filename, &reported_content_type) {
-        Ok(ct) => ct,
+        Ok(ct) => openfang_types::media::normalize_mime_type(&ct),
         Err(msg) => {
             return api_json_error(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,

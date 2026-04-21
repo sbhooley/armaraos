@@ -4,7 +4,7 @@
 
 use openfang_types::config::LocalVoiceConfig;
 use openfang_types::media::{
-    MediaAttachment, MediaConfig, MediaSource, MediaType, MediaUnderstanding,
+    normalize_mime_type, MediaAttachment, MediaConfig, MediaSource, MediaType, MediaUnderstanding,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,7 +84,8 @@ impl MediaEngine {
 
         // Derive a proper filename with extension from mime_type
         // (Whisper APIs require an extension to detect format)
-        let ext = match attachment.mime_type.as_str() {
+        let mt = normalize_mime_type(&attachment.mime_type);
+        let ext = match mt.as_str() {
             "audio/wav" => "wav",
             "audio/mpeg" | "audio/mp3" => "mp3",
             "audio/ogg" => "ogg",
@@ -133,7 +134,7 @@ impl MediaEngine {
 
         let file_part = reqwest::multipart::Part::bytes(audio_bytes)
             .file_name(filename)
-            .mime_str(&attachment.mime_type)
+            .mime_str(mt.as_str())
             .map_err(|e| format!("Failed to set MIME type: {}", e))?;
 
         let form = reqwest::multipart::Form::new()
@@ -239,7 +240,7 @@ impl MediaEngine {
             Ok("openai".into())
         } else {
             Err(
-                "No audio transcription provider. Configure [local_voice] (whisper.cpp + ggml-base.bin), set GROQ_API_KEY or OPENAI_API_KEY, or OPENFANG_ENABLE_PARAKEET_MLX.".into(),
+                "No audio transcription provider. Local STT: ensure whisper-cli is installed (e.g. `brew install whisper-cpp` on macOS) — the daemon auto-downloads ggml-base.bin to ~/.armaraos/voice/models/ on first run. Or set GROQ_API_KEY / OPENAI_API_KEY, or OPENFANG_ENABLE_PARAKEET_MLX.".into(),
             )
         }
     }
@@ -310,7 +311,8 @@ async fn transcribe_with_parakeet_mlx(
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(data)
                 .map_err(|e| format!("Failed to decode base64 audio: {e}"))?;
-            let ext = match mime_type.as_str() {
+            let mt = normalize_mime_type(mime_type);
+            let ext = match mt.as_str() {
                 "audio/wav" | "audio/x-wav" => "wav",
                 "audio/mpeg" | "audio/mp3" => "mp3",
                 "audio/ogg" => "ogg",
@@ -408,7 +410,8 @@ async fn transcribe_whisper_local(
         .as_ref()
         .ok_or_else(|| "whisper_model path missing".to_string())?;
 
-    let ext = match attachment.mime_type.as_str() {
+    let mt = normalize_mime_type(&attachment.mime_type);
+    let ext = match mt.as_str() {
         "audio/wav" | "audio/x-wav" => "wav",
         "audio/mpeg" | "audio/mp3" => "mp3",
         "audio/ogg" => "ogg",

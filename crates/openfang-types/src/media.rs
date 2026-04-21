@@ -145,19 +145,29 @@ pub const ALLOWED_AUDIO_TYPES: &[&str] = &[
 /// Allowed video MIME types.
 pub const ALLOWED_VIDEO_TYPES: &[&str] = &["video/mp4", "video/quicktime", "video/webm"];
 
+/// Strip MIME parameters (e.g. `; codecs=opus` from `audio/webm; codecs=opus`) for allowlist
+/// checks and provider calls. Browsers often send parameterized audio/video types.
+pub fn normalize_mime_type(mime: &str) -> String {
+    let s = mime.trim();
+    let base = s.split(';').next().unwrap_or("").trim();
+    base.to_ascii_lowercase()
+}
+
 impl MediaAttachment {
     /// Validate the attachment against security constraints.
     pub fn validate(&self) -> Result<(), String> {
+        let ct = normalize_mime_type(&self.mime_type);
         // Check MIME type allowlist
         let allowed = match self.media_type {
-            MediaType::Image => ALLOWED_IMAGE_TYPES.contains(&self.mime_type.as_str()),
-            MediaType::Audio => ALLOWED_AUDIO_TYPES.contains(&self.mime_type.as_str()),
-            MediaType::Video => ALLOWED_VIDEO_TYPES.contains(&self.mime_type.as_str()),
+            MediaType::Image => ALLOWED_IMAGE_TYPES.iter().any(|a| *a == ct.as_str()),
+            MediaType::Audio => ALLOWED_AUDIO_TYPES.iter().any(|a| *a == ct.as_str()),
+            MediaType::Video => ALLOWED_VIDEO_TYPES.iter().any(|a| *a == ct.as_str()),
         };
         if !allowed {
             return Err(format!(
                 "Unsupported MIME type '{}' for {:?} media",
-                self.mime_type, self.media_type
+                self.mime_type.trim(),
+                self.media_type
             ));
         }
 
@@ -418,6 +428,25 @@ mod tests {
                 url: "https://example.com/a.mp3".to_string(),
             },
             size_bytes: 5_000_000,
+        };
+        assert!(a.validate().is_ok());
+    }
+
+    #[test]
+    fn test_normalize_mime_type_strips_codecs() {
+        assert_eq!(normalize_mime_type("audio/webm; codecs=opus"), "audio/webm");
+        assert_eq!(normalize_mime_type("  AUDIO/WEBM ; codecs=opus "), "audio/webm");
+    }
+
+    #[test]
+    fn test_attachment_validate_audio_webm_with_codecs_param() {
+        let a = MediaAttachment {
+            media_type: MediaType::Audio,
+            mime_type: "audio/webm; codecs=opus".to_string(),
+            source: MediaSource::FilePath {
+                path: "x.webm".to_string(),
+            },
+            size_bytes: 100_000,
         };
         assert!(a.validate().is_ok());
     }

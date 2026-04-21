@@ -4120,6 +4120,7 @@ If you used the display filename such as voice_….webm, use the file_id from th
                 .filter(|s| !s.is_empty())
                 .unwrap_or("audio/webm")
                 .to_string();
+            let ct = openfang_types::media::normalize_mime_type(&ct);
             (p, ct)
         }
         (None, Some(p)) => {

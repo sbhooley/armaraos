@@ -1,8 +1,10 @@
 //! First-launch download of local Whisper + Piper assets into `~/.armaraos/voice/`.
 //!
 //! Windows: ships `whisper-cli.exe` + DLLs from upstream `whisper-bin-x64.zip`.
-//! macOS/Linux: reuses `whisper-cli` from PATH or Homebrew prefixes when present; otherwise logs a
-//! short hint (upstream does not publish standalone Unix CLI zips on GitHub releases).
+//! macOS: when Homebrew is present at the usual paths (`/opt/homebrew` or `/usr/local`), runs
+//! `brew install whisper-cpp` once if `whisper-cli` was not found (skipped in CI or when
+//! `ARMARAOS_SKIP_BREW_WHISPER=1`).
+//! Linux: reuses `whisper-cli` from PATH or distro installs; no automatic package manager invoke.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -98,24 +100,39 @@ fn run_bootstrap(
         cfg.whisper_model = Some(model_path);
     }
 
-    if cfg.whisper_cli.is_none() {
-        #[cfg(windows)]
-        {
-            ensure_whisper_windows(client, voice_root, cfg)?;
-        }
-        #[cfg(not(windows))]
-        {
-            if let Some(p) = probe_whisper_cli_unix() {
-                info!(path = %p.display(), "local_voice: using whisper-cli from PATH/Homebrew");
-                cfg.whisper_cli = Some(p);
-            } else {
-                warn!(
-                    "local_voice: whisper-cli not found. Install a local binary (e.g. `brew install whisper-cpp` on macOS) \
-                     or set [local_voice] whisper_cli in config.toml."
-                );
+        if cfg.whisper_cli.is_none() {
+            #[cfg(windows)]
+            {
+                ensure_whisper_windows(client, voice_root, cfg)?;
+            }
+            #[cfg(not(windows))]
+            {
+                let mut found = probe_whisper_cli_unix();
+                #[cfg(target_os = "macos")]
+                if found.is_none() {
+                    match brew_install_whisper_cpp_macos() {
+                        Ok(()) => {
+                            found = probe_whisper_cli_unix();
+                            if found.is_some() {
+                                info!("local_voice: whisper-cli available after Homebrew install");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "local_voice: automatic `brew install whisper-cpp` skipped or failed");
+                        }
+                    }
+                }
+                if let Some(p) = found {
+                    info!(path = %p.display(), "local_voice: using whisper-cli (Homebrew cellar or PATH)");
+                    cfg.whisper_cli = Some(p);
+                } else {
+                    warn!(
+                        "local_voice: whisper-cli not found. Install `whisper-cpp` (e.g. `brew install whisper-cpp` on macOS or your distro package) \
+                         or set [local_voice] whisper_cli in config.toml. The ggml-base.bin model is auto-downloaded to ~/.armaraos/voice/models/ when missing."
+                    );
+                }
             }
         }
-    }
 
     let piper_root = voice_root.join("piper_bundle");
     if cfg.piper_binary.is_none() {
@@ -248,7 +265,10 @@ fn ensure_whisper_windows(
 
 #[cfg(not(windows))]
 fn probe_whisper_cli_unix() -> Option<PathBuf> {
+    // Typical Homebrew installs (interactive shells put these on PATH; the daemon may not inherit PATH).
     let candidates = [
+        "/opt/homebrew/opt/whisper-cpp/bin/whisper-cli",
+        "/usr/local/opt/whisper-cpp/bin/whisper-cli",
         "/opt/homebrew/bin/whisper-cli",
         "/usr/local/bin/whisper-cli",
     ];
@@ -257,6 +277,9 @@ fn probe_whisper_cli_unix() -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
+    }
+    if let Some(p) = probe_whisper_via_homebrew_prefix() {
+        return Some(p);
     }
     let out = std::process::Command::new("sh")
         .arg("-lc")
@@ -268,6 +291,71 @@ fn probe_whisper_cli_unix() -> Option<PathBuf> {
         return None;
     }
     let p = PathBuf::from(s);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Typical Apple Silicon / Intel Homebrew locations (may not be on `PATH` for daemons).
+#[cfg(not(windows))]
+fn homebrew_executable() -> Option<PathBuf> {
+    ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.is_file())
+}
+
+/// On macOS, install `whisper-cpp` via Homebrew when it is missing (idempotent).
+#[cfg(all(not(windows), target_os = "macos"))]
+fn brew_install_whisper_cpp_macos() -> Result<(), String> {
+    if std::env::var("ARMARAOS_SKIP_BREW_WHISPER")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Err("ARMARAOS_SKIP_BREW_WHISPER is set".into());
+    }
+    if matches!(
+        std::env::var("CI").ok().as_deref(),
+        Some("true") | Some("1") | Some("True")
+    ) {
+        return Err("CI is set".into());
+    }
+    let Some(brew) = homebrew_executable() else {
+        return Err("Homebrew not found (/opt/homebrew/bin/brew or /usr/local/bin/brew)".into());
+    };
+    info!(
+        "local_voice: installing `whisper-cpp` via Homebrew (first-time setup; may take a few minutes)…"
+    );
+    let status = std::process::Command::new(&brew)
+        .args(["install", "whisper-cpp"])
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("NONINTERACTIVE", "1")
+        .status()
+        .map_err(|e| format!("failed to spawn brew: {e}"))?;
+    if !status.success() {
+        return Err(format!("brew install whisper-cpp exited with {status}"));
+    }
+    Ok(())
+}
+
+/// Resolve `$(brew --prefix whisper-cpp)/bin/whisper-cli` when Homebrew is installed.
+#[cfg(not(windows))]
+fn probe_whisper_via_homebrew_prefix() -> Option<PathBuf> {
+    let brew = homebrew_executable().unwrap_or_else(|| PathBuf::from("brew"));
+    let out = std::process::Command::new(&brew)
+        .args(["--prefix", "whisper-cpp"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let base = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if base.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(base).join("bin").join("whisper-cli");
     if p.is_file() {
         Some(p)
     } else {
