@@ -7,9 +7,10 @@ alwaysApply: false
 # Dashboard design system (ArmaraOS)
 
 - **Canonical doc:** `docs/dashboard-design-system.md` (read before styling changes).
-- **Neutrals:** Use **warm chromatic surfaces** via `theme.css` tokens — no scattered `#rgb` grays for core UI.
-- **Brand:** Gold/amber (`--accent` family) is for **signal** (selection, primary actions, focus, key metrics), not for every border/panel.
-- **Light / dark:** Light canvases stay **warm off-white / paper**; dark canvases stay **true black + warm charcoal** steps in `--surface*`.
-- **Edits:** Prefer changing **tokens** in `crates/openfang-api/static/css/theme.css` before adding one-off component colors.
+- **Scope:** All of **`crates/openfang-api/static/`** (`css/`, `index_*.html`, **`js/**`** including **`page-load-error.js`**). **Carve-outs:** `static/vendor/**` (third-party); **`openfang-desktop/`** is native chrome, not `theme.css`.
+- **Tightening:** Product UI should converge on **classes + `theme.css` tokens** (chat, settings, modals, command palette, errors, every `#hash` page). Replace inline styles / ad-hoc neutrals when editing; canvas/charts may keep programmatic colors (see doc **Exceptions**).
+- **Neutrals:** Warm chromatic surfaces via `theme.css` — no scattered `#rgb` neutrals for **layout chrome**.
+- **Brand:** Gold/amber (`--accent`) is for **signal**, not every border/panel.
+- **Light / dark:** Warm off-white / paper light; true black + warm charcoal dark (`--surface*`).
 
-See **“Color palette and surfaces (conformance)”** in `docs/dashboard-design-system.md` for the full checklist.
+See **Scope**, **Color palette and surfaces**, and the checklist in `docs/dashboard-design-system.md`.

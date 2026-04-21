@@ -10,7 +10,7 @@ ArmaraOS is an open-source Agent Operating System written in Rust (15 library cr
 
 For **any** UI/UX styling change in the embedded dashboard (`crates/openfang-api/static/*`), follow:
 
-- **`docs/dashboard-design-system.md`** (canonical — includes **color palette / chromatic neutrals** and surface roles)
+- **`docs/dashboard-design-system.md`** (canonical — **Scope / “everywhere” in `static/`**, **color palette / chromatic neutrals**, surface roles; carve-outs: `static/vendor/`, desktop native chrome)
 
 Rules are mandatory for AI agents and contributors:
 

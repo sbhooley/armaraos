@@ -6,13 +6,26 @@ If you are a human contributor or AI agent making UI changes, follow this file f
 
 ## Scope
 
-Applies to the embedded dashboard under:
+### Paths (canonical)
 
-- `crates/openfang-api/static/index_body.html`
-- `crates/openfang-api/static/css/layout.css`
-- `crates/openfang-api/static/css/components.css`
-- `crates/openfang-api/static/css/theme.css`
-- `crates/openfang-api/static/js/pages/*.js` (state-driven class toggles only)
+The **entire embedded dashboard** under **`crates/openfang-api/static/`** is in scope, including:
+
+- `css/theme.css`, `css/layout.css`, `css/components.css`
+- `index_head.html`, `index_body.html`
+- **`js/**`** — `app.js`, `js/pages/*.js`, loaders such as **`page-load-error.js`**, and all bundled dashboard scripts
+
+### Coverage target (“everywhere” in `static/`)
+
+**Policy:** keep tightening this tree so **all product surfaces** — chat, agents, settings, runtime, modals, overlays (e.g. command palette), load/error flows, and any other `#hash` pages — use **shared classes** and **`theme.css` variables** for layout and appearance. Prefer removing or replacing **inline `style="..."`** and **ad-hoc hex neutrals** when touching a file; large cleanups may be incremental.
+
+**Out of scope (explicit carve-outs):**
+
+- **`crates/openfang-api/static/vendor/**`** — third-party bundles (e.g. syntax/highlight CSS). Do not “theme” them by scattering product `#hex` in random places; if they must be adjusted, do it in a **controlled** way (documented override or alternative vendor theme). **Build-time or test harness HTML** outside `static/` is out of scope unless it becomes shipped UI.
+- **Desktop shell** (`crates/openfang-desktop/`) — native menus, tray, OS dialogs, icons: follow **brand/copy/icon** consistency; **not** `theme.css` (no parallel CSS skin).
+
+### Exceptions (practical)
+
+**Canvas, SVG, and chart libraries** (Chart.js, D3, workflow graph colors, usage palettes) may use **programmatic hex/rgba** for **series discrimination** or **drawing APIs** that do not read CSS variables. Prefer **semantic alignment** with dashboard status/accent colors where reasonable; do not use that as an excuse for **layout chrome** (panels, nav, forms) to bypass tokens.
 
 ## Non-Negotiable Rules
 
