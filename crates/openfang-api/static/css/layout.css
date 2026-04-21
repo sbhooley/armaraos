@@ -156,6 +156,40 @@
 
 .sidebar-status.offline { color: var(--error); }
 
+/* Keep connection strip on one line once live (startup + steady-state). */
+.sidebar-status.is-connected {
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.sidebar-status.is-connected .sidebar-label {
+  white-space: nowrap;
+}
+.sidebar-status.is-connected .sidebar-conn-badges {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+.sidebar-status.is-connected .conn-badge {
+  font-size: 8px;
+  padding: 1px 4px;
+  letter-spacing: 0.04em;
+}
+.sidebar-status.is-connected .conn-res-badge {
+  min-width: 40px;
+  max-width: 48px;
+  padding: 1px 4px 2px;
+}
+.sidebar-status.is-connected .conn-res-lbl {
+  font-size: 7px;
+}
+.sidebar-status.is-connected .conn-res-val {
+  font-size: 8px;
+}
+.sidebar-status.is-connected .conn-res-bar {
+  height: 2px;
+}
+
 .status-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
@@ -576,14 +610,26 @@
   justify-content: center;
   padding: 6px 10px !important;
   border-radius: var(--radius-md, 8px);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent) !important;
+  background: color-mix(in srgb, var(--surface2) 62%, transparent) !important;
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+  transition: background 0.14s var(--ease-smooth), border-color 0.14s var(--ease-smooth), box-shadow 0.14s var(--ease-smooth), transform 0.14s var(--ease-smooth);
+}
+.notify-bell-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border-subtle)) !important;
+  background: color-mix(in srgb, var(--surface2) 82%, var(--bg-elevated)) !important;
+  box-shadow: var(--shadow-sm), var(--shadow-inset);
+  transform: translateY(-1px);
 }
 .notify-bell-btn[aria-expanded="true"] {
-  background: transparent !important;
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border)) !important;
+  background: color-mix(in srgb, var(--accent-subtle) 62%, var(--surface2)) !important;
+  box-shadow: var(--shadow-sm), 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent) inset;
 }
 .notify-bell-badge {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 1px;
+  right: 1px;
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
@@ -594,7 +640,7 @@
   text-align: center;
   background: var(--error, #ef4444);
   color: #fff;
-  box-shadow: 0 0 0 2px var(--bg, #0f0f14);
+  box-shadow: 0 0 0 2px var(--bg-primary, #0f0f14), 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .notify-panel {
   /* Fixed to the viewport so a narrow `.notify-bell-wrap` cannot clip the dropdown */
@@ -826,9 +872,10 @@
   color: color-mix(in srgb, var(--accent) 76%, var(--text));
 }
 .app-powered-by-meta {
-  color: var(--text-muted);
-  font-size: 9px;
+  color: color-mix(in srgb, var(--text-secondary) 88%, var(--text));
+  font-size: 9.5px;
   letter-spacing: 0.02em;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.22);
 }
 
 /* Orchestration traces — Gantt timeline + token heatmap */

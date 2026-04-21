@@ -174,7 +174,7 @@
       </div>
     </div>
 
-    <div class="sidebar-status" :class="{ offline: !connected && !$store.app.booting }">
+    <div class="sidebar-status" :class="{ offline: !connected && !$store.app.booting, 'is-connected': connected }">
       <span class="status-dot"></span>
       <span class="sidebar-label sidebar-agent-count" x-show="connected" x-text="agentCount + ' agent(s)'"></span>
       <span class="sidebar-label" x-show="$store.app.booting && !connected" class="conn-reconnecting">Connecting...</span>
@@ -1085,18 +1085,19 @@
           <div x-data="chatPage" class="chat-wrapper">
             <!-- Chat header with back button -->
             <div class="page-header chat-conversation-header" x-show="currentAgent">
-              <div class="flex items-center gap-2" style="min-width:0">
-                <button class="btn btn-ghost btn-sm" @click="$dispatch('close-chat')" title="Back to Agents" style="padding:6px 10px;margin-right:2px;border-radius:10px">
+              <div class="chat-conversation-header-row">
+              <div class="chat-conversation-header-identity">
+                <button class="btn btn-ghost btn-sm topbar-action-btn chat-conversation-back-btn" @click="$dispatch('close-chat')" title="Back to Agents" style="padding:6px 10px;margin-right:2px;border-radius:10px">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
                 </button>
-                <span x-show="currentAgent && currentAgent.identity && currentAgent.identity.emoji" x-text="currentAgent && currentAgent.identity && currentAgent.identity.emoji" style="font-size:20px;line-height:1"></span>
-                <div style="min-width:0">
-                  <div class="font-bold" x-text="currentAgent ? currentAgent.name : ''"></div>
-                  <div class="text-xs text-dim truncate" style="font-family:var(--font-mono);font-size:11px" x-text="currentAgent ? currentAgent.model_provider + ':' + currentAgent.model_name : ''"></div>
-                  <div class="text-xs truncate" style="max-width:min(420px,55vw);color:var(--accent);margin-top:2px" x-show="currentAgent && $store.app.agentActivityLines[currentAgent.id]" x-text="currentAgent && $store.app.agentActivityLines[currentAgent.id] ? $store.app.agentActivityLines[currentAgent.id].text : ''"></div>
+                <span class="chat-conversation-agent-emoji" x-show="currentAgent && currentAgent.identity && currentAgent.identity.emoji" x-text="currentAgent && currentAgent.identity && currentAgent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                <div class="chat-conversation-agent-text" style="min-width:0">
+                  <div class="font-bold chat-conversation-agent-name" x-text="currentAgent ? currentAgent.name : ''"></div>
+                  <div class="text-xs text-dim truncate chat-conversation-agent-model" style="font-family:var(--font-mono);font-size:11px" x-text="currentAgent ? currentAgent.model_provider + ':' + currentAgent.model_name : ''"></div>
+                  <div class="text-xs truncate chat-conversation-agent-activity" style="max-width:min(420px,55vw);color:var(--accent);margin-top:2px" x-show="currentAgent && $store.app.agentActivityLines[currentAgent.id]" x-text="currentAgent && $store.app.agentActivityLines[currentAgent.id] ? $store.app.agentActivityLines[currentAgent.id].text : ''"></div>
                 </div>
               </div>
-              <div class="flex gap-2 items-center">
+              <div class="chat-conversation-header-actions">
                 <span class="badge badge-running" x-show="currentAgent && !sending" style="animation:fadeIn 0.2s">
                   <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);margin-right:2px"></span> Ready
                 </span>
@@ -1134,7 +1135,7 @@
                 </button>
                 <!-- Session switcher -->
                 <div style="position:relative">
-                  <button class="btn btn-ghost btn-sm" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
+                  <button class="btn btn-ghost btn-sm topbar-action-btn" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
                     <span class="session-count-badge" x-show="sessions.length > 1" x-text="sessions.length"></span>
                   </button>
@@ -1155,16 +1156,17 @@
                     <div class="text-xs text-dim" style="padding:8px 12px;text-align:center" x-show="!sessions.length">No sessions</div>
                   </div>
                 </div>
-                <button class="btn btn-ghost btn-sm" @click="toggleSearch()" title="Search messages (Ctrl+F)">
+                <button class="btn btn-ghost btn-sm topbar-action-btn" @click="toggleSearch()" title="Search messages (Ctrl+F)">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 </button>
-                <button class="btn btn-ghost btn-sm" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F">
+                <button class="btn btn-ghost btn-sm topbar-action-btn" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g x-show="!$store.app.focusMode"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></g><g x-show="$store.app.focusMode"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></g></svg>
                 </button>
-                <button type="button" class="btn btn-ghost btn-sm" x-show="currentAgent" @click="$dispatch('open-agent-detail-from-chat', { agent: currentAgent })" title="Agent settings">
+                <button type="button" class="btn btn-ghost btn-sm topbar-action-btn" x-show="currentAgent" @click="$dispatch('open-agent-detail-from-chat', { agent: currentAgent })" title="Agent settings">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 </button>
-                <button class="btn btn-danger btn-sm" @click="killAgent()">Stop</button>
+                <button class="btn btn-danger btn-sm topbar-action-btn topbar-danger-btn" @click="killAgent()">Stop</button>
+              </div>
               </div>
             </div>
 
@@ -1872,11 +1874,16 @@
 
         <!-- MODE 2: Agent picker + Templates (no agent chatting) -->
         <div x-show="!activeChatAgent" class="chat-wrapper">
-        <div class="page-header">
-          <h2 class="chat-page-heading">Chat <span class="chat-page-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread across agents"></span></h2>
-          <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" @click="openSpawnWizard()">+ New Agent</button>
-            <button class="btn btn-danger btn-sm" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
+        <div class="page-header all-agents-page-header">
+          <div class="all-agents-page-header-row">
+            <div class="all-agents-page-header-text">
+              <h2 class="chat-page-heading">Chat <span class="chat-page-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread across agents"></span></h2>
+              <p class="all-agents-page-header-sub">All Agents workspace</p>
+            </div>
+            <div class="all-agents-page-header-actions">
+              <button class="btn btn-ghost btn-sm all-agents-action-btn" @click="openSpawnWizard()">+ New Agent</button>
+              <button class="btn btn-danger btn-sm all-agents-action-btn all-agents-stop-btn" x-show="agents.length > 1" @click="killAllAgents()">Stop All</button>
+            </div>
           </div>
         </div>
         <div class="page-body chat-agents-page-body" style="overflow-y:auto;padding:24px">
@@ -2153,7 +2160,7 @@
       <div x-data="approvalsPage()" x-init="init()">
         <div class="page-header">
           <h2>Execution Approvals</h2>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 topbar-action-cluster">
             <span class="badge badge-warn" x-show="pendingCount > 0" x-text="pendingCount + ' pending'"></span>
             <button class="btn btn-ghost btn-sm" @click="loadData()">Refresh</button>
           </div>
@@ -2320,7 +2327,7 @@
       <div x-data="{ wfTab: 'list' }">
         <div class="page-header">
           <h2>Workflows</h2>
-          <div class="flex gap-2">
+          <div class="flex gap-2 topbar-action-cluster">
             <button class="btn btn-ghost btn-sm" :class="{ active: wfTab === 'list' }" @click="wfTab = 'list'">List</button>
             <button class="btn btn-ghost btn-sm" :class="{ active: wfTab === 'builder' }" @click="wfTab = 'builder'">Visual Builder</button>
           </div>
@@ -2666,7 +2673,7 @@
       <div x-data="schedulerPage()">
         <div class="page-header">
           <h2>Scheduler</h2>
-          <div class="flex gap-2">
+          <div class="flex gap-2 topbar-action-cluster">
             <button class="btn btn-primary btn-sm" x-show="tab === 'jobs'" @click="resetNewJobForm(); showCreateForm = true">+ New Job</button>
           </div>
         </div>
@@ -6374,13 +6381,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="logsPage">
         <div class="page-header">
           <h2>Logs</h2>
-          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'live' || tab === 'daemon'">
+          <div class="flex gap-2 items-center flex-wrap topbar-action-cluster" x-show="tab === 'live' || tab === 'daemon'">
             <span class="live-indicator" :class="headerConnectionClass">
               <span class="live-dot"></span>
               <span x-text="headerConnectionLabel"></span>
             </span>
           </div>
-          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'live'">
+          <div class="flex gap-2 items-center flex-wrap topbar-action-cluster" x-show="tab === 'live'">
             <select class="form-select" style="width:100px" x-model="levelFilter">
               <option value="">All</option>
               <option value="info">INFO</option>
@@ -6394,7 +6401,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="toggle" :class="{ active: autoRefresh }" @click="autoRefresh = !autoRefresh" title="Auto-scroll"></div>
             <span class="text-xs text-dim" x-text="autoRefresh ? 'Auto-scroll' : 'Scroll locked'"></span>
           </div>
-          <div class="flex gap-2 items-center flex-wrap" x-show="tab === 'daemon'">
+          <div class="flex gap-2 items-center flex-wrap topbar-action-cluster" x-show="tab === 'daemon'">
             <select class="form-select" style="width:110px" x-model="daemonLevelFilter">
               <option value="">All levels</option>
               <option value="trace">TRACE</option>
@@ -6423,7 +6430,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <button class="btn btn-primary btn-sm" @click="saveLogLevel()">Save</button>
             <span class="text-xs text-dim" x-text="'Saved: ' + savedLogLevel"></span>
           </div>
-          <div class="flex gap-2 items-center" x-show="tab === 'audit'">
+          <div class="flex gap-2 items-center topbar-action-cluster" x-show="tab === 'audit'">
             <button class="btn btn-ghost btn-sm" @click="verifyChain()">Verify Chain</button>
             <span class="badge" :class="chainValid === true ? 'badge-running' : chainValid === false ? 'badge-crashed' : ''" x-text="chainValid === true ? 'VALID' : chainValid === false ? 'BROKEN' : ''" x-show="chainValid !== null"></span>
           </div>
@@ -6550,7 +6557,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="timelinePage()" x-init="loadTimeline()">
         <div class="page-header">
           <h2>Event timeline</h2>
-          <div class="flex gap-2 flex-wrap items-center">
+          <div class="flex gap-2 flex-wrap items-center topbar-action-cluster">
             <button type="button" class="btn btn-ghost btn-sm" x-show="tipHash" @click="copyTipSnippet()" title="Copy full chain tip hash">Copy tip</button>
             <button class="btn btn-ghost btn-sm" @click="loadTimeline()" :disabled="loading" x-text="loading ? 'Loading…' : 'Refresh'"></button>
           </div>
@@ -6673,7 +6680,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="commsPage" x-init="loadData()" @page-leave.window="stopSSE()">
         <div class="page-header">
           <h2>Agent Comms</h2>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 topbar-action-cluster">
             <button class="btn btn-primary btn-sm" @click="openSendModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
               Send Message
@@ -6843,7 +6850,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="networkPage" x-init="loadData()" @page-leave.window="cleanup()">
         <div class="page-header">
           <h2>Network</h2>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 topbar-action-cluster">
             <span class="text-xs text-dim" x-show="netStatus && netStatus.enabled">OFP mesh active</span>
             <span class="text-xs text-dim" x-show="netStatus && !netStatus.enabled">OFP mesh off (configure <code class="text-dim">[network]</code>)</span>
             <button class="btn btn-ghost btn-sm" @click="loadData()" title="Refresh">
@@ -6953,7 +6960,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="wizardPage()">
         <div class="page-header">
           <h2>Setup Wizard</h2>
-          <button class="btn btn-ghost btn-sm" @click="finishAndDismiss()">Skip Setup</button>
+          <div class="topbar-action-cluster">
+            <button class="btn btn-ghost btn-sm" @click="finishAndDismiss()">Skip Setup</button>
+          </div>
         </div>
         <div class="page-body" x-init="loadData()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading...</span></div>
@@ -7510,7 +7519,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <h2>App Store</h2>
             <p class="app-store-page-sub text-xs text-dim" style="margin:4px 0 0;line-height:1.5">Free AINL programs from your synced library. Paid listings will appear here later.</p>
           </div>
-          <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex items-center gap-2 flex-wrap topbar-action-cluster">
             <button type="button" class="btn btn-ghost btn-sm" @click="loadLibrary()" :disabled="loading" title="Reload catalog">Refresh</button>
             <button type="button" class="btn btn-ghost btn-sm" @click="openFolder()">Open library folder</button>
           </div>

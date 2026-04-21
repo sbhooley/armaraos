@@ -554,6 +554,189 @@
   line-height: 1.2;
 }
 
+/* ── Agents picker header polish (MODE 2 top bar) ── */
+.page-header.all-agents-page-header {
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(ellipse 52% 70% at 11% 0%, color-mix(in srgb, var(--accent-subtle) 46%, transparent), transparent 66%),
+    var(--bg-primary);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-subtle) 70%, transparent), var(--shadow-inset);
+}
+
+.all-agents-page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.all-agents-page-header-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.all-agents-page-header-sub {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
+}
+
+.all-agents-page-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: calc(var(--radius-md) + 2px);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  background: color-mix(in srgb, var(--surface2) 64%, transparent);
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+}
+
+/* Reusable top-menu action rail for all page headers. */
+.topbar-action-cluster,
+.overview-page-header-actions,
+.bookmarks-page-header-actions,
+.dashboard-page-header-actions,
+.sessions-page-header-tools,
+.chat-conversation-header-actions,
+.all-agents-page-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: calc(var(--radius-md) + 2px);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  background: color-mix(in srgb, var(--surface2) 64%, transparent);
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+  max-width: 100%;
+}
+
+.topbar-action-btn,
+.all-agents-action-btn {
+  min-height: 30px;
+  border-radius: 7px;
+  padding: 4px 11px;
+  transition: background 0.14s var(--ease-smooth), border-color 0.14s var(--ease-smooth), box-shadow 0.14s var(--ease-smooth), transform 0.14s var(--ease-smooth), color 0.14s var(--ease-smooth);
+}
+.topbar-action-cluster .btn.btn-sm,
+.overview-page-header-actions .btn.btn-sm,
+.bookmarks-page-header-actions .btn.btn-sm,
+.dashboard-page-header-actions .btn.btn-sm,
+.sessions-page-header-tools .btn.btn-sm,
+.chat-conversation-header-actions .btn.btn-sm,
+.all-agents-page-header-actions .btn.btn-sm {
+  min-height: 30px;
+  border-radius: 7px;
+  padding: 4px 11px;
+}
+.topbar-action-cluster .form-select,
+.topbar-action-cluster .form-input,
+.overview-page-header-actions .form-select,
+.overview-page-header-actions .form-input,
+.bookmarks-page-header-actions .form-select,
+.bookmarks-page-header-actions .form-input,
+.dashboard-page-header-actions .form-select,
+.dashboard-page-header-actions .form-input,
+.sessions-page-header-tools .form-select,
+.sessions-page-header-tools .form-input,
+.chat-conversation-header-actions .form-select,
+.chat-conversation-header-actions .form-input,
+.all-agents-page-header-actions .form-select,
+.all-agents-page-header-actions .form-input {
+  min-height: 30px;
+  border-radius: 7px;
+}
+.page-header > h2 {
+  min-width: 0;
+}
+.page-header > .topbar-action-cluster + .topbar-action-cluster {
+  margin-left: 0;
+}
+
+.topbar-danger-btn,
+.all-agents-stop-btn {
+  background: color-mix(in srgb, var(--error) 76%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  box-shadow: var(--shadow-xs), 0 0 0 1px color-mix(in srgb, var(--error) 16%, transparent) inset;
+}
+
+.topbar-danger-btn:hover,
+.all-agents-stop-btn:hover {
+  background: color-mix(in srgb, var(--error) 86%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--error) 56%, var(--border-light));
+  box-shadow: var(--shadow-sm), 0 0 0 1px color-mix(in srgb, var(--error) 22%, transparent) inset;
+}
+
+/* Active conversation top bar — parity with All Agents shell/action rail */
+.page-header.chat-conversation-header {
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(ellipse 52% 70% at 11% 0%, color-mix(in srgb, var(--accent-subtle) 44%, transparent), transparent 66%),
+    var(--bg-primary);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-subtle) 70%, transparent), var(--shadow-inset);
+}
+
+.chat-conversation-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  min-width: 0;
+}
+
+.chat-conversation-header-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-conversation-agent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-conversation-agent-name {
+  letter-spacing: -0.012em;
+  line-height: 1.25;
+}
+
+.chat-conversation-agent-model {
+  color: var(--text-dim);
+}
+
+.chat-conversation-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: calc(var(--radius-md) + 2px);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 80%, transparent);
+  background: color-mix(in srgb, var(--surface2) 64%, transparent);
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+}
+
+.chat-conversation-header-actions .eco-pill,
+.chat-conversation-header-actions .workspace-pill {
+  min-height: 30px;
+  border-radius: 7px;
+}
+
 /* ── Overview (Get started) page polish ── */
 .overview-page-body {
   background:
@@ -2301,13 +2484,6 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   z-index: 1100;
 }
 
-/* Active conversation top bar — slightly elevated for separation from transcript */
-.page-header.chat-conversation-header {
-  background: var(--bg-elevated);
-  border-bottom-color: var(--border-subtle);
-  box-shadow: 0 1px 0 var(--border-subtle);
-}
-
 /* ── Eco mode pill button ── */
 .eco-pill {
   display: inline-flex;
@@ -3644,9 +3820,11 @@ button.tool-card-header {
 .input-footer {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 10px;
   margin-top: 8px;
-  min-height: 18px;
+  min-height: 22px;
   padding: 0 8px;
 }
 
@@ -5355,15 +5533,23 @@ button.tool-card-header {
   color: var(--text-dim);
   line-height: 1.35;
   transition: opacity 0.2s var(--ease-smooth), border-color 0.2s var(--ease-smooth), background 0.2s var(--ease-smooth);
-  background: color-mix(in srgb, var(--surface2) 82%, var(--bg-elevated));
+  background:
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--accent-subtle) 28%, var(--surface2)) 0%,
+      color-mix(in srgb, var(--surface2) 86%, var(--bg-elevated)) 60%,
+      color-mix(in srgb, var(--surface2) 90%, var(--bg-primary)) 100%
+    );
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-subtle));
   box-shadow: var(--shadow-xs), var(--shadow-inset);
   box-sizing: border-box;
   /* Conformance: keep this centered under input while reserving room for attribution in lower-right. */
   width: fit-content;
   max-width: min(760px, calc(100% - var(--app-powered-by-clearance, 240px) - 14px));
   min-height: 30px;
+  order: 2;
+  flex-basis: 100%;
   margin-left: auto;
   margin-right: auto;
   text-align: center;
@@ -7335,6 +7521,65 @@ button.tool-card-header {
 
 /* Mobile-specific spacing pass */
 @media (max-width: 768px) {
+  .topbar-action-cluster,
+  .overview-page-header-actions,
+  .bookmarks-page-header-actions,
+  .dashboard-page-header-actions,
+  .sessions-page-header-tools,
+  .chat-conversation-header-actions,
+  .all-agents-page-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .topbar-action-cluster::-webkit-scrollbar,
+  .overview-page-header-actions::-webkit-scrollbar,
+  .bookmarks-page-header-actions::-webkit-scrollbar,
+  .dashboard-page-header-actions::-webkit-scrollbar,
+  .sessions-page-header-tools::-webkit-scrollbar,
+  .chat-conversation-header-actions::-webkit-scrollbar,
+  .all-agents-page-header-actions::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  .topbar-action-cluster .btn.btn-sm,
+  .overview-page-header-actions .btn.btn-sm,
+  .bookmarks-page-header-actions .btn.btn-sm,
+  .dashboard-page-header-actions .btn.btn-sm,
+  .sessions-page-header-tools .btn.btn-sm,
+  .chat-conversation-header-actions .btn.btn-sm,
+  .all-agents-page-header-actions .btn.btn-sm {
+    min-height: 28px;
+  }
+  .chat-conversation-header-row {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .chat-conversation-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .chat-conversation-header-actions::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+  .topbar-action-btn {
+    min-height: 28px;
+  }
+  .all-agents-page-header-row {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .all-agents-page-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .all-agents-action-btn {
+    min-height: 28px;
+  }
   .wf-builder-layout {
     flex-direction: column;
     height: auto;
