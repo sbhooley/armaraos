@@ -66,8 +66,8 @@
   --user-bg: #fffbeb;
 
   /* Layout */
-  --sidebar-width: 240px;
-  --sidebar-collapsed: 56px;
+  --sidebar-width: 228px;
+  --sidebar-collapsed: 68px;
   --header-height: 48px;
 
   /* Radius — slightly larger for premium feel */
@@ -102,6 +102,9 @@
 }
 
 :root {
+  --sidebar-width: 228px;
+  --sidebar-collapsed: 68px;
+  --header-height: 48px;
   --bg: #080706;
   --bg-primary: #0F0E0E;
   --bg-elevated: #161413;
