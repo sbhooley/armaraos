@@ -600,9 +600,12 @@
   /* Fixed to the viewport so a narrow `.notify-bell-wrap` cannot clip the dropdown */
   position: fixed;
   top: 52px;
-  right: calc(16px + env(safe-area-inset-right, 0px));
+  /* Clamp safe-area offset so desktop WebView quirks cannot push panel off-screen. */
+  right: clamp(8px, env(safe-area-inset-right, 0px), 16px);
+  left: auto;
   z-index: 103;
-  width: min(380px, calc(100vw - 28px));
+  width: min(380px, calc(100vw - 24px));
+  min-width: min(300px, calc(100vw - 24px));
   max-height: min(70vh, 520px);
   display: flex;
   flex-direction: column;
@@ -1153,7 +1156,9 @@
   }
   .notify-panel {
     width: min(360px, calc(100vw - 20px));
+    min-width: min(260px, calc(100vw - 20px));
     top: 44px;
+    right: 10px;
   }
 }
 
