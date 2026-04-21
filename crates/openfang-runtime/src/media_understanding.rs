@@ -6,10 +6,10 @@ use openfang_types::config::LocalVoiceConfig;
 use openfang_types::media::{
     normalize_mime_type, MediaAttachment, MediaConfig, MediaSource, MediaType, MediaUnderstanding,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Media understanding engine.
 pub struct MediaEngine {
@@ -396,6 +396,81 @@ print(json.dumps({"text": result.text, "model": "mlx-community/parakeet-tdt-0.6b
     })
 }
 
+/// whisper.cpp (Homebrew build) documents: flac, mp3, ogg, wav — not webm/m4a.
+fn whisper_cli_supported_extension(ext: &str) -> bool {
+    matches!(
+        ext.to_lowercase().as_str(),
+        "wav" | "flac" | "mp3" | "ogg"
+    )
+}
+
+fn resolve_ffmpeg() -> Option<PathBuf> {
+    for p in [
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+    ] {
+        let pb = PathBuf::from(p);
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    let out = std::process::Command::new("sh")
+        .arg("-lc")
+        .arg("command -v ffmpeg 2>/dev/null || true")
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(s);
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Convert arbitrary browser/container audio to 16 kHz mono WAV for whisper-cli.
+async fn transcode_audio_to_wav_for_whisper(
+    ffmpeg: &Path,
+    input: &Path,
+) -> Result<PathBuf, String> {
+    let id = uuid::Uuid::new_v4();
+    let out = std::env::temp_dir().join(format!("openfang_wsp_{id}_whisper.wav"));
+    let st = tokio::process::Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .args(["-y", "-i"])
+        .arg(input)
+        .args([
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+        ])
+        .arg(&out)
+        .status()
+        .await
+        .map_err(|e| format!("ffmpeg: {e}"))?;
+    if !st.success() {
+        let _ = tokio::fs::remove_file(&out).await;
+        return Err(format!(
+            "ffmpeg transcoding failed (status {}). Install ffmpeg (e.g. `brew install ffmpeg`) or use cloud STT.",
+            st
+        ));
+    }
+    if !out.is_file() {
+        return Err("ffmpeg produced no output file".into());
+    }
+    Ok(out)
+}
+
 /// Local whisper.cpp transcription (`[local_voice]` + ggml-base.bin recommended).
 async fn transcribe_whisper_local(
     attachment: &MediaAttachment,
@@ -441,11 +516,38 @@ async fn transcribe_whisper_local(
         .await
         .map_err(|e| format!("temp audio: {e}"))?;
 
+    // Browser voice messages are typically WebM; whisper-cli only accepts flac/mp3/ogg/wav.
+    let mut whisper_input = tmp.clone();
+    let mut transcoded: Option<PathBuf> = None;
+    if !whisper_cli_supported_extension(ext) {
+        let Some(ffmpeg) = resolve_ffmpeg() else {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(
+                "Local whisper-cli does not decode WebM/M4A directly. Install ffmpeg (e.g. `brew install ffmpeg`) to transcode voice uploads to WAV, or set GROQ_API_KEY / OPENAI_API_KEY for cloud transcription."
+                    .into(),
+            );
+        };
+        info!(
+            ext = %ext,
+            "transcoding audio for whisper-local via ffmpeg (whisper-cli accepts flac/mp3/ogg/wav only)"
+        );
+        match transcode_audio_to_wav_for_whisper(&ffmpeg, &tmp).await {
+            Ok(wav) => {
+                transcoded = Some(wav.clone());
+                whisper_input = wav;
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(e);
+            }
+        }
+    }
+
     let out = tokio::process::Command::new(cli)
         .arg("-m")
         .arg(model.as_os_str())
         .arg("-f")
-        .arg(tmp.as_os_str())
+        .arg(whisper_input.as_os_str())
         .arg("-nt")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -453,7 +555,7 @@ async fn transcribe_whisper_local(
         .await
         .map_err(|e| format!("whisper-cli: {e}"))?;
 
-    let sidecar: PathBuf = format!("{}.txt", tmp.display()).into();
+    let sidecar: PathBuf = format!("{}.txt", whisper_input.display()).into();
     let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if text.is_empty() {
         if let Ok(s) = tokio::fs::read_to_string(&sidecar).await {
@@ -461,7 +563,28 @@ async fn transcribe_whisper_local(
             let _ = tokio::fs::remove_file(&sidecar).await;
         }
     }
+    if text.is_empty() {
+        let j = whisper_input.with_extension("json");
+        if let Ok(s) = tokio::fs::read_to_string(&j).await {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                if let Some(t) = v["transcription"].as_str().or_else(|| v["text"].as_str()) {
+                    text = t.trim().to_string();
+                }
+            }
+            let _ = tokio::fs::remove_file(&j).await;
+        }
+    }
+    if text.is_empty() && out.stderr.len() > 200 {
+        warn!(
+            stderr = %String::from_utf8_lossy(&out.stderr).chars().take(2000).collect::<String>(),
+            "whisper-cli: empty transcript; stderr excerpt may indicate decode issues"
+        );
+    }
+
     let _ = tokio::fs::remove_file(&tmp).await;
+    if let Some(ref p) = transcoded {
+        let _ = tokio::fs::remove_file(p).await;
+    }
 
     if text.is_empty() {
         let stderr = String::from_utf8_lossy(&out.stderr);

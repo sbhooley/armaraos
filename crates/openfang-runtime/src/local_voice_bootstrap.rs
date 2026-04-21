@@ -2,9 +2,10 @@
 //!
 //! Windows: ships `whisper-cli.exe` + DLLs from upstream `whisper-bin-x64.zip`.
 //! macOS: when Homebrew is present at the usual paths (`/opt/homebrew` or `/usr/local`), runs
-//! `brew install whisper-cpp` once if `whisper-cli` was not found (skipped in CI or when
-//! `ARMARAOS_SKIP_BREW_WHISPER=1`).
-//! Linux: reuses `whisper-cli` from PATH or distro installs; no automatic package manager invoke.
+//! `brew install whisper-cpp` once if `whisper-cli` was not found, and `brew install ffmpeg` if
+//! `ffmpeg` is missing (needed to transcode browser WebM voice uploads to WAV for whisper-cli).
+//! Skipped in CI or when `ARMARAOS_SKIP_BREW_WHISPER` / `ARMARAOS_SKIP_BREW_FFMPEG` is set.
+//! Linux: reuses `whisper-cli` / `ffmpeg` from PATH or distro installs; no automatic brew install.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -133,6 +134,16 @@ fn run_bootstrap(
                 }
             }
         }
+
+    #[cfg(target_os = "macos")]
+    {
+        if !probe_ffmpeg_unix() {
+            match brew_install_ffmpeg_macos() {
+                Ok(()) => info!("local_voice: ffmpeg available (WebM voice → WAV for whisper)"),
+                Err(e) => warn!(error = %e, "local_voice: automatic `brew install ffmpeg` skipped or failed"),
+            }
+        }
+    }
 
     let piper_root = voice_root.join("piper_bundle");
     if cfg.piper_binary.is_none() {
@@ -336,6 +347,61 @@ fn brew_install_whisper_cpp_macos() -> Result<(), String> {
         .map_err(|e| format!("failed to spawn brew: {e}"))?;
     if !status.success() {
         return Err(format!("brew install whisper-cpp exited with {status}"));
+    }
+    Ok(())
+}
+
+/// True when `ffmpeg` exists on PATH or at common Homebrew paths (used before WebM→WAV transcode).
+#[cfg(not(windows))]
+fn probe_ffmpeg_unix() -> bool {
+    for p in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
+        if PathBuf::from(p).is_file() {
+            return true;
+        }
+    }
+    let Ok(out) = std::process::Command::new("sh")
+        .arg("-lc")
+        .arg("command -v ffmpeg 2>/dev/null || true")
+        .output()
+    else {
+        return false;
+    };
+    !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+}
+
+/// Install `ffmpeg` via Homebrew (decodes WebM browser audio to WAV for whisper-cli).
+#[cfg(all(not(windows), target_os = "macos"))]
+fn brew_install_ffmpeg_macos() -> Result<(), String> {
+    if std::env::var("ARMARAOS_SKIP_BREW_FFMPEG")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Err("ARMARAOS_SKIP_BREW_FFMPEG is set".into());
+    }
+    if std::env::var("ARMARAOS_SKIP_BREW_WHISPER")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return Err("ARMARAOS_SKIP_BREW_WHISPER is set (also skips ffmpeg auto-install)".into());
+    }
+    if matches!(
+        std::env::var("CI").ok().as_deref(),
+        Some("true") | Some("1") | Some("True")
+    ) {
+        return Err("CI is set".into());
+    }
+    let Some(brew) = homebrew_executable() else {
+        return Err("Homebrew not found".into());
+    };
+    info!("local_voice: installing `ffmpeg` via Homebrew (transcode WebM for local STT)…");
+    let status = std::process::Command::new(&brew)
+        .args(["install", "ffmpeg"])
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .env("NONINTERACTIVE", "1")
+        .status()
+        .map_err(|e| format!("failed to spawn brew: {e}"))?;
+    if !status.success() {
+        return Err(format!("brew install ffmpeg exited with {status}"));
     }
     Ok(())
 }
