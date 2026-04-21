@@ -28,7 +28,12 @@
   display: none !important;
 }
 .sidebar.collapsed .sidebar-agent-count {
-  display: inline !important;
+  display: inline-flex !important;
+  align-items: center;
+  font-size: 9px;
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 .sidebar.collapsed .sidebar-header-expanded {
   display: none !important;
@@ -289,9 +294,15 @@
 .sidebar.collapsed .sidebar-status {
   flex-wrap: nowrap;
   justify-content: center;
-  gap: 8px;
+  gap: 5px;
   padding-left: 10px;
   padding-right: 10px;
+}
+
+.sidebar.collapsed .status-dot {
+  width: 5px;
+  height: 5px;
+  box-shadow: 0 0 5px currentColor;
 }
 
 .nav-item {

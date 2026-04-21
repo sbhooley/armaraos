@@ -5349,20 +5349,25 @@ button.tool-card-header {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 6px 12px;
-  margin-top: 4px;
+  padding: 7px 12px;
+  margin-top: 6px;
   font-size: 11px;
-  color: var(--text-muted);
-  transition: opacity 0.3s;
-  background: var(--surface2);
+  color: var(--text-dim);
+  line-height: 1.35;
+  transition: opacity 0.2s var(--ease-smooth), border-color 0.2s var(--ease-smooth), background 0.2s var(--ease-smooth);
+  background: color-mix(in srgb, var(--surface2) 82%, var(--bg-elevated));
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
   box-sizing: border-box;
-  /* Stay left of fixed `.app-powered-by` in the bottom-right corner */
+  /* Conformance: keep this centered under input while reserving room for attribution in lower-right. */
   width: fit-content;
-  max-width: min(720px, calc(100% - var(--app-powered-by-clearance, 240px)));
+  max-width: min(760px, calc(100% - var(--app-powered-by-clearance, 240px) - 14px));
+  min-height: 30px;
   margin-left: auto;
   margin-right: auto;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 .tip-bar-dismiss { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 0 4px; line-height: 1; }
 .tip-bar-dismiss:hover { color: var(--text); }
