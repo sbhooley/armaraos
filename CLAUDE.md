@@ -6,6 +6,20 @@ ArmaraOS is an open-source Agent Operating System written in Rust (15 library cr
 - Default API: `http://127.0.0.1:4200`
 - CLI binary: `target/release/openfang.exe` (or `target/debug/openfang.exe`)
 
+## MANDATORY: Dashboard design system policy
+
+For **any** UI/UX styling change in the embedded dashboard (`crates/openfang-api/static/*`), follow:
+
+- **`docs/dashboard-design-system.md`** (canonical)
+
+Rules are mandatory for AI agents and contributors:
+
+- Use tokenized CSS variables/classes; avoid ad-hoc visual values.
+- Do not add inline visual styles when a class-based approach can be used.
+- Preserve existing design hierarchy (typography, spacing, radii, border/shadow, motion).
+- Keep accessibility/focus/hover/mobile behavior intact.
+- If a new reusable visual pattern is introduced, document it in `docs/dashboard-design-system.md` in the same change.
+
 **Dashboard chat (v0.6.4+):** Unread badges use WebSocket events, kernel SSE, and **`GET /api/agents/{id}/session/digest`** (lightweight counts). Leaving `#agents` may keep the agent WS alive with UI callbacks cleared (`wsClearUiCallbacks`). See **`docs/dashboard-testing.md`** (section *Chat unread badges + session digest*). Live check: `curl -s "$BASE/api/agents/$ID/session/digest"` after resolving `$ID` from `GET /api/agents`.
 
 **OpenRouter + chat LLM banner:** Product default `:free` model, **`OPENROUTER_FREE_FALLBACK_MODELS`** after rate-limit/overload retries, and **`humanizeChatError`** (401 vs 403 vs billing) — **`docs/openrouter.md`**. Manual QA: **`docs/dashboard-testing.md`** (*LLM error banner*).

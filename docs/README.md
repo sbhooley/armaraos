@@ -19,6 +19,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
 | [Architecture](architecture.md) | Workspace crate graph, kernel boot, agent lifecycle, memory + graph-memory substrates |
+| [Dashboard UI design system](dashboard-design-system.md) | Canonical tokens/rules for dashboard typography, spacing, radii, shadows, and agent-safe design changes |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
 | [Agent automation hardening](agent-automation-hardening.md) | Tool args, persist vs re-scrape, loop guard interaction, phases, workspace habits; skill-mint stub cron reference |

@@ -4,6 +4,8 @@ The embedded dashboard **Settings** (`#settings`) and **Runtime** (`#runtime`) r
 
 This document maps **layout polish** to source files so changes stay consistent with **Get started** and **App Store** styling.
 
+> Design policy: all visual changes in these surfaces must follow [`dashboard-design-system.md`](dashboard-design-system.md).
+
 ## Shared classes (Skills, Channels, Hands, Home folder, Analytics)
 
 These routes reuse the same building blocks in `components.css`:

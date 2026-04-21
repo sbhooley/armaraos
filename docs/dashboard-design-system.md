@@ -1,0 +1,124 @@
+# Dashboard UI Design System (Canonical)
+
+This is the **single source of truth** for dashboard visual design in ArmaraOS.
+
+If you are a human contributor or AI agent making UI changes, follow this file first.
+
+## Scope
+
+Applies to the embedded dashboard under:
+
+- `crates/openfang-api/static/index_body.html`
+- `crates/openfang-api/static/css/layout.css`
+- `crates/openfang-api/static/css/components.css`
+- `crates/openfang-api/static/css/theme.css`
+- `crates/openfang-api/static/js/pages/*.js` (state-driven class toggles only)
+
+## Non-Negotiable Rules
+
+1. **Token-first edits only**
+   - Use existing CSS variables and component classes.
+   - Do not introduce arbitrary one-off values unless a new reusable token/pattern is required.
+
+2. **No inline visual styling**
+   - Do not add inline `style="..."` for colors, spacing, typography, or shadows.
+   - Convert inline styles into named classes in `components.css` / `layout.css`.
+
+3. **Extend before replace**
+   - Preserve existing UI patterns and layer improvements through shared classes.
+   - Avoid rewriting entire sections when a scoped class override can solve the issue.
+
+4. **Keep visual hierarchy consistent**
+   - Typography, spacing, radii, border strength, and shadows must follow the scales below.
+
+5. **Accessibility and interaction parity**
+   - Preserve keyboard focus states, hover states, contrast, and motion clarity.
+   - New controls must include usable focus-visible styles.
+
+## Canonical Typography Scale
+
+Use this scale for dashboard UI text:
+
+- `9px`: ultra-compact metadata badges (`.runtime-badge`, `.tier-badge`, `.sec-badge`, `.model-switcher-tier`)
+- `10px`: labels + dense metadata (`.form-group label`, `.log-level`, `.log-timestamp`, compact chips)
+- `11px`: body microcopy and operational indicators (`.log-entry`, `.live-indicator`, small pills)
+- `12px`: secondary body + compact controls (`.btn-sm`, table body/meta, panel micro-headings)
+- `13px`: primary control/body text (`.btn`, `.form-input`, core dashboard body)
+- `14px`: section/page header titles and high-salience UI labels
+
+Line-height guidance:
+
+- 1.25–1.35 for uppercase labels/tight metadata
+- 1.4–1.5 for body/control text
+- 1.5+ for long-form text blocks
+
+## Canonical Spacing Rhythm
+
+Use an 8px system with compact derivatives:
+
+- Primary spacing: `8, 16, 24`
+- Compact spacing: `4, 6, 10, 12, 14`
+- Section rhythm:
+  - page shell: 16/24 gutters depending on breakpoint
+  - card internals: 12–16
+  - dense rows (logs/tables): 8
+
+Do not introduce irregular spacing jumps (for example 3, 5, 7, 11, 13, 15) unless tied to an existing pattern.
+
+## Radius, Border, Shadow, Motion
+
+- Radius: use existing tokens (`--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-xl`)
+- Border: default `var(--border)`; accent borders should use `color-mix` against accent + border
+- Shadow: prefer token shadows (`--shadow-xs/sm/md/lg/xl`, `--shadow-inset`, `--shadow-accent`)
+- Motion:
+  - quick micro transitions: `0.12s` to `0.16s`
+  - larger transforms/entry: `0.18s` to `0.25s`
+  - use existing easing tokens (`--ease-smooth`, `--ease-out`, `--ease-spring`)
+
+## Component Rules
+
+### Buttons
+- Keep button text in the typography ladder (13 primary, 12 small).
+- Preserve hover lift and focus affordance; do not remove focus-visible behavior.
+
+### Badges and pills
+- Use the 9/10/11 hierarchy by semantic density.
+- Keep uppercase badge letter-spacing consistent (`0.06em` range for compact labels).
+
+### Dropdowns, popovers, command surfaces
+- Use consistent shell treatment: border + elevated shadow + subtle backdrop blur where already established.
+- Hover behavior should be subtle (`translateX(1px)` class of motion max).
+
+### Data surfaces (tables/logs/timelines)
+- Preserve sticky headers where implemented.
+- Use tabular numerics for timestamp/value scanability where relevant.
+- Prefer subtle row highlight/contrast improvements over dramatic color changes.
+
+### Mobile
+- At `<=768px` and `<=480px`, preserve rhythm by reducing density, not removing hierarchy.
+- Keep bell/header safe-area behavior intact (`--notify-bell-reserve` interactions).
+
+## Required Workflow for Design Changes
+
+1. Read this file and related page docs before editing.
+2. Implement changes with shared classes/tokens.
+3. Verify:
+   - no broken layout across desktop + mobile breakpoints
+   - no regressions in focus/hover states
+4. Run lint/diagnostics on touched files.
+5. Document any new tokens/patterns here in the same PR.
+
+## Agent Enforcement Policy
+
+Future AI agents should treat this file as **mandatory policy** for dashboard design edits.
+
+- If a requested design change conflicts with these rules, propose a tokenized/system-consistent alternative.
+- Do not ship ad-hoc visual styling that bypasses this system.
+
+## Related Docs
+
+- `docs/dashboard-overview-ui.md`
+- `docs/dashboard-settings-runtime-ui.md`
+- `docs/dashboard-testing.md`
+- `CLAUDE.md` (agent instructions)
+- `CONTRIBUTING.md` (contributor policy)

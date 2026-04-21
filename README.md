@@ -13,6 +13,7 @@
 <p align="center">
   <a href="https://github.com/sbhooley/armaraos">Repository</a> &bull;
   <a href="docs/getting-started.md">Quick Start</a> &bull;
+  <a href="docs/dashboard-design-system.md">UI Design System</a> &bull;
   <a href="docs/docker.md">Docker</a> &bull;
   <a href="ARCHITECTURE.md">Architecture</a> &bull;
   <a href="docs/graph-memory.md">Graph memory (runtime)</a> &bull;
@@ -85,6 +86,10 @@ Official **desktop** builds may include a **project API key** for [PostHog](http
 - **Timing:** If you leave usage enabled, the ping runs after you continue past Welcome **or** after **about two minutes** if you never open the wizard (so silent launches are still counted only when allowed).
 - **Overrides:** Power users can still set **`ARMARAOS_PRODUCT_ANALYTICS=0`** to disable completely, or **`ARMARAOS_POSTHOG_KEY`** / **`ARMARAOS_POSTHOG_HOST`** at **runtime** to override the baked values (e.g. local debugging).
 - **Releases:** Maintainers set **`ARMARAOS_POSTHOG_KEY`** (or org secret **`AINL_POSTHOG_KEY`**, same value as **`NEXT_PUBLIC_POSTHOG_KEY`** on ainativelangweb) and optionally **`ARMARAOS_POSTHOG_HOST`** or **`AINL_POSTHOG_HOST`** so release builds embed the key — **end users do not set environment variables** for normal installs.
+
+### Embedded dashboard — PostHog (navigation & product usage)
+
+If **`openfang-api`** is compiled with **`ARMARAOS_DASHBOARD_POSTHOG_KEY`** (or the same **`ARMARAOS_POSTHOG_KEY` / `AINL_POSTHOG_KEY`** fallback — **release CI** sets both from one secret), the dashboard loads a vendored [posthog-js](https://github.com/PostHog/posthog-js) bundle (version **pinned** in **`tooling/posthog-js.version`**; **`scripts/vendor-posthog-js.sh`** runs in **CI and release** so maintainers rarely touch the file by hand). **Settings → System** lists **Product analytics** (with Terms & Privacy links): anonymous analytics are **on by default**; disable anytime there, in the **Setup Wizard**, or via the desktop install-ping checkbox. Session replay defaults on for PostHog heatmaps unless turned off. Nothing in this path transmits prompts or API keys.
 
 ---
 

@@ -2,6 +2,8 @@
 
 The **Get started** route is the default landing view in the embedded dashboard (`#overview`). It aggregates health, usage, setup checklist, provider badges, and activity. This document describes layout, **Quick actions**, and where to change them.
 
+> Design policy: all visual changes in this page must follow the canonical rules in [`dashboard-design-system.md`](dashboard-design-system.md).
+
 ## Source files
 
 | Piece | Location |

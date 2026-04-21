@@ -7,6 +7,7 @@ Thank you for your interest in contributing to ArmaraOS. This guide covers every
 - [Development Environment](#development-environment)
 - [Building and Testing](#building-and-testing)
 - [Code Style](#code-style)
+- [Dashboard UI Design Rules](#dashboard-ui-design-rules)
 - [Architecture Overview](#architecture-overview)
 - [How to Add a New Agent Template](#how-to-add-a-new-agent-template)
 - [How to Add a New Channel Adapter](#how-to-add-a-new-channel-adapter)
@@ -160,6 +161,24 @@ cargo run -- doctor
 - **Dependencies**: Workspace dependencies are declared in the root `Cargo.toml`. Prefer reusing workspace deps over adding new ones. If you need a new dependency, justify it in the PR.
 - **Testing**: Every new feature must include tests. Use `tempfile::TempDir` for filesystem isolation and random port binding for network tests.
 - **Serde**: All config structs use `#[serde(default)]` for forward compatibility with partial TOML.
+
+---
+
+## Dashboard UI Design Rules
+
+For all dashboard visual work under `crates/openfang-api/static/`, follow:
+
+- [docs/dashboard-design-system.md](docs/dashboard-design-system.md) (**canonical policy**)
+
+Required:
+
+- Use tokenized classes/variables (no ad-hoc inline visual styling).
+- Keep typography/spacing hierarchy within the documented scale.
+- Extend existing UI patterns before replacing them.
+- Preserve focus-visible, hover, and mobile behavior.
+- Update `docs/dashboard-design-system.md` when introducing new reusable visual patterns.
+
+PRs that change dashboard visuals should reference that doc and stay consistent with it.
 
 ---
 
@@ -382,6 +401,14 @@ tools = ["my_tool"]
    - `cargo fmt --all --check` must produce no diff.
 
 4. **Write a clear PR description**: Explain what changed and why. Include before/after examples if applicable.
+
+   **If the PR includes dashboard visual changes (`crates/openfang-api/static/*`), include this checklist in the PR description:**
+
+   - [ ] I followed [`docs/dashboard-design-system.md`](docs/dashboard-design-system.md) as the canonical design policy.
+   - [ ] I used shared tokens/classes (no ad-hoc inline visual styles).
+   - [ ] Typography, spacing, radius, border/shadow, and motion remain within documented scales.
+   - [ ] Focus-visible, hover, and mobile behavior were preserved or improved.
+   - [ ] If I introduced a new reusable visual pattern, I documented it in `docs/dashboard-design-system.md`.
 
 5. **One concern per PR**: Keep PRs focused. A single PR should address one feature, one bug fix, or one refactor -- not all three.
 
