@@ -28,6 +28,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: check-${{ matrix.os }}
+      - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
+        shell: bash
+        run: bash scripts/vendor-posthog-js.sh
       - name: Install Tauri system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -53,6 +56,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: test-${{ matrix.os }}
+      - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
+        shell: bash
+        run: bash scripts/vendor-posthog-js.sh
       - name: Install Tauri system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -77,6 +83,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dashboard-smoke
+      - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
+        shell: bash
+        run: bash scripts/vendor-posthog-js.sh
       - name: Install Tauri system deps (Linux)
         run: |
           sudo apt-get update
@@ -100,6 +109,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
+        shell: bash
+        run: bash scripts/vendor-posthog-js.sh
       - name: Install Tauri system deps
         run: |
           sudo apt-get update

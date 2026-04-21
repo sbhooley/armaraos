@@ -69,6 +69,10 @@ pub fn run() {
             .on_menu_event(|app, event| {
                 if event.id() == "help_support_email" {
                     let _ = open::that("mailto:ainativelang@gmail.com?subject=ArmaraOS%20Support");
+                } else if event.id() == "help_ainl_terms" {
+                    let _ = open::that("https://ainativelang.com/terms");
+                } else if event.id() == "help_ainl_privacy" {
+                    let _ = open::that("https://ainativelang.com/privacy");
                 } else if event.id() == "help_ainl_website" {
                     let _ = open::that("https://ainativelang.com/");
                 } else if event.id() == "help_ainl_x" {

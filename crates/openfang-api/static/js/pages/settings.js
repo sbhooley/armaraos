@@ -221,6 +221,33 @@ function settingsPage() {
     scanResult: null,
     migResult: null,
 
+    // -- PostHog dashboard analytics (Settings → System; optional compile-time key) --
+    dashboardAnalyticsConfigured: false,
+    dashboardAnalyticsOk: false,
+    dashboardReplayOk: false,
+
+    loadDashboardAnalyticsPrefs() {
+      this.dashboardAnalyticsConfigured = false;
+      this.dashboardAnalyticsOk = false;
+      this.dashboardReplayOk = false;
+      try {
+        var a = typeof window !== 'undefined' ? window.__ARMARAOS_ANALYTICS__ : null;
+        if (!a || typeof a.configured !== 'function' || !a.configured()) return;
+        this.dashboardAnalyticsConfigured = true;
+        this.dashboardAnalyticsOk = typeof a.allow === 'function' ? !!a.allow() : false;
+        this.dashboardReplayOk = typeof a.replayAllow === 'function' ? !!a.replayAllow() : false;
+      } catch (e) { /* ignore */ }
+    },
+
+    applyDashboardAnalyticsConsent() {
+      try {
+        if (!this.dashboardAnalyticsOk) this.dashboardReplayOk = false;
+        var a = typeof window !== 'undefined' ? window.__ARMARAOS_ANALYTICS__ : null;
+        if (!a || typeof a.setConsent !== 'function') return;
+        a.setConsent(!!this.dashboardAnalyticsOk, !!this.dashboardReplayOk);
+      } catch (e) { /* ignore */ }
+    },
+
     // -- Settings load --
     async loadSettings() {
       try {
@@ -259,6 +286,33 @@ function settingsPage() {
       } catch(e) {
         applyPageLoadError(this, e, 'Could not load settings.');
       }
+      this.loadDashboardAnalyticsPrefs();
+      try {
+        if (typeof window !== 'undefined' && typeof window.armaraosAnalyticsInit === 'function') {
+          window.armaraosAnalyticsInit();
+        }
+      } catch (eA) { /* ignore */ }
+      try {
+        var A = typeof window !== 'undefined' ? window.__ARMARAOS_ANALYTICS__ : null;
+        if (A && typeof A.usageSnapshot === 'function' && A.configured && A.configured()) {
+          var provs2 = this.providers || [];
+          var nConf = 0;
+          for (var pi = 0; pi < provs2.length; pi++) {
+            if (provs2[pi] && provs2[pi].auth_status === 'configured') nConf++;
+          }
+          var ac =
+            this.sysInfo && typeof this.sysInfo.agent_count === 'number' ? this.sysInfo.agent_count : undefined;
+          var dpk = '';
+          if (this.sysInfo && this.sysInfo.default_provider) {
+            dpk = String(this.sysInfo.default_provider).split(/[:/]/)[0] || '';
+          }
+          A.usageSnapshot({
+            agent_count: ac,
+            providers_configured: nConf,
+            default_provider_kind: dpk || undefined,
+          });
+        }
+      } catch (eS) { /* ignore */ }
       this.loading = false;
     },
 

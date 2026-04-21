@@ -23,6 +23,21 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 None::<&str>,
             )?;
             let sep1 = PredefinedMenuItem::separator(app)?;
+            let terms = MenuItem::with_id(
+                app,
+                "help_ainl_terms",
+                "Terms of Service…",
+                true,
+                None::<&str>,
+            )?;
+            let privacy = MenuItem::with_id(
+                app,
+                "help_ainl_privacy",
+                "Privacy Policy…",
+                true,
+                None::<&str>,
+            )?;
+            let site_legal_sep = PredefinedMenuItem::separator(app)?;
             let website = MenuItem::with_id(
                 app,
                 "help_ainl_website",
@@ -57,6 +72,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             help.append(&support_email)?;
             help.append(&notif)?;
             help.append(&sep1)?;
+            help.append(&terms)?;
+            help.append(&privacy)?;
+            help.append(&site_legal_sep)?;
             help.append(&website)?;
             help.append(&x_profile)?;
             help.append(&telegram)?;

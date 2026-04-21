@@ -72,6 +72,29 @@ function ArmaraosDesktopTauriInvoke(cmd, args) {
   });
 }
 
+/** Opens https URLs (Terms, Privacy, etc.); uses Tauri `open_external_url` in desktop shell. */
+function armaraosOpenExternalUrl(ev, url) {
+  if (!url) return;
+  try {
+    if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+  } catch (e0) { /* ignore */ }
+  try {
+    var w = typeof window !== 'undefined' ? window : null;
+    var core = w && w.__TAURI__ && w.__TAURI__.core;
+    if (core && typeof core.invoke === 'function') {
+      core.invoke('open_external_url', { url: String(url) }).catch(function() {
+        try {
+          w.open(String(url), '_blank', 'noopener,noreferrer');
+        } catch (e1) { /* ignore */ }
+      });
+      return;
+    }
+  } catch (e2) { /* ignore */ }
+  try {
+    if (typeof window !== 'undefined') window.open(String(url), '_blank', 'noopener,noreferrer');
+  } catch (e3) { /* ignore */ }
+}
+
 /**
  * Updates Alpine.store('ainl') fields used by the sidebar WS / AINL / SSE badge row.
  * Desktop: Tauri `ainl_status` (bundled runtime). Browser: throttled GET /api/ainl/library/curated.
@@ -1629,6 +1652,9 @@ function app() {
 
     init() {
       var self = this;
+      setTimeout(function() {
+        self.hydrateSidebarTooltips();
+      }, 0);
 
       // Listen for OS theme changes (only matters when mode is 'system')
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
@@ -1718,6 +1744,11 @@ function app() {
             dash.dashboardPage = pagePart;
             if (pagePart !== 'agents') dash.agentsPageChatAgentId = null;
           } catch (e1) { /* ignore */ }
+          try {
+            if (typeof window !== 'undefined' && window.__ARMARAOS_ANALYTICS__ && window.__ARMARAOS_ANALYTICS__.nav) {
+              window.__ARMARAOS_ANALYTICS__.nav(pagePart, query);
+            }
+          } catch (eNav) { /* ignore */ }
         }
       }
       window.addEventListener('hashchange', handleHash);
@@ -1961,6 +1992,27 @@ function app() {
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed;
       localStorage.setItem('openfang-sidebar', this.sidebarCollapsed ? 'collapsed' : 'expanded');
+      this.hydrateSidebarTooltips();
+    },
+
+    /** Populate nav tooltips from labels so collapsed icon rail stays discoverable. */
+    hydrateSidebarTooltips() {
+      try {
+        var items = document.querySelectorAll('.sidebar .nav-item');
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          if (!item) continue;
+          var text = String(item.getAttribute('title') || '').trim();
+          if (!text) {
+            var label = item.querySelector('.nav-label');
+            text = label ? String(label.textContent || '').replace(/\s+/g, ' ').trim() : '';
+          }
+          if (!text) continue;
+          item.setAttribute('data-nav-tooltip', text);
+          if (!item.getAttribute('title')) item.setAttribute('title', text);
+          if (!item.getAttribute('aria-label')) item.setAttribute('aria-label', text);
+        }
+      } catch (e) { /* ignore */ }
     },
 
     /** Opens the AINL marketing site; uses Tauri when embedded in desktop so the system browser opens. */
@@ -1988,6 +2040,11 @@ function app() {
       this.wsConnected = wsLive;
       try { store.wsConnected = wsLive; } catch (eWs) { /* ignore */ }
       await armaraosRefreshAinlSidebarBadge(store.connected);
+      try {
+        if (typeof window !== 'undefined' && window.__ARMARAOS_ANALYTICS__ && window.__ARMARAOS_ANALYTICS__.refreshEngagement) {
+          window.__ARMARAOS_ANALYTICS__.refreshEngagement();
+        }
+      } catch (eEng) { /* ignore */ }
       this.maybeOfferFirstRunWizard();
     },
 

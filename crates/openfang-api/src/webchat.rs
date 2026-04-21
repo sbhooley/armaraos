@@ -18,6 +18,74 @@ use axum::response::IntoResponse;
 /// Nonce placeholder in compile-time HTML, replaced at request time.
 const NONCE_PLACEHOLDER: &str = "__NONCE__";
 
+/// PostHog dashboard config line — replaced at request time with a `window.__ARMARAOS_POSTHOG__ = …` assignment (see [`dashboard_posthog_config_js`]).
+const POSTHOG_CONFIG_PLACEHOLDER: &str = "/*__ARMARAOS_POSTHOG_CONFIG__*/\n";
+
+/// Builds `window.__ARMARAOS_POSTHOG__` for the embedded dashboard (compile-time env, same key family as desktop).
+fn dashboard_posthog_config_js() -> String {
+    let key = option_env!("ARMARAOS_DASHBOARD_POSTHOG_KEY")
+        .or(option_env!("ARMARAOS_POSTHOG_KEY"))
+        .or(option_env!("AINL_POSTHOG_KEY"))
+        .unwrap_or("");
+    let key = key.trim();
+    if key.is_empty() {
+        return "window.__ARMARAOS_POSTHOG__={configured:false};".to_string();
+    }
+    let host = option_env!("ARMARAOS_POSTHOG_HOST")
+        .or(option_env!("AINL_POSTHOG_HOST"))
+        .unwrap_or("https://us.i.posthog.com");
+    let host = host.trim().trim_end_matches('/');
+    let key_js = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".to_string());
+    let host_js =
+        serde_json::to_string(host).unwrap_or_else(|_| "\"https://us.i.posthog.com\"".to_string());
+    format!("window.__ARMARAOS_POSTHOG__={{configured:true,apiKey:{key_js},api_host:{host_js}}};")
+}
+
+/// Resolved PostHog `api_host` (compile-time env) — must stay in sync with [`dashboard_posthog_config_js`].
+fn resolved_posthog_api_host() -> &'static str {
+    option_env!("ARMARAOS_POSTHOG_HOST")
+        .or(option_env!("AINL_POSTHOG_HOST"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("https://us.i.posthog.com")
+        .trim_end_matches('/')
+}
+
+fn origin_from_url(url: &str) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return None;
+    };
+    let authority = rest.split('/').next()?.split('?').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{authority}"))
+}
+
+/// Space-separated `connect-src` origins for PostHog (cloud ingest + replay assets + custom compile-time host).
+fn posthog_connect_src_origins() -> String {
+    use std::collections::BTreeSet;
+    let mut seen = BTreeSet::new();
+    for o in [
+        "https://us.i.posthog.com",
+        "https://eu.i.posthog.com",
+        "https://us-assets.i.posthog.com",
+        "https://eu-assets.i.posthog.com",
+        "https://app.posthog.com",
+    ] {
+        seen.insert(o.to_string());
+    }
+    if let Some(o) = origin_from_url(resolved_posthog_api_host()) {
+        seen.insert(o);
+    }
+    seen.into_iter().collect::<Vec<_>>().join(" ")
+}
+
 /// Compile-time ETag based on the crate version.
 /// Not used for the dashboard page (nonce prevents caching) but retained
 /// for potential future use by static asset handlers.
@@ -101,13 +169,18 @@ pub async fn sw_js() -> impl IntoResponse {
 /// replaces `'unsafe-inline'` so only our own scripts execute.
 pub async fn webchat_page() -> impl IntoResponse {
     let nonce = uuid::Uuid::new_v4().to_string();
-    let html = WEBCHAT_HTML.replace(NONCE_PLACEHOLDER, &nonce);
+    let posthog_cfg = dashboard_posthog_config_js();
+    let html = WEBCHAT_HTML
+        .replace(NONCE_PLACEHOLDER, &nonce)
+        .replace(POSTHOG_CONFIG_PLACEHOLDER, &posthog_cfg);
+    let ph_connect = posthog_connect_src_origins();
     let csp = format!(
         "default-src 'self'; \
          script-src 'self' 'nonce-{nonce}' 'unsafe-eval'; \
          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; \
          img-src 'self' data: blob:; \
-         connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; \
+         connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:* \
+           {ph_connect}; \
          font-src 'self' https://fonts.gstatic.com; \
          media-src 'self' blob:; \
          frame-src 'self' blob:; \
@@ -146,6 +219,16 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/vendor/github-dark.min.css"),
     "\n</style>\n",
     include_str!("../static/index_body.html"),
+    // PostHog: compile-time public project key + vendored SDK + dashboard analytics (before app code).
+    "<script nonce=\"__NONCE__\">\n",
+    "/*__ARMARAOS_POSTHOG_CONFIG__*/\n",
+    "</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/vendor/posthog.array.full.es5.js"),
+    "\n</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/js/analytics.js"),
+    "\n</script>\n",
     // Vendor libs: marked + highlight first (used by app.js), then Chart.js
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/vendor/marked.min.js"),
@@ -226,3 +309,20 @@ const WEBCHAT_HTML: &str = concat!(
     "\n</script>\n",
     "</body></html>"
 );
+
+#[cfg(test)]
+mod posthog_csp_tests {
+    use super::origin_from_url;
+
+    #[test]
+    fn origin_from_posthog_url() {
+        assert_eq!(
+            origin_from_url("https://eu.i.posthog.com").as_deref(),
+            Some("https://eu.i.posthog.com")
+        );
+        assert_eq!(
+            origin_from_url("https://ph.example.com/ingest/").as_deref(),
+            Some("https://ph.example.com")
+        );
+    }
+}

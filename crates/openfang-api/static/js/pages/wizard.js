@@ -289,6 +289,11 @@ function wizardPage() {
             }
           } catch (e) { /* ignore */ }
         }
+        try {
+          if (typeof window !== 'undefined' && window.__ARMARAOS_ANALYTICS__ && window.__ARMARAOS_ANALYTICS__.syncWizardDesktopDefault) {
+            window.__ARMARAOS_ANALYTICS__.syncWizardDesktopDefault(!!this.wizardProductAnalyticsAllow);
+          }
+        } catch (eW) { /* ignore */ }
         await this.loadProviders();
         try {
           if (typeof OpenFangAPI !== 'undefined' && OpenFangAPI.getNetworkHints) {
@@ -346,6 +351,12 @@ function wizardPage() {
     async nextStep() {
       if (this.step === 1) {
         await this.applyDesktopProductAnalyticsConsent(true);
+        try {
+          if (typeof window !== 'undefined' && window.__ARMARAOS_ANALYTICS__ && window.__ARMARAOS_ANALYTICS__.setConsent) {
+            var wz = !!this.wizardProductAnalyticsAllow;
+            window.__ARMARAOS_ANALYTICS__.setConsent(wz, wz);
+          }
+        } catch (eA) { /* ignore */ }
       }
       if (this.step === 2 && !this.wizardProviderReady) return;
       if (this.step === 3 && !this.createdAgent) {

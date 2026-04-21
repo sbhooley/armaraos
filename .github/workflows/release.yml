@@ -56,6 +56,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
+        shell: bash
+        run: bash scripts/vendor-posthog-js.sh
+
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -187,8 +191,12 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           # Baked into the binary (option_env!) — same PostHog project as ainativelang.com when set.
           # Prefer ARMARAOS_*; fallback AINL_* so one org-level secret matches the ecosystem (same phc_ as NEXT_PUBLIC_POSTHOG_KEY on ainativelangweb).
+          # Embedded dashboard (`openfang-api` / webchat.rs) reads ARMARAOS_DASHBOARD_POSTHOG_KEY first, then POSTHOG_KEY / AINL_* — duplicate here so one CI secret wires both desktop + daemon UI analytics.
           ARMARAOS_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY || secrets.AINL_POSTHOG_KEY }}
+          ARMARAOS_DASHBOARD_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY || secrets.AINL_POSTHOG_KEY }}
           ARMARAOS_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST || secrets.AINL_POSTHOG_HOST }}
+          AINL_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY || secrets.AINL_POSTHOG_KEY }}
+          AINL_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST || secrets.AINL_POSTHOG_HOST }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "ArmaraOS ${{ github.ref_name }}"

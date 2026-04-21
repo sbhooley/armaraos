@@ -257,6 +257,22 @@ function commandPalette() {
 
     selectItem(item) {
       if (!item || typeof item.action !== 'function') return;
+      try {
+        var a = typeof window !== 'undefined' ? window.__ARMARAOS_ANALYTICS__ : null;
+        if (a && typeof a.track === 'function') {
+          var sid = '';
+          var id0 = String(item.id || '');
+          if (id0.indexOf('agent-') === 0) sid = 'agents';
+          else if (id0.indexOf('page-') === 0) sid = 'pages';
+          else if (id0.indexOf('action-') === 0) sid = 'actions';
+          else if (id0.indexOf('recent-') === 0) sid = 'recent';
+          a.track('armaraos_dashboard_command_palette', {
+            section: sid,
+            item_id: id0.slice(0, 120),
+            label: (item.label || '').slice(0, 160),
+          });
+        }
+      } catch (eT) { /* ignore */ }
       this.closePalette();
       item.action();
     },
