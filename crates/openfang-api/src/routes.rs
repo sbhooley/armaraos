@@ -556,7 +556,7 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
             .unwrap_or_else(|| att.filename.as_str());
 
         lines.push(format!(
-            "- **file_id** `{}`, display name `{}`, MIME `{}` — call **media_transcribe** with `{{\"file_id\":\"{}\",\"content_type\":\"{}\"}}` (the display filename is not a path on disk).",
+            "- **file_id** `{}`, display name `{}`, MIME `{}` — call **media_transcribe** with `{{\"file_id\":\"{}\",\"content_type\":\"{}\"}}`. **Do not** put the display name (e.g. `voice_*.webm`) in `file_id`; only the UUID above is valid.",
             att.file_id, orig, content_type, att.file_id, content_type
         ));
     }
@@ -565,7 +565,7 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
         String::new()
     } else {
         format!(
-            "\n\n**Voice/audio attachments** (server temp store, not workspace/uploads):\n{}\n",
+            "\n\n**Voice/audio attachments** (server temp store, not workspace/uploads):\n{}\n**Important:** `file_id` must be the UUID listed here, never the client-side `voice_…` filename.\n",
             lines.join("\n")
         )
     }

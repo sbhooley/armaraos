@@ -2504,11 +2504,20 @@ function chatPage() {
         // Remove the "Transcribing..." message
         this.messages = this.messages.filter(function(m) { return !m.thinking || m.role !== 'system'; });
 
-        // Use server-side transcription if available, otherwise fall back to placeholder
+        // Use server-side transcription if available, otherwise fall back to placeholder.
+        // Include upload.file_id in the text so the model never mistakes the synthetic
+        // filename (voice_*.webm) for the server file_id (UUID in temp openfang_uploads).
         var text = (upload.transcription && upload.transcription.trim())
           ? upload.transcription.trim()
-          : '[Voice message - audio: ' + upload.filename + ']';
-        this._sendPayload(text, [upload], []);
+          : ('[Voice message — transcribe with **media_transcribe** using file_id `' + upload.file_id +
+            '` and content_type `' + upload.content_type + '` (display name: `' + upload.filename + '`). ' +
+            'Do not use the display name as file_id.]');
+        var voiceAttachments = [{
+          file_id: upload.file_id,
+          filename: upload.filename || '',
+          content_type: upload.content_type || 'audio/webm'
+        }];
+        this._sendPayload(text, voiceAttachments, []);
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking || m.role !== 'system'; });
         if (typeof OpenFangToast !== 'undefined') OpenFangToast.error('Failed to upload audio: ' + openFangErrText(e));

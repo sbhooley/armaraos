@@ -1370,12 +1370,12 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "media_transcribe".to_string(),
-            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript. For dashboard/voice uploads, use file_id (UUID from the user message hint), not the display filename — the bytes live in a temp upload dir, not under workspace.".to_string(),
+            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript. For dashboard/voice uploads, file_id must be the **UUID** string from the Voice/audio attachments hint (or the user message) — never the browser display name like voice_123.webm.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path to the audio file (workspace-relative or absolute). Supported extensions: mp3, wav, ogg, flac, m4a, webm." },
-                    "file_id": { "type": "string", "description": "Upload UUID from chat (openfang_uploads). Use this for voice messages instead of path when the hint lists a file_id." },
+                    "file_id": { "type": "string", "description": "The server's upload UUID only (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). For voice recordings this is NOT the voice_….webm label — copy the UUID from the attachment hint or user message." },
                     "content_type": { "type": "string", "description": "MIME type when using file_id (e.g. audio/webm). Defaults to audio/webm if omitted." },
                     "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
                 }
@@ -4107,7 +4107,11 @@ async fn tool_media_transcribe(
     let (resolved, mime): (PathBuf, String) = match (file_id, path_str) {
         (Some(fid), _) => {
             if uuid::Uuid::parse_str(fid).is_err() {
-                return Err("Invalid file_id: expected a UUID from the chat upload hint.".to_string());
+                return Err(
+                    "Invalid file_id: expected the upload UUID from the message (format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). \
+If you used the display filename such as voice_….webm, use the file_id from the **Voice/audio attachments** block instead — not the synthetic name."
+                        .to_string(),
+                );
             }
             let p = std::env::temp_dir().join("openfang_uploads").join(fid);
             let ct = input["content_type"]
