@@ -91,13 +91,20 @@ function graphMemoryPanel() {
     /** Polling fallback when `$watch` on `kernelEvents.received` does not fire. */
     _kernelEventsPollTimer: null,
     _lastSeenKernelReceivedCount: -1,
+    /** D3 zoom behavior for graph canvas — reused so handlers do not stack on re-render. */
+    _gmZoomBehavior: null,
+    /** Last pan/zoom transform — reapplied after `renderGraph` so filters do not reset the view. */
+    _gmLastTransform: null,
+    /** Min/max scale passed to `d3.zoom().scaleExtent` — wide min so large graphs can fully fit. */
+    _gmZoomMin: 0.02,
+    _gmZoomMax: 12,
 
     kindColor: {
-      episode: '#7c9ef5',
-      semantic: '#6be8a0',
-      procedural: '#f5c75a',
-      persona: '#c97cf5',
-      runtime_state: '#9aa0b4',
+      episode: '#7ab0ff',
+      semantic: '#4ae8b0',
+      procedural: '#ffd073',
+      persona: '#d48cff',
+      runtime_state: '#a8b0cc',
     },
 
     isGraphMemoryKernelEvent(d) {
@@ -1315,6 +1322,71 @@ function graphMemoryPanel() {
       });
     },
 
+    /**
+     * Reset pan/zoom to identity (1:1, top-left origin behavior matches d3 default view).
+     */
+    resetGraphView() {
+      var svg = d3.select('#gm-svg');
+      if (svg.empty() || !this._gmZoomBehavior || typeof d3 === 'undefined') {
+        return;
+      }
+      this._gmLastTransform = d3.zoomIdentity;
+      svg
+        .transition()
+        .duration(280)
+        .call(this._gmZoomBehavior.transform, d3.zoomIdentity);
+    },
+
+    /**
+     * Fit all currently simulated node positions into the viewport with padding.
+     * Uses the standard translate(center).scale(k).translate(-cx,-cy) composition.
+     */
+    fitGraphToView() {
+      if (typeof d3 === 'undefined') {
+        return;
+      }
+      var canvas = document.getElementById('graph-memory-canvas');
+      var svg = d3.select('#gm-svg');
+      if (!canvas || svg.empty() || !this._gmZoomBehavior || !this.simulation) {
+        return;
+      }
+      var nds = this.simulation.nodes();
+      if (!nds || !nds.length) {
+        return;
+      }
+      var W = canvas.clientWidth || 800;
+      var H = canvas.clientHeight || 500;
+      var pad = 56;
+      var labelTop = 52;
+      var minX = Infinity;
+      var minY = Infinity;
+      var maxX = -Infinity;
+      var maxY = -Infinity;
+      var kindR = { persona: 14, episode: 10 };
+      nds.forEach(function (n) {
+        if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) {
+          return;
+        }
+        var rr = kindR[n.kind] != null ? kindR[n.kind] : 8;
+        minX = Math.min(minX, n.x - rr - 6);
+        maxX = Math.max(maxX, n.x + rr + 6);
+        minY = Math.min(minY, n.y - rr - labelTop);
+        maxY = Math.max(maxY, n.y + rr + 10);
+      });
+      if (!Number.isFinite(minX) || !Number.isFinite(maxX)) {
+        return;
+      }
+      var bw = Math.max(maxX - minX, 64);
+      var bh = Math.max(maxY - minY, 64);
+      var k = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
+      k = Math.max(this._gmZoomMin, Math.min(k, this._gmZoomMax));
+      var cx = (minX + maxX) / 2;
+      var cy = (minY + maxY) / 2;
+      var t = d3.zoomIdentity.translate(W / 2, H / 2).scale(k).translate(-cx, -cy);
+      this._gmLastTransform = t;
+      svg.transition().duration(420).call(this._gmZoomBehavior.transform, t);
+    },
+
     renderGraph() {
       if (typeof d3 === 'undefined') {
         return;
@@ -1381,9 +1453,12 @@ function graphMemoryPanel() {
         .force('collision', d3.forceCollide(28))
         .alphaDecay(0.025);
 
+      if (self._gmZoomBehavior) {
+        svg.on('.zoom', null);
+      }
       var zoom = d3
         .zoom()
-        .scaleExtent([0.2, 4])
+        .scaleExtent([self._gmZoomMin, self._gmZoomMax])
         // Keep page scrolling usable: plain wheel scrolls the page.
         // Power users can still wheel-zoom the graph with Ctrl/Cmd + wheel.
         .filter(function (event) {
@@ -1396,11 +1471,15 @@ function graphMemoryPanel() {
           return true;
         })
         .on('zoom', function (event) {
+          self._gmLastTransform = event.transform;
           svg.select('#gm-links').attr('transform', event.transform);
           svg.select('#gm-nodes').attr('transform', event.transform);
           svg.select('#gm-labels').attr('transform', event.transform);
         });
+      self._gmZoomBehavior = zoom;
       svg.call(zoom);
+      var startTransform = self._gmLastTransform != null ? self._gmLastTransform : d3.zoomIdentity;
+      svg.call(zoom.transform, startTransform);
       // d3-zoom may set touch-action:none on the SVG, which blocks trackpad/page scroll
       // chaining on some engines; pan-y keeps vertical scroll while Ctrl/Cmd+wheel still zooms.
       try {
@@ -1415,12 +1494,26 @@ function graphMemoryPanel() {
         .data(simEdges)
         .enter()
         .append('line')
-        .attr('stroke', 'rgba(255,255,255,0.12)')
-        .attr('stroke-width', 1.2)
+        .attr('stroke', 'rgba(148,163,210,0.22)')
+        .attr('stroke-width', function (d) {
+          return d.rel ? 1.35 : 1.05;
+        })
+        .attr('stroke-linecap', 'round')
         .attr('marker-end', 'url(#gm-arrow)')
         .attr('title', function (d) {
           return d.rel ? String(d.rel) : '';
         });
+
+      function gmNodeGradientId(kind) {
+        var k = kind || 'semantic';
+        var safe =
+          k === 'runtime_state'
+            ? 'runtime_state'
+            : ['episode', 'semantic', 'procedural', 'persona'].indexOf(k) >= 0
+              ? k
+              : 'semantic';
+        return 'url(#gm-rad-' + safe + ')';
+      }
 
       var nodeSel = svg
         .select('#gm-nodes')
@@ -1432,34 +1525,41 @@ function graphMemoryPanel() {
           return d.kind === 'persona' ? 14 : d.kind === 'episode' ? 10 : 8;
         })
         .attr('fill', function (d) {
-          return self.kindColor[d.kind] || '#888';
+          return gmNodeGradientId(d.kind);
         })
-        .attr('fill-opacity', 0.85)
+        .attr('fill-opacity', 0.98)
         .attr('stroke', function (d) {
           return self.kindColor[d.kind] || '#888';
         })
-        .attr('stroke-width', 1.5)
-        .attr('stroke-opacity', 0.5)
-        .attr('filter', function (d) {
-          return d.kind === 'persona' ? 'url(#gm-glow)' : null;
+        .attr('stroke-width', function (d) {
+          return d.kind === 'persona' ? 2.2 : 1.75;
+        })
+        .attr('stroke-opacity', 0.65)
+        .attr('filter', 'url(#gm-node-shadow)')
+        .attr('class', function (d) {
+          return 'gm-node gm-node-' + (d.kind || 'semantic');
         })
         .style('cursor', 'pointer')
         .on('mouseover', function (event, d) {
+          var base = d.kind === 'persona' ? 14 : d.kind === 'episode' ? 10 : 8;
           d3.select(this)
             .transition()
             .duration(150)
-            .attr('r', (d.kind === 'persona' ? 14 : d.kind === 'episode' ? 10 : 8) * 1.4)
+            .attr('r', base * 1.35)
             .attr('fill-opacity', 1)
-            .attr('filter', 'url(#gm-glow)');
+            .attr('filter', 'url(#gm-node-active)')
+            .attr('stroke-opacity', 0.92);
         })
         .on('mouseout', function (event, d) {
           if (!self.selected || self.selected.id !== d.id) {
+            var base = d.kind === 'persona' ? 14 : d.kind === 'episode' ? 10 : 8;
             d3.select(this)
               .transition()
               .duration(150)
-              .attr('r', d.kind === 'persona' ? 14 : d.kind === 'episode' ? 10 : 8)
-              .attr('fill-opacity', 0.85)
-              .attr('filter', d.kind === 'persona' ? 'url(#gm-glow)' : null);
+              .attr('r', base)
+              .attr('fill-opacity', 0.98)
+              .attr('filter', 'url(#gm-node-shadow)')
+              .attr('stroke-opacity', 0.65);
           }
         })
         .on('click', function (event, d) {
@@ -1521,7 +1621,10 @@ function graphMemoryPanel() {
         .attr('fill', function (d) {
           return self.kindColor[d.kind] || '#888';
         })
-        .attr('fill-opacity', 0.8)
+        .attr('fill-opacity', 0.92)
+        .attr('stroke', 'rgba(8,10,18,0.92)')
+        .attr('stroke-width', 0.35)
+        .attr('paint-order', 'stroke fill')
         .attr('text-anchor', 'middle')
         .attr('dy', function (d) {
           if (d.kind === 'persona') {
