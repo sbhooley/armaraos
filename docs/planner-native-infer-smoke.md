@@ -2,7 +2,7 @@
 
 This path uses `POST /armara/v1/infer` on **`ainl-inference-server`** (or Wiremock in tests) when all of the following hold:
 
-- **Planner mode** is on (`planner_mode` in agent manifest metadata, or env — see `resolve_planner_mode` in `openfang-runtime`).
+- **Planner mode** is on (`planner_mode` in agent manifest metadata, or env — see `resolve_planner_mode` in `openfang-runtime`). In the dashboard this maps to **Agents → gear → Config → Native Planner (AINL Inference)**.
 - **`ARMARA_NATIVE_INFER_URL`** is set to the infer server base (no trailing path; the client calls `/armara/v1/infer`).
 - The agent has **graph memory** available (seeded DB under the agent’s home).
 
@@ -22,7 +22,7 @@ This path uses `POST /armara/v1/infer` on **`ainl-inference-server`** (or Wiremo
 
 1. Start **`ainl-inference-server`** (see that crate’s README) on a known port.
 2. Export `ARMARA_NATIVE_INFER_URL=http://127.0.0.1:<port>` (adjust host/port).
-3. Ensure an agent has **`planner_mode = "on"`** in `[metadata]` and graph memory has at least one episode (normal use) or seed for testing.
+3. Ensure an agent has **`planner_mode = "on"`** in `[metadata]` (or toggle **Native Planner (AINL Inference)** on the Config tab) and graph memory has at least one episode (normal use) or seed for testing.
 4. Send a chat message; check **`#orchestration-traces`** for `plan_started` / `plan_step_*` events, or `GET /api/orchestration/traces?limit=20`.
 5. Optional: `curl -s http://127.0.0.1:4200/metrics | grep openfang_planner` (API port from your daemon).
 

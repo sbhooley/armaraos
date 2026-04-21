@@ -220,7 +220,7 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 
 ## Agents page → Config tab (identity, prompt, tool filters)
 
-**API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), **`manifest_toml`** (detail route — canonical TOML for the full manifest editor), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
+**API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), **`manifest_toml`** (detail route — canonical TOML for the full manifest editor), planner/runtime toggles (**`ainl_runtime_engine`**, **`native_planner_enabled`**), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
 
 **Manual checks (daemon + browser):**
 
@@ -228,7 +228,8 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 2. Close the detail modal and reopen **Config** — fields and lists should match what you saved.
 3. **Default allowlist merge:** When the allowlist is **non-empty**, the kernel merges core file/network/channel tools plus **AINL MCP** helpers (`mcp_ainl_*`) automatically (see [api-reference.md](api-reference.md#get-apiagentsidtools)); you should see those names present after save/reload even if you did not type them manually. **Empty allowlist** still means “profile defaults” (no merge).
 4. Optional: click **Add messaging tools** — `channel_send` and `event_publish` are added to the allowlist when it is non-empty, or removed from the blocklist when using profile-default tools (empty allowlist).
-5. **Advanced full manifest:** expand **Show advanced — full manifest**, click **Reload from server** (textarea fills), change a harmless line (e.g. `description`), **Apply full manifest** — confirm dialog lists session clear + audit; after success, toast includes server **`note`** and audit hint.
+5. Toggle **Native Planner (AINL Inference)** and click **Save Config** — verify next turn switches planner behavior without daemon restart (planner on writes `metadata.planner_mode="on"`, planner off writes `"off"`).
+6. **Advanced full manifest:** expand **Show advanced — full manifest**, click **Reload from server** (textarea fills), change a harmless line (e.g. `description`), **Apply full manifest** — confirm dialog lists session clear + audit; after success, toast includes server **`note`** and audit hint.
 
 **curl (replace `AGENT_ID` and port):**
 

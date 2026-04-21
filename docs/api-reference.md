@@ -83,6 +83,7 @@ AINL runtime fields include:
 - **`ainl_runtime_engine_forced_by_env`**: whether `AINL_RUNTIME_ENGINE=1` is set
 - **`ainl_runtime_engine_env_disabled`**: whether `ARMARAOS_DISABLE_AINL_RUNTIME_ENGINE` is truthy
 - **`ainl_runtime_engine_compiled`**: whether the running binary compiled `openfang-runtime` with `ainl-runtime-engine`
+- **`native_planner_enabled`**: per-agent planner toggle (`manifest.metadata.planner_mode` on/off) used by native infer eligibility
 
 **Response** `200 OK`:
 
@@ -107,6 +108,7 @@ AINL runtime fields include:
     "ainl_runtime_engine_forced_by_env": false,
     "ainl_runtime_engine_env_disabled": false,
     "ainl_runtime_engine_compiled": true,
+    "native_planner_enabled": true,
     "profile": "full",
     "system_prompt": "You are a helpful assistant.",
     "identity": {
@@ -281,7 +283,7 @@ Set an agent's operating mode. `Stable` mode pins the current model and freezes 
 
 ### PATCH /api/agents/{id}/config
 
-Hot-update name, description, system prompt, visual identity, model, provider, optional custom endpoint hints, fallback model chain, and autonomous loop step limit. Omitted JSON keys leave those fields unchanged.
+Hot-update name, description, system prompt, visual identity, model, provider, optional custom endpoint hints, fallback model chain, autonomous loop step limit, and planner/runtime feature toggles. Omitted JSON keys leave those fields unchanged.
 
 **Merge semantics (important for API clients):**
 
@@ -292,6 +294,8 @@ Hot-update name, description, system prompt, visual identity, model, provider, o
 
 - **`api_key_env`**, **`base_url`**: forwarded to the agent’s primary model config when set (custom endpoints / env key for the provider).
 - **`max_iterations`**: integer **1–10000** — sets **`[autonomous]` `max_iterations`** (creates **`[autonomous]`** if absent).
+- **`ainl_runtime_engine`**: boolean manifest toggle for the ainl-runtime prelude path.
+- **`native_planner_enabled`**: boolean convenience toggle for `metadata.planner_mode` (`true` ⇒ `"on"`, `false` ⇒ `"off"`).
 
 The updated agent row is persisted to SQLite after a successful patch, and `agent.toml` is synced when the on-disk file exists (or materialized under the kernel home when missing).
 
@@ -313,7 +317,9 @@ The updated agent row is persisted to SQLite after a successful patch, and `agen
   "api_key_env": "GROQ_API_KEY",
   "base_url": null,
   "fallback_models": [{ "provider": "groq", "model": "llama-3.1-8b-instant" }],
-  "max_iterations": 50
+  "max_iterations": 50,
+  "ainl_runtime_engine": true,
+  "native_planner_enabled": true
 }
 ```
 
@@ -3384,12 +3390,12 @@ The `Retry-After` header indicates the window duration in seconds.
 | PUT | `/api/ui-prefs` | Save UI preferences (full JSON object replace; atomic write) |
 | GET | `/api/peers` | List OFP wire peers |
 | **Agents** | | |
-| GET | `/api/agents` | List agents (`system_prompt`, `identity`, `ainl_runtime_engine` + effective/runtime-state booleans, optional `workspace` / `workspace_rel_home`) |
+| GET | `/api/agents` | List agents (`system_prompt`, `identity`, `ainl_runtime_engine` + effective/runtime-state booleans, `native_planner_enabled`, optional `workspace` / `workspace_rel_home`) |
 | POST | `/api/agents` | Spawn agent |
 | GET | `/api/agents/{id}` | Get agent details (+ `tool_allowlist` / `tool_blocklist`) |
 | PATCH | `/api/agents/{id}` | Partial update (`name`, `description`, `model`, `system_prompt`) |
 | PUT | `/api/agents/{id}/update` | Replace full manifest (`manifest_toml` TOML string) |
-| PATCH | `/api/agents/{id}/config` | Hot-update name, prompt, identity, model, `api_key_env` / `base_url`, fallbacks, `max_iterations` |
+| PATCH | `/api/agents/{id}/config` | Hot-update name, prompt, identity, model, `api_key_env` / `base_url`, fallbacks, `max_iterations`, `ainl_runtime_engine`, `native_planner_enabled` |
 | PATCH | `/api/agents/{id}/identity` | Update identity only (merged) |
 | GET | `/api/agents/{id}/tools` | Get tool allowlist / blocklist |
 | PUT | `/api/agents/{id}/tools` | Set tool allowlist / blocklist |
