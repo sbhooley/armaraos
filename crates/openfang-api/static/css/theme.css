@@ -68,7 +68,7 @@
   --user-bg: #fff7e8;
 
   /* Layout */
-  --sidebar-width: 252px;
+  --sidebar-width: 268px;
   --sidebar-collapsed: 72px;
   --header-height: 48px;
 
@@ -105,56 +105,57 @@
 
 :root {
   /* Layout tokens — keep in sync with [data-theme="light"] above */
-  --sidebar-width: 252px;
+  --sidebar-width: 268px;
   --sidebar-collapsed: 72px;
   --header-height: 48px;
-  /* Dark — black canvas + warm graphite surfaces (chromatic neutrals, gold-adjacent) */
+  /* Dark — true black + subtle transparent glass surfaces */
   --bg: #000000;
-  --bg-primary: #0A0908;
-  --bg-elevated: #141210;
-  --surface: #1B1917;
-  --surface2: #252220;
-  --surface3: #121110;
-  --border: #302C29;
-  --border-light: #3B3733;
-  --border-subtle: #1C1A18;
-  --text: #F1EFED;
-  --text-secondary: #C6C1BC;
-  --text-dim: #8C8680;
-  --text-muted: #5F5954;
+  --bg-primary: #050505;
+  --bg-elevated: #0C0C0C;
+  --surface: rgba(14, 14, 14, 0.76);
+  --surface2: rgba(20, 20, 20, 0.68);
+  --surface3: rgba(30, 30, 30, 0.60);
+  /* Neutral borders intentionally near-black to avoid silver/gray cast. */
+  --border: #272727;
+  --border-light: #353535;
+  --border-subtle: #1B1B1B;
+  --text: #F1F1F1;
+  --text-secondary: #C8C8C8;
+  --text-dim: #949494;
+  --text-muted: #6E6E6E;
   --accent: var(--color-amber-500);
   --accent-light: var(--color-amber-400);
   --accent-dim: var(--color-amber-600);
-  --accent-glow: rgba(245, 158, 11, 0.18);
-  --accent-subtle: rgba(245, 158, 11, 0.12);
+  --accent-glow: rgba(245, 158, 11, 0.16);
+  --accent-subtle: rgba(245, 158, 11, 0.09);
   --success: #4ADE80;
   --success-dim: #22C55E;
-  --success-subtle: rgba(74, 222, 128, 0.1);
+  --success-subtle: rgba(74, 222, 128, 0.09);
   --error: #EF4444;
   --error-dim: #B91C1C;
-  --error-subtle: rgba(239, 68, 68, 0.1);
+  --error-subtle: rgba(239, 68, 68, 0.09);
   --warning: #F59E0B;
   --warning-dim: #D97706;
-  --warning-subtle: rgba(245, 158, 11, 0.1);
+  --warning-subtle: rgba(245, 158, 11, 0.09);
   --info: #3B82F6;
   --info-dim: #2563EB;
-  --info-subtle: rgba(59, 130, 246, 0.1);
-  --success-muted: rgba(74, 222, 128, 0.25);
-  --error-muted: rgba(239, 68, 68, 0.25);
-  --warning-muted: rgba(245, 158, 11, 0.25);
-  --info-muted: rgba(59, 130, 246, 0.25);
-  --border-strong: #4A4540;
-  --card-highlight: rgba(255, 255, 255, 0.045);
-  --agent-bg: #161412;
-  --user-bg: #2a2218;
-  --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.4), 0 2px 4px rgba(0,0,0,0.3);
-  --shadow-lg: 0 12px 28px rgba(0,0,0,0.35), 0 4px 10px rgba(0,0,0,0.3);
-  --shadow-xl: 0 20px 40px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.3);
-  --shadow-glow: 0 0 80px rgba(0,0,0,0.6);
-  --shadow-accent: 0 4px 18px rgba(245, 158, 11, 0.28);
-  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.03);
+  --info-subtle: rgba(59, 130, 246, 0.09);
+  --success-muted: rgba(74, 222, 128, 0.22);
+  --error-muted: rgba(239, 68, 68, 0.22);
+  --warning-muted: rgba(245, 158, 11, 0.22);
+  --info-muted: rgba(59, 130, 246, 0.22);
+  --border-strong: #404040;
+  --card-highlight: rgba(255, 255, 255, 0.06);
+  --agent-bg: rgba(16, 16, 16, 0.8);
+  --user-bg: #252012;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.44);
+  --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.48), 0 1px 2px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.52), 0 2px 5px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 14px 30px rgba(0, 0, 0, 0.56), 0 4px 10px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 24px 46px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.42);
+  --shadow-glow: 0 0 72px rgba(0, 0, 0, 0.58);
+  --shadow-accent: 0 4px 18px rgba(245, 158, 11, 0.24);
+  --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.42);
 
   /* Typography — default (dark) theme; light theme overrides in [data-theme="light"] */
   --font-sans: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -200,7 +201,7 @@ body {
 
 ::selection {
   background: var(--accent);
-  color: #12100e;
+  color: #0B0E14;
 }
 
 /* Theme transition — smooth switch between light/dark */

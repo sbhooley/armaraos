@@ -159,15 +159,19 @@
 /* Keep connection strip on one line once live (startup + steady-state). */
 .sidebar-status.is-connected {
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: 3px;
   padding-left: 12px;
   padding-right: 12px;
 }
 .sidebar-status.is-connected .sidebar-label {
   white-space: nowrap;
 }
+.sidebar-status.is-connected .sidebar-agent-count {
+  flex-shrink: 0;
+}
 .sidebar-status.is-connected .sidebar-conn-badges {
   flex-wrap: nowrap;
+  margin-left: 6px;
   gap: 3px;
 }
 .sidebar-status.is-connected .conn-badge {
@@ -176,15 +180,16 @@
   letter-spacing: 0.04em;
 }
 .sidebar-status.is-connected .conn-res-badge {
-  min-width: 40px;
-  max-width: 48px;
-  padding: 1px 4px 2px;
+  min-width: 50px;
+  max-width: 58px;
+  padding: 1px 5px 2px;
 }
 .sidebar-status.is-connected .conn-res-lbl {
   font-size: 7px;
 }
 .sidebar-status.is-connected .conn-res-val {
   font-size: 8px;
+  white-space: nowrap;
 }
 .sidebar-status.is-connected .conn-res-bar {
   height: 2px;
@@ -504,7 +509,7 @@
 
 /* Horizontal space for fixed notification bell (viewport top-right) so page headers and actions never sit underneath it */
 :root {
-  --sidebar-width: 252px;
+  --sidebar-width: 268px;
   --sidebar-collapsed: 72px;
   --notify-bell-reserve: 56px;
   /* Leave horizontal room for fixed `.app-powered-by` above chat tips */
