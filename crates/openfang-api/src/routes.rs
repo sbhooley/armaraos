@@ -789,8 +789,11 @@ pub async fn send_message(
                 .await
                 {
                     Ok(tts) => {
-                        match register_generated_upload("audio/wav", "voice_reply.wav", tts.audio_data)
-                        {
+                        match register_generated_upload(
+                            "audio/wav",
+                            "voice_reply.wav",
+                            tts.audio_data,
+                        ) {
                             Ok(url) => Some(url),
                             Err(e) => {
                                 tracing::warn!(error = %e, "voice reply upload failed");
@@ -6365,15 +6368,16 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
         serde_json::to_value(&evaluated.calendar_readiness).unwrap_or(serde_json::Value::Null);
 
     let workspace_ri = openfang_runtime::ainl_policy::workspace_repo_intel_profile(&connections);
-    let ainl_workspace_policy =
-        openfang_runtime::ainl_policy::workspace_policy_view(&connections);
+    let ainl_workspace_policy = openfang_runtime::ainl_policy::workspace_policy_view(&connections);
     let ainl_policy_json =
         serde_json::to_value(&ainl_workspace_policy).unwrap_or(serde_json::Value::Null);
-    let per_server_ri: std::collections::HashMap<String, ainl_contracts::RepoIntelCapabilityProfile> =
-        openfang_runtime::ainl_policy::repo_intel_profiles_for_connections(&connections)
-            .into_iter()
-            .map(|s| (s.server_name, s.profile))
-            .collect();
+    let per_server_ri: std::collections::HashMap<
+        String,
+        ainl_contracts::RepoIntelCapabilityProfile,
+    > = openfang_runtime::ainl_policy::repo_intel_profiles_for_connections(&connections)
+        .into_iter()
+        .map(|s| (s.server_name, s.profile))
+        .collect();
 
     let connected: Vec<serde_json::Value> = connections
         .iter()
@@ -9482,13 +9486,10 @@ pub async fn update_custom_model(
         .write()
         .unwrap_or_else(|e| e.into_inner());
 
-    let has_existing = catalog
-        .list_models()
-        .iter()
-        .any(|m| {
-            m.tier == openfang_types::model_catalog::ModelTier::Custom
-                && m.id.eq_ignore_ascii_case(&model_id)
-        });
+    let has_existing = catalog.list_models().iter().any(|m| {
+        m.tier == openfang_types::model_catalog::ModelTier::Custom
+            && m.id.eq_ignore_ascii_case(&model_id)
+    });
     if !has_existing {
         return api_json_error(
             StatusCode::NOT_FOUND,
@@ -11214,8 +11215,7 @@ pub async fn set_provider_key(
             );
             backup_config(&config_path);
             let new_content = if let Ok(existing) = std::fs::read_to_string(&config_path) {
-                let repaired =
-                    openfang_kernel::config::repair_config_toml_stale_mcp_env(&existing);
+                let repaired = openfang_kernel::config::repair_config_toml_stale_mcp_env(&existing);
                 let cleaned = remove_toml_section(&repaired, "default_model");
                 format!("{}\n{}", cleaned.trim(), update_toml)
             } else {

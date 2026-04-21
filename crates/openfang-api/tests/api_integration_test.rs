@@ -1969,36 +1969,41 @@ async fn test_orchestration_trace_plan_events_json_roundtrip() {
     let trace_id = "orch-it-plan-trace";
     let aid = AgentId(uuid::Uuid::new_v4());
 
-    server.state.kernel.orchestration_traces.push(OrchestrationTraceEvent {
-        trace_id: trace_id.to_string(),
-        orchestrator_id: aid,
-        agent_id: aid,
-        parent_agent_id: None,
-        event_type: TraceEventType::PlanStarted {
-            step_count: 3,
-            confidence: 0.91,
-            reasoning_step_ids: vec!["r1".to_string()],
-        },
-        timestamp: Utc::now(),
-        metadata: std::collections::HashMap::new(),
-    });
-    server.state.kernel.orchestration_traces.push(OrchestrationTraceEvent {
-        trace_id: trace_id.to_string(),
-        orchestrator_id: aid,
-        agent_id: aid,
-        parent_agent_id: None,
-        event_type: TraceEventType::PlanFallback {
-            reason: "planner_invalid_plan".to_string(),
-        },
-        timestamp: Utc::now(),
-        metadata: std::collections::HashMap::new(),
-    });
+    server
+        .state
+        .kernel
+        .orchestration_traces
+        .push(OrchestrationTraceEvent {
+            trace_id: trace_id.to_string(),
+            orchestrator_id: aid,
+            agent_id: aid,
+            parent_agent_id: None,
+            event_type: TraceEventType::PlanStarted {
+                step_count: 3,
+                confidence: 0.91,
+                reasoning_step_ids: vec!["r1".to_string()],
+            },
+            timestamp: Utc::now(),
+            metadata: std::collections::HashMap::new(),
+        });
+    server
+        .state
+        .kernel
+        .orchestration_traces
+        .push(OrchestrationTraceEvent {
+            trace_id: trace_id.to_string(),
+            orchestrator_id: aid,
+            agent_id: aid,
+            parent_agent_id: None,
+            event_type: TraceEventType::PlanFallback {
+                reason: "planner_invalid_plan".to_string(),
+            },
+            timestamp: Utc::now(),
+            metadata: std::collections::HashMap::new(),
+        });
 
     let client = reqwest::Client::new();
-    let url = format!(
-        "{}/api/orchestration/traces/{}",
-        server.base_url, trace_id
-    );
+    let url = format!("{}/api/orchestration/traces/{}", server.base_url, trace_id);
     let resp = client.get(url).send().await.unwrap();
     assert_eq!(resp.status(), 200);
     let events: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -2011,10 +2016,7 @@ async fn test_orchestration_trace_plan_events_json_roundtrip() {
         events[0]["event_type"]["type"].as_str(),
         Some("plan_started")
     );
-    assert_eq!(
-        events[0]["event_type"]["step_count"].as_u64(),
-        Some(3)
-    );
+    assert_eq!(events[0]["event_type"]["step_count"].as_u64(), Some(3));
     assert_eq!(
         events[1]["event_type"]["type"].as_str(),
         Some("plan_fallback")

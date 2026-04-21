@@ -26,7 +26,10 @@ impl Drop for TestServer {
     }
 }
 
-async fn spawn_test_server_with_kernel(kernel: Arc<OpenFangKernel>, tmp: tempfile::TempDir) -> TestServer {
+async fn spawn_test_server_with_kernel(
+    kernel: Arc<OpenFangKernel>,
+    tmp: tempfile::TempDir,
+) -> TestServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test server");
@@ -478,8 +481,7 @@ async fn daemon_validation_failed_falls_back_to_legacy_and_emits_plan_fallback_t
     Mock::given(method("POST"))
         .and(path("/armara/v1/infer"))
         .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(infer_response_validation_failed_json()),
+            ResponseTemplate::new(200).set_body_json(infer_response_validation_failed_json()),
         )
         .expect(1)
         .mount(&mock)
