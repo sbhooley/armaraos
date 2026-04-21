@@ -32,6 +32,12 @@ pub struct GraphMemoryQuery {
     pub limit: usize,
     #[serde(default = "default_since_seconds")]
     pub since_seconds: i64,
+    #[serde(default = "default_graph_edge_mode")]
+    pub edge_mode: String,
+    #[serde(default)]
+    pub ego_expand_1hop: bool,
+    #[serde(default)]
+    pub synthetic_provenance: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -47,6 +53,12 @@ pub struct GraphMemorySnapshotGraphQuery {
     pub limit: usize,
     #[serde(default = "default_since_seconds")]
     pub since_seconds: i64,
+    #[serde(default = "default_graph_edge_mode")]
+    pub edge_mode: String,
+    #[serde(default)]
+    pub ego_expand_1hop: bool,
+    #[serde(default)]
+    pub synthetic_provenance: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +172,14 @@ const fn default_audit_limit() -> usize {
     100
 }
 
+fn default_graph_edge_mode() -> String {
+    "strict".to_string()
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 const fn default_true() -> bool {
     true
 }
@@ -206,6 +226,22 @@ struct GraphMemoryEdgeOut {
     source: String,
     target: String,
     rel: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    inferred: bool,
+}
+
+#[derive(Clone, Copy)]
+struct GraphLoadOptions {
+    ego_expand_1hop: bool,
+    synthetic_provenance: bool,
+}
+
+fn graph_load_options(edge_mode: &str, ego_expand_1hop: bool, synthetic_provenance: bool) -> GraphLoadOptions {
+    let augmented = edge_mode.trim().eq_ignore_ascii_case("augmented");
+    GraphLoadOptions {
+        ego_expand_1hop: ego_expand_1hop || augmented,
+        synthetic_provenance: synthetic_provenance || augmented,
+    }
 }
 
 fn node_kind(row_type: &str) -> &'static str {
@@ -690,7 +726,9 @@ fn explainability_for_node(
     }
 }
 
-fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
+fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64, options: GraphLoadOptions) -> Value {
+    const EGO_EXPAND_NODE_CAP: usize = 240;
+    const PROVENANCE_EXPAND_NODE_CAP: usize = 240;
     let limit = limit.clamp(1, 2000);
     if !path.exists() {
         return json!({ "nodes": [], "edges": [] });
@@ -738,25 +776,159 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64) -> Value {
         id_to_label.insert(id.clone(), label);
     }
 
-    let mut edges_out: Vec<GraphMemoryEdgeOut> = Vec::new();
-    if !id_set.is_empty() {
-        if let Ok(mut estmt) = conn.prepare("SELECT from_id, to_id, label FROM ainl_graph_edges") {
-            if let Ok(erows) = estmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            }) {
-                for er in erows.flatten() {
-                    let (from_id, to_id, label) = er;
-                    if id_set.contains(&from_id) && id_set.contains(&to_id) {
-                        edges_out.push(GraphMemoryEdgeOut {
-                            source: from_id,
-                            target: to_id,
-                            rel: normalize_rel(&label),
-                        });
+    let mut raw_edges: Vec<(String, String, String)> = Vec::new();
+    if let Ok(mut estmt) = conn.prepare("SELECT from_id, to_id, label FROM ainl_graph_edges") {
+        if let Ok(erows) = estmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        }) {
+            for er in erows.flatten() {
+                raw_edges.push(er);
+            }
+        }
+    }
+
+    if options.ego_expand_1hop && !id_set.is_empty() {
+        let mut missing_neighbors: Vec<String> = Vec::new();
+        let mut seen_missing: HashSet<String> = HashSet::new();
+        for (from_id, to_id, _) in &raw_edges {
+            let from_in = id_set.contains(from_id);
+            let to_in = id_set.contains(to_id);
+            if from_in && !to_in && seen_missing.insert(to_id.clone()) {
+                missing_neighbors.push(to_id.clone());
+            }
+            if to_in && !from_in && seen_missing.insert(from_id.clone()) {
+                missing_neighbors.push(from_id.clone());
+            }
+            if missing_neighbors.len() >= EGO_EXPAND_NODE_CAP {
+                break;
+            }
+        }
+        if !missing_neighbors.is_empty() {
+            if let Ok(mut nstmt) = conn.prepare(
+                "SELECT id, node_type, payload, timestamp FROM ainl_graph_nodes WHERE id = ?1",
+            ) {
+                for nid in missing_neighbors.into_iter().take(EGO_EXPAND_NODE_CAP) {
+                    if id_set.contains(&nid) {
+                        continue;
                     }
+                    let row = nstmt.query_row(rusqlite::params![nid], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    });
+                    let Ok((id, node_type, payload, ts)) = row else {
+                        continue;
+                    };
+                    let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) else {
+                        continue;
+                    };
+                    let (label, _, _, _, _, _) = label_for_node(&node);
+                    id_to_label.insert(id.clone(), label);
+                    id_set.insert(id.clone());
+                    parsed.push((id, node_type, node, ts));
+                }
+            }
+        }
+    }
+
+    if options.synthetic_provenance {
+        let mut missing_sources: Vec<String> = Vec::new();
+        let mut seen_sources: HashSet<String> = HashSet::new();
+        for (_, _, node, _) in &parsed {
+            if let AinlNodeType::Semantic { semantic } = &node.node_type {
+                let sid = semantic.source_episode_id.trim();
+                if sid.is_empty() || id_set.contains(sid) {
+                    continue;
+                }
+                if seen_sources.insert(sid.to_string()) {
+                    missing_sources.push(sid.to_string());
+                }
+            }
+        }
+        if !missing_sources.is_empty() {
+            if let Ok(mut nstmt) = conn.prepare(
+                "SELECT id, node_type, payload, timestamp FROM ainl_graph_nodes WHERE id = ?1",
+            ) {
+                for sid in missing_sources.into_iter().take(PROVENANCE_EXPAND_NODE_CAP) {
+                    if id_set.contains(&sid) {
+                        continue;
+                    }
+                    let row = nstmt.query_row(rusqlite::params![sid], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    });
+                    let Ok((id, node_type, payload, ts)) = row else {
+                        continue;
+                    };
+                    let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) else {
+                        continue;
+                    };
+                    let (label, _, _, _, _, _) = label_for_node(&node);
+                    id_to_label.insert(id.clone(), label);
+                    id_set.insert(id.clone());
+                    parsed.push((id, node_type, node, ts));
+                }
+            }
+        }
+    }
+
+    let mut edges_out: Vec<GraphMemoryEdgeOut> = Vec::new();
+    let mut edge_index: HashMap<(String, String, String), usize> = HashMap::new();
+    let mut push_edge = |source: String, target: String, rel: String, inferred: bool| {
+        let key = (source.clone(), target.clone(), rel.clone());
+        if let Some(idx) = edge_index.get(&key).copied() {
+            if !inferred && edges_out[idx].inferred {
+                edges_out[idx].inferred = false;
+            }
+            return;
+        }
+        let idx = edges_out.len();
+        edges_out.push(GraphMemoryEdgeOut {
+            source,
+            target,
+            rel,
+            inferred,
+        });
+        edge_index.insert(key, idx);
+    };
+    if !id_set.is_empty() {
+        for (from_id, to_id, label) in &raw_edges {
+            if id_set.contains(from_id) && id_set.contains(to_id) {
+                push_edge(
+                    from_id.clone(),
+                    to_id.clone(),
+                    normalize_rel(label),
+                    false,
+                );
+            }
+        }
+        if options.synthetic_provenance {
+            for (id, _, node, _) in &parsed {
+                if let AinlNodeType::Semantic { semantic } = &node.node_type {
+                    let source_episode_id = semantic.source_episode_id.trim();
+                    if source_episode_id.is_empty() {
+                        continue;
+                    }
+                    if !id_set.contains(source_episode_id) {
+                        continue;
+                    }
+                    push_edge(
+                        id.clone(),
+                        source_episode_id.to_string(),
+                        "source_episode".to_string(),
+                        true,
+                    );
                 }
             }
         }
@@ -798,7 +970,8 @@ pub async fn get_graph_memory(
         return Json(json!({ "nodes": [], "edges": [] }));
     };
     let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
-    Json(load_graph_from_db(&path, q.limit, q.since_seconds))
+    let options = graph_load_options(&q.edge_mode, q.ego_expand_1hop, q.synthetic_provenance);
+    Json(load_graph_from_db(&path, q.limit, q.since_seconds, options))
 }
 
 /// GET /api/graph-memory/snapshot-graph?agent_id=…&snapshot_id=…
@@ -813,7 +986,8 @@ pub async fn get_graph_memory_snapshot_graph(
         return Json(json!({ "nodes": [], "edges": [] }));
     };
     let path = snapshots_dir(&state.kernel.config.home_dir, &agent_id).join(snapshot_id);
-    Json(load_graph_from_db(&path, q.limit, q.since_seconds))
+    let options = graph_load_options(&q.edge_mode, q.ego_expand_1hop, q.synthetic_provenance);
+    Json(load_graph_from_db(&path, q.limit, q.since_seconds, options))
 }
 
 /// GET /api/graph-memory/snapshots?agent_id=…
@@ -1632,6 +1806,27 @@ mod tests {
         assert!(controls.include_semantic_facts);
         assert!(controls.include_conflicts);
         assert!(controls.include_procedural_hints);
+    }
+
+    #[test]
+    fn graph_load_options_strict_defaults_off() {
+        let options = graph_load_options("strict", false, false);
+        assert!(!options.ego_expand_1hop);
+        assert!(!options.synthetic_provenance);
+    }
+
+    #[test]
+    fn graph_load_options_augmented_enables_both_paths() {
+        let options = graph_load_options("augmented", false, false);
+        assert!(options.ego_expand_1hop);
+        assert!(options.synthetic_provenance);
+    }
+
+    #[test]
+    fn graph_load_options_preserves_explicit_flags_in_strict_mode() {
+        let options = graph_load_options("strict", true, false);
+        assert!(options.ego_expand_1hop);
+        assert!(!options.synthetic_provenance);
     }
 
     #[test]

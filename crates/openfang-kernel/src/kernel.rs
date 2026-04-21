@@ -56,6 +56,7 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "channel_send",
     "event_publish",
     "web_fetch",
+    "media_transcribe",
     "mcp_ainl_ainl_list_ecosystem",
     "mcp_ainl_ainl_capabilities",
     "mcp_ainl_ainl_validate",

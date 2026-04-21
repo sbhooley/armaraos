@@ -53,6 +53,9 @@ function graphMemoryPanel() {
     edges: [],
     agents: [],
     agentId: '',
+    graphEdgeMode: 'augmented',
+    graphExpandEgo: true,
+    graphSyntheticProvenance: true,
     filters: ['episode', 'semantic', 'procedural', 'persona', 'runtime_state'],
     selected: null,
     loading: false,
@@ -718,10 +721,11 @@ function graphMemoryPanel() {
       }
       this.loading = true;
       try {
+        var qs = this.graphQueryString(300);
         var path =
           '/api/graph-memory?agent_id=' +
           encodeURIComponent(this.agentId) +
-          '&limit=300';
+          qs;
         var data = await OpenFangAPI.get(path);
         this.nodes = data.nodes || [];
         this.edges = data.edges || [];
@@ -958,12 +962,13 @@ function graphMemoryPanel() {
       }
       this.loading = true;
       try {
+        var qs = this.graphQueryString(300);
         var path =
           '/api/graph-memory/snapshot-graph?agent_id=' +
           encodeURIComponent(this.agentId) +
           '&snapshot_id=' +
           encodeURIComponent(this.selectedSnapshotId) +
-          '&limit=300';
+          qs;
         var data = await OpenFangAPI.get(path);
         this.nodes = data.nodes || [];
         this.edges = data.edges || [];
@@ -981,6 +986,45 @@ function graphMemoryPanel() {
 
     async returnToLiveGraph() {
       this.viewMode = 'live';
+      await this.fetchGraph();
+    },
+
+    graphQueryString(limit) {
+      var params = new URLSearchParams();
+      params.set('limit', String(limit || 300));
+      params.set('edge_mode', this.graphEdgeMode === 'augmented' ? 'augmented' : 'strict');
+      if (this.graphExpandEgo) {
+        params.set('ego_expand_1hop', 'true');
+      }
+      if (this.graphSyntheticProvenance) {
+        params.set('synthetic_provenance', 'true');
+      }
+      return '&' + params.toString();
+    },
+
+    async setGraphEdgeMode(mode) {
+      var m = mode === 'augmented' ? 'augmented' : 'strict';
+      if (this.graphEdgeMode === m) {
+        return;
+      }
+      this.graphEdgeMode = m;
+      if (m === 'augmented') {
+        // Augmented mode presets both expansion and provenance edges.
+        this.graphExpandEgo = true;
+        this.graphSyntheticProvenance = true;
+      }
+      if (this.viewMode === 'snapshot' && this.selectedSnapshotId) {
+        await this.previewSelectedSnapshot();
+        return;
+      }
+      await this.fetchGraph();
+    },
+
+    async refreshGraphWithEdgeOptions() {
+      if (this.viewMode === 'snapshot' && this.selectedSnapshotId) {
+        await this.previewSelectedSnapshot();
+        return;
+      }
       await this.fetchGraph();
     },
 
@@ -1341,7 +1385,7 @@ function graphMemoryPanel() {
      * Fit all currently simulated node positions into the viewport with padding.
      * Uses the standard translate(center).scale(k).translate(-cx,-cy) composition.
      */
-    fitGraphToView() {
+    fitGraphToView(zoomBias) {
       if (typeof d3 === 'undefined') {
         return;
       }
@@ -1379,6 +1423,8 @@ function graphMemoryPanel() {
       var bw = Math.max(maxX - minX, 64);
       var bh = Math.max(maxY - minY, 64);
       var k = Math.min((W - 2 * pad) / bw, (H - 2 * pad) / bh);
+      var bias = typeof zoomBias === 'number' && Number.isFinite(zoomBias) ? zoomBias : 1;
+      k = k * bias;
       k = Math.max(this._gmZoomMin, Math.min(k, this._gmZoomMax));
       var cx = (minX + maxX) / 2;
       var cy = (minY + maxY) / 2;
@@ -1425,6 +1471,7 @@ function graphMemoryPanel() {
       var simEdges = filteredEdges.map(function (e) {
         return {
           rel: e.rel,
+          inferred: !!e.inferred,
           source: e.source && e.source.id !== undefined ? e.source.id : e.source,
           target: e.target && e.target.id !== undefined ? e.target.id : e.target,
         };
@@ -1487,6 +1534,16 @@ function graphMemoryPanel() {
       } catch (eTouch) {
         /* ignore */
       }
+      if (self._gmLastTransform == null) {
+        // First render: auto-fit after initial force settle, but keep a slightly
+        // closer view than full "fit all" so the graph remains readable.
+        setTimeout(function () {
+          if (self._gmLastTransform != null || !self.simulation) {
+            return;
+          }
+          self.fitGraphToView(1.12);
+        }, 220);
+      }
 
       var linkSel = svg
         .select('#gm-links')
@@ -1494,14 +1551,22 @@ function graphMemoryPanel() {
         .data(simEdges)
         .enter()
         .append('line')
-        .attr('stroke', 'rgba(148,163,210,0.22)')
+        .attr('stroke', function (d) {
+          return d.inferred ? 'rgba(124,211,255,0.28)' : 'rgba(148,163,210,0.22)';
+        })
         .attr('stroke-width', function (d) {
           return d.rel ? 1.35 : 1.05;
+        })
+        .attr('stroke-dasharray', function (d) {
+          return d.inferred ? '4 3' : null;
         })
         .attr('stroke-linecap', 'round')
         .attr('marker-end', 'url(#gm-arrow)')
         .attr('title', function (d) {
-          return d.rel ? String(d.rel) : '';
+          if (!d.rel) {
+            return '';
+          }
+          return d.inferred ? String(d.rel) + ' (inferred)' : String(d.rel);
         });
 
       function gmNodeGradientId(kind) {

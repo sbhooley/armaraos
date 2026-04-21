@@ -7832,6 +7832,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <template x-for="kind in ['episode','semantic','procedural','persona','runtime_state']" :key="kind">
               <button type="button" @click="toggleFilter(kind)" :class="filters.includes(kind) ? 'pill pill-active' : 'pill'" x-text="kind === 'runtime_state' ? 'runtime' : kind"></button>
             </template>
+            <button type="button" @click="setGraphEdgeMode('strict')" :class="graphEdgeMode === 'strict' ? 'pill pill-active' : 'pill'" title="Only stored edges from SQLite">Strict edges</button>
+            <button type="button" @click="setGraphEdgeMode('augmented')" :class="graphEdgeMode === 'augmented' ? 'pill pill-active' : 'pill'" title="Stored edges plus inferred provenance and neighbor expansion">Augmented edges</button>
             <select id="gm-agent-select" x-model="agentId" @change="onAgentChange()" class="form-input text-xs" style="padding:4px 8px;max-width:min(360px,100%);min-width:12rem" aria-label="Agent for graph memory">
             </select>
             <button type="button" class="btn btn-ghost btn-sm" @click="fitGraphToView()" title="Zoom and pan so the whole graph fits in view">Fit view</button>
@@ -7843,6 +7845,20 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <p class="text-xs text-dim" style="margin:-6px 0 10px 2px">
           Tip: Scroll to move the page. Hold <strong>Ctrl</strong> (or <strong>Cmd</strong> on Mac) while scrolling to zoom out very far or zoom in — or use <strong>Fit view</strong>. Drag nodes to rearrange.
         </p>
+        <div class="text-xs text-dim" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px 2px">
+          <span>
+            <span style="display:inline-block;width:18px;height:0;border-top:2px solid rgba(148,163,210,0.55);vertical-align:middle;margin-right:6px"></span>
+            Stored edge
+          </span>
+          <span>
+            <span style="display:inline-block;width:18px;height:0;border-top:2px dashed rgba(124,211,255,0.75);vertical-align:middle;margin-right:6px"></span>
+            Inferred edge
+          </span>
+          <span>
+            Mode:
+            <strong x-text="graphEdgeMode === 'augmented' ? 'augmented' : 'strict'" style="text-transform:capitalize"></strong>
+          </span>
+        </div>
         <div id="graph-memory-canvas" style="width:100%;height:min(620px, max(360px, calc(100vh - 280px)));min-height:360px;background:var(--graph-bg,#0a0c12);border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--border)">
           <svg id="gm-svg" width="100%" height="100%">
             <defs>
@@ -8095,6 +8111,18 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div style="border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">
               <p class="text-xs text-dim" style="margin:0 0 6px">Memory controls</p>
               <div style="display:flex;flex-direction:column;gap:6px">
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" :checked="graphEdgeMode === 'augmented'" @change="setGraphEdgeMode($event.target.checked ? 'augmented' : 'strict')" />
+                  Augmented graph view (UI/API)
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="graphExpandEgo" @change="refreshGraphWithEdgeOptions()" />
+                  Include 1-hop missing endpoints
+                </label>
+                <label class="text-xs" style="display:flex;align-items:center;gap:6px">
+                  <input type="checkbox" x-model="graphSyntheticProvenance" @change="refreshGraphWithEdgeOptions()" />
+                  Infer semantic → source episode edges
+                </label>
                 <label class="text-xs" style="display:flex;align-items:center;gap:6px">
                   <input type="checkbox" x-model="memoryControls.memory_enabled" />
                   Memory enabled

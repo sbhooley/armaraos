@@ -321,7 +321,15 @@ impl ToolProfile {
     /// Expand profile to tool name list.
     pub fn tools(&self) -> Vec<String> {
         match self {
-            Self::Minimal => vec!["file_read", "file_list", "channel_send", "event_publish"],
+            // `media_transcribe` is included so dashboard/voice uploads work with every profile
+            // (the API appends `media_transcribe` hints for audio attachments; see `audio_upload_tool_hints`).
+            Self::Minimal => vec![
+                "file_read",
+                "file_list",
+                "channel_send",
+                "event_publish",
+                "media_transcribe",
+            ],
             Self::Coding => vec![
                 "file_read",
                 "file_write",
@@ -332,6 +340,7 @@ impl ToolProfile {
                 "web_fetch",
                 "channel_send",
                 "event_publish",
+                "media_transcribe",
             ],
             Self::Research => vec![
                 "web_fetch",
@@ -341,6 +350,7 @@ impl ToolProfile {
                 "document_extract",
                 "channel_send",
                 "event_publish",
+                "media_transcribe",
             ],
             Self::Messaging => vec![
                 "agent_send",
@@ -349,6 +359,7 @@ impl ToolProfile {
                 "memory_recall",
                 "channel_send",
                 "event_publish",
+                "media_transcribe",
             ],
             Self::Automation => vec![
                 "file_read",
@@ -365,6 +376,7 @@ impl ToolProfile {
                 "memory_recall",
                 "channel_send",
                 "event_publish",
+                "media_transcribe",
             ],
             Self::Full | Self::Custom => vec!["*"],
         }
@@ -874,7 +886,8 @@ mod tests {
         assert!(tools.contains(&"file_list".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
         assert!(tools.contains(&"event_publish".to_string()));
-        assert_eq!(tools.len(), 4);
+        assert!(tools.contains(&"media_transcribe".to_string()));
+        assert_eq!(tools.len(), 5);
     }
 
     #[test]
@@ -887,7 +900,8 @@ mod tests {
         assert!(tools.contains(&"web_fetch".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
         assert!(tools.contains(&"event_publish".to_string()));
-        assert_eq!(tools.len(), 9);
+        assert!(tools.contains(&"media_transcribe".to_string()));
+        assert_eq!(tools.len(), 10);
     }
 
     #[test]
@@ -897,7 +911,8 @@ mod tests {
         assert!(tools.contains(&"web_search".to_string()));
         assert!(tools.contains(&"document_extract".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&"media_transcribe".to_string()));
+        assert_eq!(tools.len(), 8);
     }
 
     #[test]
@@ -906,13 +921,14 @@ mod tests {
         assert!(tools.contains(&"agent_send".to_string()));
         assert!(tools.contains(&"memory_recall".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
-        assert_eq!(tools.len(), 6);
+        assert!(tools.contains(&"media_transcribe".to_string()));
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]
