@@ -78,19 +78,30 @@ pub fn start_server() -> Result<ServerHandle, Box<dyn std::error::Error>> {
         std::env::set_var("AINL_ALLOW_IR_DECLARED_ADAPTERS", "1");
     }
 
-    // Boot kernel (sync — no tokio needed)
+    // Bind first so `kernel.config.api_listen` matches the real socket. Scheduled AINL programs
+    // receive `ARMARAOS_DAEMON_BASE_URL` from `scheduled_ainl_api_base_url(api_listen)`; if we
+    // booted the kernel with the on-disk `api_listen` while serving on a random port, HTTP graphs
+    // would call the wrong host:port (connection refused).
+    let std_listener = TcpListener::bind("127.0.0.1:0")?;
+    let listen_addr: SocketAddr = std_listener.local_addr()?;
+    let port = listen_addr.port();
+
     let mut config = load_config(None);
     if !default_config_path().exists() {
         apply_desktop_bundled_llm_defaults(&mut config);
     }
+    config.api_listen = listen_addr.to_string();
+    // `boot_with_config` overrides `api_listen` from `OPENFANG_LISTEN` if set; clear for this boot
+    // so our bound address wins, then restore so user/CI env is unchanged.
+    let saved_openfang_listen = std::env::var("OPENFANG_LISTEN").ok();
+    std::env::remove_var("OPENFANG_LISTEN");
     let kernel = OpenFangKernel::boot_with_config(config)?;
+    if let Some(v) = saved_openfang_listen {
+        std::env::set_var("OPENFANG_LISTEN", v);
+    }
+
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
-
-    // Bind to a random free port on localhost (main thread — guarantees port)
-    let std_listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = std_listener.local_addr()?.port();
-    let listen_addr: SocketAddr = std_listener.local_addr()?;
 
     info!("ArmaraOS embedded server bound to http://127.0.0.1:{port}");
 
