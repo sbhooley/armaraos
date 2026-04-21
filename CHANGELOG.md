@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries below **[0.7.5]** describe the **0.7.5** release candidate on `main` as of the dated section header.
 
+### Added
+
+- **Local voice auto-download:** `[local_voice]` defaults to **`enabled = true`** and **`auto_download = true`**. On daemon boot (not `cargo test`), the kernel runs **`local_voice_bootstrap`** to populate **`~/.armaraos/voice/`** with the Whisper **ggml-base** model, Rhasspy **Piper** runtime + default English voice, and on **Windows x64** the official **whisper-cli** zip. **macOS/Linux** resolve **`whisper-cli`** from PATH or common Homebrew paths; otherwise logs install guidance. Docs: **[docs/local-voice.md](docs/local-voice.md)**, **[configuration.md](docs/configuration.md#local_voice)**, **[data-directory.md](docs/data-directory.md)**.
+
 ## [0.7.5] - 2026-04-17
 
 Ships everything on `main` after **`v0.7.4`** through the **0.7.5** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). This changelog section consolidates graph-memory GA work, control-plane UX, validation scripts, and release documentation prepared for the **0.7.5** tag.

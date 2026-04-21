@@ -16,6 +16,7 @@ Complete reference for `config.toml`, covering every configurable field in the A
   - [\[runtime_limits\]](#runtime_limits)
   - [\[network\]](#network)
   - [\[dashboard\]](#dashboard)
+  - [\[local\_voice\]](#local_voice)
   - [\[web\]](#web)
   - [\[channels\]](#channels)
   - [\[\[mcp\_servers\]\]](#mcp_servers)
@@ -429,6 +430,33 @@ home_edit_max_bytes = 524288
 | `home_edit_max_bytes` | u64 | `524288` (512 KiB) | Maximum UTF-8 byte length accepted by `POST /api/armaraos-home/write`. |
 
 **Hot reload:** Changes under `[dashboard]` apply on the next config reload (no full kernel restart). From the embedded UI you can trigger **`POST /api/config/reload`** via **Settings → System Info → Daemon / API** or **Monitor → Runtime** (**Reload config**); see [dashboard-settings-runtime-ui.md](dashboard-settings-runtime-ui.md). See [dashboard-home-folder.md](dashboard-home-folder.md) for blocklisted paths, UI behavior (View vs Download), and [api-reference.md](api-reference.md#armaraos-home-browser-endpoints) for HTTP details.
+
+---
+
+### `[local_voice]`
+
+Local **whisper.cpp** STT and **Piper** TTS — optional paths that do not require cloud speech API keys. On first daemon launch, **`auto_download`** (default **true**) can populate `~/.armaraos/voice/`; see [local-voice.md](local-voice.md).
+
+```toml
+[local_voice]
+enabled = true                  # master switch
+auto_download = true            # download model + Piper (+ whisper-cli on Windows) when paths unset
+# whisper_cli = "/path/to/whisper-cli"
+# whisper_model = "/path/to/ggml-base.bin"
+# piper_binary = "/path/to/piper"        # or piper.exe on Windows
+# piper_voice = "/path/to/en_US-lessac-medium.onnx"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | When true, [`whisper_ready()`](https://github.com/sbhooley/armaraos/blob/main/crates/openfang-types/src/config.rs) / [`piper_ready()`](https://github.com/sbhooley/armaraos/blob/main/crates/openfang-types/src/config.rs) may succeed once binaries/models exist. |
+| `auto_download` | bool | `true` | When **`enabled`**, download assets into **`{home_dir}/voice/`** on boot if path fields are unset (skipped in `cargo test` kernel builds — see [local-voice.md](local-voice.md)). |
+| `whisper_cli` | string (path) or omitted | omitted | Path to **`whisper-cli`** (or legacy `main`). Auto-set on **Windows** from the official zip; on **macOS/Linux** use **PATH** / Homebrew locations or install manually. |
+| `whisper_model` | string (path) or omitted | omitted | GGML/GGUF model file (e.g. **`ggml-base.bin`**). Default download target: **`voice/models/ggml-base.bin`**. |
+| `piper_binary` | string (path) or omitted | omitted | Piper executable. Populated under **`voice/piper_bundle/`** when **`auto_download`** runs. |
+| `piper_voice` | string (path) or omitted | omitted | Piper **`.onnx`** voice. Default: **`voice/voices/en_US-lessac-medium.onnx`**. |
+
+**Implementation:** `openfang_runtime::local_voice_bootstrap::ensure_local_voice` (called from the kernel before the media engine is constructed). Defaults live in `openfang_types::config::LocalVoiceConfig`.
 
 ---
 

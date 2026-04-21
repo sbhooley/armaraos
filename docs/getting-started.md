@@ -334,6 +334,7 @@ Now that you have ArmaraOS running:
 - **Migrate from OpenClaw**: Run `openfang migrate --from openclaw`. See [MIGRATION.md](../MIGRATION.md).
 - **Desktop app**: Run `cargo tauri dev` for a native desktop experience with system tray.
 - **Run diagnostics**: `armaraos doctor` checks your entire setup.
+- **Local voice (optional)**: On first daemon start, `[local_voice]` can download Whisper + Piper into `~/.armaraos/voice/` (see [local-voice.md](local-voice.md)). On macOS/Linux you may still need **`whisper-cli`** (e.g. `brew install whisper-cpp`).
 
 ### Useful Commands Reference
 

@@ -18,6 +18,7 @@ Configuration and local state default to **`~/.armaraos/`** (on Windows, `~` is 
 | `~/.armaraos/.env`, `~/.armaraos/secrets.env` | Optional API keys (loaded by CLI and desktop; not committed) |
 | `~/.armaraos/ui-prefs.json` | Dashboard UI preferences persisted by the daemon (e.g. **pinned agent** IDs for the sidebar Quick open list). Atomic write (same pattern as `slash-templates.json`). Survives desktop reinstalls that clear WebView `localStorage`. |
 | `~/.armaraos/slash-templates.json` | Slash message templates (`/t …`); see [api-reference.md](api-reference.md#slash-templates-endpoints) |
+| `~/.armaraos/voice/` | Optional **local voice** bundle: Whisper GGML model, Piper runtime, Piper ONNX voice. Populated when **`[local_voice] auto_download = true`** (default) on first daemon boot — see **[local-voice.md](local-voice.md)**. |
 
 ## Overrides
 
