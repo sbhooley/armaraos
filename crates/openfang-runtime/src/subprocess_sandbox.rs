@@ -37,11 +37,48 @@ pub const SAFE_ENV_VARS_WINDOWS: &[&str] = &[
 ///
 /// Variables that are not set in the current process environment are silently
 /// skipped (rather than being set to empty strings).
+/// PATH for subprocess tools (`shell_exec`, `process_*`, etc.). Daemons launched by launchd often
+/// have a minimal PATH without Homebrew (`/opt/homebrew/bin`), so `ffmpeg` / `brew` appear
+/// missing even when installed. Prepend standard macOS Homebrew locations when not already present.
+fn path_for_sandboxed_child() -> Option<String> {
+    let base = std::env::var("PATH").unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    {
+        let brew = "/opt/homebrew/bin:/usr/local/bin";
+        if base.contains("/opt/homebrew/bin") || base.contains("/usr/local/bin") {
+            return Some(if base.is_empty() {
+                format!("{brew}:/usr/bin:/bin")
+            } else {
+                base
+            });
+        }
+        Some(if base.is_empty() {
+            format!("{brew}:/usr/bin:/bin")
+        } else {
+            format!("{brew}:{base}")
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if base.is_empty() {
+            None
+        } else {
+            Some(base)
+        }
+    }
+}
+
 pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[String]) {
     cmd.env_clear();
 
     // Re-add platform-independent safe vars.
     for var in SAFE_ENV_VARS {
+        if var == &"PATH" {
+            if let Some(merged) = path_for_sandboxed_child() {
+                cmd.env("PATH", merged);
+            }
+            continue;
+        }
         if let Ok(val) = std::env::var(var) {
             cmd.env(var, val);
         }

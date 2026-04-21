@@ -354,7 +354,12 @@ fn brew_install_whisper_cpp_macos() -> Result<(), String> {
 /// True when `ffmpeg` exists on PATH or at common Homebrew paths (used before WebM→WAV transcode).
 #[cfg(not(windows))]
 fn probe_ffmpeg_unix() -> bool {
-    for p in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] {
+    for p in [
+        "/opt/homebrew/bin/ffmpeg",
+        "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg/bin/ffmpeg",
+    ] {
         if PathBuf::from(p).is_file() {
             return true;
         }

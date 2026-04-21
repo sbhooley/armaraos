@@ -405,9 +405,18 @@ fn whisper_cli_supported_extension(ext: &str) -> bool {
 }
 
 fn resolve_ffmpeg() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FFMPEG_PATH").or_else(|_| std::env::var("FFMPEG_BINARY")) {
+        let pb = PathBuf::from(p.trim());
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    // Homebrew default symlink and Cellar layout (when `brew` is not on daemon PATH).
     for p in [
         "/opt/homebrew/bin/ffmpeg",
+        "/opt/homebrew/opt/ffmpeg/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
+        "/usr/local/opt/ffmpeg/bin/ffmpeg",
     ] {
         let pb = PathBuf::from(p);
         if pb.is_file() {
@@ -523,7 +532,7 @@ async fn transcribe_whisper_local(
         let Some(ffmpeg) = resolve_ffmpeg() else {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(
-                "Local whisper-cli does not decode WebM/M4A directly. Install ffmpeg (e.g. `brew install ffmpeg`) to transcode voice uploads to WAV, or set GROQ_API_KEY / OPENAI_API_KEY for cloud transcription."
+                "Local whisper-cli does not decode WebM/M4A directly. Install ffmpeg (e.g. `/opt/homebrew/bin/brew install ffmpeg` on Apple Silicon) or set FFMPEG_PATH to the binary. Cloud: GROQ_API_KEY / OPENAI_API_KEY."
                     .into(),
             );
         };
