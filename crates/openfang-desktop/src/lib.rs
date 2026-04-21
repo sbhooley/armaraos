@@ -204,9 +204,10 @@ pub fn run() {
             .theme(crate::ui_prefs::window_theme_for_mode(&theme_mode))
             .build()?;
 
-            // macOS 26+: avoid Tahoe’s auto-layered dock icon (silver plate + inset artwork).
+            // Tahoe-only: keep the running Dock icon visually aligned with the
+            // bundled rounded black/starfish icon.
             #[cfg(target_os = "macos")]
-            crate::macos_app_icon::apply_flat_icon_image();
+            crate::macos_app_icon::apply_tahoe_icon_image();
 
             // Set up system tray (desktop only)
             #[cfg(desktop)]

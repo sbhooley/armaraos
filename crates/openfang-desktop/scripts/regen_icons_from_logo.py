@@ -14,11 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 REPO = Path(__file__).resolve().parents[3]
 ICONS = REPO / "crates" / "openfang-desktop" / "icons"
 LOGO = REPO / "public" / "assets" / "armaraos-logo.png"
+TAHOE_ICON = ICONS / "icon-tahoe-rounded.png"
 
 
 def trim_to_content(im: Image.Image, pad: int = 2) -> Image.Image:
@@ -56,6 +57,23 @@ def cover_on_black_square(im: Image.Image, side: int = 1024) -> Image.Image:
     return rgb.convert("RGBA")
 
 
+def tahoe_rounded_variant(im: Image.Image, radius_ratio: float = 0.23) -> Image.Image:
+    """Create a rounded-corner variant for macOS 26+ Dock override."""
+    im = im.convert("RGBA")
+    side = min(im.size)
+    if im.size != (side, side):
+        left = (im.width - side) // 2
+        top = (im.height - side) // 2
+        im = im.crop((left, top, left + side, top + side))
+    radius = max(1, int(round(side * radius_ratio)))
+    mask = Image.new("L", (side, side), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, side - 1, side - 1), radius=radius, fill=255)
+    out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    out.paste(im, (0, 0), mask)
+    return out
+
+
 def main() -> int:
     if not LOGO.is_file():
         print(f"Missing logo: {LOGO}", file=sys.stderr)
@@ -66,11 +84,17 @@ def main() -> int:
 
     try:
         for path in sorted(ICONS.rglob("*.png")):
+            if path == TAHOE_ICON:
+                continue
             with Image.open(path) as target:
                 w, h = target.size
             out = src.resize((w, h), Image.Resampling.LANCZOS)
             out.save(path, "PNG")
             print("updated", path.relative_to(REPO))
+
+        tahoe = tahoe_rounded_variant(src)
+        tahoe.save(TAHOE_ICON, "PNG")
+        print("updated", TAHOE_ICON.relative_to(REPO))
 
         iconset = Path(tempfile.mkdtemp(suffix=".iconset"))
         try:
