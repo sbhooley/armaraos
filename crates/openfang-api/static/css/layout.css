@@ -535,15 +535,15 @@
 
 .page-header {
   padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
   background:
-    radial-gradient(ellipse 58% 32% at 15% 0%, color-mix(in srgb, var(--accent-subtle) 55%, transparent), transparent 62%),
+    radial-gradient(ellipse 52% 70% at 11% 0%, color-mix(in srgb, var(--accent-subtle) 46%, transparent), transparent 66%),
     var(--bg-primary);
   display: flex;
   align-items: center;
   justify-content: space-between;
   min-height: var(--header-height);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 80%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-subtle) 70%, transparent), var(--shadow-inset);
 }
 
 .page-header h2 {
