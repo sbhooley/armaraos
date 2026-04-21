@@ -3823,14 +3823,18 @@ button.tool-card-header {
 }
 
 .input-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 6px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
   margin-top: 8px;
-  min-height: 22px;
-  padding: 0 8px;
+  min-height: 30px;
+  padding: 0 calc(var(--app-powered-by-clearance, 240px) + 8px) 0 8px;
+}
+
+.input-footer > .flex {
+  min-height: 30px;
+  align-items: center;
 }
 
 /* Slash command menu */
@@ -3868,6 +3872,7 @@ button.tool-card-header {
   align-items: center;
   gap: 5px;
   padding: 3px 10px;
+  min-height: 30px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -5536,8 +5541,8 @@ button.tool-card-header {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 7px 12px;
-  margin-top: 6px;
+  padding: 6px 12px;
+  margin-top: 0;
   font-size: 11px;
   color: var(--text-dim);
   line-height: 1.35;
@@ -5550,17 +5555,15 @@ button.tool-card-header {
       color-mix(in srgb, var(--surface2) 90%, var(--bg-primary)) 100%
     );
   border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-subtle));
+  border: 1px solid transparent;
   box-shadow: var(--shadow-xs), var(--shadow-inset);
   box-sizing: border-box;
-  /* Conformance: keep this centered under input while reserving room for attribution in lower-right. */
   width: fit-content;
-  max-width: min(760px, calc(100% - var(--app-powered-by-clearance, 240px) - 14px));
+  max-width: min(760px, 100%);
   min-height: 30px;
-  order: 2;
-  flex-basis: 100%;
-  margin-left: auto;
-  margin-right: auto;
+  justify-self: center;
+  margin-left: 0;
+  margin-right: 0;
   text-align: center;
   overflow-wrap: anywhere;
 }
@@ -7607,7 +7610,21 @@ button.tool-card-header {
     left: auto;
   }
   .input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    min-height: 22px;
     padding: 0 4px;
+  }
+  .tip-bar {
+    order: 2;
+    flex-basis: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 6px;
+    max-width: min(760px, calc(100% - var(--app-powered-by-clearance, 240px) - 14px));
   }
   .log-entry {
     padding: 8px;

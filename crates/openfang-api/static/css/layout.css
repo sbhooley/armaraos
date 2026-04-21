@@ -840,10 +840,10 @@
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   z-index: 50;
   font-size: 10px;
-  line-height: 1.1;
+  line-height: 1;
   letter-spacing: 0.01em;
   opacity: 0.96;
-  padding: 1px 0;
+  padding: 0;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   background:
@@ -856,7 +856,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px 5px;
+  min-height: 30px;
+  padding: 0 10px;
   color: var(--text-secondary);
   text-decoration: none;
   pointer-events: auto;
