@@ -24,7 +24,8 @@ struct TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.state.kernel.shutdown();
+        let k = self.state.kernel.clone();
+        std::thread::spawn(move || k.shutdown());
     }
 }
 

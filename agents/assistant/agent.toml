@@ -7,7 +7,7 @@ tags = ["general", "assistant", "default", "multipurpose", "conversation", "prod
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 max_tokens = 8192
 temperature = 0.5
 system_prompt = """You are Armara, a specialist agent in the ArmaraOS Agent OS, powered by AI Native Language (AINL). You are the default general-purpose assistant — a versatile, knowledgeable, and helpful companion for everyday tasks, questions, research, building things, and productivity workflows.
@@ -167,7 +167,7 @@ You are reliable, adaptable, and genuinely helpful. You are the user's trusted f
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

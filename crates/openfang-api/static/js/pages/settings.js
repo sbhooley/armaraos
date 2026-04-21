@@ -14,7 +14,13 @@ function settingsPage() {
     modelSearch: '',
     modelProviderFilter: '',
     modelTierFilter: '',
+    /** Set when GET /api/models fails or returns an unexpected shape (otherwise the UI looks empty). */
+    modelsLoadError: '',
+    /** Set when GET /api/providers fails (Providers hub + Models tab diagnostics). */
+    providersLoadError: '',
+    catalogRefreshing: false,
     showCustomModelForm: false,
+    editingCustomModelId: '',
     customModelId: '',
     customModelProvider: 'openrouter',
     customModelContext: 128000,
@@ -226,6 +232,13 @@ function settingsPage() {
       } catch (e) { /* ignore */ }
       this.loading = true;
       clearPageLoadError(this);
+      // Always start Settings with a clean model filter state; stale webview
+      // autofill/search state should never hide the whole catalog.
+      this.modelSearch = '';
+      this.modelProviderFilter = '';
+      this.modelTierFilter = '';
+      this.modelsLoadError = '';
+      this.providersLoadError = '';
       try {
         await Promise.all([
           this.loadSysInfo(),
@@ -237,6 +250,12 @@ function settingsPage() {
           this.loadUpdaterPrefs(),
           this.loadGraphMemoryControls()
         ]);
+        // Fail-safe: if both arrays are empty, retry once serially so transient
+        // startup races do not leave the Models tab blank.
+        if (!this.models.length && !this.providers.length) {
+          await this.loadProviders();
+          await this.loadModels();
+        }
       } catch(e) {
         applyPageLoadError(this, e, 'Could not load settings.');
       }
@@ -434,9 +453,12 @@ function settingsPage() {
     },
 
     async loadProviders() {
+      this.providersLoadError = '';
       try {
         var data = await OpenFangAPI.get('/api/providers');
-        this.providers = data.providers || [];
+        var plist = data && data.providers;
+        if (!Array.isArray(plist) && Array.isArray(data)) plist = data;
+        this.providers = Array.isArray(plist) ? plist : [];
         for (var i = 0; i < this.providers.length; i++) {
           var p = this.providers[i];
           if (this.canEditProviderUrl(p)) {
@@ -448,29 +470,126 @@ function settingsPage() {
             }
           }
         }
-      } catch(e) { this.providers = []; }
+      } catch (e) {
+        this.providers = [];
+        this.providersLoadError = openFangErrText(e) || String(e);
+      }
     },
 
     async loadModels() {
+      this.modelsLoadError = '';
       try {
         var data = await OpenFangAPI.get('/api/models');
-        this.models = data.models || [];
-      } catch(e) { this.models = []; }
+        var mlist = data && data.models;
+        if (!Array.isArray(mlist) && data && Array.isArray(data.data)) mlist = data.data;
+        if (!Array.isArray(mlist) && Array.isArray(data)) mlist = data;
+        this.models = Array.isArray(mlist)
+          ? mlist.map(function(m) {
+              if (!m) return null;
+              if (typeof m === 'string') {
+                return {
+                  id: m,
+                  display_name: m,
+                  provider: 'unknown',
+                  tier: 'custom',
+                  context_window: null,
+                  max_output_tokens: null,
+                  input_cost_per_m: 0,
+                  output_cost_per_m: 0,
+                  available: true,
+                };
+              }
+              var id = m.id || m.model || m.name || '';
+              var provider =
+                m.provider || m.owned_by || m.vendor || m.provider_id || 'unknown';
+              var tier = m.tier != null ? m.tier : (m.category || m.level || 'custom');
+              return Object.assign({}, m, {
+                id: String(id || ''),
+                display_name: m.display_name || m.name || String(id || ''),
+                provider: String(provider || 'unknown'),
+                tier: String(tier || 'custom').toLowerCase(),
+              });
+            }).filter(Boolean)
+          : [];
+        // If stale filters/search hide all rows, auto-clear once so the catalog
+        // cannot appear empty while models are present.
+        if (this.models.length > 0 && this.filteredModels.length === 0) {
+          if ((this.modelSearch || '').trim() || this.modelProviderFilter || this.modelTierFilter) {
+            this.modelSearch = '';
+            this.modelProviderFilter = '';
+            this.modelTierFilter = '';
+          }
+        }
+        var total = data && typeof data.total === 'number' ? data.total : null;
+        if (this.models.length === 0 && total != null && total > 0) {
+          this.modelsLoadError =
+            'Server reported ' +
+            total +
+            ' models but returned an empty list. Try Refresh catalog, or restart the daemon.';
+        }
+      } catch (e) {
+        this.models = [];
+        this.modelsLoadError = openFangErrText(e) || String(e);
+      }
+    },
+
+    resetCustomModelForm() {
+      this.editingCustomModelId = '';
+      this.customModelId = '';
+      this.customModelProvider = 'openrouter';
+      this.customModelContext = 128000;
+      this.customModelMaxOutput = 8192;
+      this.customModelStatus = '';
+    },
+
+    startEditCustomModel(model) {
+      if (!model) return;
+      this.showCustomModelForm = true;
+      this.editingCustomModelId = String(model.id || '');
+      this.customModelId = String(model.id || '');
+      this.customModelProvider = String(model.provider || 'openrouter');
+      this.customModelContext = model.context_window || 128000;
+      this.customModelMaxOutput = model.max_output_tokens || 8192;
+      this.customModelStatus = '';
+    },
+
+    /** Reload providers + models (e.g. after a transient API failure left the catalog empty). */
+    async refreshModelCatalog() {
+      if (this.catalogRefreshing) return;
+      this.catalogRefreshing = true;
+      try {
+        await Promise.all([this.loadProviders(), this.loadModels()]);
+        if (!this.modelsLoadError && !this.providersLoadError) {
+          OpenFangToast && OpenFangToast.success('Catalog refreshed');
+        }
+      } finally {
+        this.catalogRefreshing = false;
+      }
     },
 
     async addCustomModel() {
       var id = this.customModelId.trim();
       if (!id) return;
-      this.customModelStatus = 'Adding...';
+      var isEdit = !!this.editingCustomModelId;
+      this.customModelStatus = isEdit ? 'Saving...' : 'Adding...';
       try {
-        await OpenFangAPI.post('/api/models/custom', {
+        var payload = {
           id: id,
           provider: this.customModelProvider || 'openrouter',
           context_window: this.customModelContext || 128000,
           max_output_tokens: this.customModelMaxOutput || 8192,
-        });
-        this.customModelStatus = 'Added!';
-        this.customModelId = '';
+        };
+        if (isEdit) {
+          await OpenFangAPI.put(
+            '/api/models/custom/' + encodeURIComponent(this.editingCustomModelId),
+            payload
+          );
+          this.customModelStatus = 'Saved!';
+        } else {
+          await OpenFangAPI.post('/api/models/custom', payload);
+          this.customModelStatus = 'Added!';
+        }
+        this.resetCustomModelForm();
         this.showCustomModelForm = false;
         await this.loadModels();
       } catch(e) {
@@ -483,6 +602,10 @@ function settingsPage() {
       try {
         await OpenFangAPI.del('/api/models/custom/' + encodeURIComponent(modelId));
         OpenFangToast.success('Model deleted');
+        if (this.editingCustomModelId === modelId) {
+          this.resetCustomModelForm();
+          this.showCustomModelForm = false;
+        }
         await this.loadModels();
       } catch(e) {
         OpenFangToast.error('Failed to delete: ' + openFangErrText(e));
@@ -535,12 +658,20 @@ function settingsPage() {
 
     get filteredModels() {
       var self = this;
+      var pf = (self.modelProviderFilter || '').trim();
+      var tf = (self.modelTierFilter || '').trim().toLowerCase();
       return this.models.filter(function(m) {
-        if (self.modelProviderFilter && m.provider !== self.modelProviderFilter) return false;
-        if (self.modelTierFilter && m.tier !== self.modelTierFilter) return false;
+        if (!m) return false;
+        var pid = m.id != null ? String(m.id) : '';
+        var pprovider = m.provider != null ? String(m.provider) : '';
+        if (pf && pprovider !== pf) return false;
+        if (tf) {
+          var mt = m.tier != null ? String(m.tier).toLowerCase() : '';
+          if (mt !== tf) return false;
+        }
         if (self.modelSearch) {
           var q = self.modelSearch.toLowerCase();
-          if (m.id.toLowerCase().indexOf(q) === -1 &&
+          if (pid.toLowerCase().indexOf(q) === -1 &&
               (m.display_name || '').toLowerCase().indexOf(q) === -1) return false;
         }
         return true;
@@ -549,13 +680,24 @@ function settingsPage() {
 
     get uniqueProviderNames() {
       var seen = {};
-      this.models.forEach(function(m) { seen[m.provider] = true; });
+      this.models.forEach(function(m) {
+        if (m && m.provider) seen[m.provider] = true;
+      });
+      // Keep the provider filter populated even when /api/models fails but
+      // /api/providers succeeds.
+      this.providers.forEach(function(p) {
+        if (p && p.id) seen[p.id] = true;
+      });
       return Object.keys(seen).sort();
     },
 
     get uniqueTiers() {
       var seen = {};
-      this.models.forEach(function(m) { if (m.tier) seen[m.tier] = true; });
+      this.models.forEach(function(m) {
+        if (m && m.tier != null && String(m.tier).length) {
+          seen[String(m.tier).toLowerCase()] = true;
+        }
+      });
       return Object.keys(seen).sort();
     },
 

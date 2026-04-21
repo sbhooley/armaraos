@@ -129,6 +129,7 @@ impl LlmDriver for NativeInferDriver {
             backend_preference: vec![],
             agent_snapshot: None,
             repair_context: None,
+            planner_context_hints: None,
         };
         let out = self.infer(infer).await?;
         let text = out.output.text.clone();

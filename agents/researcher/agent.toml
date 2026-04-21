@@ -7,7 +7,7 @@ tags = ["research", "analysis", "web"]
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.5
@@ -70,7 +70,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

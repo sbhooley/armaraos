@@ -265,6 +265,18 @@ pub async fn spawn_agent(
     }
 }
 
+fn manifest_native_planner_enabled(manifest: &openfang_types::agent::AgentManifest) -> bool {
+    manifest
+        .metadata
+        .get("planner_mode")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            let mode = s.trim().to_ascii_lowercase();
+            mode == "on" || mode == "true"
+        })
+        .unwrap_or(false)
+}
+
 /// GET /api/agents — List all agents.
 pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Snapshot catalog once for enrichment
@@ -332,6 +344,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
             let ainl_runtime_engine_effective = ainl_runtime_engine_compiled
                 && !ainl_runtime_engine_env_disabled
                 && (e.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
+            let native_planner_enabled = manifest_native_planner_enabled(&e.manifest);
 
             serde_json::json!({
                 "id": e.id.to_string(),
@@ -352,6 +365,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "ainl_runtime_engine_forced_by_env": ainl_runtime_engine_forced_by_env,
                 "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
                 "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
+                "native_planner_enabled": native_planner_enabled,
                 "profile": e.manifest.profile,
                 "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
@@ -764,6 +778,35 @@ pub async fn send_message(
                 })
             });
 
+            let voice_reply_audio_url = if req.voice_reply
+                && !response.trim().is_empty()
+                && state.kernel.config.local_voice.piper_ready()
+            {
+                match openfang_runtime::tts::synthesize_piper_local(
+                    &response,
+                    &state.kernel.config.local_voice,
+                )
+                .await
+                {
+                    Ok(tts) => {
+                        match register_generated_upload("audio/wav", "voice_reply.wav", tts.audio_data)
+                        {
+                            Ok(url) => Some(url),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "voice reply upload failed");
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Piper voice reply failed");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             (
                 StatusCode::OK,
                 Json(serde_json::json!(MessageResponse {
@@ -785,6 +828,7 @@ pub async fn send_message(
                     adaptive_eco_reason_codes: result.adaptive_eco_reason_codes.clone(),
                     tools: Vec::new(),
                     ainl_runtime_telemetry,
+                    voice_reply_audio_url,
                 })),
             )
         }
@@ -2201,6 +2245,7 @@ pub async fn get_agent(
     let ainl_runtime_engine_effective = ainl_runtime_engine_compiled
         && !ainl_runtime_engine_env_disabled
         && (entry.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
+    let native_planner_enabled = manifest_native_planner_enabled(&entry.manifest);
 
     let turn_error_rate: serde_json::Value = if turn_total == 0 {
         serde_json::Value::Null
@@ -2250,6 +2295,7 @@ pub async fn get_agent(
         "ainl_runtime_engine_forced_by_env": ainl_runtime_engine_forced_by_env,
         "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
         "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
+        "native_planner_enabled": native_planner_enabled,
         "skills": entry.manifest.skills,
         "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
         "mcp_servers": entry.manifest.mcp_servers,
@@ -6318,6 +6364,17 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
     let calendar_readiness_json =
         serde_json::to_value(&evaluated.calendar_readiness).unwrap_or(serde_json::Value::Null);
 
+    let workspace_ri = openfang_runtime::ainl_policy::workspace_repo_intel_profile(&connections);
+    let ainl_workspace_policy =
+        openfang_runtime::ainl_policy::workspace_policy_view(&connections);
+    let ainl_policy_json =
+        serde_json::to_value(&ainl_workspace_policy).unwrap_or(serde_json::Value::Null);
+    let per_server_ri: std::collections::HashMap<String, ainl_contracts::RepoIntelCapabilityProfile> =
+        openfang_runtime::ainl_policy::repo_intel_profiles_for_connections(&connections)
+            .into_iter()
+            .map(|s| (s.server_name, s.profile))
+            .collect();
+
     let connected: Vec<serde_json::Value> = connections
         .iter()
         .map(|conn| {
@@ -6333,6 +6390,9 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
                     let is_calendar_like = flags
                         .check_ids
                         .contains(openfang_runtime::mcp_readiness::CHECK_ID_CALENDAR);
+                    let is_repo_intel_like = flags
+                        .check_ids
+                        .contains(openfang_runtime::mcp_readiness::CHECK_ID_REPO_INTELLIGENCE);
                     let mut readiness_map = serde_json::Map::new();
                     for id in &flags.check_ids {
                         readiness_map.insert(id.clone(), serde_json::json!(true));
@@ -6341,6 +6401,7 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
                         "name": t.name,
                         "description": t.description,
                         "calendar_like": is_calendar_like,
+                        "repo_intelligence_like": is_repo_intel_like,
                         "readiness": serde_json::Value::Object(readiness_map),
                     })
                 })
@@ -6348,12 +6409,18 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
             let has_calendar_tools = tools
                 .iter()
                 .any(|t| t["calendar_like"].as_bool().unwrap_or(false));
+            let ri_profile = per_server_ri
+                .get(conn.name())
+                .cloned()
+                .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
+                .unwrap_or(serde_json::Value::Null);
             serde_json::json!({
                 "name": conn.name(),
                 "tools_count": tools.len(),
                 "tools": tools,
                 "connected": true,
                 "calendar_capable": has_calendar_tools,
+                "repo_intelligence_profile": ri_profile,
             })
         })
         .collect();
@@ -6365,6 +6432,11 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
         "total_connected": connected.len(),
         "readiness": readiness_json,
         "calendar_readiness": calendar_readiness_json,
+        "repo_intelligence": {
+            "schema_version": workspace_ri.schema_version,
+            "workspace_profile": workspace_ri,
+        },
+        "ainl_policy": ainl_policy_json,
     }))
 }
 
@@ -9357,6 +9429,152 @@ pub async fn remove_custom_model(
     )
 }
 
+/// PUT /api/models/custom/{id} — Update an existing custom model.
+///
+/// Allows editing id/provider/limits and other metadata in-place.
+pub async fn update_custom_model(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    axum::extract::Path(model_id): axum::extract::Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/models/custom/:id";
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&model_id)
+        .to_string();
+    let provider = body
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("openrouter")
+        .to_string();
+    let context_window = body
+        .get("context_window")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(128_000);
+    let max_output = body
+        .get("max_output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8_192);
+
+    if id.trim().is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            PATH,
+            "Missing model id",
+            "JSON body must include non-empty 'id'.".to_string(),
+            Some("Provide a valid model id in the request body."),
+        );
+    }
+
+    let display = body
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&id)
+        .to_string();
+
+    let mut catalog = state
+        .kernel
+        .model_catalog
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+
+    let has_existing = catalog
+        .list_models()
+        .iter()
+        .any(|m| {
+            m.tier == openfang_types::model_catalog::ModelTier::Custom
+                && m.id.eq_ignore_ascii_case(&model_id)
+        });
+    if !has_existing {
+        return api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            PATH,
+            "Custom model not found",
+            format!("No custom model '{model_id}' in the catalog."),
+            Some("List models with GET /api/models?available=false."),
+        );
+    }
+
+    let would_conflict = catalog.list_models().iter().any(|m| {
+        m.tier == openfang_types::model_catalog::ModelTier::Custom
+            && m.id.eq_ignore_ascii_case(&id)
+            && m.provider.eq_ignore_ascii_case(&provider)
+            && !m.id.eq_ignore_ascii_case(&model_id)
+    });
+    if would_conflict {
+        return api_json_error(
+            StatusCode::CONFLICT,
+            &rid,
+            PATH,
+            "Model already exists",
+            format!("Model '{id}' already exists for provider '{provider}'."),
+            Some("Choose a different id/provider pair."),
+        );
+    }
+
+    let _ = catalog.remove_custom_model(&model_id);
+    let entry = openfang_types::model_catalog::ModelCatalogEntry {
+        id: id.clone(),
+        display_name: display,
+        provider: provider.clone(),
+        tier: openfang_types::model_catalog::ModelTier::Custom,
+        context_window,
+        max_output_tokens: max_output,
+        input_cost_per_m: body
+            .get("input_cost_per_m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        output_cost_per_m: body
+            .get("output_cost_per_m")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        supports_tools: body
+            .get("supports_tools")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        supports_vision: body
+            .get("supports_vision")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        supports_streaming: body
+            .get("supports_streaming")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        aliases: vec![],
+    };
+
+    if !catalog.add_custom_model(entry) {
+        return api_json_error(
+            StatusCode::CONFLICT,
+            &rid,
+            PATH,
+            "Model update conflict",
+            format!("Could not update '{model_id}' to '{id}' for provider '{provider}'."),
+            Some("Try a different id/provider pair."),
+        );
+    }
+
+    let custom_path = state.kernel.config.home_dir.join("custom_models.json");
+    if let Err(e) = catalog.save_custom_models(&custom_path) {
+        tracing::warn!("Failed to persist custom models: {e}");
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "updated",
+            "id": id,
+            "provider": provider,
+            "previous_id": model_id,
+        })),
+    )
+}
+
 // ── A2A (Agent-to-Agent) Protocol Endpoints ─────────────────────────
 
 /// GET /.well-known/agent.json — A2A Agent Card for the default agent.
@@ -10931,6 +11149,23 @@ pub async fn set_provider_key(
         .unwrap_or_else(|e| e.into_inner())
         .detect_auth();
 
+    // Reconnect any running MCP child whose env whitelist includes this var.
+    //
+    // MCP children inherit env at spawn time only — without this hook a user
+    // pasting their OPENROUTER_API_KEY into the dashboard would still see
+    // `mcp_ainl_ainl_run` fail with "OPENROUTER_API_KEY not set" until the
+    // daemon was restarted. Spawned in the background so the HTTP response
+    // is not blocked on potentially-slow MCP handshakes.
+    {
+        let kernel = state.kernel.clone();
+        let env_var_for_task = env_var.clone();
+        tokio::spawn(async move {
+            let _ = kernel
+                .reconnect_mcp_servers_with_env_var(&env_var_for_task)
+                .await;
+        });
+    }
+
     // Auto-switch default provider if current default has no working key.
     // This fixes the common case where a user adds e.g. a Gemini key via dashboard
     // but their agent still tries to use the previous provider (which has no key).
@@ -11514,10 +11749,20 @@ fn upsert_provider_url(
         String::new()
     };
 
-    let mut doc: toml::Value = if content.trim().is_empty() {
+    let repaired = openfang_kernel::config::repair_config_toml_stale_mcp_env(&content);
+    let to_parse = if repaired != content {
+        let tmp = config_path.with_extension("toml.tmp");
+        std::fs::write(&tmp, &repaired)?;
+        let _ = std::fs::rename(&tmp, config_path);
+        repaired
+    } else {
+        content
+    };
+
+    let mut doc: toml::Value = if to_parse.trim().is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
-        toml::from_str(&content)?
+        toml::from_str(&to_parse)?
     };
 
     let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
@@ -11557,7 +11802,16 @@ fn remove_provider_url_override(
     if content.trim().is_empty() {
         return Ok(false);
     }
-    let mut doc: toml::Value = toml::from_str(&content)?;
+    let repaired = openfang_kernel::config::repair_config_toml_stale_mcp_env(&content);
+    let to_parse = if repaired != content {
+        let tmp = config_path.with_extension("toml.tmp");
+        std::fs::write(&tmp, &repaired)?;
+        let _ = std::fs::rename(&tmp, config_path);
+        repaired
+    } else {
+        content
+    };
+    let mut doc: toml::Value = toml::from_str(&to_parse)?;
     let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
     let Some(urls_table) = root.get_mut("provider_urls").and_then(|v| v.as_table_mut()) else {
         return Ok(false);
@@ -13654,6 +13908,8 @@ pub struct PatchAgentConfigRequest {
     pub max_iterations: Option<u32>,
     /// Toggle the embedded ainl-runtime-engine path. Maps to manifest `ainl_runtime_engine`.
     pub ainl_runtime_engine: Option<bool>,
+    /// Toggle native planner mode (`metadata.planner_mode` on/off) for this agent.
+    pub native_planner_enabled: Option<bool>,
 }
 
 /// PATCH /api/agents/{id}/config — Hot-update agent name, description, system prompt, and identity.
@@ -13961,6 +14217,25 @@ pub async fn patch_agent_config(
             .kernel
             .registry
             .update_ainl_runtime_engine(agent_id, enabled)
+            .is_err()
+        {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                Some("Use GET /api/agents to list agents."),
+            );
+        }
+    }
+
+    // Toggle native planner mode (manifest metadata `planner_mode`).
+    if let Some(enabled) = req.native_planner_enabled {
+        if state
+            .kernel
+            .registry
+            .update_native_planner_mode(agent_id, enabled)
             .is_err()
         {
             return api_json_error(
@@ -14856,6 +15131,33 @@ struct UploadMeta {
 
 /// In-memory upload metadata registry.
 static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::new(DashMap::new);
+
+/// Register server-generated bytes (e.g. Piper WAV) for playback at `/api/uploads/{file_id}`.
+pub(crate) fn register_generated_upload(
+    content_type: &str,
+    suggested_filename: &str,
+    body: Vec<u8>,
+) -> Result<String, String> {
+    if body.len() > MAX_UPLOAD_SIZE {
+        return Err(format!(
+            "Payload too large (max {} MB)",
+            MAX_UPLOAD_SIZE / (1024 * 1024)
+        ));
+    }
+    let file_id = uuid::Uuid::new_v4().to_string();
+    let upload_dir = std::env::temp_dir().join("openfang_uploads");
+    std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
+    let path = upload_dir.join(&file_id);
+    std::fs::write(&path, &body).map_err(|e| e.to_string())?;
+    UPLOAD_REGISTRY.insert(
+        file_id.clone(),
+        UploadMeta {
+            filename: suggested_filename.to_string(),
+            content_type: content_type.to_string(),
+        },
+    );
+    Ok(format!("/api/uploads/{file_id}"))
+}
 
 /// Maximum upload size: 10 MB.
 const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024;

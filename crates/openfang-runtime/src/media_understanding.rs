@@ -2,9 +2,11 @@
 //!
 //! Auto-cascades through available providers based on configured API keys.
 
+use openfang_types::config::LocalVoiceConfig;
 use openfang_types::media::{
     MediaAttachment, MediaConfig, MediaSource, MediaType, MediaUnderstanding,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -12,14 +14,17 @@ use tracing::info;
 /// Media understanding engine.
 pub struct MediaEngine {
     config: MediaConfig,
+    /// Local whisper.cpp + Piper paths from `[local_voice]` (optional).
+    local_voice: LocalVoiceConfig,
     semaphore: Arc<Semaphore>,
 }
 
 impl MediaEngine {
-    pub fn new(config: MediaConfig) -> Self {
+    pub fn new(config: MediaConfig, local_voice: LocalVoiceConfig) -> Self {
         let max = config.max_concurrency.clamp(1, 8);
         Self {
             config,
+            local_voice,
             semaphore: Arc::new(Semaphore::new(max)),
         }
     }
@@ -64,16 +69,13 @@ impl MediaEngine {
             return Err("Expected audio attachment".into());
         }
 
-        let provider = self
-            .config
-            .audio_provider
-            .as_deref()
-            .or_else(|| detect_audio_provider())
-            .ok_or(
-                "No audio transcription provider configured. Set GROQ_API_KEY or OPENAI_API_KEY",
-            )?;
+        let provider = self.resolve_audio_provider()?;
 
         let _permit = self.semaphore.acquire().await.map_err(|e| e.to_string())?;
+
+        if provider == "whisper-local" {
+            return transcribe_whisper_local(attachment, &self.local_voice).await;
+        }
 
         // Parakeet MLX — local transcription via uv + Python
         if provider == "parakeet-mlx" {
@@ -112,10 +114,10 @@ impl MediaEngine {
         };
         let filename = format!("audio.{}", ext);
 
-        let model = default_audio_model(provider);
+        let model = default_audio_model(&provider);
 
         // Build API request
-        let (api_url, api_key) = match provider {
+        let (api_url, api_key) = match provider.as_str() {
             "groq" => (
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 std::env::var("GROQ_API_KEY").map_err(|_| "GROQ_API_KEY not set")?,
@@ -175,7 +177,7 @@ impl MediaEngine {
         Ok(MediaUnderstanding {
             media_type: MediaType::Audio,
             description: transcription,
-            provider: provider.to_string(),
+            provider: provider.clone(),
             model: model.to_string(),
         })
     }
@@ -206,6 +208,42 @@ impl MediaEngine {
         })
     }
 
+    /// Resolve STT backend: explicit `[media] audio_provider`, else `[local_voice]` Whisper, else env keys.
+    fn resolve_audio_provider(&self) -> Result<String, String> {
+        if let Some(ref p) = self.config.audio_provider {
+            match p.as_str() {
+                "whisper-local" => {
+                    if self.local_voice.whisper_ready() {
+                        Ok("whisper-local".into())
+                    } else {
+                        Err(
+                            "media.audio_provider is 'whisper-local' but [local_voice] whisper_cli/whisper_model are missing or not files."
+                                .into(),
+                        )
+                    }
+                }
+                "parakeet-mlx" => Ok("parakeet-mlx".into()),
+                "groq" => Ok("groq".into()),
+                "openai" => Ok("openai".into()),
+                other => Err(format!(
+                    "Unknown media.audio_provider: {other}. Use whisper-local, parakeet-mlx, groq, or openai."
+                )),
+            }
+        } else if self.local_voice.whisper_ready() {
+            Ok("whisper-local".into())
+        } else if std::env::var("OPENFANG_ENABLE_PARAKEET_MLX").is_ok() {
+            Ok("parakeet-mlx".into())
+        } else if std::env::var("GROQ_API_KEY").is_ok() {
+            Ok("groq".into())
+        } else if std::env::var("OPENAI_API_KEY").is_ok() {
+            Ok("openai".into())
+        } else {
+            Err(
+                "No audio transcription provider. Configure [local_voice] (whisper.cpp + ggml-base.bin), set GROQ_API_KEY or OPENAI_API_KEY, or OPENFANG_ENABLE_PARAKEET_MLX.".into(),
+            )
+        }
+    }
+
     /// Process multiple attachments concurrently (bounded by max_concurrency).
     pub async fn process_attachments(
         &self,
@@ -216,10 +254,12 @@ impl MediaEngine {
         for attachment in attachments {
             let sem = self.semaphore.clone();
             let config = self.config.clone();
+            let local_voice = self.local_voice.clone();
             let handle = tokio::spawn(async move {
                 let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
                 let engine = MediaEngine {
                     config,
+                    local_voice,
                     semaphore: Arc::new(Semaphore::new(1)), // inner engine, no extra semaphore
                 };
                 match attachment.media_type {
@@ -354,19 +394,92 @@ print(json.dumps({"text": result.text, "model": "mlx-community/parakeet-tdt-0.6b
     })
 }
 
-/// Detect which audio transcription provider is available.
-fn detect_audio_provider() -> Option<&'static str> {
-    // Explicit opt-in for local Parakeet MLX transcription
-    if std::env::var("OPENFANG_ENABLE_PARAKEET_MLX").is_ok() {
-        return Some("parakeet-mlx");
+/// Local whisper.cpp transcription (`[local_voice]` + ggml-base.bin recommended).
+async fn transcribe_whisper_local(
+    attachment: &MediaAttachment,
+    lv: &LocalVoiceConfig,
+) -> Result<MediaUnderstanding, String> {
+    let cli = lv
+        .whisper_cli
+        .as_ref()
+        .ok_or_else(|| "whisper_cli path missing".to_string())?;
+    let model = lv
+        .whisper_model
+        .as_ref()
+        .ok_or_else(|| "whisper_model path missing".to_string())?;
+
+    let ext = match attachment.mime_type.as_str() {
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/webm" => "webm",
+        "audio/mp4" | "audio/m4a" => "m4a",
+        "audio/flac" => "flac",
+        _ => "webm",
+    };
+    let id = uuid::Uuid::new_v4();
+    let tmp: PathBuf = std::env::temp_dir().join(format!("openfang_wsp_{id}.{ext}"));
+
+    let audio_bytes = match &attachment.source {
+        MediaSource::FilePath { path } => tokio::fs::read(path)
+            .await
+            .map_err(|e| format!("read audio: {e}"))?,
+        MediaSource::Base64 { data, .. } => {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| format!("decode: {e}"))?
+        }
+        MediaSource::Url { url } => {
+            return Err(format!("URL audio not supported for whisper-local: {url}"));
+        }
+    };
+    tokio::fs::write(&tmp, &audio_bytes)
+        .await
+        .map_err(|e| format!("temp audio: {e}"))?;
+
+    let out = tokio::process::Command::new(cli)
+        .arg("-m")
+        .arg(model.as_os_str())
+        .arg("-f")
+        .arg(tmp.as_os_str())
+        .arg("-nt")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("whisper-cli: {e}"))?;
+
+    let sidecar: PathBuf = format!("{}.txt", tmp.display()).into();
+    let mut text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        if let Ok(s) = tokio::fs::read_to_string(&sidecar).await {
+            text = s.trim().to_string();
+            let _ = tokio::fs::remove_file(&sidecar).await;
+        }
     }
-    if std::env::var("GROQ_API_KEY").is_ok() {
-        return Some("groq");
+    let _ = tokio::fs::remove_file(&tmp).await;
+
+    if text.is_empty() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!(
+            "whisper-local returned no text (status {}). stderr: {}",
+            out.status,
+            stderr.trim()
+        ));
     }
-    if std::env::var("OPENAI_API_KEY").is_ok() {
-        return Some("openai");
-    }
-    None
+
+    let model_label = model
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("whisper-local")
+        .to_string();
+    Ok(MediaUnderstanding {
+        media_type: MediaType::Audio,
+        description: text,
+        provider: "whisper-local".to_string(),
+        model: model_label,
+    })
 }
 
 /// Get the default vision model for a provider.
@@ -382,6 +495,7 @@ fn default_vision_model(provider: &str) -> &str {
 /// Get the default audio model for a provider.
 fn default_audio_model(provider: &str) -> &str {
     match provider {
+        "whisper-local" => "whisper-cpp-local",
         "parakeet-mlx" => "mlx-community/parakeet-tdt-0.6b-v3",
         "groq" => "whisper-large-v3-turbo",
         "openai" => "whisper-1",
@@ -392,12 +506,13 @@ fn default_audio_model(provider: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openfang_types::config::LocalVoiceConfig;
     use openfang_types::media::{MediaSource, MAX_IMAGE_BYTES};
 
     #[test]
     fn test_engine_creation() {
         let config = MediaConfig::default();
-        let engine = MediaEngine::new(config);
+        let engine = MediaEngine::new(config, LocalVoiceConfig::default());
         assert_eq!(engine.config.max_concurrency, 2);
     }
 
@@ -407,14 +522,14 @@ mod tests {
             max_concurrency: 100,
             ..Default::default()
         };
-        let engine = MediaEngine::new(config);
+        let engine = MediaEngine::new(config, LocalVoiceConfig::default());
         // Semaphore was clamped to 8
         assert!(engine.semaphore.available_permits() <= 8);
     }
 
     #[tokio::test]
     async fn test_describe_image_wrong_type() {
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Audio,
             mime_type: "audio/mpeg".into(),
@@ -430,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_describe_image_invalid_mime() {
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Image,
             mime_type: "application/pdf".into(),
@@ -445,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_describe_image_too_large() {
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Image,
             mime_type: "image/png".into(),
@@ -460,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcribe_audio_wrong_type() {
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Image,
             mime_type: "image/png".into(),
@@ -479,7 +594,7 @@ mod tests {
             video_description: false,
             ..Default::default()
         };
-        let engine = MediaEngine::new(config);
+        let engine = MediaEngine::new(config, LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Video,
             mime_type: "video/mp4".into(),
@@ -519,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcribe_audio_rejects_image_type() {
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Image,
             mime_type: "image/png".into(),
@@ -536,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn test_transcribe_audio_no_provider() {
         // With no API keys set, should fail with provider error
-        let engine = MediaEngine::new(MediaConfig::default());
+        let engine = MediaEngine::new(MediaConfig::default(), LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Audio,
             mime_type: "audio/webm".into(),
@@ -557,7 +672,7 @@ mod tests {
             audio_provider: Some("groq".to_string()),
             ..Default::default()
         };
-        let engine = MediaEngine::new(config);
+        let engine = MediaEngine::new(config, LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Audio,
             mime_type: "audio/mpeg".into(),
@@ -579,7 +694,7 @@ mod tests {
             audio_provider: Some("groq".to_string()),
             ..Default::default()
         };
-        let engine = MediaEngine::new(config);
+        let engine = MediaEngine::new(config, LocalVoiceConfig::default());
         let attachment = MediaAttachment {
             media_type: MediaType::Audio,
             mime_type: "audio/webm".into(),

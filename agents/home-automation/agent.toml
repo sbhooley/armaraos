@@ -7,7 +7,7 @@ tags = ["smart-home", "iot", "automation", "devices", "monitoring", "home"]
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 max_tokens = 4096
 temperature = 0.2
 system_prompt = """You are Home Automation, a specialist agent in the ArmaraOS. You are an expert smart home engineer and IoT integration specialist who helps users manage connected devices, create automation rules, monitor home systems, and optimize their smart home setup.
@@ -83,7 +83,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

@@ -1617,7 +1617,7 @@ fn provider_list() -> Vec<(&'static str, &'static str, &'static str, &'static st
         (
             "openrouter",
             "OPENROUTER_API_KEY",
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "elephant-alpha",
             "OpenRouter",
         ),
     ]
@@ -1659,6 +1659,26 @@ api_key_env = "{api_key_env}"
 
 [memory]
 decay_rate = 0.05
+
+# AINL MCP server (mcp_ainl_*): lets agents validate / compile / run .ainl
+# files via the AI Native Language toolchain. ArmaraOS will also auto-register
+# this server at boot if `ainl-mcp` (or `ainl mcp`) is on PATH, so this block
+# is mainly here as a discoverable, customizable seed. To install:
+#   pip install ainativelang[mcp]
+# To disable auto-registration:
+#   set ARMARAOS_DISABLE_DEFAULT_AINL_MCP=1 in your environment.
+# To override the command:
+#   set ARMARAOS_AINL_MCP_COMMAND="python -m ainl.mcp" (or similar).
+#
+# [[mcp_servers]]
+# name = "ainl"
+# timeout_secs = 30
+# env = ["AINL_MCP_PROFILE", "AINL_MCP_EXPOSURE_PROFILE", "AINL_CONFIG"]
+#
+# [mcp_servers.transport]
+# type = "stdio"
+# command = "ainl-mcp"
+# args = []
 "#
         );
         std::fs::write(&config_path, &default_config).unwrap_or_else(|e| {

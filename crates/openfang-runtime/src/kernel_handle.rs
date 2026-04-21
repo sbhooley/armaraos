@@ -299,6 +299,21 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Resolve the configured base URL for a given LLM provider.
+    ///
+    /// Looks up `[provider_urls]` from `config.toml` first, then the runtime model
+    /// catalog (updated by dashboard `set_provider_url` etc.). Returns `None` when
+    /// the provider is built-in / hardcoded with no override.
+    ///
+    /// Used by the **planner-mode autowire** in `agent_loop` to detect when an agent
+    /// targets the `ainl-inference-server` (so `ARMARA_NATIVE_INFER_URL` doesn't have
+    /// to be set by hand). Default impl returns `None` so non-kernel hosts (tests,
+    /// `ainl-runtime` embedders) behave identically to today.
+    fn lookup_provider_url(&self, provider: &str) -> Option<String> {
+        let _ = provider;
+        None
+    }
+
     /// Resolve an LLM driver via the host `LlmDriverFactory` (instrumented, LRU when shared).
     ///
     /// Used for rare fallback paths (OpenRouter free-tier, manifest `fallback_models`) so they

@@ -11,6 +11,7 @@ pub mod auto_reply;
 pub mod background;
 pub mod capabilities;
 pub mod config;
+mod config_toml_repair;
 pub mod config_reload;
 pub mod cron;
 pub mod embedded_ainl_programs;

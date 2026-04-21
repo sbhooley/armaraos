@@ -534,6 +534,57 @@ impl Default for TtsElevenLabsConfig {
     }
 }
 
+/// Local voice pipeline — whisper.cpp STT (e.g. `ggml-base.bin`) + Piper TTS (`.onnx`).
+///
+/// Configure in `config.toml` as `[local_voice]`. No cloud STT/TTS API keys are required
+/// for these paths. Binary paths must be absolute or resolvable on the host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalVoiceConfig {
+    /// Master switch: when true, [`Self::whisper_ready`] / [`Self::piper_ready`] may succeed.
+    pub enabled: bool,
+    /// When true (default), the daemon downloads Whisper/Piper assets into `~/.armaraos/voice/` on
+    /// first launch when paths are unset (no network in `cargo test` builds — see kernel bootstrap).
+    pub auto_download: bool,
+    /// Path to whisper.cpp `whisper-cli` (or `main`) executable.
+    pub whisper_cli: Option<PathBuf>,
+    /// Path to a Whisper GGML/GGUF model (recommended: `ggml-base.bin` for voice messages).
+    pub whisper_model: Option<PathBuf>,
+    /// Piper executable (e.g. `piper` release binary).
+    pub piper_binary: Option<PathBuf>,
+    /// Piper voice model path (e.g. `en_US-lessac-medium.onnx`).
+    pub piper_voice: Option<PathBuf>,
+}
+
+impl LocalVoiceConfig {
+    /// True when local Whisper STT can run (enabled + files exist).
+    pub fn whisper_ready(&self) -> bool {
+        self.enabled
+            && self.whisper_cli.as_ref().is_some_and(|p| p.is_file())
+            && self.whisper_model.as_ref().is_some_and(|p| p.is_file())
+    }
+
+    /// True when local Piper TTS can run (enabled + files exist).
+    pub fn piper_ready(&self) -> bool {
+        self.enabled
+            && self.piper_binary.as_ref().is_some_and(|p| p.is_file())
+            && self.piper_voice.as_ref().is_some_and(|p| p.is_file())
+    }
+}
+
+impl Default for LocalVoiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_download: true,
+            whisper_cli: None,
+            whisper_model: None,
+            piper_binary: None,
+            piper_voice: None,
+        }
+    }
+}
+
 /// Docker container sandbox configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1262,6 +1313,9 @@ pub struct KernelConfig {
     /// Adaptive eco policy (shadow recommendations by default). See [`crate::adaptive_eco::AdaptiveEcoConfig`].
     #[serde(default)]
     pub adaptive_eco: crate::adaptive_eco::AdaptiveEcoConfig,
+    /// Local Whisper.cpp + Piper TTS (`[local_voice]`) — optional, no cloud STT/TTS keys.
+    #[serde(default)]
+    pub local_voice: LocalVoiceConfig,
     /// Named agent pools sharing a manifest template (`[[agent_pools]]`).
     #[serde(default)]
     pub agent_pools: Vec<AgentPoolConfigEntry>,
@@ -1615,6 +1669,7 @@ impl Default for KernelConfig {
             llm: LlmConfig::default(),
             efficient_mode: default_efficient_mode(),
             adaptive_eco: crate::adaptive_eco::AdaptiveEcoConfig::default(),
+            local_voice: LocalVoiceConfig::default(),
             agent_pools: Vec::new(),
         }
     }
@@ -1826,7 +1881,7 @@ pub fn openfang_home_dir() -> PathBuf {
 
 /// Default OpenRouter model id for fresh installs (no `openrouter/` prefix; drivers add the provider).
 /// Kept in sync with desktop `apply_desktop_bundled_llm_defaults` and the model catalog.
-pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "nvidia/nemotron-3-super-120b-a12b:free";
+pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "elephant-alpha";
 
 /// OpenRouter `:free` models tried in order when the primary hits rate limit / overload after
 /// built-in retries. Entries equal to the **primary** `request.model` are skipped to avoid a

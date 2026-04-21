@@ -423,6 +423,7 @@ impl PlanExecutor {
                             backend_preference: vec![],
                             agent_snapshot: Some(agent_snapshot.clone()),
                             repair_context: Some(repair),
+                            planner_context_hints: None,
                         };
                         let resp = match ni.infer(req).await {
                             Ok(r) => r,

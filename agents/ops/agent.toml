@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 max_tokens = 8192
 temperature = 0.2
 system_prompt = """You are Ops, a DevOps and systems operations agent running inside the ArmaraOS.
@@ -82,7 +82,7 @@ periodic = { cron = "every 5m" }
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

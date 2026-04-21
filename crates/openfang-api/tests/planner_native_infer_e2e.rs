@@ -21,7 +21,8 @@ struct TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.state.kernel.shutdown();
+        let k = self.state.kernel.clone();
+        std::thread::spawn(move || k.shutdown());
     }
 }
 
@@ -46,7 +47,11 @@ async fn spawn_test_server_with_kernel(kernel: Arc<OpenFangKernel>, tmp: tempfil
     }
 }
 
-async fn start_test_server_for_planner_e2e() -> TestServer {
+/// `ollama_base_url`: when set, must be the OpenAI-compat base including `/v1` (e.g. `{wiremock}/v1`), as
+/// chat completions resolve to `{base}/chat/completions`. Needed when the legacy loop runs after native
+/// infer; otherwise `base_url: None` targets real Ollama (`localhost:11434/v1`) and CI machines without
+/// `test-model` fail.
+async fn start_test_server_for_planner_e2e(ollama_base_url: Option<String>) -> TestServer {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = KernelConfig {
         home_dir: tmp.path().to_path_buf(),
@@ -55,7 +60,7 @@ async fn start_test_server_for_planner_e2e() -> TestServer {
             provider: "ollama".into(),
             model: "test-model".into(),
             api_key_env: "OLLAMA_API_KEY".into(),
-            base_url: None,
+            base_url: ollama_base_url,
         },
         ..KernelConfig::default()
     };
@@ -235,7 +240,7 @@ async fn daemon_infer_plan_executor_emits_plan_started_trace() {
     let prev_infer = std::env::var("ARMARA_NATIVE_INFER_URL").ok();
     let prev_pm = std::env::var("ARMARA_PLANNER_MODE").ok();
 
-    let server = start_test_server_for_planner_e2e().await;
+    let server = start_test_server_for_planner_e2e(None).await;
     let home = server.state.kernel.config.home_dir.clone();
     std::env::set_var("ARMARAOS_HOME", home.as_os_str());
     std::env::set_var("ARMARA_NATIVE_INFER_URL", mock.uri());
@@ -340,7 +345,7 @@ async fn daemon_infer_plan_executor_runs_file_read_step_and_emits_plan_step_even
     let prev_infer = std::env::var("ARMARA_NATIVE_INFER_URL").ok();
     let prev_pm = std::env::var("ARMARA_PLANNER_MODE").ok();
 
-    let server = start_test_server_for_planner_e2e().await;
+    let server = start_test_server_for_planner_e2e(None).await;
     let home = server.state.kernel.config.home_dir.clone();
     std::env::set_var("ARMARAOS_HOME", home.as_os_str());
     std::env::set_var("ARMARA_NATIVE_INFER_URL", mock.uri());
@@ -501,10 +506,14 @@ async fn daemon_validation_failed_falls_back_to_legacy_and_emits_plan_fallback_t
     let prev_infer = std::env::var("ARMARA_NATIVE_INFER_URL").ok();
     let prev_pm = std::env::var("ARMARA_PLANNER_MODE").ok();
 
-    let server = start_test_server_for_planner_e2e().await;
+    // OpenAI-compatible chat URL is `{base_url}/chat/completions`; ollama defaults use
+    // `.../v1` as base (see `OLLAMA_BASE_URL`). Wiremock mounts `POST /v1/chat/completions`.
+    let origin = mock.uri().as_str().trim_end_matches('/').to_string();
+    let ollama_openai_base = format!("{origin}/v1");
+    let server = start_test_server_for_planner_e2e(Some(ollama_openai_base)).await;
     let home = server.state.kernel.config.home_dir.clone();
     std::env::set_var("ARMARAOS_HOME", home.as_os_str());
-    std::env::set_var("ARMARA_NATIVE_INFER_URL", mock.uri());
+    std::env::set_var("ARMARA_NATIVE_INFER_URL", &origin);
     std::env::set_var("ARMARA_PLANNER_MODE", "1");
 
     let client = reqwest::Client::new();

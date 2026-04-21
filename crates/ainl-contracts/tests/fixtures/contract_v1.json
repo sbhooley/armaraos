@@ -1,0 +1,18 @@
+{
+  "RepoIntelCapabilityProfile": {
+    "schema_version": 1,
+    "state": "ready",
+    "classes_present": ["query", "impact"],
+    "note": null
+  },
+  "ContextFreshness": "unknown",
+  "RecommendedNextTools": {
+    "schema_version": 1,
+    "steps": [
+      {"tool": "ainl_validate", "reason": "Strict check after edits"},
+      {"tool": "ainl_compile", "reason": "IR before diff/impact"},
+      {"tool": "ainl_ir_diff", "reason": "Blast radius vs prior IR when available"},
+      {"tool": "ainl_run", "reason": "Execute only after validation + impact awareness"}
+    ]
+  }
+}

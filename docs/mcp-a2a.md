@@ -127,6 +127,17 @@ When the kernel starts (`start_background_agents()`), it checks `config.mcp_serv
 
 After connection, the kernel logs the total number of MCP tools available.
 
+#### Repo intelligence MCP (GitNexus-class)
+
+ArmaraOS classifies connected MCP `tools/list` entries with **`ainl-repo-intel`** (see workspace crates `ainl-contracts`, `ainl-repo-intel`). **`GET /api/mcp/servers`** includes:
+
+- **`readiness.checks.repo_intelligence`** — ready when hybrid **query** + **impact**-style tools are detected (see `openfang-runtime::mcp_readiness::CHECK_ID_REPO_INTELLIGENCE`).
+- **`repo_intelligence.workspace_profile`** — aggregate `RepoIntelCapabilityProfile` JSON (`crates/ainl-contracts`).
+- Per connected server: **`repo_intelligence_profile`** and per-tool **`repo_intelligence_like`** flags.
+- **`ainl_policy`** — workspace snapshot from **`ainl-context-freshness`** + **`ainl-impact-policy`**: `context_freshness`, `repo_intelligence_ready`, strict/balanced **`impact_decision`**, and **`recommended_next_tools`** (golden chain). Default host-local freshness stays **`unknown`** until index/git signals exist.
+
+**Example preset (stdio):** run GitNexus MCP after indexing — `npx -y gitnexus@latest mcp` (see upstream GitNexus docs). Policy boundaries: **`docs/POLICY_BOUNDARIES.md`**.
+
 #### Tool Discovery and Listing
 
 MCP tools are merged into the agent's available tool set via `available_tools()`:
@@ -531,11 +542,19 @@ args = ["-y", "@modelcontextprotocol/server-postgres"]
       "caldav_like_server_connected": false
     },
     "missing_reason": "No connected MCP server exposed calendar/event tools. …"
+  },
+  "repo_intelligence": { "schema_version": 1, "workspace_profile": {} },
+  "ainl_policy": {
+    "context_freshness": "unknown",
+    "repo_intelligence_ready": false,
+    "impact_decision_strict": "require_impact_first",
+    "impact_decision_balanced": "allow_execute",
+    "recommended_next_tools": { "schema_version": 1, "steps": [] }
   }
 }
 ```
 
-Per-tool rows may include `readiness` maps (e.g. `{ "calendar": true }`) when a tool matches a check; `calendar_like` remains for backward compatibility.
+Per-tool rows may include `readiness` maps (e.g. `{ "calendar": true }`) when a tool matches a check; `calendar_like` remains for backward compatibility. **`ainl_policy`** is derived entirely from portable `ainl-*` crates (see `docs/POLICY_BOUNDARIES.md`).
 
 ---
 

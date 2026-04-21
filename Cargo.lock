@@ -106,6 +106,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-context-freshness"
+version = "0.1.0"
+dependencies = [
+ "ainl-contracts",
+]
+
+[[package]]
+name = "ainl-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ainl-graph-extractor"
 version = "0.1.6"
 dependencies = [
@@ -116,6 +131,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "ainl-impact-policy"
+version = "0.1.0"
+dependencies = [
+ "ainl-contracts",
 ]
 
 [[package]]
@@ -139,6 +161,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "ainl-repo-intel"
+version = "0.1.0"
+dependencies = [
+ "ainl-contracts",
+ "serde",
 ]
 
 [[package]]
@@ -4507,6 +4537,7 @@ dependencies = [
 name = "openfang-api"
 version = "0.7.5"
 dependencies = [
+ "ainl-contracts",
  "ainl-memory",
  "argon2",
  "async-trait",
@@ -4795,9 +4826,13 @@ version = "0.7.5"
 dependencies = [
  "ainl-agent-snapshot",
  "ainl-compression",
+ "ainl-context-freshness",
+ "ainl-contracts",
  "ainl-graph-extractor",
+ "ainl-impact-policy",
  "ainl-memory",
  "ainl-persona",
+ "ainl-repo-intel",
  "ainl-runtime",
  "ainl-semantic-tagger",
  "anyhow",
@@ -4809,6 +4844,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "dirs 6.0.0",
+ "flate2",
  "futures",
  "hex",
  "http",
@@ -4828,6 +4864,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shlex",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

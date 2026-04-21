@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 max_tokens = 4096
 temperature = 0.2
 system_prompt = """You are DevOps Lead, a platform engineering expert running inside the ArmaraOS.
@@ -71,7 +71,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

@@ -27,7 +27,7 @@ function validateManifestToml(toml) {
 }
 
 var SPAWN_DEFAULT_PROVIDER = 'openrouter';
-var SPAWN_DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+var SPAWN_DEFAULT_MODEL = 'elephant-alpha';
 
 function spawnModelFromManifestToml(toml) {
   var provider = '?';
@@ -50,7 +50,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'full',
       system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.',
-      manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
+      manifest_toml: 'name = "Armara"\ndescription = "Personal assistant powered by AI Native Language — everyday tasks, answers, web search, building, and more."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.\n"""'
     },
     {
       name: 'Code Helper',
@@ -60,7 +60,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'coding',
       system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.',
-      manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
+      manifest_toml: 'name = "Code Helper"\ndescription = "A programming-focused agent that writes, reviews, and debugs code across multiple languages."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.\n"""'
     },
     {
       name: 'Researcher',
@@ -70,7 +70,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'research',
       system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.',
-      manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
+      manifest_toml: 'name = "Researcher"\ndescription = "An analytical agent that breaks down complex topics, synthesizes information, and provides cited summaries."\nmodule = "builtin:chat"\nprofile = "research"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.\n"""'
     },
     {
       name: 'Writer',
@@ -80,7 +80,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'full',
       system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.',
-      manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
+      manifest_toml: 'name = "Writer"\ndescription = "A creative writing agent that helps with drafting, editing, and improving written content of all kinds."\nmodule = "builtin:chat"\nprofile = "full"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.\n"""'
     },
     {
       name: 'Data Analyst',
@@ -90,7 +90,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'coding',
       system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.',
-      manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
+      manifest_toml: 'name = "Data Analyst"\ndescription = "A data-focused agent that helps analyze datasets, create queries, and interpret statistical results."\nmodule = "builtin:chat"\nprofile = "coding"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.\n"""'
     },
     {
       name: 'DevOps Engineer',
@@ -100,7 +100,7 @@ function staticChatBuiltinTemplates() {
       model: SPAWN_DEFAULT_MODEL,
       profile: 'automation',
       system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.',
-      manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "openrouter"\nmodel = "nvidia/nemotron-3-super-120b-a12b:free"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
+      manifest_toml: 'name = "DevOps Engineer"\ndescription = "A systems-focused agent for CI/CD, infrastructure, Docker, and deployment troubleshooting."\nmodule = "builtin:chat"\nprofile = "automation"\n\n[model]\nprovider = "openrouter"\nmodel = "elephant-alpha"\nsystem_prompt = """\nYou are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.\n"""'
     }
   ];
 }
@@ -419,7 +419,8 @@ function agentsPage() {
         archetype: this.normalizeArchetypeForUi(idn.archetype),
         vibe: idn.vibe || '',
         max_iterations: (agent && agent.max_iterations) || null,
-        ainl_runtime_engine: (agent && agent.ainl_runtime_engine) === true
+        ainl_runtime_engine: (agent && agent.ainl_runtime_engine) === true,
+        native_planner_enabled: (agent && agent.native_planner_enabled) === true
       };
       this.fullManifestToml = '';
       this.toolFilters = { tool_allowlist: [], tool_blocklist: [] };
@@ -440,7 +441,8 @@ function agentsPage() {
         profile: full.profile,
         identity: full.identity,
         system_prompt: full.system_prompt,
-        ainl_runtime_engine: full.ainl_runtime_engine === true
+        ainl_runtime_engine: full.ainl_runtime_engine === true,
+        native_planner_enabled: full.native_planner_enabled === true
       });
       this.detailAgent._fallbacks = full.fallback_models || [];
       this.detailAgent.turn_stats = full.turn_stats || null;
@@ -453,7 +455,8 @@ function agentsPage() {
         archetype: this.normalizeArchetypeForUi(idn.archetype),
         vibe: idn.vibe || '',
         max_iterations: full.max_iterations != null ? full.max_iterations : null,
-        ainl_runtime_engine: full.ainl_runtime_engine === true
+        ainl_runtime_engine: full.ainl_runtime_engine === true,
+        native_planner_enabled: full.native_planner_enabled === true
       };
       this.toolFilters = {
         tool_allowlist: (full.tool_allowlist || []).slice(),

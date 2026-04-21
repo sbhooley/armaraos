@@ -618,6 +618,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+**Note:** Full `cargo test --workspace` can take **15 minutes or more**. Integration tests avoid requiring a local LLM where possible; expectations for mocked HTTP and env vars are described in [`docs/development-testing.md`](docs/development-testing.md).
+
 ---
 
 ## Stability Notice

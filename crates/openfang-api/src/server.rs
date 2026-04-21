@@ -723,7 +723,7 @@ pub async fn build_router(
         )
         .route(
             "/api/models/custom/{*id}",
-            axum::routing::delete(routes::remove_custom_model),
+            axum::routing::delete(routes::remove_custom_model).put(routes::update_custom_model),
         )
         .route("/api/models/{*id}", axum::routing::get(routes::get_model))
         .route("/api/providers", axum::routing::get(routes::list_providers))

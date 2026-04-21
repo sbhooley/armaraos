@@ -21,6 +21,10 @@ members = [
     "crates/ainl-semantic-tagger",
     "crates/ainl-runtime",
     "crates/ainl-agent-snapshot",
+    "crates/ainl-contracts",
+    "crates/ainl-repo-intel",
+    "crates/ainl-context-freshness",
+    "crates/ainl-impact-policy",
     "xtask",
 ]
 

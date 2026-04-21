@@ -13,6 +13,11 @@ use tracing::info;
 /// Re-export for CLI and diagnostics (increment in `openfang-types` when migrations change).
 pub use openfang_types::config::CONFIG_SCHEMA_VERSION;
 
+/// Fix invalid TOML from older AINL MCP merges (orphan lines after `env = [ ... ]`).
+pub fn repair_config_toml_stale_mcp_env(raw: &str) -> String {
+    crate::config_toml_repair::repair_stale_mcp_env_continuations(raw)
+}
+
 /// Maximum include nesting depth.
 const MAX_INCLUDE_DEPTH: u32 = 10;
 
@@ -27,7 +32,29 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
 
     if config_path.exists() {
         match std::fs::read_to_string(&config_path) {
-            Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
+            Ok(contents) => {
+                let repaired = crate::config_toml_repair::repair_stale_mcp_env_continuations(&contents);
+                let to_parse = if repaired != contents {
+                    match atomic_write(&config_path, &repaired) {
+                        Ok(()) => {
+                            info!(
+                                path = %config_path.display(),
+                                "Repaired stale MCP env array fragments in config.toml (invalid TOML from older AINL bootstrap)"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                path = %config_path.display(),
+                                "Could not persist repaired config.toml; continuing with in-memory repair"
+                            );
+                        }
+                    }
+                    repaired
+                } else {
+                    contents
+                };
+                match toml::from_str::<toml::Value>(&to_parse) {
                 Ok(mut root_value) => {
                     // Process includes before deserializing
                     let config_dir = config_path
@@ -96,7 +123,8 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
                         "Failed to parse config, using defaults"
                     );
                 }
-            },
+                }
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,

@@ -1,0 +1,11 @@
+[package]
+name = "ainl-contracts"
+description = "Shared policy contracts for repo intelligence, context freshness, and impact-first tooling (no OpenFang deps)"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

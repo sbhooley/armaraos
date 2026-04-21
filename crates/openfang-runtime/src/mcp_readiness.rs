@@ -1,9 +1,11 @@
 //! MCP / tool **readiness** evaluation — shared by API, doctor, UI, and agent loop.
 //!
-//! Keeps matching heuristics out of `openfang-api` so the contract can move to a shared
-//! `ainl-*` crate later without dragging HTTP types.
+//! Calendar heuristics remain local; **repo intelligence** classification is delegated to
+//! [`ainl_repo_intel`] so ArmaraOS stays aligned with `ainl-contracts`.
 
 use crate::mcp::McpConnection;
+use ainl_contracts::{ContextFreshness, RepoIntelCapabilityState};
+use ainl_repo_intel::{self, McpToolRow};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,6 +14,9 @@ pub const READINESS_SCHEMA_VERSION: u32 = 1;
 
 /// Stable id for the calendar/events integration check.
 pub const CHECK_ID_CALENDAR: &str = "calendar";
+
+/// Stable id for GitNexus-class repo intelligence tools (see `ainl-repo-intel`).
+pub const CHECK_ID_REPO_INTELLIGENCE: &str = ainl_repo_intel::CHECK_ID_REPO_INTELLIGENCE;
 
 /// One discovered MCP tool (namespaced name + description as seen by the runtime).
 #[derive(Debug, Clone)]
@@ -110,6 +115,11 @@ pub fn evaluate_from_snapshots(snapshots: &[McpToolSnapshot]) -> EvaluatedMcpRea
     report
         .checks
         .insert(CHECK_ID_CALENDAR.to_string(), cal.result.clone());
+
+    let ri = evaluate_repo_intelligence_check(snapshots, &mut tool_flags);
+    report
+        .checks
+        .insert(CHECK_ID_REPO_INTELLIGENCE.to_string(), ri.result);
 
     let calendar_alias = CalendarReadinessAlias {
         ready: cal.result.ready,
@@ -211,6 +221,100 @@ fn evaluate_calendar_check(
     }
 }
 
+struct RepoIntelEval {
+    result: ReadinessCheckResult,
+}
+
+fn evaluate_repo_intelligence_check(
+    snapshots: &[McpToolSnapshot],
+    tool_flags: &mut [(McpToolSnapshot, ToolReadinessFlags)],
+) -> RepoIntelEval {
+    let rows: Vec<McpToolRow> = snapshots
+        .iter()
+        .map(|s| McpToolRow {
+            server_name: s.server_name.clone(),
+            tool_name: s.tool_name.clone(),
+            description: s.description.clone(),
+        })
+        .collect();
+    let profile = ainl_repo_intel::classify_inventory(&rows);
+
+    let mut matched_servers: BTreeSet<String> = BTreeSet::new();
+    let mut matched_tools: BTreeSet<String> = BTreeSet::new();
+    for snap in snapshots {
+        if tool_matches_repo_intelligence(snap) {
+            matched_servers.insert(snap.server_name.clone());
+            matched_tools.insert(snap.tool_name.clone());
+        }
+    }
+    for (snap, flags) in tool_flags.iter_mut() {
+        if tool_matches_repo_intelligence(snap) {
+            flags.check_ids.insert(CHECK_ID_REPO_INTELLIGENCE.to_string());
+        }
+    }
+
+    let mut ms: Vec<String> = matched_servers.into_iter().collect();
+    ms.sort();
+    let mut mt: Vec<String> = matched_tools.into_iter().collect();
+    mt.sort();
+
+    let ready = matches!(profile.state, RepoIntelCapabilityState::Ready);
+    let severity = if ready {
+        "ok"
+    } else {
+        match profile.state {
+            RepoIntelCapabilityState::Degraded => "warn",
+            RepoIntelCapabilityState::Absent => "warn",
+            RepoIntelCapabilityState::Ready => "ok",
+        }
+    };
+
+    let default_missing = "No repo-intelligence MCP tools detected (hybrid query, symbol context, impact/blast radius). Connect a GitNexus-class MCP server or index your repo locally.";
+    let missing_reason = if ready {
+        None
+    } else {
+        Some(profile.note.clone().unwrap_or_else(|| default_missing.to_string()))
+    };
+
+    let remediation = if ready {
+        String::new()
+    } else {
+        "Add an MCP server that exposes codebase analysis tools (e.g. `npx -y gitnexus@latest mcp`), run `gitnexus analyze` in the repo, then reload MCP integrations. See docs/mcp-a2a.md (Repo intelligence MCP).".to_string()
+    };
+
+    RepoIntelEval {
+        result: ReadinessCheckResult {
+            id: CHECK_ID_REPO_INTELLIGENCE.to_string(),
+            label: Some("Repo intelligence".to_string()),
+            ready,
+            severity,
+            missing_reason,
+            matched_servers: ms,
+            matched_tools: mt,
+            provider_hints: CalendarProviderHints {
+                google_like_server_connected: false,
+                apple_like_server_connected: false,
+                caldav_like_server_connected: false,
+            },
+            remediation,
+        },
+    }
+}
+
+#[inline]
+fn tool_matches_repo_intelligence(s: &McpToolSnapshot) -> bool {
+    use ainl_contracts::RepoIntelToolClass;
+    [
+        RepoIntelToolClass::Query,
+        RepoIntelToolClass::Context,
+        RepoIntelToolClass::Impact,
+        RepoIntelToolClass::DetectChanges,
+        RepoIntelToolClass::Cypher,
+    ]
+    .into_iter()
+    .any(|c| ainl_repo_intel::tool_class_matches(&s.tool_name, &s.description, c))
+}
+
 /// Output of [`evaluate_from_connections`] / [`evaluate_from_snapshots`].
 pub struct EvaluatedMcpReadiness {
     pub report: ReadinessReport,
@@ -230,6 +334,9 @@ pub fn flags_for_tool(server_name: &str, tool_name: &str, description: &str) -> 
     let mut f = ToolReadinessFlags::default();
     if tool_matches_calendar(&snap) {
         f.check_ids.insert(CHECK_ID_CALENDAR.to_string());
+    }
+    if tool_matches_repo_intelligence(&snap) {
+        f.check_ids.insert(CHECK_ID_REPO_INTELLIGENCE.to_string());
     }
     f
 }
@@ -290,6 +397,26 @@ pub fn format_prompt_appendix(report: &ReadinessReport, max_chars: usize) -> Str
     out
 }
 
+/// Telemetry hints for [`armara_provider_api::InferRequest::planner_context_hints`], aligned with
+/// `tooling/ainl_policy_contract.json` / `ainl-contracts`.
+#[must_use]
+pub fn planner_context_hints_from_connections(
+    connections: &[McpConnection],
+) -> armara_provider_api::PlannerContextHints {
+    let view = crate::ainl_policy::workspace_policy_view(connections);
+    let cf = match view.context_freshness {
+        ContextFreshness::Fresh => "fresh",
+        ContextFreshness::Stale => "stale",
+        ContextFreshness::Unknown => "unknown",
+    };
+    armara_provider_api::PlannerContextHints {
+        repo_intelligence_mcp_ready: Some(view.repo_intelligence_ready),
+        context_freshness: Some(cf.to_string()),
+        freshness_known_at_plan_time: Some(false),
+        impact_considered_before_execute: None,
+    }
+}
+
 /// Digest for deduplicating graph-memory facts / kernel memory (stable JSON).
 #[must_use]
 pub fn readiness_digest_json(report: &ReadinessReport) -> serde_json::Value {
@@ -319,5 +446,37 @@ mod tests {
         let ev = evaluate_from_snapshots(&[]);
         assert!(!ev.report.checks[CHECK_ID_CALENDAR].ready);
         assert!(!ev.calendar_readiness.missing_reason.is_null());
+    }
+
+    #[test]
+    fn repo_intelligence_ready_with_query_and_impact() {
+        let snaps = vec![
+            McpToolSnapshot {
+                server_name: "gitnexus".into(),
+                tool_name: "mcp_gitnexus_query".into(),
+                description: "hybrid bm25 search".into(),
+            },
+            McpToolSnapshot {
+                server_name: "gitnexus".into(),
+                tool_name: "mcp_gitnexus_impact".into(),
+                description: "blast radius".into(),
+            },
+        ];
+        let ev = evaluate_from_snapshots(&snaps);
+        let ri = ev.report.checks.get(CHECK_ID_REPO_INTELLIGENCE).expect("ri check");
+        assert!(ri.ready);
+        assert_eq!(ri.id, CHECK_ID_REPO_INTELLIGENCE);
+    }
+
+    #[test]
+    fn planner_context_hints_match_workspace_policy() {
+        let hints = planner_context_hints_from_connections(&[]);
+        let view = crate::ainl_policy::workspace_policy_view(&[]);
+        assert_eq!(
+            hints.repo_intelligence_mcp_ready,
+            Some(view.repo_intelligence_ready)
+        );
+        assert_eq!(hints.context_freshness.as_deref(), Some("unknown"));
+        assert_eq!(hints.freshness_known_at_plan_time, Some(false));
     }
 }

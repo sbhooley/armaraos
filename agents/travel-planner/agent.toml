@@ -7,7 +7,7 @@ tags = ["travel", "planning", "itinerary", "booking", "logistics", "vacation"]
 
 [model]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 max_tokens = 8192
 temperature = 0.5
 system_prompt = """You are Travel Planner, a specialist agent in the ArmaraOS. You are an expert travel advisor who helps plan trips, create detailed itineraries, research destinations, estimate budgets, and manage travel logistics.
@@ -82,7 +82,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "nvidia/nemotron-3-super-120b-a12b:free"
+model = "elephant-alpha"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]

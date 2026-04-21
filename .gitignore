@@ -35,6 +35,9 @@ BUILD_LOG.md
 # Accidental copy of programs/ under kernel (build uses repo-root programs/)
 crates/openfang-kernel/embedded_programs_bundle/
 
+# Local desktop DMG outputs (dev builds; releases attach artifacts separately)
+crates/openfang-desktop/**/*.dmg
+
 # Bundled AINL wheel (added by packaging pipeline)
 crates/openfang-desktop/resources/ainl/*.whl
 # Portable Python trees from `xtask bundle-portable-python` (release CI); keep resources/python/README.md

@@ -17,7 +17,10 @@ struct TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.state.kernel.shutdown();
+        // Never block the Tokio test worker: `join()` triggers the same panic as synchronous
+        // `shutdown()` (blocking pool teardown while inside an async task). Detached thread only.
+        let k = self.state.kernel.clone();
+        std::thread::spawn(move || k.shutdown());
     }
 }
 

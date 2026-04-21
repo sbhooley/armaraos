@@ -21,7 +21,10 @@ use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::{CompletionRequest, DriverConfig, LlmDriver, LlmError, StreamEvent};
 use crate::plan_executor::{PlanEpisodeRecorder, PlanExecutionTrace, PlanExecutor, PlanStepDispatch};
-use crate::planner_mode::{native_infer_base_url, resolve_planner_mode};
+use crate::planner_mode::{
+    effective_native_infer_base_url, native_infer_base_url, provider_is_ainl_inference_server,
+    resolve_planner_mode,
+};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -170,11 +173,16 @@ async fn append_mcp_readiness_context(
     };
     let guard = mcp_mtx.lock().await;
     let ev = crate::mcp_readiness::evaluate_from_connections(&guard);
+    let policy_hint = crate::ainl_policy::format_workspace_policy_user_hint(&guard);
     drop(guard);
     let appendix = crate::mcp_readiness::format_prompt_appendix(&ev.report, 1200);
     if !appendix.is_empty() {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&appendix);
+    }
+    if !policy_hint.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&policy_hint);
     }
     let digest = crate::mcp_readiness::readiness_digest_json(&ev.report);
     let digest_str = digest.to_string();
@@ -1249,11 +1257,55 @@ pub async fn run_agent_loop(
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
-    let planner_mode_on =
-        resolve_planner_mode(&manifest.metadata, &manifest.model.model, planner_model_tier);
-    let native_infer_url = native_infer_base_url();
+    // Autowire: when the agent's configured provider IS the AINL inference server
+    // (by canonical name OR by URL on the inference server's default port / native
+    // path), derive the planner endpoint directly from `[provider_urls]` so the
+    // operator doesn't have to set `ARMARA_NATIVE_INFER_URL` by hand. Env override
+    // still wins via `effective_native_infer_base_url`.
+    let provider_name = manifest.model.provider.as_str();
+    let provider_url = kernel
+        .as_ref()
+        .and_then(|k| k.lookup_provider_url(provider_name));
+    let provider_is_inference_server =
+        provider_is_ainl_inference_server(provider_name, provider_url.as_deref());
+    let native_infer_url = effective_native_infer_base_url(provider_name, provider_url.as_deref());
+    let env_native_infer_url = native_infer_base_url();
+    let planner_mode_on = resolve_planner_mode(
+        &manifest.metadata,
+        &manifest.model.model,
+        planner_model_tier,
+        provider_is_inference_server,
+    );
     let planner_path_eligible =
         planner_mode_on && native_infer_url.is_some() && graph_memory.is_some();
+
+    // High-visibility per-turn log so it's possible to see *exactly* why the
+    // GraphPatch planner path is or isn't firing without grepping source.
+    // All four eligibility fields are needed; if any is false, the legacy
+    // CompletionRequest tool loop runs and the model has to free-form reason
+    // over text instead of emitting a typed DeterministicPlan.
+    let planner_native_infer_url_source = if env_native_infer_url.is_some() {
+        "ARMARA_NATIVE_INFER_URL env"
+    } else if native_infer_url.is_some() {
+        "autowired from provider URL"
+    } else {
+        "none"
+    };
+    info!(
+        target: "armaraos::planner_eligibility",
+        agent = %agent_id_str,
+        model = %manifest.model.model,
+        provider = %manifest.model.provider,
+        provider_url = provider_url.as_deref().unwrap_or(""),
+        provider_is_inference_server,
+        planner_mode_on,
+        native_infer_url_present = native_infer_url.is_some(),
+        native_infer_url = native_infer_url.as_deref().unwrap_or(""),
+        native_infer_url_source = planner_native_infer_url_source,
+        graph_memory_present = graph_memory.is_some(),
+        eligible = planner_path_eligible,
+        "planner eligibility resolved (eligible=true ⇒ /armara/v1/infer + AgentSnapshot + PlanExecutor; eligible=false ⇒ legacy /v1/chat/completions tool loop)"
+    );
 
     let mut suppress_persona_for_planner = false;
     if planner_path_eligible {
@@ -1527,6 +1579,13 @@ pub async fn run_agent_loop(
     // Counts consecutive iterations where every tool call was blocked by the loop guard.
     // Used to exit early when the model is clearly stuck calling the same blocked tools.
     let mut consecutive_all_blocked: u32 = 0;
+    // Counts consecutive iterations where the LLM returned an empty response with
+    // input_tokens=0 / output_tokens=0 — i.e. the upstream backend is dead or refusing.
+    // Without this guard, the existing "one-shot retry" branch fires every iteration
+    // (because `is_silent_failure` is true on every backend connection failure) and
+    // burns through max_iterations adding "[no response]" / "Please provide your response."
+    // pairs to history, masking the real error from the user.
+    let mut consecutive_silent_failures: u32 = 0;
     let mut tool_error_tracker = ToolErrorTracker::new();
     // Tracks the names of all tools called since the last EndTurn response, so process
     // phantom detection can tell whether the model claimed to start/stop a process without
@@ -1750,6 +1809,12 @@ pub async fn run_agent_loop(
                             input_schema: Some(t.input_schema.clone()),
                         })
                         .collect();
+                    let planner_hints = if let Some(mcp_mtx) = mcp_connections {
+                        let guard = mcp_mtx.lock().await;
+                        crate::mcp_readiness::planner_context_hints_from_connections(guard.as_slice())
+                    } else {
+                        armara_provider_api::PlannerContextHints::default()
+                    };
                     let infer_req = InferRequest {
                         request_id: Uuid::new_v4(),
                         tenant_id: None,
@@ -1780,6 +1845,7 @@ pub async fn run_agent_loop(
                         backend_preference: vec![],
                         agent_snapshot: Some(agent_snapshot.clone()),
                         repair_context: None,
+                        planner_context_hints: Some(planner_hints),
                     };
                     let http = reqwest::Client::builder()
                         .user_agent(crate::USER_AGENT)
@@ -2138,12 +2204,65 @@ pub async fn run_agent_loop(
                     let is_silent_failure =
                         response.usage.input_tokens == 0 && response.usage.output_tokens == 0;
                     if iteration == 0 || is_silent_failure {
+                        // Bail out fast if the upstream backend keeps returning empty
+                        // responses — otherwise this branch loops forever (each iteration
+                        // appends "[no response]" + "Please provide your response." to
+                        // `messages`, eventually hitting max_iterations).
+                        if is_silent_failure {
+                            consecutive_silent_failures += 1;
+                        }
+                        const SILENT_FAILURE_BAILOUT: u32 = 3;
+                        if consecutive_silent_failures >= SILENT_FAILURE_BAILOUT {
+                            warn!(
+                                agent = %manifest.name,
+                                iteration,
+                                consecutive_silent_failures,
+                                "Backend returned empty responses repeatedly — aborting agent loop"
+                            );
+                            let err_text = "[The inference backend returned empty responses repeatedly. \
+                                The model server (e.g. llama-server, OpenRouter, or the AINL inference server's upstream) \
+                                is likely unreachable or out of credits. Check the daemon logs and `/status`.]"
+                                .to_string();
+                            session.messages.push(Message::assistant(err_text.clone()));
+                            if let Err(e) = memory.save_session_async(session).await {
+                                warn!("Failed to save session after silent-failure bailout: {e}");
+                            }
+                            return Ok(AgentLoopResult {
+                                response: err_text,
+                                total_usage,
+                                iterations: iteration + 1,
+                                cost_usd: None,
+                                silent: false,
+                                directives: Default::default(),
+                                latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                                llm_fallback_note: llm_fallback_note.clone(),
+                                compression_savings_pct,
+                                compressed_input: compressed_input.clone(),
+                                compression_semantic_score,
+                                adaptive_confidence,
+                                eco_counterfactual,
+                                adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                                adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                                adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
+                                ainl_runtime_telemetry: {
+                                    #[cfg(feature = "ainl-runtime-engine")]
+                                    {
+                                        ainl_prelude_telemetry.clone()
+                                    }
+                                    #[cfg(not(feature = "ainl-runtime-engine"))]
+                                    {
+                                        None
+                                    }
+                                },
+                            });
+                        }
                         warn!(
                             agent = %manifest.name,
                             iteration,
                             input_tokens = response.usage.input_tokens,
                             output_tokens = response.usage.output_tokens,
                             silent_failure = is_silent_failure,
+                            consecutive_silent_failures,
                             "Empty response, retrying once"
                         );
                         // Re-validate messages before retry — the history may have
@@ -2155,6 +2274,9 @@ pub async fn run_agent_loop(
                         messages.push(Message::user("Please provide your response.".to_string()));
                         continue;
                     }
+                } else {
+                    // Non-empty / has content / has tool calls — reset the silent-failure streak.
+                    consecutive_silent_failures = 0;
                 }
 
                 // Guard against empty response — covers both iteration 0 and post-tool cycles
@@ -3905,6 +4027,13 @@ pub async fn run_agent_loop_streaming(
     // Counts consecutive iterations where every tool call was blocked by the loop guard.
     // Used to exit early when the model is clearly stuck calling the same blocked tools.
     let mut consecutive_all_blocked: u32 = 0;
+    // Counts consecutive iterations where the LLM returned an empty response with
+    // input_tokens=0 / output_tokens=0 — i.e. the upstream backend is dead or refusing.
+    // Without this guard, the existing "one-shot retry" branch fires every iteration
+    // (because `is_silent_failure` is true on every backend connection failure) and
+    // burns through max_iterations adding "[no response]" / "Please provide your response."
+    // pairs to history, masking the real error from the user.
+    let mut consecutive_silent_failures: u32 = 0;
     let mut tool_error_tracker = ToolErrorTracker::new();
     // Tracks the names of all tools called since the last EndTurn response, so process
     // phantom detection can tell whether the model claimed to start/stop a process without
@@ -4214,12 +4343,61 @@ pub async fn run_agent_loop_streaming(
                     let is_silent_failure =
                         response.usage.input_tokens == 0 && response.usage.output_tokens == 0;
                     if iteration == 0 || is_silent_failure {
+                        if is_silent_failure {
+                            consecutive_silent_failures += 1;
+                        }
+                        const SILENT_FAILURE_BAILOUT: u32 = 3;
+                        if consecutive_silent_failures >= SILENT_FAILURE_BAILOUT {
+                            warn!(
+                                agent = %manifest.name,
+                                iteration,
+                                consecutive_silent_failures,
+                                "Backend returned empty responses repeatedly (streaming) — aborting agent loop"
+                            );
+                            let err_text = "[The inference backend returned empty responses repeatedly. \
+                                The model server (e.g. llama-server, OpenRouter, or the AINL inference server's upstream) \
+                                is likely unreachable or out of credits. Check the daemon logs and `/status`.]"
+                                .to_string();
+                            session.messages.push(Message::assistant(err_text.clone()));
+                            if let Err(e) = memory.save_session_async(session).await {
+                                warn!("Failed to save session after silent-failure bailout (streaming): {e}");
+                            }
+                            return Ok(AgentLoopResult {
+                                response: err_text,
+                                total_usage,
+                                iterations: iteration + 1,
+                                cost_usd: None,
+                                silent: false,
+                                directives: Default::default(),
+                                latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
+                                llm_fallback_note: llm_fallback_note.clone(),
+                                compression_savings_pct,
+                                compressed_input: compressed_input.clone(),
+                                compression_semantic_score,
+                                adaptive_confidence,
+                                eco_counterfactual,
+                                adaptive_eco_effective_mode: adaptive_eco_effective_mode.clone(),
+                                adaptive_eco_recommended_mode: adaptive_eco_recommended_mode.clone(),
+                                adaptive_eco_reason_codes: adaptive_eco_reason_codes.clone(),
+                                ainl_runtime_telemetry: {
+                                    #[cfg(feature = "ainl-runtime-engine")]
+                                    {
+                                        ainl_prelude_telemetry.clone()
+                                    }
+                                    #[cfg(not(feature = "ainl-runtime-engine"))]
+                                    {
+                                        None
+                                    }
+                                },
+                            });
+                        }
                         warn!(
                             agent = %manifest.name,
                             iteration,
                             input_tokens = response.usage.input_tokens,
                             output_tokens = response.usage.output_tokens,
                             silent_failure = is_silent_failure,
+                            consecutive_silent_failures,
                             "Empty response (streaming), retrying once"
                         );
                         // Re-validate messages before retry — the history may have
@@ -4231,6 +4409,8 @@ pub async fn run_agent_loop_streaming(
                         messages.push(Message::user("Please provide your response.".to_string()));
                         continue;
                     }
+                } else {
+                    consecutive_silent_failures = 0;
                 }
 
                 // Guard against empty response — covers both iteration 0 and post-tool cycles

@@ -19,6 +19,10 @@ openfang-skills = { path = "../openfang-skills" }
 ainl-compression = { path = "../ainl-compression", version = "0.1.0-alpha" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
 ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
+ainl-contracts = { path = "../ainl-contracts" }
+ainl-repo-intel = { path = "../ainl-repo-intel" }
+ainl-context-freshness = { path = "../ainl-context-freshness" }
+ainl-impact-policy = { path = "../ainl-impact-policy" }
 armara-provider-api = { path = "../../../ainl-inference-server/crates/armara-provider-api" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6", optional = true }
@@ -29,7 +33,9 @@ ainl-runtime = { path = "../ainl-runtime", version = "0.3.7-alpha", optional = t
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+flate2 = "1"
+tar = "0.4"
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }

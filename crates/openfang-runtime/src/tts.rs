@@ -3,6 +3,7 @@
 //! Auto-cascades through available providers based on configured API keys.
 
 use openfang_types::config::TtsConfig;
+use tokio::io::AsyncWriteExt;
 
 /// Maximum audio response size (10MB).
 const MAX_AUDIO_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
@@ -222,6 +223,66 @@ impl TtsEngine {
             duration_estimate_ms: duration_ms,
         })
     }
+}
+
+/// Local Piper TTS for `[local_voice]` (voice replies without cloud STT/TTS APIs).
+pub async fn synthesize_piper_local(
+    text: &str,
+    local_voice: &openfang_types::config::LocalVoiceConfig,
+) -> Result<TtsResult, String> {
+    if text.trim().is_empty() {
+        return Err("Text cannot be empty".into());
+    }
+    if !local_voice.piper_ready() {
+        return Err(
+            "Piper is not configured: set [local_voice] enabled=true, piper_binary, and piper_voice."
+                .into(),
+        );
+    }
+    let bin = local_voice.piper_binary.as_ref().unwrap();
+    let model = local_voice.piper_voice.as_ref().unwrap();
+    let out = std::env::temp_dir().join(format!(
+        "openfang_piper_{}.wav",
+        uuid::Uuid::new_v4()
+    ));
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--model")
+        .arg(model.as_os_str())
+        .arg("--output_file")
+        .arg(out.as_os_str())
+        .stdin(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn piper: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| format!("piper stdin: {e}"))?;
+    }
+    let status = child.wait_with_output().await.map_err(|e| e.to_string())?;
+    if !status.status.success() {
+        return Err(format!(
+            "piper failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        ));
+    }
+    let audio_data = tokio::fs::read(&out)
+        .await
+        .map_err(|e| format!("read piper wav: {e}"))?;
+    let _ = tokio::fs::remove_file(&out).await;
+    if audio_data.len() > MAX_AUDIO_RESPONSE_BYTES {
+        return Err("Piper output too large".into());
+    }
+    let word_count = text.split_whitespace().count();
+    let duration_ms = (word_count as u64 * 400).max(500);
+    Ok(TtsResult {
+        audio_data,
+        format: "wav".into(),
+        provider: "piper".into(),
+        duration_estimate_ms: duration_ms,
+    })
 }
 
 #[cfg(test)]

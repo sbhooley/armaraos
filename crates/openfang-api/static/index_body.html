@@ -1795,6 +1795,15 @@
                     </label>
                     <p class="text-xs text-dim" style="margin:6px 0 0 26px;line-height:1.4">Routes turns through the optional <code style="font-size:10px">ainl-runtime</code> graph shim instead of the built-in loop. Requires graph memory (<code style="font-size:10px">ainl_memory.db</code>) to be healthy. See <strong>docs/ainl-runtime-integration.md</strong>.</p>
                   </div>
+                  <div class="form-group mt-3" style="border:1px solid var(--border);border-radius:6px;padding:10px 14px;background:rgba(0,120,255,0.06)">
+                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin:0">
+                      <input type="checkbox" x-model="configForm.native_planner_enabled" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)">
+                      <span>
+                        <span style="font-size:13px;font-weight:500">Native Planner (AINL Inference)</span>
+                      </span>
+                    </label>
+                    <p class="text-xs text-dim" style="margin:6px 0 0 26px;line-height:1.4">When enabled, this agent sets <code style="font-size:10px">metadata.planner_mode = "on"</code> and uses the native planner path (<code style="font-size:10px">/armara/v1/infer</code>) whenever planner eligibility is satisfied. Disabling sets <code style="font-size:10px">planner_mode = "off"</code>. Changes apply on the next turn without restarting the daemon.</p>
+                  </div>
                   <button class="btn btn-primary mt-4" @click="saveConfig()" :disabled="configSaving">
                     <span x-show="!configSaving">Save Config</span><span x-show="configSaving">Saving...</span>
                   </button>
@@ -4678,6 +4687,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="empty-state" x-show="!providers.length">
               <h4>No providers found</h4>
               <p class="hint">Provider information could not be loaded. Check that the API is running.</p>
+              <p class="hint text-xs mt-2" style="color:var(--error)" x-show="providersLoadError" x-text="providersLoadError"></p>
+              <button type="button" class="btn btn-primary btn-sm mt-2" x-show="providersLoadError" @click="refreshModelCatalog()" :disabled="catalogRefreshing">Retry</button>
             </div>
           </div>
 
@@ -4686,6 +4697,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="info-card">
               <h4>Model Catalog</h4>
               <p>Browse all available models across providers. Models marked "Available" have their provider configured and ready to use.</p>
+            </div>
+            <div class="text-xs text-dim mb-2">
+              <span x-text="'Loaded ' + models.length + ' models from ' + uniqueProviderNames.length + ' providers'"></span>
+              <span x-show="typeof OpenFangAPI !== 'undefined' && OpenFangAPI.baseUrl" x-text="' • API: ' + OpenFangAPI.baseUrl"></span>
+            </div>
+            <div class="info-card mb-4" style="border:1px solid var(--error);background:rgba(239,68,68,0.06)" x-show="modelsLoadError || providersLoadError">
+              <h4 style="margin-top:0;color:var(--error)">Catalog could not be loaded</h4>
+              <p class="text-xs text-dim" x-show="modelsLoadError" x-text="'Models API: ' + modelsLoadError"></p>
+              <p class="text-xs text-dim mt-1" x-show="providersLoadError" x-text="'Providers API: ' + providersLoadError"></p>
+              <button type="button" class="btn btn-primary btn-sm mt-2" @click="refreshModelCatalog()" :disabled="catalogRefreshing">
+                <span x-show="!catalogRefreshing">Refresh catalog</span>
+                <span x-show="catalogRefreshing" class="spinner" style="width:10px;height:10px;border-width:2px;display:inline-block;vertical-align:middle"></span>
+              </button>
             </div>
             <div class="flex gap-2 mb-4" style="flex-wrap:wrap">
               <div class="search-input" style="flex:1;min-width:200px">
@@ -4704,11 +4728,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <option :value="t" x-text="t"></option>
                 </template>
               </select>
-              <button class="btn btn-primary btn-sm" @click="showCustomModelForm = !showCustomModelForm" x-text="showCustomModelForm ? 'Cancel' : '+ Custom Model'"></button>
+              <button type="button" class="btn btn-ghost btn-sm" @click="refreshModelCatalog()" :disabled="catalogRefreshing" title="Reload models and providers from the daemon">Refresh</button>
+              <button class="btn btn-primary btn-sm" @click="if (showCustomModelForm) { resetCustomModelForm(); showCustomModelForm = false; } else { showCustomModelForm = true; }" x-text="showCustomModelForm ? 'Cancel' : '+ Custom Model'"></button>
             </div>
             <!-- Custom model form -->
             <div x-show="showCustomModelForm" class="info-card mb-4" style="border:1px solid var(--accent,#7c3aed)">
-              <h4 style="margin-top:0">Add Custom Model</h4>
+              <h4 style="margin-top:0" x-text="editingCustomModelId ? 'Edit Custom Model' : 'Add Custom Model'"></h4>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
                 <div>
                   <label class="text-xs text-dim">Model ID (required)</label>
@@ -4727,15 +4752,15 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <input class="form-input" type="number" x-model.number="customModelMaxOutput" placeholder="8192">
                 </div>
               </div>
-              <button class="btn btn-primary btn-sm mt-2" @click="addCustomModel()" :disabled="!customModelId.trim()">Add Model</button>
+              <button class="btn btn-primary btn-sm mt-2" @click="addCustomModel()" :disabled="!customModelId.trim()" x-text="editingCustomModelId ? 'Save Model' : 'Add Model'"></button>
               <span class="text-xs text-dim ml-2" x-text="customModelStatus"></span>
             </div>
             <div class="text-xs text-dim mb-2" x-text="filteredModels.length + ' of ' + models.length + ' models'"></div>
             <div x-show="!filteredModels.length && !loading" style="text-align:center;padding:32px 16px">
               <div style="font-size:32px;margin-bottom:8px;opacity:0.5">&#x1F916;</div>
-              <h3 style="margin:0 0 4px;font-size:14px" x-text="models.length ? 'No models match your search' : 'No models available'"></h3>
-              <p class="text-xs text-dim" x-text="models.length ? 'Try a different search term or clear filters.' : 'Configure an LLM provider to see available models.'"></p>
-              <button class="btn btn-ghost btn-sm mt-2" x-show="models.length && (modelSearch || modelProviderFilter)" @click="modelSearch=''; modelProviderFilter=''">Clear Filters</button>
+              <h3 style="margin:0 0 4px;font-size:14px" x-text="models.length ? 'No models match your search' : (modelsLoadError ? 'Catalog request failed' : 'No models available')"></h3>
+              <p class="text-xs text-dim" x-text="models.length ? 'Try a different search term or clear filters.' : (modelsLoadError ? 'See the error banner above, or click Refresh.' : 'The built-in catalog should list many models even without API keys. If this stays empty, the daemon may be unreachable — try Refresh or restart.')"></p>
+              <button class="btn btn-ghost btn-sm mt-2" x-show="models.length && (modelSearch || modelProviderFilter || modelTierFilter)" @click="modelSearch=''; modelProviderFilter=''; modelTierFilter=''">Clear Filters</button>
             </div>
             <div class="table-wrap" x-show="filteredModels.length">
               <table>
@@ -4750,7 +4775,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       <td class="text-xs" x-text="formatCost(m.input_cost_per_m)"></td>
                       <td class="text-xs" x-text="formatCost(m.output_cost_per_m)"></td>
                       <td><span class="badge" :class="m.available ? 'badge-success' : 'badge-muted'" x-text="m.available ? 'Available' : 'Needs Key'"></span></td>
-                      <td><button x-show="m.tier === 'custom'" class="btn btn-ghost btn-sm" @click="deleteCustomModel(m.id)" title="Delete custom model" style="padding:2px 6px;font-size:11px;color:var(--text-muted)">&#x2715;</button></td>
+                      <td>
+                        <button x-show="m.tier === 'custom'" class="btn btn-ghost btn-sm" @click="startEditCustomModel(m)" title="Edit custom model" style="padding:2px 6px;font-size:11px">Edit</button>
+                        <button x-show="m.tier === 'custom'" class="btn btn-ghost btn-sm" @click="deleteCustomModel(m.id)" title="Delete custom model" style="padding:2px 6px;font-size:11px;color:var(--text-muted)">&#x2715;</button>
+                      </td>
                     </tr>
                   </template>
                 </tbody>

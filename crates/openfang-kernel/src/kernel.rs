@@ -90,6 +90,125 @@ fn merge_default_agent_mcp_servers(servers: &mut Vec<String>) {
     }
 }
 
+/// Cross-platform PATH lookup for an executable. Returns `true` if `name`
+/// resolves to an existing file in any directory listed in `$PATH`.
+///
+/// Mirrors the helper in `openfang-hands::registry::which_binary` but is kept
+/// private to `kernel` to avoid a dependency cycle.
+fn which_binary(name: &str) -> bool {
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let extensions: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    for dir in path_var.split(separator) {
+        if dir.is_empty() {
+            continue;
+        }
+        for ext in extensions {
+            let candidate = std::path::Path::new(dir).join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Resolve the AINL MCP server command for default auto-registration.
+///
+/// Resolution order (first match wins):
+/// 1. `ARMARAOS_AINL_MCP_COMMAND` env var (verbatim — operator override)
+/// 2. `ainl-mcp` on PATH (canonical entrypoint installed by `pip install ainativelang[mcp]`)
+/// 3. `ainl` on PATH with `mcp` subcommand (older AINL CLI builds)
+///
+/// Returns `None` when no candidate is available, in which case auto-registration
+/// is skipped silently — users without AINL installed should not see spurious
+/// connection failures.
+fn resolve_default_ainl_mcp_command() -> Option<(String, Vec<String>)> {
+    if let Ok(override_cmd) = std::env::var("ARMARAOS_AINL_MCP_COMMAND") {
+        let trimmed = override_cmd.trim();
+        if !trimmed.is_empty() {
+            // Allow `command arg1 arg2` so operators can point at e.g.
+            // `python -m ainl.mcp` without a wrapper script.
+            let mut parts = trimmed.split_whitespace();
+            let command = parts.next()?.to_string();
+            let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+            return Some((command, args));
+        }
+    }
+    if which_binary("ainl-mcp") {
+        return Some(("ainl-mcp".to_string(), Vec::new()));
+    }
+    if which_binary("ainl") {
+        return Some(("ainl".to_string(), vec!["mcp".to_string()]));
+    }
+    None
+}
+
+/// Build the default ArmaraOS-managed AINL MCP server entry.
+///
+/// `name` is always `"ainl"` so per-agent allowlists and `mcp_ainl_*` tool
+/// names line up with the rest of the kernel.
+fn build_default_ainl_mcp_entry(
+    command: String,
+    args: Vec<String>,
+) -> openfang_types::config::McpServerConfigEntry {
+    openfang_types::config::McpServerConfigEntry {
+        name: "ainl".to_string(),
+        transport: openfang_types::config::McpTransportEntry::Stdio { command, args },
+        timeout_secs: 30,
+        env: vec![
+            // Pass through common AINL config knobs so operator-set policy/llm
+            // env vars reach the spawned MCP subprocess.
+            "AINL_MCP_PROFILE".to_string(),
+            "AINL_MCP_EXPOSURE_PROFILE".to_string(),
+            "AINL_CONFIG".to_string(),
+            "AINL_MCP_LLM_ENABLED".to_string(),
+            "OPENROUTER_API_KEY".to_string(),
+            "ANTHROPIC_API_KEY".to_string(),
+            "OPENAI_API_KEY".to_string(),
+        ],
+        config_env: std::collections::HashMap::new(),
+        headers: Vec::new(),
+    }
+}
+
+/// Inject a default `ainl` MCP server into the effective server list when:
+///   - no operator/extension entry already provides it, and
+///   - `ARMARAOS_DISABLE_DEFAULT_AINL_MCP` is **not** set to `1` / `true`, and
+///   - an AINL MCP command is resolvable on the host.
+///
+/// This is what makes small models inside ArmaraOS chat see `mcp_ainl_*` tools
+/// (and therefore validate/compile/run `.ainl` files) without the user having
+/// to hand-edit `~/.armaraos/config.toml` or run `tooling/mcp_host_install.py`.
+///
+/// Returns `Some(command)` when an entry was injected (for logging), `None`
+/// when the helper made no changes.
+fn maybe_inject_default_ainl_mcp_server(
+    servers: &mut Vec<openfang_types::config::McpServerConfigEntry>,
+) -> Option<String> {
+    if servers.iter().any(|s| s.name.eq_ignore_ascii_case("ainl")) {
+        return None;
+    }
+    if let Ok(disable) = std::env::var("ARMARAOS_DISABLE_DEFAULT_AINL_MCP") {
+        let v = disable.trim().to_ascii_lowercase();
+        if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
+            return None;
+        }
+    }
+    let (command, args) = resolve_default_ainl_mcp_command()?;
+    let display_command = if args.is_empty() {
+        command.clone()
+    } else {
+        format!("{command} {}", args.join(" "))
+    };
+    servers.push(build_default_ainl_mcp_entry(command, args));
+    Some(display_command)
+}
+
 /// Case-insensitive glob-style matcher for per-agent tool filters.
 ///
 /// Supports `*` wildcards (for example `mcp_ainl_*`).
@@ -1377,6 +1496,20 @@ impl OpenFangKernel {
             }
         }
 
+        // Auto-register the AINL MCP server when the host has `ainl-mcp` (or
+        // `ainl mcp`) on PATH and no entry already exists. This is what lets
+        // small models in chat actually call `mcp_ainl_ainl_validate` /
+        // `mcp_ainl_ainl_compile` / `mcp_ainl_ainl_run` instead of guessing
+        // AINL syntax (and hallucinating Python). Operators can disable this
+        // with `ARMARAOS_DISABLE_DEFAULT_AINL_MCP=1` or override the command
+        // with `ARMARAOS_AINL_MCP_COMMAND=...`.
+        if let Some(cmd) = maybe_inject_default_ainl_mcp_server(&mut all_mcp_servers) {
+            info!(
+                command = %cmd,
+                "MCP: auto-registered default AINL server (mcp_ainl_*) — disable with ARMARAOS_DISABLE_DEFAULT_AINL_MCP=1"
+            );
+        }
+
         // Initialize integration health monitor
         let health_config = openfang_extensions::health::HealthMonitorConfig {
             auto_reconnect: config.extensions.auto_reconnect,
@@ -1536,11 +1669,21 @@ impl OpenFangKernel {
             }
         };
 
+        // Local Whisper + Piper: download into ~/.armaraos/voice on first launch when enabled.
+        // Skipped in `cargo test` builds (`cfg(test)`) to avoid large downloads during CI.
+        #[cfg(not(test))]
+        openfang_runtime::local_voice_bootstrap::ensure_local_voice(
+            &config.home_dir,
+            &mut config.local_voice,
+        );
+
         let browser_ctx = openfang_runtime::browser::BrowserManager::new(config.browser.clone());
 
         // Initialize media understanding engine
-        let media_engine =
-            openfang_runtime::media_understanding::MediaEngine::new(config.media.clone());
+        let media_engine = openfang_runtime::media_understanding::MediaEngine::new(
+            config.media.clone(),
+            config.local_voice.clone(),
+        );
         let tts_engine = openfang_runtime::tts::TtsEngine::new(config.tts.clone());
         let mut pairing = crate::pairing::PairingManager::new(config.pairing.clone());
 
@@ -6965,6 +7108,76 @@ impl OpenFangKernel {
         }
     }
 
+    /// Reconnect every running MCP stdio server whose env whitelist contains
+    /// `env_var`.
+    ///
+    /// MCP children are spawned with `cmd.env_clear()` and inherit only the
+    /// vars listed in their per-server `env` whitelist. That snapshot is taken
+    /// at spawn time, so when an operator later sets a provider key via the
+    /// dashboard (`set_provider_key` calls `std::env::set_var`), already-running
+    /// MCP children stay frozen with the *old* environment.
+    ///
+    /// This helper closes that gap. Called from `set_provider_key` after the
+    /// new value is in `std::env`, it identifies any MCP server that *would*
+    /// inherit the var on a fresh spawn (i.e. lists it in `server.env`) and
+    /// rebuilds the connection. The existing `reconnect_extension_mcp` machinery
+    /// disconnects → re-runs `hydrate_mcp_stdio_env` → re-spawns, so the child
+    /// boots with the freshly-set env var without requiring a daemon restart.
+    ///
+    /// In practice the most important consumer is the auto-injected `ainl` MCP
+    /// server: when a user pastes their `OPENROUTER_API_KEY` into the dashboard
+    /// the AINL `web.SEARCH` adapter (which calls OpenRouter under the hood)
+    /// starts working on the very next `mcp_ainl_ainl_run` call instead of
+    /// failing with "OPENROUTER_API_KEY not set" until the next process boot.
+    ///
+    /// Returns a list of `(server_name, result)` tuples — one per server that
+    /// matched and was reconnect-attempted. Servers without `env_var` in their
+    /// whitelist are silently skipped.
+    pub async fn reconnect_mcp_servers_with_env_var(
+        self: &Arc<Self>,
+        env_var: &str,
+    ) -> Vec<(String, Result<usize, String>)> {
+        let matching: Vec<String> = {
+            let effective = self
+                .effective_mcp_servers
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            effective
+                .iter()
+                .filter(|s| s.env.iter().any(|v| v == env_var))
+                .map(|s| s.name.clone())
+                .collect()
+        };
+        if matching.is_empty() {
+            return Vec::new();
+        }
+        info!(
+            env_var = %env_var,
+            servers = ?matching,
+            "MCP: provider key changed — reconnecting MCP children that whitelist this var"
+        );
+        let mut results = Vec::with_capacity(matching.len());
+        for name in matching {
+            let r = self.reconnect_extension_mcp(&name).await;
+            match &r {
+                Ok(tools) => info!(
+                    server = %name,
+                    env_var = %env_var,
+                    tools = tools,
+                    "MCP: reconnected after provider-key change"
+                ),
+                Err(e) => warn!(
+                    server = %name,
+                    env_var = %env_var,
+                    error = %e,
+                    "MCP: reconnect after provider-key change failed"
+                ),
+            }
+            results.push((name, r));
+        }
+        results
+    }
+
     /// Background loop that checks extension MCP health and auto-reconnects.
     async fn run_extension_health_loop(self: &Arc<Self>) {
         let interval_secs = self.extension_health.config().check_interval_secs;
@@ -8992,6 +9205,16 @@ impl KernelHandle for OpenFangKernel {
         Some(self.llm_factory.live_llm_config())
     }
 
+    fn lookup_provider_url(&self, provider: &str) -> Option<String> {
+        // Delegates to the existing private inherent method on `OpenFangKernel`
+        // which checks `[provider_urls]` (config.toml boot-time) AND the runtime
+        // ModelCatalog (dashboard `set_provider_url` overrides). Re-exposed via
+        // the `KernelHandle` trait so `openfang-runtime::agent_loop` can autowire
+        // `ARMARA_NATIVE_INFER_URL` when the agent's provider points at the
+        // AINL inference server.
+        OpenFangKernel::lookup_provider_url(self, provider)
+    }
+
     fn get_llm_driver(
         &self,
         config: &openfang_runtime::llm_driver::DriverConfig,
@@ -10128,6 +10351,131 @@ mod tests {
             servers.iter().any(|s| s.eq_ignore_ascii_case("ainl")),
             "ainl MCP server should be preserved for non-empty allowlists"
         );
+    }
+
+    #[test]
+    fn build_default_ainl_mcp_entry_uses_stdio_transport_and_passes_through_policy_envs() {
+        let entry =
+            build_default_ainl_mcp_entry("ainl-mcp".to_string(), vec!["--quiet".to_string()]);
+        assert_eq!(entry.name, "ainl");
+        assert_eq!(entry.timeout_secs, 30);
+        match entry.transport {
+            openfang_types::config::McpTransportEntry::Stdio { command, args } => {
+                assert_eq!(command, "ainl-mcp");
+                assert_eq!(args, vec!["--quiet".to_string()]);
+            }
+            other => panic!("expected stdio transport, got {other:?}"),
+        }
+        for required in &["AINL_MCP_PROFILE", "AINL_MCP_EXPOSURE_PROFILE", "AINL_CONFIG"] {
+            assert!(
+                entry.env.iter().any(|e| e == required),
+                "default AINL MCP entry should pass through {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn maybe_inject_default_ainl_mcp_server_skips_when_already_present() {
+        let existing = build_default_ainl_mcp_entry("custom".to_string(), vec![]);
+        let mut servers = vec![existing];
+        let injected = maybe_inject_default_ainl_mcp_server(&mut servers);
+        assert!(
+            injected.is_none(),
+            "should not inject when an `ainl` entry already exists"
+        );
+        assert_eq!(servers.len(), 1, "existing entry must be preserved");
+    }
+
+    #[test]
+    #[serial_test::serial(default_ainl_mcp_env)]
+    fn maybe_inject_default_ainl_mcp_server_respects_disable_env() {
+        // Use a unique override command so that `resolve_default_ainl_mcp_command`
+        // would otherwise definitely return Some(...) — this isolates the test
+        // from whatever's on the developer's PATH.
+        let _override =
+            EnvGuard::set("ARMARAOS_AINL_MCP_COMMAND", "/path/to/fake-ainl-mcp --flag");
+        let _disable = EnvGuard::set("ARMARAOS_DISABLE_DEFAULT_AINL_MCP", "1");
+        let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
+        let injected = maybe_inject_default_ainl_mcp_server(&mut servers);
+        assert!(
+            injected.is_none(),
+            "ARMARAOS_DISABLE_DEFAULT_AINL_MCP=1 must suppress auto-registration"
+        );
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial(default_ainl_mcp_env)]
+    fn maybe_inject_default_ainl_mcp_server_uses_command_override() {
+        let _disable = EnvGuard::clear("ARMARAOS_DISABLE_DEFAULT_AINL_MCP");
+        let _override = EnvGuard::set(
+            "ARMARAOS_AINL_MCP_COMMAND",
+            "/usr/local/bin/fake-ainl-mcp --quiet",
+        );
+        let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
+        let injected = maybe_inject_default_ainl_mcp_server(&mut servers);
+        assert_eq!(
+            injected.as_deref(),
+            Some("/usr/local/bin/fake-ainl-mcp --quiet"),
+            "override command + args should be returned for logging"
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "ainl");
+        match &servers[0].transport {
+            openfang_types::config::McpTransportEntry::Stdio { command, args } => {
+                assert_eq!(command, "/usr/local/bin/fake-ainl-mcp");
+                assert_eq!(args, &vec!["--quiet".to_string()]);
+            }
+            other => panic!("expected stdio transport, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(default_ainl_mcp_env)]
+    fn resolve_default_ainl_mcp_command_prefers_env_override() {
+        let _override = EnvGuard::set("ARMARAOS_AINL_MCP_COMMAND", "  custom-ainl  --foo  ");
+        let resolved = resolve_default_ainl_mcp_command();
+        assert_eq!(
+            resolved,
+            Some(("custom-ainl".to_string(), vec!["--foo".to_string()])),
+            "env override should win over PATH lookup and have whitespace trimmed"
+        );
+    }
+
+    /// RAII guard that temporarily sets/clears a process env var for the
+    /// duration of one test. Required because Rust unit tests share a process
+    /// — without restoration, env mutation in one test can leak into another.
+    struct EnvGuard {
+        key: String,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                key: key.to_string(),
+                prev,
+            }
+        }
+        fn clear(key: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self {
+                key: key.to_string(),
+                prev,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(&self.key, v),
+                None => std::env::remove_var(&self.key),
+            }
+        }
     }
 
     #[test]

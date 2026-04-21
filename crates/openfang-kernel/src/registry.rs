@@ -284,6 +284,23 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Toggle per-agent native planner mode (manifest metadata `planner_mode`).
+    ///
+    /// - `true`  => `metadata.planner_mode = "on"`
+    /// - `false` => `metadata.planner_mode = "off"`
+    pub fn update_native_planner_mode(&self, id: AgentId, enabled: bool) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        entry.manifest.metadata.insert(
+            "planner_mode".to_string(),
+            serde_json::Value::String(if enabled { "on" } else { "off" }.to_string()),
+        );
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
     /// Update an agent's skill allowlist.
     pub fn update_skills(&self, id: AgentId, skills: Vec<String>) -> OpenFangResult<()> {
         let mut entry = self

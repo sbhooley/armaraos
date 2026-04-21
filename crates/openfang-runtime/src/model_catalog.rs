@@ -2002,6 +2002,20 @@ fn builtin_models() -> Vec<ModelCatalogEntry> {
             supports_streaming: true,
             aliases: vec!["hunter-alpha".into()],
         },
+        ModelCatalogEntry {
+            id: "openrouter/elephant-alpha".into(),
+            display_name: "Elephant Alpha (OpenRouter)".into(),
+            provider: "openrouter".into(),
+            tier: ModelTier::Smart,
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            input_cost_per_m: 0.0,
+            output_cost_per_m: 0.0,
+            supports_tools: true,
+            supports_vision: false,
+            supports_streaming: true,
+            aliases: vec!["elephant-alpha".into()],
+        },
         // ArmaraOS — additional OpenRouter pass-through (chat + media catalog)
         ModelCatalogEntry {
             id: "openrouter/nvidia/nemotron-3-super-120b-a12b:free".into(),

@@ -482,6 +482,8 @@ async fn handle_text_message(
                 })
                 .unwrap_or_default();
 
+            let voice_reply = parsed["voice_reply"].as_bool().unwrap_or(false);
+
             // Sanitize inbound user input
             let mut content = sanitize_user_input(&raw_content);
             if content.is_empty() {
@@ -954,6 +956,39 @@ async fn handle_text_message(
                             if let Some(ref c) = adaptive_eco_reason_codes_ws {
                                 response_payload["adaptive_eco_reason_codes"] =
                                     serde_json::json!(c);
+                            }
+                            if voice_reply
+                                && !response_text.trim().is_empty()
+                                && state.kernel.config.local_voice.piper_ready()
+                            {
+                                match openfang_runtime::tts::synthesize_piper_local(
+                                    &response_text,
+                                    &state.kernel.config.local_voice,
+                                )
+                                .await
+                                {
+                                    Ok(tts) => {
+                                        match crate::routes::register_generated_upload(
+                                            "audio/wav",
+                                            "voice_reply.wav",
+                                            tts.audio_data,
+                                        ) {
+                                            Ok(url) => {
+                                                response_payload["voice_reply_audio_url"] =
+                                                    serde_json::json!(url);
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    error = %e,
+                                                    "WS: voice reply upload failed"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "WS: Piper voice reply failed");
+                                    }
+                                }
                             }
                             let _ = send_json(sender, &response_payload).await;
                         }

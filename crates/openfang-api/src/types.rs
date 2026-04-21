@@ -48,6 +48,9 @@ pub struct MessageRequest {
     /// Optional file attachments (uploaded via /upload endpoint).
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
+    /// When true and `[local_voice]` Piper is configured, synthesize the assistant reply to speech and return a playable URL.
+    #[serde(default)]
+    pub voice_reply: bool,
     /// Sender identity (e.g. WhatsApp phone number, Telegram user ID).
     #[serde(default)]
     pub sender_id: Option<String>,
@@ -104,6 +107,9 @@ pub struct MessageResponse {
     /// Structured telemetry for ainl-runtime-engine turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ainl_runtime_telemetry: Option<serde_json::Value>,
+    /// Playable URL (e.g. `/api/uploads/…`) for a local Piper TTS rendering of `response` when `voice_reply` was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_reply_audio_url: Option<String>,
 }
 
 /// Request to install a skill from the marketplace.
@@ -182,6 +188,7 @@ mod message_response_contract_tests {
             ]),
             tools: Vec::<ToolTurnRecord>::new(),
             ainl_runtime_telemetry: None,
+            voice_reply_audio_url: None,
         };
 
         let v = serde_json::to_value(&msg).expect("serialize MessageResponse");

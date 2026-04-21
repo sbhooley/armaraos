@@ -1711,6 +1711,12 @@ function chatPage() {
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
             compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
             savingsPct: data.compression_savings_pct || 0, ecoMetaTooltip: ecoTip || null });
+          if (data.voice_reply_audio_url && typeof Audio !== 'undefined') {
+            try {
+              var wsAu = new Audio(window.location.origin + data.voice_reply_audio_url);
+              wsAu.play().catch(function() {});
+            } catch (eWsAu) {}
+          }
           this._updateMemoryAppliedIndicatorForTurn();
           // Snapshot to cache so switching away and back shows the complete turn instantly
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
@@ -2150,8 +2156,12 @@ function chatPage() {
       }
 
       // Try WebSocket first
+      var voiceReply = !!(uploadedFiles && uploadedFiles.some(function(f) {
+        return f.content_type && f.content_type.indexOf('audio/') === 0;
+      }));
       var wsPayload = { type: 'message', content: finalText };
       if (uploadedFiles && uploadedFiles.length) wsPayload.attachments = uploadedFiles;
+      if (voiceReply) wsPayload.voice_reply = true;
       if (OpenFangAPI.wsSend(wsPayload)) {
         // Track in-flight so onClose can retry if the connection drops while waiting
         this._wsInFlightMsg = { text: finalText, files: uploadedFiles || [], images: msgImages || [] };
@@ -2173,6 +2183,10 @@ function chatPage() {
         var self = this;
         var httpBody = { message: finalText };
         if (uploadedFiles && uploadedFiles.length) httpBody.attachments = uploadedFiles;
+        var voiceReplyHttp = !!(uploadedFiles && uploadedFiles.some(function(f) {
+          return f.content_type && f.content_type.indexOf('audio/') === 0;
+        }));
+        if (voiceReplyHttp) httpBody.voice_reply = true;
         var res = await OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/message', httpBody);
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
         if (res.turn_wall_ms != null) this.lastTurnWallMs = res.turn_wall_ms;
@@ -2211,6 +2225,12 @@ function chatPage() {
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
           compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
           savingsPct: res.compression_savings_pct || 0, ecoMetaTooltip: httpEcoTip || null });
+        if (res.voice_reply_audio_url && typeof Audio !== 'undefined') {
+          try {
+            var httpAu = new Audio(window.location.origin + res.voice_reply_audio_url);
+            httpAu.play().catch(function() {});
+          } catch (eHttpAu) {}
+        }
         this._updateMemoryAppliedIndicatorForTurn();
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });

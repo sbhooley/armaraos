@@ -46,7 +46,7 @@ function wizardPage() {
         icon: 'GA',
         category: 'General',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'automation',
         system_prompt: 'You are Armara, a personal assistant powered by AI Native Language, running in ArmaraOS. Be helpful, clear, and concise. Ask clarifying questions when needed.'
       },
@@ -57,7 +57,7 @@ function wizardPage() {
         icon: 'CH',
         category: 'Development',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'coding',
         system_prompt: 'You are an expert programmer. Help users write clean, efficient code. Explain your reasoning. Follow best practices and conventions for the language being used.'
       },
@@ -68,7 +68,7 @@ function wizardPage() {
         icon: 'RS',
         category: 'Research',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'research',
         system_prompt: 'You are a research analyst. Break down complex topics into clear explanations. Provide structured analysis with key findings. Cite sources when available.'
       },
@@ -79,7 +79,7 @@ function wizardPage() {
         icon: 'WR',
         category: 'Writing',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'full',
         system_prompt: 'You are a skilled writer and editor. Help users create polished content. Adapt your tone and style to match the intended audience. Offer constructive suggestions for improvement.'
       },
@@ -90,7 +90,7 @@ function wizardPage() {
         icon: 'DA',
         category: 'Development',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'coding',
         system_prompt: 'You are a data analysis expert. Help users understand their data, write SQL/Python queries, and interpret results. Present findings clearly with actionable insights.'
       },
@@ -101,7 +101,7 @@ function wizardPage() {
         icon: 'DO',
         category: 'Development',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'coding',
         system_prompt: 'You are a DevOps engineer. Help with CI/CD pipelines, Docker, Kubernetes, infrastructure as code, and deployment. Prioritize reliability and security.'
       },
@@ -112,7 +112,7 @@ function wizardPage() {
         icon: 'CS',
         category: 'Business',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'messaging',
         system_prompt: 'You are a professional customer support representative. Be empathetic, patient, and solution-oriented. Acknowledge concerns before offering solutions. Escalate complex issues appropriately.'
       },
@@ -123,7 +123,7 @@ function wizardPage() {
         icon: 'TU',
         category: 'General',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'research',
         system_prompt: 'You are a patient and encouraging tutor. Explain concepts step by step, starting from fundamentals. Use analogies and examples. Check understanding before moving on. Adapt to the learner\'s pace.'
       },
@@ -134,7 +134,7 @@ function wizardPage() {
         icon: 'AD',
         category: 'Development',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'coding',
         system_prompt: 'You are an API design expert. Help users design clean, consistent RESTful APIs following best practices. Cover endpoint naming, request/response schemas, error handling, and versioning.'
       },
@@ -145,7 +145,7 @@ function wizardPage() {
         icon: 'MN',
         category: 'Business',
         provider: 'openrouter',
-        model: 'nvidia/nemotron-3-super-120b-a12b:free',
+        model: 'elephant-alpha',
         profile: 'automation',
         system_prompt: 'You are a meeting summarizer. When given a meeting transcript or notes, produce a structured summary with: key decisions, action items (with owners), discussion highlights, and follow-up questions.'
       }
@@ -545,7 +545,7 @@ function wizardPage() {
         gemini: { url: 'https://aistudio.google.com/apikey', text: 'Get your key from Google AI Studio' },
         groq: { url: 'https://console.groq.com/keys', text: 'Get your key from the Groq Console (free tier available)' },
         deepseek: { url: 'https://platform.deepseek.com/api_keys', text: 'Get your key from the DeepSeek Platform (very affordable)' },
-        openrouter: { url: 'https://openrouter.com', text: 'Get a free API key at openrouter.com (then create a key in the dashboard). ArmaraOS defaults to the free model nvidia/nemotron-3-super-120b-a12b:free unless you pick a paid model or another provider.' },
+        openrouter: { url: 'https://openrouter.com', text: 'Get an API key at openrouter.com (free keys available). ArmaraOS defaults to openrouter/elephant-alpha unless you pick another model or provider.' },
         mistral: { url: 'https://console.mistral.ai/api-keys', text: 'Get your key from the Mistral Console' },
         together: { url: 'https://api.together.xyz/settings/api-keys', text: 'Get your key from Together AI' },
         fireworks: { url: 'https://fireworks.ai/account/api-keys', text: 'Get your key from Fireworks AI' },
@@ -754,7 +754,7 @@ function wizardPage() {
         gemini: 'gemini-2.5-flash',
         groq: 'llama-3.3-70b-versatile',
         deepseek: 'deepseek-chat',
-        openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+        openrouter: 'elephant-alpha',
         mistral: 'mistral-large-latest',
         together: 'meta-llama/Llama-3-70b-chat-hf',
         fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
