@@ -18,6 +18,45 @@ pub fn repair_config_toml_stale_mcp_env(raw: &str) -> String {
     crate::config_toml_repair::repair_stale_mcp_env_continuations(raw)
 }
 
+/// Read `config.toml`, repair known stale MCP `env` fragments (same as boot [`load_config`]),
+/// persist the repair if the file changed, then parse as [`toml::Value`].
+///
+/// Use this before **partial** rewrites (provider URLs, channels, etc.) so corrupted on-disk
+/// TOML from older AINL bootstrap merges does not block saves or yield opaque parse errors.
+pub fn parse_config_toml_file(
+    path: &Path,
+) -> Result<toml::Value, Box<dyn std::error::Error>> {
+    if !path.exists() {
+        return Ok(toml::Value::Table(toml::map::Map::new()));
+    }
+    let raw = std::fs::read_to_string(path)?;
+    let repaired = crate::config_toml_repair::repair_stale_mcp_env_continuations(&raw);
+    let to_parse = if repaired != raw {
+        match atomic_write(path, &repaired) {
+            Ok(()) => {
+                info!(
+                    path = %path.display(),
+                    "Repaired stale MCP env array fragments before partial config.toml rewrite"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "Could not persist repaired config.toml; parsing in-memory repair only"
+                );
+            }
+        }
+        repaired
+    } else {
+        raw
+    };
+    if to_parse.trim().is_empty() {
+        return Ok(toml::Value::Table(toml::map::Map::new()));
+    }
+    Ok(toml::from_str(&to_parse)?)
+}
+
 /// Maximum include nesting depth.
 const MAX_INCLUDE_DEPTH: u32 = 10;
 
@@ -192,7 +231,25 @@ fn apply_config_schema_migrations(config: &mut KernelConfig, config_path: &Path)
 /// multiline strings or other constructs that a line-based rewriter could break.
 pub fn persist_config_schema_version_line(path: &Path, version: u32) -> std::io::Result<()> {
     let raw = std::fs::read_to_string(path)?;
-    let mut root: toml::Value = toml::from_str(&raw).map_err(|e| {
+    let repaired = crate::config_toml_repair::repair_stale_mcp_env_continuations(&raw);
+    let to_parse = if repaired != raw {
+        if let Err(e) = atomic_write(path, &repaired) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "Could not persist repaired config.toml before schema version bump; using in-memory repair"
+            );
+        } else {
+            info!(
+                path = %path.display(),
+                "Repaired stale MCP env array fragments before config_schema_version update"
+            );
+        }
+        repaired
+    } else {
+        raw
+    };
+    let mut root: toml::Value = toml::from_str(&to_parse).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("config.toml is not valid TOML: {e}"),
@@ -657,6 +714,36 @@ mod tests {
             ))
             .count(),
             1
+        );
+    }
+
+    #[test]
+    fn test_persist_config_schema_version_repairs_stale_mcp_env_before_parse() {
+        let broken = r#"config_schema_version = 0
+log_level = "info"
+
+[[mcp_servers]]
+env = ["AINL_MCP_EXPOSURE_PROFILE", "AINL_MCP_TOOLS"]
+    "AINL_MCP_EXPOSURE_PROFILE",
+    "AINL_MCP_TOOLS",
+]
+name = "ainl"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, broken).unwrap();
+        super::persist_config_schema_version_line(&path, super::CONFIG_SCHEMA_VERSION).unwrap();
+        let disk = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            toml::from_str::<toml::Value>(&disk).is_ok(),
+            "disk should be valid TOML after repair + persist: {disk:?}"
+        );
+        assert!(
+            disk.contains(&format!(
+                "config_schema_version = {}",
+                super::CONFIG_SCHEMA_VERSION
+            )),
+            "schema version should be updated: {disk:?}"
         );
     }
 

@@ -1278,6 +1278,8 @@ url = "https://mcp.example.com/sse"
 
 **AINL MCP:** `ainl install-mcp --host armaraos` registers an `ainl` server whose `env` entry forwards `AINL_MCP_EXPOSURE_PROFILE`, `AINL_MCP_TOOLS`, `AINL_MCP_TOOLS_EXCLUDE`, `AINL_MCP_RESOURCES`, and `AINL_MCP_RESOURCES_EXCLUDE` from the parent process. Set values in `~/.armaraos/.env` (for example `AINL_MCP_EXPOSURE_PROFILE=inspect_only` for read-first tooling and the `ainl://authoring-cheatsheet` resource) without editing this file; leave `AINL_MCP_EXPOSURE_PROFILE` unset for the full MCP tool list.
 
+**Invalid `env` arrays (legacy merges):** Some older bootstrap merges left **orphan lines** after a one-line `env = ["…"]` assignment (extra quoted entries and/or a stray `]`), which makes the file **invalid TOML** and can break the daemon. On boot, the kernel runs a small **repair** (`repair_stale_mcp_env_continuations` in `openfang-kernel`) and persists the fix when possible. Dashboard/API paths that **merge** into `config.toml` (provider URLs, channels, schema version bumps) use the same repair via [`parse_config_toml_file`](https://github.com/sbhooley/armaraos/blob/main/crates/openfang-kernel/src/config.rs) so partial writes do not require a hand-fixed file first. The AINL `tooling/mcp_host_install.py` installer **validates** ArmaraOS TOML after each write (Python 3.11+ `tomllib`) so bad merges fail at install time instead of silently corrupting `~/.armaraos/config.toml`.
+
 **AINL graph memory (process environment):** **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, and **`AINL_PERSONA_EVOLUTION`** are **not** `config.toml` keys—they apply to the **`openfang-runtime`** / daemon process (set in `~/.armaraos/.env` or the service plist, same as other env vars). `AINL_EXTRACTOR_ENABLED` and `AINL_PERSONA_EVOLUTION` are **opt-out** (default on when their Cargo features are compiled in; set to `0`/`false`/`no`/`off` to disable). `AINL_TAGGER_ENABLED` is **opt-in** (must be exactly `1`). See **[graph-memory.md](graph-memory.md)** (*Optional extraction and tagging*) and root **`.env.example`**.
 
 **Transport variants** (tagged union on `type`):
@@ -1528,6 +1530,10 @@ Complete table of all environment variables referenced by the configuration. Non
 ## Validation
 
 `KernelConfig::validate()` runs at boot time and returns a list of **warnings** (non-fatal). The kernel still starts, but logs each warning.
+
+### `config.toml` parse integrity
+
+Before deserializing [`KernelConfig`](https://github.com/sbhooley/armaraos/blob/main/crates/openfang-types/src/config.rs), full config load repairs known-bad **`[[mcp_servers]].env`** tails (see [`[[mcp_servers]]`](#mcp_servers)). API helpers that rewrite **parts** of the file (for example `[provider_urls]`, `[channels.*]`, and `config_schema_version` bumps) call the same repair path so **install, reinstall, and Settings saves** keep valid TOML on disk.
 
 ### What is validated
 

@@ -11214,14 +11214,23 @@ pub async fn set_provider_key(
             );
             backup_config(&config_path);
             let new_content = if let Ok(existing) = std::fs::read_to_string(&config_path) {
-                let cleaned = remove_toml_section(&existing, "default_model");
+                let repaired =
+                    openfang_kernel::config::repair_config_toml_stale_mcp_env(&existing);
+                let cleaned = remove_toml_section(&repaired, "default_model");
                 format!("{}\n{}", cleaned.trim(), update_toml)
             } else {
                 update_toml
             };
-            let tmp = config_path.with_extension("toml.tmp");
-            if std::fs::write(&tmp, &new_content).is_ok() {
-                let _ = std::fs::rename(&tmp, &config_path);
+            if toml::from_str::<toml::Value>(&new_content).is_ok() {
+                let tmp = config_path.with_extension("toml.tmp");
+                if std::fs::write(&tmp, &new_content).is_ok() {
+                    let _ = std::fs::rename(&tmp, &config_path);
+                }
+            } else {
+                tracing::warn!(
+                    path = %config_path.display(),
+                    "Refusing to write default_model switch: merged config.toml would not parse as TOML"
+                );
             }
 
             // Hot-update the in-memory default model override so resolve_driver()
@@ -11743,27 +11752,7 @@ fn upsert_provider_url(
     provider: &str,
     url: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = if config_path.exists() {
-        std::fs::read_to_string(config_path)?
-    } else {
-        String::new()
-    };
-
-    let repaired = openfang_kernel::config::repair_config_toml_stale_mcp_env(&content);
-    let to_parse = if repaired != content {
-        let tmp = config_path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &repaired)?;
-        let _ = std::fs::rename(&tmp, config_path);
-        repaired
-    } else {
-        content
-    };
-
-    let mut doc: toml::Value = if to_parse.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
-    } else {
-        toml::from_str(&to_parse)?
-    };
+    let mut doc = openfang_kernel::config::parse_config_toml_file(config_path)?;
 
     let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
 
@@ -11798,20 +11787,7 @@ fn remove_provider_url_override(
     if !config_path.exists() {
         return Ok(false);
     }
-    let content = std::fs::read_to_string(config_path)?;
-    if content.trim().is_empty() {
-        return Ok(false);
-    }
-    let repaired = openfang_kernel::config::repair_config_toml_stale_mcp_env(&content);
-    let to_parse = if repaired != content {
-        let tmp = config_path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &repaired)?;
-        let _ = std::fs::rename(&tmp, config_path);
-        repaired
-    } else {
-        content
-    };
-    let mut doc: toml::Value = toml::from_str(&to_parse)?;
+    let mut doc = openfang_kernel::config::parse_config_toml_file(config_path)?;
     let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
     let Some(urls_table) = root.get_mut("provider_urls").and_then(|v| v.as_table_mut()) else {
         return Ok(false);
@@ -12027,17 +12003,7 @@ fn upsert_channel_config(
     channel_name: &str,
     fields: &HashMap<String, (String, FieldType)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = if config_path.exists() {
-        std::fs::read_to_string(config_path)?
-    } else {
-        String::new()
-    };
-
-    let mut doc: toml::Value = if content.trim().is_empty() {
-        toml::Value::Table(toml::map::Map::new())
-    } else {
-        toml::from_str(&content)?
-    };
+    let mut doc = openfang_kernel::config::parse_config_toml_file(config_path)?;
 
     let root = doc.as_table_mut().ok_or("Config is not a TOML table")?;
 
@@ -12108,12 +12074,7 @@ fn remove_channel_config(
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(config_path)?;
-    if content.trim().is_empty() {
-        return Ok(());
-    }
-
-    let mut doc: toml::Value = toml::from_str(&content)?;
+    let mut doc = openfang_kernel::config::parse_config_toml_file(config_path)?;
 
     if let Some(channels) = doc
         .as_table_mut()
