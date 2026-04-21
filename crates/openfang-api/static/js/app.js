@@ -425,6 +425,73 @@ function armaraosNotifyPersistAinlDismiss(version) {
   } catch (e) { /* ignore */ }
 }
 
+/** Latest blog posts from ainativelang.com (JSON); polled by the notification center. */
+var ARMARAOS_BLOG_FEED_URL = 'https://ainativelang.com/blog/feed.json';
+var NOTIFY_BLOG_SEEDED_KEY = 'armaraos-blog-notify-seeded-v1';
+var NOTIFY_BLOG_IGNORED_SLUGS_KEY = 'armaraos-blog-notify-ignored-slugs';
+var NOTIFY_BLOG_DISMISSED_SLUGS_KEY = 'armaraos-notify-dismissed-blog-slugs';
+var NOTIFY_BLOG_DISMISS_MAX = 200;
+var NOTIFY_BLOG_BASELINE_COUNT = 3;
+
+function armaraosNotifyBlogLoadIgnoredSet() {
+  try {
+    var raw = localStorage.getItem(NOTIFY_BLOG_IGNORED_SLUGS_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return {};
+    var o = {};
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i]) o[String(arr[i])] = true;
+    }
+    return o;
+  } catch (e) {
+    return {};
+  }
+}
+
+function armaraosNotifyBlogLoadDismissedSet() {
+  try {
+    var raw = localStorage.getItem(NOTIFY_BLOG_DISMISSED_SLUGS_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) return {};
+    var o = {};
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i]) o[String(arr[i])] = true;
+    }
+    return o;
+  } catch (e) {
+    return {};
+  }
+}
+
+function armaraosNotifyPersistBlogDismiss(slug) {
+  if (!slug) return;
+  try {
+    var raw = localStorage.getItem(NOTIFY_BLOG_DISMISSED_SLUGS_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) arr = [];
+    var s = String(slug);
+    if (arr.indexOf(s) < 0) arr.push(s);
+    if (arr.length > NOTIFY_BLOG_DISMISS_MAX) arr = arr.slice(-NOTIFY_BLOG_DISMISS_MAX);
+    localStorage.setItem(NOTIFY_BLOG_DISMISSED_SLUGS_KEY, JSON.stringify(arr));
+  } catch (e) { /* ignore */ }
+}
+
+/** First successful fetch: ignore archive beyond the newest `NOTIFY_BLOG_BASELINE_COUNT` posts. */
+function armaraosNotifyBlogMaybeSeed(posts) {
+  if (!Array.isArray(posts) || posts.length === 0) return;
+  try {
+    if (localStorage.getItem(NOTIFY_BLOG_SEEDED_KEY) === '1') return;
+    var beyond = posts.slice(NOTIFY_BLOG_BASELINE_COUNT);
+    var ignored = [];
+    for (var i = 0; i < beyond.length; i++) {
+      var sl = beyond[i] && beyond[i].slug != null ? String(beyond[i].slug).trim() : '';
+      if (sl) ignored.push(sl);
+    }
+    localStorage.setItem(NOTIFY_BLOG_IGNORED_SLUGS_KEY, JSON.stringify(ignored));
+    localStorage.setItem(NOTIFY_BLOG_SEEDED_KEY, '1');
+  } catch (e) { /* ignore */ }
+}
+
 function armaraosSemverTuple(s) {
   if (!s) return null;
   var t = String(s).trim();
@@ -1228,6 +1295,9 @@ document.addEventListener('alpine:init', function() {
       if (String(id).indexOf('ainl-pypi-') === 0) {
         armaraosNotifyPersistAinlDismiss(id.slice('ainl-pypi-'.length));
       }
+      if (String(id).indexOf('blog-') === 0) {
+        armaraosNotifyPersistBlogDismiss(id.slice('blog-'.length));
+      }
       if (id === 'approval-pending') {
         try {
           this.approvalDismissSig = Alpine.store('app').lastPendingApprovalSignature || '';
@@ -1378,6 +1448,81 @@ document.addEventListener('alpine:init', function() {
         severity: worst.pct >= 0.98 ? 'error' : 'warn',
         ts: Date.now()
       });
+    },
+    /**
+     * Replace blog rows from `GET https://ainativelang.com/blog/feed.json` (`posts` newest-first).
+     * First run seeds “archive ignore” past the newest NOTIFY_BLOG_BASELINE_COUNT posts; dismissals persist per slug.
+     */
+    syncBlogFeedFromJson(data) {
+      var posts = data && data.posts;
+      if (!Array.isArray(posts) || posts.length === 0) return;
+      armaraosNotifyBlogMaybeSeed(posts);
+      var ignored = armaraosNotifyBlogLoadIgnoredSet();
+      var dismissed = armaraosNotifyBlogLoadDismissedSet();
+      this.items = (this.items || []).filter(function(x) {
+        return !(x && (x.kind === 'blog' || (x.id && String(x.id).indexOf('blog-') === 0)));
+      });
+      var eligible = [];
+      for (var i = 0; i < posts.length; i++) {
+        var p = posts[i];
+        if (!p || p.slug == null) continue;
+        var slug = String(p.slug).trim();
+        if (!slug) continue;
+        if (ignored[slug]) continue;
+        if (dismissed[slug]) continue;
+        var title = p.title != null ? String(p.title).trim() : '';
+        if (!title) title = 'Blog update';
+        var pubTitle = 'Latest News & Updates · ' + title;
+        var detail = '';
+        if (p.description != null && String(p.description).trim()) {
+          detail = String(p.description).trim().slice(0, 280);
+        }
+        var url = p.url != null ? String(p.url).trim() : '';
+        if (!url) {
+          url = 'https://ainativelang.com/blog/' + encodeURIComponent(slug);
+        }
+        var ts = Date.now();
+        if (p.date) {
+          var parsed = Date.parse(String(p.date));
+          if (!isNaN(parsed)) ts = parsed;
+        }
+        eligible.push({ slug: slug, title: pubTitle, detail: detail, url: url, ts: ts });
+      }
+      for (var j = eligible.length - 1; j >= 0; j--) {
+        var e = eligible[j];
+        this._prepend({
+          id: 'blog-' + e.slug,
+          kind: 'blog',
+          title: e.title,
+          detail: e.detail,
+          href: e.url,
+          severity: 'info',
+          ts: e.ts
+        });
+      }
+    },
+    /** Notification row primary action: external https in browser / desktop shell; hash routes in-dashboard. */
+    openRow(ev, row) {
+      if (!row || !row.href) return;
+      var h = String(row.href).trim();
+      if (!h) return;
+      if (h.indexOf('http://') === 0 || h.indexOf('https://') === 0) {
+        try {
+          if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+        } catch (e0) { /* ignore */ }
+        armaraosOpenExternalUrl(ev, h);
+        this.close();
+        return;
+      }
+      try {
+        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      } catch (e1) { /* ignore */ }
+      if (h.charAt(0) === '#') {
+        try {
+          window.location.hash = h.slice(1);
+        } catch (e2) { /* ignore */ }
+      }
+      this.close();
     },
     ingestKernelEvent(j) {
       if (!j || !j.payload) return;
@@ -1825,6 +1970,22 @@ function app() {
       }
       armaraosPollDaemonReleaseUpdate();
       setInterval(armaraosPollDaemonReleaseUpdate, 6 * 60 * 60 * 1000);
+      function armaraosPollBlogFeed() {
+        if (typeof fetch !== 'function') return;
+        fetch(ARMARAOS_BLOG_FEED_URL, { credentials: 'omit', cache: 'default' })
+          .then(function(r) {
+            if (!r.ok) return Promise.reject(new Error('blog feed http'));
+            return r.json();
+          })
+          .then(function(data) {
+            try {
+              Alpine.store('notifyCenter').syncBlogFeedFromJson(data);
+            } catch (eSync) { /* ignore */ }
+          })
+          .catch(function() { /* offline / blocked */ });
+      }
+      armaraosPollBlogFeed();
+      setInterval(armaraosPollBlogFeed, 60 * 60 * 1000);
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       Alpine.store('app').loadUiPrefs();
