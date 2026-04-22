@@ -20,6 +20,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [Model Catalog Endpoints](#model-catalog-endpoints)
 - [Provider Configuration Endpoints](#provider-configuration-endpoints)
 - [Skills & Marketplace Endpoints](#skills--marketplace-endpoints)
+- [Hands (App Store) Endpoints](#hands-app-store-endpoints)
 - [ClawHub Endpoints](#clawhub-endpoints)
 - [MCP & A2A Protocol Endpoints](#mcp--a2a-protocol-endpoints)
 - [Audit & Security Endpoints](#audit--security-endpoints)
@@ -1786,6 +1787,32 @@ Search the FangHub marketplace for community skills.
 
 ---
 
+## Hands (App Store) Endpoints
+
+**Curated “Hands”** (bundled autonomous packages from `openfang-hands`) are listed in the embedded dashboard under **App Store / Hands**. The kernel stores **active** hand instance state in **`{home_dir}/hand_state.json`** so the daemon can restore active hands after restart. This file is written when a hand is **activated** or **deactivated** and whenever **`PUT /api/hands/{hand_id}/settings`** succeeds (full instance `config` map, including user settings and optional LLM overrides — see below).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/hands` | List hand definitions (marketplace / bundled metadata). |
+| `GET` | `/api/hands/{hand_id}` | Single hand definition, requirements, and settings schema. |
+| `GET` | `/api/hands/active` | List active hand instances. |
+| `POST` | `/api/hands/{hand_id}/activate` | Body: `{ "config": { ... } }` — hand-specific settings and optional LLM keys. |
+| `DELETE` | `/api/hands/instances/{id}` | Deactivate (removes instance; updates `hand_state.json`). |
+| `GET` | `/api/hands/{hand_id}/settings` | Settings schema, option availability, and current instance values. |
+| `PUT` | `/api/hands/{hand_id}/settings` | Body: full `config` object (JSON map). **Persists** to `hand_state.json` and **applies** to the running hand agent (model + effective system prompt from the same path as activation). |
+| `POST` | `/api/hands/{hand_id}/check-deps` / `.../install-deps` | Re-check or install declared dependencies. |
+| `POST` | `/api/hands/instances/{id}/pause` / `.../resume` | Pause or resume a hand instance. |
+| `GET` | `/api/hands/instances/{id}/stats` | Dashboard metrics (hand-defined). |
+
+**Instance `config` and LLM overrides:** In addition to keys defined in the hand’s `[[settings]]` schema, the per-instance map may include optional **connection** fields that override the hand’s `[agent]` defaults (and are honored on **activate** and after **`PUT` settings**):
+
+- `provider`, `model` — use the string `"default"` to mean the kernel’s **`[default_model]`** (same as `provider = "default"` in `HAND.toml`).
+- `api_key_env`, `base_url` — optional; set `api_key_env` / `base_url` JSON `null` to clear a previous override.
+
+**Desktop reinstalls:** Replacing the app bundle does **not** remove `~/.armaraos/`. If `hand_state.json` and `config.toml` remain, hand settings and LLM choices survive. Deleting the ArmaraOS home directory (or using a clean profile) drops this state; see [data-directory.md](data-directory.md).
+
+---
+
 ## ClawHub Endpoints
 
 Browse and install skills from ClawHub (OpenClaw ecosystem compatibility). All installations go through the full security pipeline: SHA256 verification, SKILL.md security scanning, and trust boundary enforcement.
@@ -3540,6 +3567,13 @@ The `Retry-After` header indicates the window duration in seconds.
 | POST | `/api/skills/uninstall` | Uninstall skill |
 | POST | `/api/skills/create` | Create new skill |
 | GET | `/api/marketplace/search` | Search FangHub |
+| **Hands (App Store)** | | |
+| GET | `/api/hands` | List hand definitions |
+| GET | `/api/hands/{hand_id}` | Hand details + settings schema |
+| GET | `/api/hands/active` | Active hand instances |
+| POST | `/api/hands/{hand_id}/activate` | Activate with `config` map |
+| PUT | `/api/hands/{hand_id}/settings` | Update instance `config` (persists `hand_state.json` + hot-reload agent) |
+| DELETE | `/api/hands/instances/{id}` | Deactivate hand |
 | **ClawHub** | | |
 | GET | `/api/clawhub/search` | Search ClawHub |
 | GET | `/api/clawhub/browse` | Browse ClawHub |

@@ -36,6 +36,7 @@ use openfang_types::memory::Memory;
 use openfang_types::tool::ToolDefinition;
 
 use async_trait::async_trait;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -116,6 +117,44 @@ fn which_binary(name: &str) -> bool {
         }
     }
     false
+}
+
+/// `uv`/`uvx` is often installed to `~/.local/bin`, which may not be on the daemon
+/// `PATH` until the user restarts a shell. Prefer `PATH` first, then a well-known
+/// [astral](https://docs.astral.sh/uv/) default install path.
+fn first_uvx_command() -> Option<String> {
+    if which_binary("uvx") {
+        return Some("uvx".to_string());
+    }
+    if let Some(h) = std::env::var_os("HOME") {
+        let p = std::path::Path::new(&h).join(".local/bin/uvx");
+        if p.is_file() {
+            return p.to_str().map(std::string::ToString::to_string);
+        }
+    }
+    None
+}
+
+/// Dashboard / API: whether host tooling and Google OAuth *application* id are set.
+#[derive(Debug, Clone, Serialize)]
+pub struct McpHostReadiness {
+    /// `uvx` is on `PATH` or `~/.local/bin/uvx` exists.
+    pub uvx_available: bool,
+    /// `npx` (Node) on `PATH` — for other bundled MCPs.
+    pub npx_on_path: bool,
+    /// Google OAuth *client* id (GCP app) is in vault, dotenv, or environment.
+    pub google_oauth_client_id_set: bool,
+    /// Opt-in: `ARMARAOS_AUTO_INSTALL_UV=1` runs the official `uv` installer on startup.
+    pub auto_install_uv_configured: bool,
+}
+
+/// String from a hand instance `config` JSON value (e.g. provider/model from dashboard).
+fn hand_config_value_as_nonempty_string(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) if n.is_u64() => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 /// Resolve the AINL MCP server command for default auto-registration.
@@ -208,6 +247,133 @@ fn maybe_inject_default_ainl_mcp_server(
     };
     servers.push(build_default_ainl_mcp_entry(command, args));
     Some(display_command)
+}
+
+/// Resolve the workspace-mcp command for default auto-registration.
+///
+/// Resolution order:
+/// 1. `ARMARAOS_WORKSPACE_MCP_COMMAND` — full command line, split on whitespace
+/// 2. `uvx` on PATH with `workspace-mcp --tool-tier core` (PyPI: `workspace-mcp`,
+///    [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp))
+///
+/// Returns `None` when `uv`/`uvx` is not available and no override is set.
+fn resolve_default_google_workspace_mcp_command() -> Option<(String, Vec<String>)> {
+    if let Ok(override_cmd) = std::env::var("ARMARAOS_WORKSPACE_MCP_COMMAND") {
+        let trimmed = override_cmd.trim();
+        if !trimmed.is_empty() {
+            let mut parts = trimmed.split_whitespace();
+            let command = parts.next()?.to_string();
+            let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+            return Some((command, args));
+        }
+    }
+    if let Some(cmd) = first_uvx_command() {
+        return Some((
+            cmd,
+            vec![
+                "workspace-mcp".to_string(),
+                "--tool-tier".to_string(),
+                "core".to_string(),
+            ],
+        ));
+    }
+    None
+}
+
+/// Build a default `google-workspace-mcp` MCP entry (taylorwilsdon `workspace-mcp` on PyPI).
+fn build_default_google_workspace_mcp_entry(
+    command: String,
+    args: Vec<String>,
+) -> openfang_types::config::McpServerConfigEntry {
+    openfang_types::config::McpServerConfigEntry {
+        name: "google-workspace-mcp".to_string(),
+        transport: openfang_types::config::McpTransportEntry::Stdio { command, args },
+        timeout_secs: 120,
+        env: vec![
+            "GOOGLE_OAUTH_CLIENT_ID".to_string(),
+            "GOOGLE_OAUTH_CLIENT_SECRET".to_string(),
+        ],
+        config_env: std::collections::HashMap::new(),
+        headers: Vec::new(),
+    }
+}
+
+/// When `GOOGLE_OAUTH_CLIENT_ID` is available (vault / dotenv) and the host has `uvx` (or an
+/// override), register workspace-mcp so agents see `mcp_google_workspace_mcp_*` tools without
+/// a separate install step. Skips if a server with the same name already exists (including an
+/// explicit or integration install).
+///
+/// `GOOGLE_OAUTH_CLIENT_ID` is required to avoid launching the server with no app credentials:
+/// in stdio mode, workspace-mcp can still start a local OAuth listener on `localhost:8000` even
+/// before a full Google sign-in, which is surprising on headless/CI hosts.
+fn maybe_inject_default_google_workspace_mcp_server(
+    servers: &mut Vec<openfang_types::config::McpServerConfigEntry>,
+    credential_resolver: &openfang_extensions::credentials::CredentialResolver,
+) -> Option<String> {
+    if servers.iter().any(|s| s.name == "google-workspace-mcp") {
+        return None;
+    }
+    if let Ok(disable) = std::env::var("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP") {
+        let v = disable.trim().to_ascii_lowercase();
+        if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
+            return None;
+        }
+    }
+    let has_client_id = credential_resolver
+        .resolve("GOOGLE_OAUTH_CLIENT_ID")
+        .map(|z| !z.to_string().trim().is_empty())
+        .unwrap_or(false);
+    if !has_client_id {
+        return None;
+    }
+    let (command, args) = resolve_default_google_workspace_mcp_command()?;
+    let display = if args.is_empty() {
+        command.clone()
+    } else {
+        format!("{command} {}", args.join(" "))
+    };
+    servers.push(build_default_google_workspace_mcp_entry(command, args));
+    Some(display)
+}
+
+/// When `ARMARAOS_AUTO_INSTALL_UV=1` and `uvx` is not resolvable, run the official
+/// [uv](https://docs.astral.sh/uv/) `install.sh` so `~/.local/bin/uvx` is created.
+/// No-op on non-Unix, when `uvx` already works, or when the env is unset. Chained to run
+/// before MCP handshakes on boot.
+async fn run_auto_install_uv_on_boot() {
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+    if first_uvx_command().is_some() {
+        return;
+    }
+    let v = std::env::var("ARMARAOS_AUTO_INSTALL_UV").unwrap_or_default();
+    if !matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    ) {
+        return;
+    }
+    info!("ARMARAOS_AUTO_INSTALL_UV: running official uv installer (curl | sh)…");
+    let result = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("curl -LsSf https://astral.sh/uv/install.sh | sh")
+            .status()
+    })
+    .await;
+    match result {
+        Ok(Ok(st)) if st.success() => {
+            info!(
+                code = ?st.code(),
+                "uv: install script completed; ~/.local/bin/uvx may be used if not already on PATH"
+            );
+        }
+        Ok(Ok(st)) => warn!(code = ?st.code(), "uv: install script failed"),
+        Ok(Err(e)) => warn!(error = %e, "uv: failed to run install script"),
+        Err(e) => warn!(error = %e, "uv: install join error"),
+    }
 }
 
 /// Case-insensitive glob-style matcher for per-agent tool filters.
@@ -1593,6 +1759,16 @@ impl OpenFangKernel {
             );
         }
 
+        if let Some(cmd) = maybe_inject_default_google_workspace_mcp_server(
+            &mut all_mcp_servers,
+            &credential_resolver,
+        ) {
+            info!(
+                command = %cmd,
+                "MCP: auto-registered default Google Workspace server (mcp_google_workspace_mcp_*) — requires GOOGLE_OAUTH_CLIENT_ID; `uv`/`uvx` on PATH, or set ARMARAOS_WORKSPACE_MCP_COMMAND; disable with ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP=1"
+            );
+        }
+
         // Initialize integration health monitor
         let health_config = openfang_extensions::health::HealthMonitorConfig {
             auto_reconnect: config.extensions.auto_reconnect,
@@ -1604,6 +1780,12 @@ impl OpenFangKernel {
         // Register all installed integrations for health monitoring
         for inst in extension_registry.to_mcp_configs() {
             extension_health.register(&inst.name);
+        }
+        if all_mcp_servers
+            .iter()
+            .any(|s| s.name == "google-workspace-mcp")
+        {
+            extension_health.register("google-workspace-mcp");
         }
 
         // Initialize web tools (multi-provider search + SSRF-protected fetch + caching)
@@ -5137,6 +5319,171 @@ impl OpenFangKernel {
 
     // ─── Hand lifecycle ─────────────────────────────────────────────────────
 
+    /// Persist current active hand instance configs to `hand_state.json` in the kernel home.
+    /// Call this after in-memory hand config changes (e.g. `PUT` hand settings) so restarts
+    /// restore the same provider/model and other instance keys.
+    pub fn persist_hand_state(&self) {
+        let state_path = self.config.home_dir.join("hand_state.json");
+        if let Err(e) = self.hand_registry.persist_state(&state_path) {
+            warn!(error = %e, "Failed to persist hand state");
+        }
+    }
+
+    /// Resolve LLM + inference fields for a hand from its definition, kernel defaults, and
+    /// per-instance `config` (e.g. dashboard / `PUT` settings). Used by [`Self::activate_hand`]
+    /// and [`Self::apply_hand_instance_config_to_running_agent`].
+    fn resolve_hand_instance_model_config(
+        kernel: &KernelConfig,
+        def: &openfang_hands::HandDefinition,
+        instance_config: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> ModelConfig {
+        let mut hand_provider = if def.agent.provider == "default" {
+            kernel.default_model.provider.clone()
+        } else {
+            def.agent.provider.clone()
+        };
+        let mut hand_model = if def.agent.model == "default" {
+            kernel.default_model.model.clone()
+        } else {
+            def.agent.model.clone()
+        };
+        let mut api_key_env = def.agent.api_key_env.clone();
+        let mut base_url = def.agent.base_url.clone();
+        let mut max_tokens = def.agent.max_tokens;
+        let mut temperature = def.agent.temperature;
+
+        if let Some(v) = instance_config.get("provider") {
+            if let Some(s) = hand_config_value_as_nonempty_string(v) {
+                if s == "default" {
+                    hand_provider = kernel.default_model.provider.clone();
+                } else {
+                    hand_provider = s;
+                }
+            }
+        }
+        if let Some(v) = instance_config.get("model") {
+            if let Some(s) = hand_config_value_as_nonempty_string(v) {
+                if s == "default" {
+                    hand_model = kernel.default_model.model.clone();
+                } else {
+                    hand_model = s;
+                }
+            }
+        }
+        if let Some(v) = instance_config.get("api_key_env") {
+            if v.is_null() {
+                api_key_env = None;
+            } else if let Some(s) = hand_config_value_as_nonempty_string(v) {
+                api_key_env = Some(s);
+            }
+        }
+        if let Some(v) = instance_config.get("base_url") {
+            if v.is_null() {
+                base_url = None;
+            } else if let Some(s) = hand_config_value_as_nonempty_string(v) {
+                base_url = Some(s);
+            }
+        }
+        if let Some(v) = instance_config.get("max_tokens") {
+            if let Some(n) = v.as_u64() {
+                max_tokens = n as u32;
+            } else if let Some(f) = v.as_f64() {
+                max_tokens = f as u32;
+            }
+        }
+        if let Some(v) = instance_config.get("temperature") {
+            if let Some(f) = v.as_f64() {
+                temperature = f as f32;
+            } else if let Some(s) = v.as_str() {
+                if let Ok(f) = s.parse::<f32>() {
+                    temperature = f;
+                }
+            }
+        }
+
+        ModelConfig {
+            provider: hand_provider,
+            model: hand_model,
+            max_tokens,
+            temperature,
+            system_prompt: def.agent.system_prompt.clone(),
+            api_key_env,
+            base_url,
+        }
+    }
+
+    /// Build the full hand system prompt from a [`openfang_hands::resolve_settings`] result.
+    fn hand_effective_system_prompt_from_resolved(
+        def: &openfang_hands::HandDefinition,
+        resolved: &openfang_hands::ResolvedSettings,
+    ) -> String {
+        let mut system_prompt = def.agent.system_prompt.clone();
+        if !resolved.prompt_block.is_empty() {
+            system_prompt = format!("{}\n\n---\n\n{}", system_prompt, resolved.prompt_block);
+        }
+        if let Some(ref skill_content) = def.skill_content {
+            system_prompt = format!(
+                "{}\n\n---\n\n## Reference Knowledge\n\n{}",
+                system_prompt, skill_content
+            );
+        }
+        system_prompt
+    }
+
+    /// Rebuild a hand's effective system prompt from definition + current instance `config`
+    /// (user settings + optional bundled skill), matching [`Self::activate_hand`].
+    fn hand_effective_system_prompt(
+        def: &openfang_hands::HandDefinition,
+        instance_config: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> String {
+        let resolved = openfang_hands::resolve_settings(&def.settings, instance_config);
+        Self::hand_effective_system_prompt_from_resolved(def, &resolved)
+    }
+
+    /// After a hand's instance `config` map changes, push the same effective `ModelConfig` and
+    /// system prompt that a fresh [`Self::activate_hand`] would use (LLM + settings block),
+    /// without tearing down the agent. Persists the agent to memory when successful.
+    pub fn apply_hand_instance_config_to_running_agent(
+        &self,
+        hand_id: &str,
+        instance_id: uuid::Uuid,
+    ) -> KernelResult<()> {
+        let def = self
+            .hand_registry
+            .get_definition(hand_id)
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::AgentNotFound(format!(
+                    "Hand not found: {hand_id}"
+                )))
+            })?;
+        let inst = self
+            .hand_registry
+            .get_instance(instance_id)
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::Internal(format!(
+                    "Hand instance not found: {instance_id}"
+                )))
+            })?;
+        let Some(agent_id) = inst.agent_id else {
+            return Ok(());
+        };
+        let mut m = Self::resolve_hand_instance_model_config(&self.config, &def, &inst.config);
+        m.system_prompt = Self::hand_effective_system_prompt(&def, &inst.config);
+        self.registry
+            .replace_model_config(agent_id, m)
+            .map_err(KernelError::OpenFang)?;
+        if let Some(entry) = self.registry.get(agent_id) {
+            let _ = self.memory.save_agent(&entry);
+        }
+        let _ = self.memory.delete_canonical_session(agent_id);
+        debug!(
+            agent_id = %agent_id,
+            hand = %hand_id,
+            "Updated hand agent model + system prompt from instance config"
+        );
+        Ok(())
+    }
+
     /// Activate a hand: check requirements, create instance, spawn agent.
     pub fn activate_hand(
         &self,
@@ -5166,32 +5513,16 @@ impl OpenFangKernel {
                 other => KernelError::OpenFang(OpenFangError::Internal(other.to_string())),
             })?;
 
-        // Build an agent manifest from the hand definition.
-        // If the hand declares provider/model as "default", inherit the kernel's configured LLM.
-        let hand_provider = if def.agent.provider == "default" {
-            self.config.default_model.provider.clone()
-        } else {
-            def.agent.provider.clone()
-        };
-        let hand_model = if def.agent.model == "default" {
-            self.config.default_model.model.clone()
-        } else {
-            def.agent.model.clone()
-        };
-
+        // Build an agent manifest from the hand definition, including per-instance LLM overrides.
         let mut manifest = AgentManifest {
             name: def.agent.name.clone(),
             description: def.agent.description.clone(),
             module: def.agent.module.clone(),
-            model: ModelConfig {
-                provider: hand_provider,
-                model: hand_model,
-                max_tokens: def.agent.max_tokens,
-                temperature: def.agent.temperature,
-                system_prompt: def.agent.system_prompt.clone(),
-                api_key_env: def.agent.api_key_env.clone(),
-                base_url: def.agent.base_url.clone(),
-            },
+            model: Self::resolve_hand_instance_model_config(
+                &self.config,
+                &def,
+                &instance.config,
+            ),
             capabilities: ManifestCapabilities {
                 tools: def.tools.clone(),
                 ..Default::default()
@@ -5242,14 +5573,10 @@ impl OpenFangKernel {
             ..Default::default()
         };
 
-        // Resolve hand settings → prompt block + env vars
+        // Resolve hand settings → prompt + env; single pass matches hot-reload
+        // [`Self::apply_hand_instance_config_to_running_agent`].
         let resolved = openfang_hands::resolve_settings(&def.settings, &instance.config);
-        if !resolved.prompt_block.is_empty() {
-            manifest.model.system_prompt = format!(
-                "{}\n\n---\n\n{}",
-                manifest.model.system_prompt, resolved.prompt_block
-            );
-        }
+        manifest.model.system_prompt = Self::hand_effective_system_prompt_from_resolved(&def, &resolved);
         // Collect env vars from settings + from requires (api_key/env_var requirements)
         let mut allowed_env = resolved.env_vars;
         for req in &def.requires {
@@ -5267,14 +5594,6 @@ impl OpenFangKernel {
             manifest.metadata.insert(
                 "hand_allowed_env".to_string(),
                 serde_json::to_value(&allowed_env).unwrap_or_default(),
-            );
-        }
-
-        // Inject skill content into system prompt
-        if let Some(ref skill_content) = def.skill_content {
-            manifest.model.system_prompt = format!(
-                "{}\n\n---\n\n## Reference Knowledge\n\n{}",
-                manifest.model.system_prompt, skill_content
             );
         }
 
@@ -5374,14 +5693,6 @@ impl OpenFangKernel {
         // Persist hand state so it survives restarts
         self.persist_hand_state();
         Ok(())
-    }
-
-    /// Persist active hand state to disk.
-    fn persist_hand_state(&self) {
-        let state_path = self.config.home_dir.join("hand_state.json");
-        if let Err(e) = self.hand_registry.persist_state(&state_path) {
-            warn!(error = %e, "Failed to persist hand state");
-        }
     }
 
     /// Pause a hand (marks it paused; agent stays alive but won't receive new work).
@@ -6414,6 +6725,7 @@ impl OpenFangKernel {
         if has_mcp {
             let kernel = Arc::clone(self);
             tokio::spawn(async move {
+                run_auto_install_uv_on_boot().await;
                 kernel.connect_mcp_servers().await;
             });
         }
@@ -6888,6 +7200,25 @@ impl OpenFangKernel {
             .unwrap_or_else(|e| e.into_inner())
             .resolve(key)
             .map(|z| z.to_string())
+    }
+
+    /// Exposes host `PATH` / dotenv / credential state for Google Workspace MCP setup in the
+    /// dashboard (see `GET /api/system/mcp-host-readiness`).
+    pub fn mcp_host_readiness(&self) -> McpHostReadiness {
+        McpHostReadiness {
+            uvx_available: first_uvx_command().is_some(),
+            npx_on_path: which_binary("npx"),
+            google_oauth_client_id_set: self
+                .resolve_credential("GOOGLE_OAUTH_CLIENT_ID")
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false),
+            auto_install_uv_configured: std::env::var("ARMARAOS_AUTO_INSTALL_UV")
+                .map(|s| {
+                    let v = s.trim().to_ascii_lowercase();
+                    matches!(v.as_str(), "1" | "true" | "yes" | "on")
+                })
+                .unwrap_or(false),
+        }
     }
 
     /// Ensure MCP stdio subprocesses can read whitelisted env vars.
@@ -10531,6 +10862,7 @@ impl openfang_wire::peer::PeerHandle for OpenFangKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openfang_extensions::credentials::CredentialResolver;
     use std::collections::HashMap;
 
     #[test]
@@ -10923,6 +11255,82 @@ mod tests {
             openfang_types::config::McpTransportEntry::Stdio { command, args } => {
                 assert_eq!(command, "/usr/local/bin/fake-ainl-mcp");
                 assert_eq!(args, &vec!["--quiet".to_string()]);
+            }
+            other => panic!("expected stdio transport, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(google_workspace_mcp_env)]
+    fn maybe_inject_default_google_workspace_mcp_server_skips_without_client_id() {
+        let _id = EnvGuard::clear("GOOGLE_OAUTH_CLIENT_ID");
+        let _cmd = EnvGuard::set(
+            "ARMARAOS_WORKSPACE_MCP_COMMAND",
+            "/fake/uvx workspace-mcp",
+        );
+        let _dis = EnvGuard::clear("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP");
+        let resolver = CredentialResolver::new(None, None);
+        let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
+        let injected = maybe_inject_default_google_workspace_mcp_server(&mut servers, &resolver);
+        assert!(injected.is_none(), "no auto-inject without GOOGLE_OAUTH_CLIENT_ID");
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial(google_workspace_mcp_env)]
+    fn maybe_inject_default_google_workspace_mcp_server_respects_disable_env() {
+        let _id = EnvGuard::set("GOOGLE_OAUTH_CLIENT_ID", "cid");
+        let _cmd = EnvGuard::set(
+            "ARMARAOS_WORKSPACE_MCP_COMMAND",
+            "/fake/uvx workspace-mcp",
+        );
+        let _dis = EnvGuard::set("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP", "1");
+        let resolver = CredentialResolver::new(None, None);
+        let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
+        let injected = maybe_inject_default_google_workspace_mcp_server(&mut servers, &resolver);
+        assert!(
+            injected.is_none(),
+            "ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP=1 must suppress"
+        );
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial(google_workspace_mcp_env)]
+    fn maybe_inject_default_google_workspace_mcp_uses_command_override() {
+        let _id = EnvGuard::set("GOOGLE_OAUTH_CLIENT_ID", "test-client");
+        let _cmd = EnvGuard::set(
+            "ARMARAOS_WORKSPACE_MCP_COMMAND",
+            "/opt/fake-uvx workspace-mcp --tool-tier core",
+        );
+        let _dis = EnvGuard::clear("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP");
+        let resolver = CredentialResolver::new(None, None);
+        let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
+        let injected = maybe_inject_default_google_workspace_mcp_server(&mut servers, &resolver);
+        assert_eq!(
+            injected.as_deref(),
+            Some("/opt/fake-uvx workspace-mcp --tool-tier core")
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "google-workspace-mcp");
+        assert_eq!(servers[0].timeout_secs, 120);
+        assert!(
+            servers[0].env.contains(&"GOOGLE_OAUTH_CLIENT_ID".to_string())
+                && servers[0]
+                    .env
+                    .contains(&"GOOGLE_OAUTH_CLIENT_SECRET".to_string())
+        );
+        match &servers[0].transport {
+            openfang_types::config::McpTransportEntry::Stdio { command, args } => {
+                assert_eq!(command, "/opt/fake-uvx");
+                assert_eq!(
+                    args,
+                    &vec![
+                        "workspace-mcp".to_string(),
+                        "--tool-tier".to_string(),
+                        "core".to_string()
+                    ]
+                );
             }
             other => panic!("expected stdio transport, got {other:?}"),
         }

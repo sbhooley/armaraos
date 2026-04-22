@@ -6376,7 +6376,20 @@ pub async fn update_hand_settings(
 
     match instance_id {
         Some(id) => match state.kernel.hand_registry.update_config(id, config.clone()) {
-            Ok(()) => (
+            Ok(()) => {
+                state.kernel.persist_hand_state();
+                if let Err(e) = state
+                    .kernel
+                    .apply_hand_instance_config_to_running_agent(&hand_id, id)
+                {
+                    tracing::warn!(
+                        hand = %hand_id,
+                        instance = %id,
+                        error = %e,
+                        "Hand settings persisted; could not apply to running hand agent (restart to pick up)"
+                    );
+                }
+                (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "status": "ok",
@@ -6384,7 +6397,8 @@ pub async fn update_hand_settings(
                     "instance_id": id,
                     "config": config,
                 })),
-            ),
+            )
+            }
             Err(e) => api_json_error(
                 StatusCode::BAD_REQUEST,
                 &rid,
@@ -7380,6 +7394,174 @@ pub async fn system_local_voice(State(state): State<Arc<AppState>>) -> impl Into
         "piper_ready": lv.piper_ready(),
         "whisper_ready": lv.whisper_ready(),
     }))
+}
+
+/// GET /api/system/mcp-host-readiness — `uvx` / `npx` on host, Google OAuth *client* id presence,
+/// and whether `ARMARAOS_AUTO_INSTALL_UV=1` is set (one-shot install before MCP on boot).
+pub async fn system_mcp_host_readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let r = state.kernel.mcp_host_readiness();
+    Json(serde_json::json!({
+        "uvx_available": r.uvx_available,
+        "npx_on_path": r.npx_on_path,
+        "google_oauth_client_id_set": r.google_oauth_client_id_set,
+        "auto_install_uv_configured": r.auto_install_uv_configured,
+        "uv_install_sh": "curl -LsSf https://astral.sh/uv/install.sh | sh",
+    }))
+}
+
+/// POST /api/system/bootstrap-uv — runs the official uv installer (`curl | sh`) on the host
+/// (Unix). Idempotent. Does not add `~/.local/bin` to the daemon's `PATH` automatically.
+pub async fn system_bootstrap_uv(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let result: Result<(), String> = if cfg!(unix) {
+        match tokio::task::spawn_blocking(|| {
+            let st = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("curl -LsSf https://astral.sh/uv/install.sh | sh")
+                .status();
+            let st = st.map_err(|e| e.to_string())?;
+            if st.success() {
+                Ok(())
+            } else {
+                Err(format!("uv install script exited with {:?}", st.code()))
+            }
+        })
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(e) => Err(e.to_string()),
+        }
+    } else {
+        Err("On Windows, install `uv` from https://docs.astral.sh/uv/ and add it to PATH, then restart the daemon.".to_string())
+    };
+
+    let after = state.kernel.mcp_host_readiness();
+    match result {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "message": "uv install script completed. You may need a new shell, add ~/.local/bin to PATH, or restart the ArmaraOS daemon to pick up `uvx`.",
+                "readiness": {
+                    "uvx_available": after.uvx_available,
+                    "npx_on_path": after.npx_on_path,
+                }
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": e,
+                "readiness": {
+                    "uvx_available": after.uvx_available,
+                    "npx_on_path": after.npx_on_path,
+                }
+            })),
+        ),
+    }
+}
+
+/// POST /api/integrations/google-workspace/oauth — save Google *OAuth app* (Desktop/Web client)
+/// credentials the same way provider keys are saved (vault, secrets.env, process env), then
+/// reconnect MCP stdio children that list these env var names.
+pub async fn post_google_workspace_oauth(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/integrations/google-workspace/oauth";
+
+    let id_str = match req
+        .get("GOOGLE_OAUTH_CLIENT_ID")
+        .or_else(|| req.get("client_id"))
+        .and_then(|v| v.as_str())
+    {
+        Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Missing client id",
+                "Include non-empty GOOGLE_OAUTH_CLIENT_ID (or client_id) in the JSON object."
+                    .to_string(),
+                None,
+            );
+        }
+    };
+
+    let sec_str = req
+        .get("GOOGLE_OAUTH_CLIENT_SECRET")
+        .or_else(|| req.get("client_secret"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    let secrets_path = state.kernel.config.home_dir.join("secrets.env");
+
+    // Client ID
+    if let Err(e) = write_secret_env(&secrets_path, "GOOGLE_OAUTH_CLIENT_ID", &id_str) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            PATH,
+            "Failed to write GOOGLE_OAUTH_CLIENT_ID",
+            e.to_string(),
+            None,
+        );
+    }
+    state
+        .kernel
+        .store_credential("GOOGLE_OAUTH_CLIENT_ID", &id_str);
+    std::env::set_var("GOOGLE_OAUTH_CLIENT_ID", &id_str);
+
+    if !sec_str.is_empty() {
+        if let Err(e) = write_secret_env(
+            &secrets_path,
+            "GOOGLE_OAUTH_CLIENT_SECRET",
+            &sec_str,
+        ) {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                PATH,
+                "Failed to write GOOGLE_OAUTH_CLIENT_SECRET",
+                e.to_string(),
+                None,
+            );
+        }
+        state
+            .kernel
+            .store_credential("GOOGLE_OAUTH_CLIENT_SECRET", &sec_str);
+        std::env::set_var("GOOGLE_OAUTH_CLIENT_SECRET", &sec_str);
+    } else {
+        // Allow PKCE / public clients without a secret: remove stale secret from env
+        // so workspace-mcp does not pick up an old value.
+        let _ = remove_secret_env(&secrets_path, "GOOGLE_OAUTH_CLIENT_SECRET");
+        let _ = state
+            .kernel
+            .remove_credential("GOOGLE_OAUTH_CLIENT_SECRET");
+        std::env::remove_var("GOOGLE_OAUTH_CLIENT_SECRET");
+    }
+
+    for key in ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"] {
+        let k = key.to_string();
+        let kernel = state.kernel.clone();
+        tokio::spawn(async move {
+            let _ = kernel.reconnect_mcp_servers_with_env_var(&k).await;
+        });
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "message": "Google OAuth application credentials saved. Reconnecting MCP services that use these variables.",
+            "request_id": rid.0,
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -12557,6 +12739,13 @@ pub async fn mcp_integration_presets() -> impl IntoResponse {
                 "title": "Google Calendar",
                 "subtitle": "OAuth — use Connect flow when available",
                 "order": 40
+            },
+            {
+                "preset_id": "google-workspace-mcp",
+                "integration_id": "google-workspace-mcp",
+                "title": "Google Workspace (unified)",
+                "subtitle": "Gmail, Drive, Calendar, Docs, Sheets… via workspace-mcp (uvx)",
+                "order": 45
             },
             {
                 "preset_id": "apple-caldav",

@@ -631,6 +631,18 @@ pub async fn build_router(
             "/api/system/daemon-resources",
             axum::routing::get(routes::daemon_resources),
         )
+        .route(
+            "/api/system/mcp-host-readiness",
+            axum::routing::get(routes::system_mcp_host_readiness),
+        )
+        .route(
+            "/api/system/bootstrap-uv",
+            axum::routing::post(routes::system_bootstrap_uv),
+        )
+        .route(
+            "/api/integrations/google-workspace/oauth",
+            axum::routing::post(routes::post_google_workspace_oauth),
+        )
         // Agent communication (Comms) endpoints
         .route(
             "/api/comms/topology",

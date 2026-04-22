@@ -71,6 +71,10 @@ pub fn install_integration(
 
     let mut actually_missing: Vec<String> = Vec::new();
     for key in &required_keys {
+        if id == "google-workspace-mcp" && *key == "GOOGLE_OAUTH_CLIENT_SECRET" {
+            // Optional for PKCE-only OAuth clients; do not block Ready status.
+            continue;
+        }
         let meta = template
             .required_env
             .iter()
@@ -257,6 +261,11 @@ pub fn integration_payload_field_errors(
         let v_cfg = config.get(&e.name).map(|s| s.as_str()).unwrap_or("");
         if e.is_secret {
             if v_secret.trim().is_empty() {
+                // `google-workspace-mcp` supports public OAuth 2.1 (PKCE) with no client secret;
+                // workspace-mcp reads other env in that case.
+                if id == "google-workspace-mcp" && e.name == "GOOGLE_OAUTH_CLIENT_SECRET" {
+                    continue;
+                }
                 errors.insert(e.name.clone(), format!("{} is required", e.label));
             }
         } else if v_cfg.trim().is_empty() && v_secret.trim().is_empty() {
@@ -571,7 +580,7 @@ mod tests {
         let resolver = CredentialResolver::new(None, None);
 
         let list = list_integrations(&registry, &resolver);
-        assert_eq!(list.len(), 27);
+        assert_eq!(list.len(), 28);
         assert!(list
             .iter()
             .all(|e| e.status == IntegrationStatus::Available));

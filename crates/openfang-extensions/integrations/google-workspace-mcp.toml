@@ -1,0 +1,40 @@
+id = "google-workspace-mcp"
+name = "Google Workspace (unified)"
+description = "Gmail, Calendar, Drive, Docs, Sheets, Slides, and more via workspace-mcp (taylorwilsdon/google_workspace_mcp, PyPI: workspace-mcp). Uses uvx to install on first run."
+category = "productivity"
+icon = "🌐"
+tags = ["google", "workspace", "gmail", "calendar", "drive", "docs", "sheets", "mcp"]
+
+[transport]
+type = "stdio"
+command = "uvx"
+args = ["workspace-mcp", "--tool-tier", "core"]
+
+[[required_env]]
+name = "GOOGLE_OAUTH_CLIENT_ID"
+label = "Google OAuth Client ID"
+help = "From Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID (Desktop app recommended)."
+is_secret = false
+get_url = "https://console.cloud.google.com/apis/credentials"
+
+[[required_env]]
+name = "GOOGLE_OAUTH_CLIENT_SECRET"
+label = "Google OAuth Client Secret"
+help = "From the same OAuth client. For public OAuth 2.1 / PKCE-only clients, leave empty and follow workspace-mcp docs; most Desktop clients require this."
+is_secret = true
+get_url = "https://console.cloud.google.com/apis/credentials"
+
+[health_check]
+interval_secs = 60
+unhealthy_threshold = 3
+
+# First `uvx` run may download the package; allow enough time.
+mcp_timeout_secs = 120
+
+setup_instructions = """
+1. In Google Cloud Console, create a project and enable the Workspace APIs you need (Gmail, Drive, Calendar, etc.).
+2. Create OAuth 2.0 credentials (Desktop application is a good default for local use).
+3. Paste the Client ID and (if your client has one) Client Secret above and install. Secrets are stored in the vault when available.
+4. The server is launched with `uvx workspace-mcp` (downloads the PyPI package on first use). After install, use Reconnect or restart the daemon.
+5. Complete any browser OAuth prompts from workspace-mcp when a tool first needs access; tokens are stored under ~/.google_workspace_mcp/credentials by default.
+"""

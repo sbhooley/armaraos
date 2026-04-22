@@ -239,6 +239,21 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Replace the entire `[model]` block on an existing agent (identity + instructions + provider).
+    pub fn replace_model_config(
+        &self,
+        id: AgentId,
+        new_model: openfang_types::agent::ModelConfig,
+    ) -> OpenFangResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| OpenFangError::AgentNotFound(id.to_string()))?;
+        entry.manifest.model = new_model;
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
     /// Update an agent's fallback model chain.
     pub fn update_fallback_models(
         &self,

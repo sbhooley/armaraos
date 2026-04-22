@@ -39,6 +39,12 @@ function settingsPage() {
     customProviderStatus: '',
     addingCustomProvider: false,
     loading: true,
+    /** From GET /api/system/mcp-host-readiness (Google Workspace MCP + uvx). */
+    mcpHostReadiness: null,
+    googleOauthClientId: '',
+    googleOauthClientSecret: '',
+    googleOauthSaving: false,
+    uvBootstrapBusy: false,
     loadError: '',
     loadErrorDetail: '',
     loadErrorHint: '',
@@ -272,6 +278,7 @@ function settingsPage() {
           this.loadSysInfo(),
           this.loadUsage(),
           this.loadTools(),
+          this.loadMcpHostReadiness(),
           this.loadConfig(),
           this.loadProviders(),
           this.loadModels(),
@@ -491,6 +498,60 @@ function settingsPage() {
         var data = await OpenFangAPI.get('/api/tools');
         this.tools = data.tools || [];
       } catch(e) { this.tools = []; }
+    },
+
+    async loadMcpHostReadiness() {
+      try {
+        this.mcpHostReadiness = await OpenFangAPI.get('/api/system/mcp-host-readiness');
+      } catch (e) {
+        this.mcpHostReadiness = null;
+      }
+    },
+
+    async saveGoogleWorkspaceOAuth() {
+      var id = (this.googleOauthClientId || '').trim();
+      if (!id) {
+        if (OpenFangToast) OpenFangToast.error('Enter a Google OAuth Client ID from Google Cloud Console.');
+        return;
+      }
+      this.googleOauthSaving = true;
+      try {
+        await OpenFangAPI.post('/api/integrations/google-workspace/oauth', {
+          GOOGLE_OAUTH_CLIENT_ID: id,
+          GOOGLE_OAUTH_CLIENT_SECRET: (this.googleOauthClientSecret || '').trim()
+        });
+        if (OpenFangToast) OpenFangToast.success('Saved. MCP servers that use these env vars will reconnect.');
+        await this.loadMcpHostReadiness();
+      } catch (e) {
+        if (OpenFangToast) OpenFangToast.error('Save failed: ' + (e && e.message ? e.message : String(e)));
+      }
+      this.googleOauthSaving = false;
+    },
+
+    async bootstrapUvFromSettings() {
+      this.uvBootstrapBusy = true;
+      try {
+        var res = await OpenFangAPI.post('/api/system/bootstrap-uv', {});
+        if (res && res.ok === false) {
+          if (OpenFangToast) OpenFangToast.error(res.error || 'Install failed');
+        } else {
+          if (OpenFangToast) OpenFangToast.success((res && res.message) || 'uv installed — restart the daemon if `uvx` is still not found');
+        }
+        await this.loadMcpHostReadiness();
+      } catch (e) {
+        if (OpenFangToast) OpenFangToast.error('Install failed: ' + (e && e.message ? e.message : String(e)));
+      }
+      this.uvBootstrapBusy = false;
+    },
+
+    async copyUvInstallCommand() {
+      var cmd = (this.mcpHostReadiness && this.mcpHostReadiness.uv_install_sh) || 'curl -LsSf https://astral.sh/uv/install.sh | sh';
+      try {
+        if (typeof copyTextToClipboard === 'function') {
+          await copyTextToClipboard(cmd);
+          if (OpenFangToast) OpenFangToast.success('Copied install command');
+        }
+      } catch (e) { /* ignore */ }
     },
 
     async loadConfig() {

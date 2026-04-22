@@ -1,6 +1,6 @@
 //! Compile-time embedded integration templates.
 //!
-//! All 25 integration TOML files are baked into the binary via `include_str!()`,
+//! All integration TOML files are baked into the binary via `include_str!()`,
 //! ensuring they ship with every OpenFang build with zero filesystem dependencies.
 
 /// True if `id` is a built-in integration (cannot be overridden by custom MCP).
@@ -22,7 +22,7 @@ pub fn bundled_integrations() -> Vec<(&'static str, &'static str)> {
         ("jira", include_str!("../integrations/jira.toml")),
         ("bitbucket", include_str!("../integrations/bitbucket.toml")),
         ("sentry", include_str!("../integrations/sentry.toml")),
-        // ── Productivity (7) ────────────────────────────────────────────────
+        // ── Productivity (8) ────────────────────────────────────────────────
         (
             "apple-caldav",
             include_str!("../integrations/apple-caldav.toml"),
@@ -37,6 +37,10 @@ pub fn bundled_integrations() -> Vec<(&'static str, &'static str)> {
         (
             "google-drive",
             include_str!("../integrations/google-drive.toml"),
+        ),
+        (
+            "google-workspace-mcp",
+            include_str!("../integrations/google-workspace-mcp.toml"),
         ),
         ("dropbox", include_str!("../integrations/dropbox.toml")),
         // ── Communication (3) ───────────────────────────────────────────────
@@ -84,7 +88,7 @@ mod tests {
 
     #[test]
     fn bundled_count() {
-        assert_eq!(bundled_integrations().len(), 27);
+        assert_eq!(bundled_integrations().len(), 28);
     }
 
     #[test]
@@ -129,7 +133,7 @@ mod tests {
             .filter(|t| t.category == crate::IntegrationCategory::AI)
             .count();
         assert_eq!(devtools, 7);
-        assert_eq!(productivity, 7);
+        assert_eq!(productivity, 8);
         assert_eq!(communication, 3);
         assert_eq!(data, 5);
         assert_eq!(cloud, 3);
@@ -150,10 +154,13 @@ mod tests {
         for (id, content) in bundled_integrations() {
             let t: IntegrationTemplate = toml::from_str(content)
                 .unwrap_or_else(|e| panic!("Failed to parse '{}': {}", id, e));
-            // All bundled integrations use stdio transport via npx
+            // Bundled integrations use stdio via `npx` (Node) or `uvx` (Python / PyPI).
             match &t.transport {
                 crate::McpTransportTemplate::Stdio { command, args } => {
-                    assert_eq!(command, "npx", "{} should use npx", id);
+                    assert!(
+                        command == "npx" || command == "uvx",
+                        "{id} should use npx or uvx, got {command}"
+                    );
                     assert!(!args.is_empty(), "{} should have args", id);
                 }
                 crate::McpTransportTemplate::Sse { .. } => {

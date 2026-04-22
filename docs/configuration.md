@@ -235,7 +235,7 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `home_dir` | path | `~/.armaraos` | ArmaraOS home directory. Stores config, agents, skills. |
+| `home_dir` | path | `~/.armaraos` | ArmaraOS home directory. Stores `config.toml`, per-agent data, skills, and **`hand_state.json`** (persisted [Hands](api-reference.md#hands-app-store-endpoints) / App Store instance `config` — including optional per-hand `provider` / `model` overrides). |
 | `data_dir` | path | `~/.armaraos/data` | Directory for SQLite databases and persistent data. |
 | `config_schema_version` | integer | `0` when omitted (legacy) | On-disk config format version. The daemon may migrate legacy files in memory and append the current value to `config.toml`. The running binary also defines a constant (`CONFIG_SCHEMA_VERSION`); compare **effective** vs **binary** in **Settings** (summary under tabs shows **`⚠ mismatch`** when they differ), **Daemon & runtime**, `GET /api/status`, or support **`diagnostics_snapshot.json`**. Semantics and migrations: [data-directory.md](data-directory.md#config-schema-version). |
 | `log_level` | string | `"info"` | Log verbosity. One of: `trace`, `debug`, `info`, `warn`, `error`. Persisted in `config.toml` and used when the CLI daemon initializes `tracing`. **Changing this value at runtime** (e.g. via the dashboard **Logs → Daemon** save or `POST /api/config/set`) updates the file and reloads config, but **already-running tracing does not re-subscribe** — **restart the daemon** for new verbosity to apply. `RUST_LOG` still overrides the filter when set. |

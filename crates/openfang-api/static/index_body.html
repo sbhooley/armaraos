@@ -5146,6 +5146,41 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
           <!-- Tools tab -->
           <div x-show="tab === 'tools'">
+            <div class="info-card mb-4" style="border:1px solid var(--border-subtle, rgba(255,255,255,0.1))" x-data x-show="mcpHostReadiness != null" x-cloak>
+              <h4 style="margin-top:0">Google Workspace MCP (Gmail, Calendar, Drive, Docs, …)</h4>
+              <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 10px">
+                The bundled <code>google-workspace-mcp</code> server runs <code>uvx workspace-mcp</code> and needs a Google Cloud <strong>OAuth client</strong> (ID + usually secret) from
+                <a href="https://console.cloud.google.com/apis/credentials" @click.prevent="armaraosOpenExternalUrl($event, 'https://console.cloud.google.com/apis/credentials')" class="text-accent" style="color:var(--accent)">APIs &amp; Credentials</a>. Enable the Workspace APIs you need in the same project. The same form lives under <strong>Skills → MCP Servers</strong> when you pick the <em>Google Workspace (unified)</em> preset.
+              </p>
+              <p class="text-xs mb-2" x-show="!mcpHostReadiness.uvx_available" style="color:var(--warn, #c9a227)">
+                <code>uvx</code> was not found on the daemon <code>PATH</code> (or <code>~/.local/bin/uvx</code>). Run the official installer, then restart the daemon or add <code>~/.local/bin</code> to PATH. Optional: set <code>ARMARAOS_AUTO_INSTALL_UV=1</code> in the environment so the next daemon start runs the installer once.
+              </p>
+              <div class="flex flex-wrap gap-2 items-center mb-2" x-show="!mcpHostReadiness.uvx_available">
+                <button type="button" class="btn btn-primary btn-sm" @click="bootstrapUvFromSettings()" :disabled="uvBootstrapBusy">
+                  <span x-show="!uvBootstrapBusy">Install <code>uv</code> now (Unix)</span>
+                  <span x-show="uvBootstrapBusy" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="copyUvInstallCommand()">Copy install command</button>
+                <span class="text-xs text-dim" x-show="mcpHostReadiness.auto_install_uv_configured"><code>ARMARAOS_AUTO_INSTALL_UV</code> is set (install runs at daemon boot).</span>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr;gap:8px;max-width:560px">
+                <div>
+                  <label class="text-xs text-dim">GOOGLE_OAUTH_CLIENT_ID</label>
+                  <input class="form-input" type="text" autocomplete="off" x-model="googleOauthClientId" placeholder="e.g. xxx.apps.googleusercontent.com" />
+                </div>
+                <div>
+                  <label class="text-xs text-dim">GOOGLE_OAUTH_CLIENT_SECRET <span class="text-dim">(optional for some public/PKCE clients)</span></label>
+                  <input class="form-input" type="password" autocomplete="off" x-model="googleOauthClientSecret" placeholder="From the same OAuth client" />
+                </div>
+                <div>
+                  <button type="button" class="btn btn-primary btn-sm" @click="saveGoogleWorkspaceOAuth()" :disabled="googleOauthSaving">
+                    <span x-show="!googleOauthSaving">Save OAuth credentials for daemon + MCP</span>
+                    <span x-show="googleOauthSaving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                  </button>
+                  <span class="text-xs text-dim ml-2" x-show="mcpHostReadiness && mcpHostReadiness.google_oauth_client_id_set">Client ID is already stored.</span>
+                </div>
+              </div>
+            </div>
             <div class="search-input mb-4">
               <span style="color:var(--text-muted)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
               <input placeholder="Search tools..." x-model="toolSearch">

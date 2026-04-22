@@ -543,6 +543,10 @@ async fn test_integrations_mcp_presets_endpoint() {
         "postgres preset should map to postgresql integration id"
     );
     assert!(presets.iter().any(|p| p["integration_id"] == "filesystem"));
+    assert!(
+        presets.iter().any(|p| p["integration_id"] == "google-workspace-mcp"),
+        "unified Google Workspace (workspace-mcp) preset should be present"
+    );
 }
 
 /// `POST /api/integrations/validate` — structured field errors for filesystem preset.

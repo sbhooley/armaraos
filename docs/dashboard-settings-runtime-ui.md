@@ -23,6 +23,8 @@ These routes reuse the same building blocks in `components.css`:
 
 **Markup:** `index_body.html` — `page === 'skills'`, `'channels'`, `'hands'`, `'home-files'`, `'analytics'`.
 
+**Hands persistence:** per-hand **instance** settings (and optional `provider` / `model` keys in the instance `config` map) are written to **`~/.armaraos/hand_state.json`** on activate, deactivate, and on successful **`PUT /api/hands/{hand_id}/settings`**. See [api-reference.md](api-reference.md#hands-app-store-endpoints).
+
 ## Source files
 
 | Page | Markup | Logic | Shared styles |
