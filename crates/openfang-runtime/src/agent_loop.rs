@@ -13,6 +13,10 @@
 //! `record_pattern`, spawned `run_persona_evolution_pass`, and when `AINL_PERSONA_EVOLUTION=1`
 //! also [`crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn`]) uses the same handle
 //! for both streaming and non-streaming loops.
+//!
+//! **Learning stack** (trajectory batch slots + typed `Failure` rows): [`crate::graph_memory_learning::LearningRecorder`]
+//! applies **`AINL_LEARNING`** / `manifest.metadata["ainl_learning"]` as a master off-switch, then
+//! existing per-subsystem envs; all failure ingest is centralized there (sanitization + metrics).
 
 use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
@@ -324,6 +328,8 @@ async fn run_ainl_runtime_engine_prelude(
     agent_id_str: &str,
     runtime_limits: &EffectiveRuntimeLimits,
     orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
+    learning: &crate::graph_memory_learning::LearningRecorder,
+    session: &openfang_memory::session::Session,
 ) -> Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> {
     if !ainl_runtime_engine_switch_active(manifest) {
         return None;
@@ -369,6 +375,12 @@ async fn run_ainl_runtime_engine_prelude(
         Err(e) => {
             ainl_runtime_bridge_run_failures_counter()
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let err_text = e.to_string();
+            if err_text.contains("graph validation") {
+                learning
+                    .record_ainl_runtime_graph_validation_failure(session, err_text.as_str())
+                    .await;
+            }
             warn!(
                 agent = %manifest.name,
                 error = %e,
@@ -768,6 +780,14 @@ pub struct AgentLoopResult {
     pub latency_ms: Option<u64>,
     /// When a fallback model or OpenRouter free-tier path was used instead of the primary.
     pub llm_fallback_note: Option<String>,
+    /// Provider that **actually** handled the turn when a fallback fired (e.g. `"openrouter"` after a
+    /// primary 429/timeout/ModelNotFound). When `None`, the kernel attributes usage to
+    /// `manifest.model.provider`. Pairs with [`Self::actual_model`] so per-model cost rollups in
+    /// `eco_compression_events` and `usage_events` reflect the model that actually billed the call.
+    pub actual_provider: Option<String>,
+    /// Model id that **actually** handled the turn when a fallback fired. When `None`, the kernel
+    /// attributes usage to the requested model. See [`Self::actual_provider`] for context.
+    pub actual_model: Option<String>,
     /// Input token reduction percentage achieved by the prompt compressor (0 when off/passthrough).
     pub compression_savings_pct: u8,
     /// The compressed version of the user message (only set when savings_pct > 0; for diff UI).
@@ -1152,6 +1172,11 @@ pub async fn run_agent_loop(
                     gm.drain_python_graph_memory_inbox().await;
                 }
 
+                let learning = crate::graph_memory_learning::LearningRecorder::new(
+                    graph_memory.clone(),
+                    manifest,
+                );
+
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
@@ -1345,8 +1370,13 @@ pub async fn run_agent_loop(
     // to system prompt so the agent's learned traits affect every LLM call.
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
-            let prompt_ctx =
-                crate::graph_memory_context::build_prompt_memory_context(gm, &memory_policy).await;
+            let prompt_ctx = crate::graph_memory_context::build_prompt_memory_context(
+                gm,
+                &memory_policy,
+                Some(user_message),
+                learning.policy().failures,
+            )
+            .await;
             if !prompt_ctx.is_empty() {
                 system_prompt.push_str(&prompt_ctx.to_prompt_block());
             }
@@ -1591,6 +1621,8 @@ pub async fn run_agent_loop(
     // phantom detection can tell whether the model claimed to start/stop a process without
     // actually calling the corresponding tool.
     let mut last_tools_called: std::collections::HashSet<String> = Default::default();
+    // Per-tool trajectory steps accumulated across chained ToolUse rounds.
+    let mut trajectory_steps_accum: Vec<ainl_contracts::TrajectoryStep> = Vec::new();
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -1598,6 +1630,11 @@ pub async fn run_agent_loop(
     let mut any_tools_executed = false;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
+    // The provider/model that **actually** serviced a turn when a fallback path fires (None = primary).
+    // Persisted via `AgentLoopResult::actual_provider` / `actual_model` so the kernel can attribute
+    // billing + cost to the model that really billed the call.
+    let mut actual_provider_used: Option<String> = None;
+    let mut actual_model_used: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
     let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
@@ -1642,6 +1679,8 @@ pub async fn run_agent_loop(
                 agent_id_str.as_str(),
                 &runtime_limits,
                 &orchestration_ctx,
+                &learning,
+                session,
             )
             .await
         } else {
@@ -2012,6 +2051,8 @@ pub async fn run_agent_loop(
                                                         loop_t0.elapsed().as_millis() as u64,
                                                     ),
                                                     llm_fallback_note: None,
+                                                    actual_provider: None,
+                                                    actual_model: None,
                                                     compression_savings_pct,
                                                     compressed_input: compressed_input.clone(),
                                                     compression_semantic_score,
@@ -2094,7 +2135,7 @@ pub async fn run_agent_loop(
             llm_http: live_llm.as_ref(),
             llm_kernel: kernel.as_ref(),
         };
-        let (mut response, fb_note) = call_with_retry(
+        let (mut response, fb_used) = call_with_retry(
             &*driver,
             request,
             Some(provider_name),
@@ -2103,8 +2144,10 @@ pub async fn run_agent_loop(
             &llm_fb,
         )
         .await?;
-        if fb_note.is_some() {
-            llm_fallback_note = fb_note;
+        if let Some(fb) = fb_used {
+            llm_fallback_note = Some(fb.note);
+            actual_provider_used = Some(fb.provider);
+            actual_model_used = Some(fb.model);
         }
 
         total_usage.input_tokens += response.usage.input_tokens;
@@ -2173,6 +2216,8 @@ pub async fn run_agent_loop(
                         },
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
@@ -2236,6 +2281,8 @@ pub async fn run_agent_loop(
                                 directives: Default::default(),
                                 latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                                 llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                                 compression_savings_pct,
                                 compressed_input: compressed_input.clone(),
                                 compression_semantic_score,
@@ -2426,6 +2473,31 @@ pub async fn run_agent_loop(
                             )
                             .await;
                         }
+                        let project_id = std::env::var("AINL_MEMORY_PROJECT_ID").ok();
+                        let detailed = if trajectory_steps_accum.is_empty() {
+                            None
+                        } else {
+                            Some(std::mem::take(&mut trajectory_steps_accum))
+                        };
+                        let dur_ms: u64 = detailed
+                            .as_ref()
+                            .map(|s| s.iter().map(|x| x.duration_ms).sum())
+                            .unwrap_or(0);
+                        let traj_hash =
+                            crate::graph_memory_writer::ainl_source_hash_for_trajectory_persist(
+                                manifest,
+                            );
+                        gm.record_trajectory_for_episode(
+                            episode_id,
+                            &tools_for_episode,
+                            detailed,
+                            ainl_contracts::TrajectoryOutcome::Success,
+                            &session.id.to_string(),
+                            project_id.as_deref(),
+                            dur_ms,
+                            traj_hash.as_deref(),
+                        )
+                        .await;
                     } else {
                         warn!(
                             agent_id = %session.agent_id,
@@ -2557,6 +2629,8 @@ pub async fn run_agent_loop(
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
                     compression_semantic_score,
@@ -2615,6 +2689,13 @@ pub async fn run_agent_loop(
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
                             warn!(tool = %tool_call.name, "Circuit breaker triggered");
+                            learning.record_loop_guard_failure(
+                                session,
+                                "circuit_break",
+                                tool_call.name.as_str(),
+                                msg.as_str(),
+                            )
+                            .await;
                             if let Err(e) = memory.save_session_async(session).await {
                                 warn!("Failed to save session on circuit break: {e}");
                             }
@@ -2634,6 +2715,13 @@ pub async fn run_agent_loop(
                         }
                         LoopGuardVerdict::Block(msg) => {
                             warn!(tool = %tool_call.name, "Tool call blocked by loop guard");
+                            learning.record_loop_guard_failure(
+                                session,
+                                "block",
+                                tool_call.name.as_str(),
+                                msg.as_str(),
+                            )
+                            .await;
                             dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
@@ -2671,13 +2759,21 @@ pub async fn run_agent_loop(
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
+                            let content = format!(
+                                "Hook blocked tool '{}': {}",
+                                tool_call.name, reason
+                            );
+                            learning.record_agent_loop_precheck_failure(
+                                session,
+                                "hook_blocked",
+                                tool_call.name.as_str(),
+                                content.as_str(),
+                            )
+                            .await;
                             dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!(
-                                    "Hook blocked tool '{}': {}",
-                                    tool_call.name, reason
-                                ),
+                                content,
                                 is_error: true,
                             }));
                             continue;
@@ -2692,6 +2788,13 @@ pub async fn run_agent_loop(
                             missing_required_params_error(&tool_call.name, &tool_call.input, def)
                         {
                             debug!(tool = %tool_call.name, "Pre-execution param validation failed");
+                            learning.record_agent_loop_precheck_failure(
+                                session,
+                                "param_validation",
+                                tool_call.name.as_str(),
+                                err_msg.as_str(),
+                            )
+                            .await;
                             dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
@@ -2711,16 +2814,35 @@ pub async fn run_agent_loop(
                 // in the final result list so the next LLM turn sees results in the same order as
                 // the tool_use blocks it produced.
                 let effective_exec_policy = manifest.exec_policy.as_ref();
+                let pending_tool_slots: usize = dispatches
+                    .iter()
+                    .filter(|d| matches!(d, ToolDispatch::Pending { .. }))
+                    .count();
+                let traj_capture_buf = if pending_tool_slots > 0
+                    && learning.trajectories_on()
+                {
+                    Some(std::sync::Arc::new(crate::trajectory_turn::TrajectoryTurnBuffer::new(
+                        pending_tool_slots,
+                    )))
+                } else {
+                    None
+                };
+                let mut pending_slot: usize = 0;
                 let pending_futures: Vec<_> = dispatches
                     .iter()
                     .filter_map(|d| {
                         if let ToolDispatch::Pending { tool_call, .. } = d {
+                            let slot = pending_slot;
+                            pending_slot += 1;
                             let timeout = tool_timeout_for(&tool_call.name);
+                            let cap = traj_capture_buf
+                                .as_ref()
+                                .map(|b| (std::sync::Arc::clone(b), slot));
                             Some((
                                 tool_call,
                                 tokio::time::timeout(
                                     timeout,
-                                    tool_runner::execute_tool(
+                                    tool_runner::execute_tool_with_trajectory(
                                         &tool_call.id,
                                         &tool_call.name,
                                         &tool_call.input,
@@ -2744,6 +2866,7 @@ pub async fn run_agent_loop(
                                         docker_config,
                                         process_manager,
                                         orchestration_live,
+                                        cap,
                                     ),
                                 ),
                             ))
@@ -2757,6 +2880,23 @@ pub async fn run_agent_loop(
                 let (pending_tool_calls, pending_futs): (Vec<&&ToolCall>, Vec<_>) =
                     pending_futures.into_iter().unzip();
                 let parallel_results = futures::future::join_all(pending_futs).await;
+
+                if let Some(buf) = traj_capture_buf {
+                    match Arc::try_unwrap(buf) {
+                        Ok(owned) => {
+                            if let Some(steps) = owned.take_steps_if_complete() {
+                                trajectory_steps_accum.extend(steps);
+                            }
+                        }
+                        Err(arc) => {
+                            debug!(
+                                agent = %manifest.name,
+                                refs = %Arc::strong_count(&arc),
+                                "trajectory buffer still shared after tool batch; skipping merge"
+                            );
+                        }
+                    }
+                }
 
                 // Merge pre-resolved blocks and parallel results back in LLM-declaration order
                 let mut pending_iter = pending_tool_calls
@@ -2800,6 +2940,15 @@ pub async fn run_agent_loop(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
+                            }
+
+                            if result.is_error {
+                                learning.record_tool_execution_failure(
+                                    session,
+                                    tool_call.name.as_str(),
+                                    result.content.as_str(),
+                                )
+                                .await;
                             }
 
                             let content =
@@ -2864,6 +3013,8 @@ pub async fn run_agent_loop(
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
                             compression_semantic_score,
@@ -2992,6 +3143,8 @@ pub async fn run_agent_loop(
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
@@ -3064,6 +3217,8 @@ pub async fn run_agent_loop(
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
+        actual_provider: actual_provider_used.clone(),
+        actual_model: actual_model_used.clone(),
         compression_savings_pct,
         compressed_input,
         compression_semantic_score,
@@ -3092,6 +3247,20 @@ pub async fn run_agent_loop(
 struct LlmFallbackContext<'a> {
     llm_http: Option<&'a LlmConfig>,
     llm_kernel: Option<&'a Arc<dyn KernelHandle>>,
+}
+
+/// Structured info about a fallback model that actually serviced a turn.
+///
+/// Returned by [`call_with_retry`] / [`stream_with_retry`] (in `Option<...>`) so that the
+/// kernel can persist the **actually-used** `provider` + `model` (and snapshot pricing for
+/// that model) instead of the manifest's *requested* defaults — see `AgentLoopResult::actual_provider`
+/// / `AgentLoopResult::actual_model`. `note` is a short human-readable string suitable for
+/// `AgentLoopResult::llm_fallback_note` and dashboards.
+#[derive(Debug, Clone)]
+struct LlmFallbackUsed {
+    note: String,
+    provider: String,
+    model: String,
 }
 
 /// Attach `[llm]` HTTP timeouts to a one-off driver config (OpenRouter fallbacks, manifest fallbacks).
@@ -3133,8 +3302,9 @@ async fn call_with_retry(
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<LlmFallbackUsed>)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
+    const OR_PROVIDER: &str = "openrouter";
     // Check circuit breaker before calling
     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
         match cooldown.check(provider) {
@@ -3171,8 +3341,17 @@ async fn call_with_retry(
                     }
                     // Final attempt hit a retryable throttling error — try OpenRouter free-model
                     // fallbacks to keep UX flowing even when the primary provider is rate limited.
-                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone(), llm_fb).await {
-                        return Ok((resp, Some(OR_NOTE.to_string())));
+                    if let Ok((resp, model)) =
+                        try_openrouter_free_fallbacks(request.clone(), llm_fb).await
+                    {
+                        return Ok((
+                            resp,
+                            Some(LlmFallbackUsed {
+                                note: OR_NOTE.to_string(),
+                                provider: OR_PROVIDER.to_string(),
+                                model,
+                            }),
+                        ));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
@@ -3193,8 +3372,17 @@ async fn call_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
-                    if let Ok(resp) = try_openrouter_free_fallbacks(request.clone(), llm_fb).await {
-                        return Ok((resp, Some(OR_NOTE.to_string())));
+                    if let Ok((resp, model)) =
+                        try_openrouter_free_fallbacks(request.clone(), llm_fb).await
+                    {
+                        return Ok((
+                            resp,
+                            Some(LlmFallbackUsed {
+                                note: OR_NOTE.to_string(),
+                                provider: OR_PROVIDER.to_string(),
+                                model,
+                            }),
+                        ));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -3285,7 +3473,14 @@ async fn call_with_retry(
                                     "Fallback {}/{} (primary model not found)",
                                     fb.provider, fb.model
                                 );
-                                return Ok((response, Some(note)));
+                                return Ok((
+                                    response,
+                                    Some(LlmFallbackUsed {
+                                        note,
+                                        provider: fb.provider.clone(),
+                                        model: fb.model.clone(),
+                                    }),
+                                ));
                             }
                             Err(fb_err) => {
                                 warn!(
@@ -3318,10 +3513,12 @@ async fn call_with_retry(
     ))
 }
 
+/// Returns the response **and** the OpenRouter model id that actually succeeded, so the kernel
+/// can persist the actually-used model for cost attribution.
 async fn try_openrouter_free_fallbacks(
     request: CompletionRequest,
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, String)> {
     // Models requested by product default strategy.
     const FB_MODELS: [&str; 2] = [
         "stepfun/step-3.5-flash:free",
@@ -3347,7 +3544,7 @@ async fn try_openrouter_free_fallbacks(
         match driver.complete(req).await {
             Ok(resp) => {
                 info!(fallback_index = idx, model = %model, "OpenRouter fallback succeeded");
-                return Ok(resp);
+                return Ok((resp, model.to_string()));
             }
             Err(e) => {
                 warn!(fallback_index = idx, model = %model, error = %e, "OpenRouter fallback failed");
@@ -3374,8 +3571,9 @@ async fn stream_with_retry(
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<String>)> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<LlmFallbackUsed>)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
+    const OR_PROVIDER: &str = "openrouter";
     // Check circuit breaker before calling
     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
         match cooldown.check(provider) {
@@ -3412,11 +3610,18 @@ async fn stream_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
-                    if let Ok(resp) =
+                    if let Ok((resp, model)) =
                         try_openrouter_free_fallbacks_stream(request.clone(), tx.clone(), llm_fb)
                             .await
                     {
-                        return Ok((resp, Some(OR_NOTE.to_string())));
+                        return Ok((
+                            resp,
+                            Some(LlmFallbackUsed {
+                                note: OR_NOTE.to_string(),
+                                provider: OR_PROVIDER.to_string(),
+                                model,
+                            }),
+                        ));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Rate limited after {} retries",
@@ -3437,11 +3642,18 @@ async fn stream_with_retry(
                     if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
                         cooldown.record_failure(provider, false);
                     }
-                    if let Ok(resp) =
+                    if let Ok((resp, model)) =
                         try_openrouter_free_fallbacks_stream(request.clone(), tx.clone(), llm_fb)
                             .await
                     {
-                        return Ok((resp, Some(OR_NOTE.to_string())));
+                        return Ok((
+                            resp,
+                            Some(LlmFallbackUsed {
+                                note: OR_NOTE.to_string(),
+                                provider: OR_PROVIDER.to_string(),
+                                model,
+                            }),
+                        ));
                     }
                     return Err(OpenFangError::LlmDriver(format!(
                         "Model overloaded after {} retries",
@@ -3529,7 +3741,14 @@ async fn stream_with_retry(
                                     "Fallback {}/{} (primary model not found)",
                                     fb.provider, fb.model
                                 );
-                                return Ok((response, Some(note)));
+                                return Ok((
+                                    response,
+                                    Some(LlmFallbackUsed {
+                                        note,
+                                        provider: fb.provider.clone(),
+                                        model: fb.model.clone(),
+                                    }),
+                                ));
                             }
                             Err(fb_err) => {
                                 warn!(
@@ -3559,11 +3778,13 @@ async fn stream_with_retry(
     ))
 }
 
+/// Streaming variant of [`try_openrouter_free_fallbacks`]; also returns the OpenRouter model id
+/// that actually serviced the request.
 async fn try_openrouter_free_fallbacks_stream(
     request: CompletionRequest,
     tx: mpsc::Sender<StreamEvent>,
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<crate::llm_driver::CompletionResponse> {
+) -> OpenFangResult<(crate::llm_driver::CompletionResponse, String)> {
     const FB_MODELS: [&str; 2] = [
         "stepfun/step-3.5-flash:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
@@ -3596,7 +3817,7 @@ async fn try_openrouter_free_fallbacks_stream(
                     model = %model,
                     "OpenRouter fallback succeeded (stream)"
                 );
-                return Ok(resp);
+                return Ok((resp, model.to_string()));
             }
             Err(e) => {
                 warn!(
@@ -3678,6 +3899,11 @@ pub async fn run_agent_loop_streaming(
                 if let Some(ref gm) = graph_memory {
                     gm.drain_python_graph_memory_inbox().await;
                 }
+
+                let learning = crate::graph_memory_learning::LearningRecorder::new(
+                    graph_memory.clone(),
+                    manifest,
+                );
 
                 let live_llm = kernel
                     .as_ref()
@@ -3786,8 +4012,13 @@ pub async fn run_agent_loop_streaming(
 
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
-            let prompt_ctx =
-                crate::graph_memory_context::build_prompt_memory_context(gm, &memory_policy).await;
+            let prompt_ctx = crate::graph_memory_context::build_prompt_memory_context(
+                gm,
+                &memory_policy,
+                Some(user_message),
+                learning.policy().failures,
+            )
+            .await;
             if !prompt_ctx.is_empty() {
                 system_prompt.push_str(&prompt_ctx.to_prompt_block());
             }
@@ -4039,6 +4270,8 @@ pub async fn run_agent_loop_streaming(
     // phantom detection can tell whether the model claimed to start/stop a process without
     // actually calling the corresponding tool.
     let mut last_tools_called: std::collections::HashSet<String> = Default::default();
+    // Per-tool trajectory steps accumulated across chained ToolUse rounds.
+    let mut trajectory_steps_accum: Vec<ainl_contracts::TrajectoryStep> = Vec::new();
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -4046,6 +4279,11 @@ pub async fn run_agent_loop_streaming(
     let mut any_tools_executed = false;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
+    // The provider/model that **actually** serviced a turn when a fallback path fires (None = primary).
+    // Persisted via `AgentLoopResult::actual_provider` / `actual_model` so the kernel can attribute
+    // billing + cost to the model that really billed the call.
+    let mut actual_provider_used: Option<String> = None;
+    let mut actual_model_used: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
     let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
@@ -4090,6 +4328,8 @@ pub async fn run_agent_loop_streaming(
                 agent_id_str.as_str(),
                 &runtime_limits,
                 &orchestration_ctx,
+                &learning,
+                session,
             )
             .await
         } else {
@@ -4235,7 +4475,7 @@ pub async fn run_agent_loop_streaming(
             llm_http: live_llm.as_ref(),
             llm_kernel: kernel.as_ref(),
         };
-        let (mut response, fb_note) = stream_with_retry(
+        let (mut response, fb_used) = stream_with_retry(
             &*driver,
             request,
             stream_tx.clone(),
@@ -4245,8 +4485,10 @@ pub async fn run_agent_loop_streaming(
             &llm_fb,
         )
         .await?;
-        if fb_note.is_some() {
-            llm_fallback_note = fb_note;
+        if let Some(fb) = fb_used {
+            llm_fallback_note = Some(fb.note);
+            actual_provider_used = Some(fb.provider);
+            actual_model_used = Some(fb.model);
         }
 
         total_usage.input_tokens += response.usage.input_tokens;
@@ -4312,6 +4554,8 @@ pub async fn run_agent_loop_streaming(
                         },
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
@@ -4371,6 +4615,8 @@ pub async fn run_agent_loop_streaming(
                                 directives: Default::default(),
                                 latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                                 llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                                 compression_savings_pct,
                                 compressed_input: compressed_input.clone(),
                                 compression_semantic_score,
@@ -4556,6 +4802,31 @@ pub async fn run_agent_loop_streaming(
                             )
                             .await;
                         }
+                        let project_id = std::env::var("AINL_MEMORY_PROJECT_ID").ok();
+                        let detailed = if trajectory_steps_accum.is_empty() {
+                            None
+                        } else {
+                            Some(std::mem::take(&mut trajectory_steps_accum))
+                        };
+                        let dur_ms: u64 = detailed
+                            .as_ref()
+                            .map(|s| s.iter().map(|x| x.duration_ms).sum())
+                            .unwrap_or(0);
+                        let traj_hash =
+                            crate::graph_memory_writer::ainl_source_hash_for_trajectory_persist(
+                                manifest,
+                            );
+                        gm.record_trajectory_for_episode(
+                            episode_id,
+                            &tools_for_episode,
+                            detailed,
+                            ainl_contracts::TrajectoryOutcome::Success,
+                            &session.id.to_string(),
+                            project_id.as_deref(),
+                            dur_ms,
+                            traj_hash.as_deref(),
+                        )
+                        .await;
                     } else {
                         warn!(
                             agent_id = %session.agent_id,
@@ -4684,6 +4955,8 @@ pub async fn run_agent_loop_streaming(
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                     compression_savings_pct,
                     compressed_input: compressed_input.clone(),
                     compression_semantic_score,
@@ -4739,6 +5012,13 @@ pub async fn run_agent_loop_streaming(
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
                             warn!(tool = %tool_call.name, "Circuit breaker triggered (streaming)");
+                            learning.record_loop_guard_failure(
+                                session,
+                                "circuit_break",
+                                tool_call.name.as_str(),
+                                msg.as_str(),
+                            )
+                            .await;
                             if let Err(e) = memory.save_session_async(session).await {
                                 warn!("Failed to save session on circuit break: {e}");
                             }
@@ -4758,6 +5038,13 @@ pub async fn run_agent_loop_streaming(
                         }
                         LoopGuardVerdict::Block(msg) => {
                             warn!(tool = %tool_call.name, "Tool call blocked by loop guard (streaming)");
+                            learning.record_loop_guard_failure(
+                                session,
+                                "block",
+                                tool_call.name.as_str(),
+                                msg.as_str(),
+                            )
+                            .await;
                             dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
@@ -4794,13 +5081,21 @@ pub async fn run_agent_loop_streaming(
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
+                            let content = format!(
+                                "Hook blocked tool '{}': {}",
+                                tool_call.name, reason
+                            );
+                            learning.record_agent_loop_precheck_failure(
+                                session,
+                                "hook_blocked",
+                                tool_call.name.as_str(),
+                                content.as_str(),
+                            )
+                            .await;
                             dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
-                                content: format!(
-                                    "Hook blocked tool '{}': {}",
-                                    tool_call.name, reason
-                                ),
+                                content,
                                 is_error: true,
                             }));
                             continue;
@@ -4813,6 +5108,13 @@ pub async fn run_agent_loop_streaming(
                             missing_required_params_error(&tool_call.name, &tool_call.input, def)
                         {
                             debug!(tool = %tool_call.name, "Pre-execution param validation failed (streaming)");
+                            learning.record_agent_loop_precheck_failure(
+                                session,
+                                "param_validation",
+                                tool_call.name.as_str(),
+                                err_msg.as_str(),
+                            )
+                            .await;
                             dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
@@ -4829,16 +5131,35 @@ pub async fn run_agent_loop_streaming(
                 }
 
                 let effective_exec_policy = manifest.exec_policy.as_ref();
+                let pending_tool_slots_s: usize = dispatches_s
+                    .iter()
+                    .filter(|d| matches!(d, ToolDispatch::Pending { .. }))
+                    .count();
+                let traj_capture_buf_s = if pending_tool_slots_s > 0
+                    && learning.trajectories_on()
+                {
+                    Some(std::sync::Arc::new(crate::trajectory_turn::TrajectoryTurnBuffer::new(
+                        pending_tool_slots_s,
+                    )))
+                } else {
+                    None
+                };
+                let mut pending_slot_s: usize = 0;
                 let pending_futures_s: Vec<_> = dispatches_s
                     .iter()
                     .filter_map(|d| {
                         if let ToolDispatch::Pending { tool_call, .. } = d {
+                            let slot = pending_slot_s;
+                            pending_slot_s += 1;
                             let timeout = tool_timeout_for(&tool_call.name);
+                            let cap = traj_capture_buf_s
+                                .as_ref()
+                                .map(|b| (std::sync::Arc::clone(b), slot));
                             Some((
                                 tool_call,
                                 tokio::time::timeout(
                                     timeout,
-                                    tool_runner::execute_tool(
+                                    tool_runner::execute_tool_with_trajectory(
                                         &tool_call.id,
                                         &tool_call.name,
                                         &tool_call.input,
@@ -4862,6 +5183,7 @@ pub async fn run_agent_loop_streaming(
                                         docker_config,
                                         process_manager,
                                         orchestration_live,
+                                        cap,
                                     ),
                                 ),
                             ))
@@ -4907,6 +5229,23 @@ pub async fn run_agent_loop_streaming(
                     }
                 };
 
+                if let Some(buf) = traj_capture_buf_s {
+                    match Arc::try_unwrap(buf) {
+                        Ok(owned) => {
+                            if let Some(steps) = owned.take_steps_if_complete() {
+                                trajectory_steps_accum.extend(steps);
+                            }
+                        }
+                        Err(arc) => {
+                            debug!(
+                                agent = %manifest.name,
+                                refs = %Arc::strong_count(&arc),
+                                "trajectory buffer still shared after tool batch (streaming); skipping merge"
+                            );
+                        }
+                    }
+                }
+
                 let mut pending_iter_s =
                     <Vec<&&ToolCall> as IntoIterator>::into_iter(pending_tcs_s)
                         .zip(parallel_results_s.into_iter())
@@ -4947,6 +5286,15 @@ pub async fn run_agent_loop_streaming(
                                     }),
                                 };
                                 let _ = hook_reg.fire(&ctx);
+                            }
+
+                            if result.is_error {
+                                learning.record_tool_execution_failure(
+                                    session,
+                                    tool_call.name.as_str(),
+                                    result.content.as_str(),
+                                )
+                                .await;
                             }
 
                             let content =
@@ -5027,6 +5375,8 @@ pub async fn run_agent_loop_streaming(
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                             compression_savings_pct,
                             compressed_input: compressed_input.clone(),
                             compression_semantic_score,
@@ -5151,6 +5501,8 @@ pub async fn run_agent_loop_streaming(
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
+                            actual_provider: actual_provider_used.clone(),
+                            actual_model: actual_model_used.clone(),
                         compression_savings_pct,
                         compressed_input: compressed_input.clone(),
                         compression_semantic_score,
@@ -5228,6 +5580,8 @@ pub async fn run_agent_loop_streaming(
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
+        actual_provider: actual_provider_used.clone(),
+        actual_model: actual_model_used.clone(),
         compression_savings_pct,
         compressed_input,
         compression_semantic_score,

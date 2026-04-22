@@ -35,6 +35,12 @@ pub(crate) fn runtime_env_test_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Counters for graph-memory **learning** ingest (failures skipped vs recorded, etc.).
+#[must_use]
+pub fn graph_memory_learning_metrics() -> serde_json::Value {
+    graph_memory_learning::metrics_snapshot()
+}
+
 /// Runtime counters for ainl-runtime bridge cache behavior.
 #[must_use]
 pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
@@ -92,6 +98,7 @@ pub mod embedding;
 pub mod graceful_shutdown;
 pub mod graph_extractor;
 pub mod graph_memory_context;
+pub mod graph_memory_learning;
 pub mod graph_memory_writer;
 pub mod hooks;
 pub mod host_ainl_snapshot;
@@ -131,6 +138,7 @@ mod tests;
 pub mod think_filter;
 pub mod tool_policy;
 pub mod tool_runner;
+pub mod trajectory_turn;
 pub mod tts;
 pub mod vitals_classifier;
 pub mod web_cache;

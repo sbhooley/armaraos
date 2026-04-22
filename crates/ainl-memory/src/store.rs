@@ -31,6 +31,8 @@ use crate::snapshot::{
     AgentGraphSnapshot, DanglingEdgeDetail, GraphValidationReport, SnapshotEdge,
     SNAPSHOT_SCHEMA_VERSION,
 };
+use crate::trajectory_table::TrajectoryDetailRecord;
+use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use std::collections::HashSet;
@@ -212,6 +214,8 @@ fn node_type_name(node: &AinlMemoryNode) -> &'static str {
         AinlNodeType::Procedural { .. } => "procedural",
         AinlNodeType::Persona { .. } => "persona",
         AinlNodeType::RuntimeState { .. } => "runtime_state",
+        AinlNodeType::Trajectory { .. } => "trajectory",
+        AinlNodeType::Failure { .. } => "failure",
     }
 }
 
@@ -219,8 +223,51 @@ fn node_timestamp(node: &AinlMemoryNode) -> i64 {
     match &node.node_type {
         AinlNodeType::Episode { episodic } => episodic.timestamp,
         AinlNodeType::RuntimeState { runtime_state } => runtime_state.updated_at,
+        AinlNodeType::Trajectory { trajectory } => trajectory.recorded_at,
+        AinlNodeType::Failure { failure } => failure.recorded_at,
         _ => chrono::Utc::now().timestamp(),
     }
+}
+
+fn failure_fts_body(node: &AinlMemoryNode) -> Option<String> {
+    match &node.node_type {
+        AinlNodeType::Failure { failure } => Some(format!(
+            "{} {} {}",
+            failure.source,
+            failure.tool_name.as_deref().unwrap_or(""),
+            failure.message
+        )),
+        _ => None,
+    }
+}
+
+/// Token-prefix AND query for FTS5 `body MATCH` (returns empty → skip search).
+fn fts5_prefix_match_query(raw: &str) -> String {
+    raw.split_whitespace()
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| {
+            let esc: String = t.chars().filter(|c| !c.is_control() && *c != '"').collect();
+            if esc.is_empty() {
+                return None;
+            }
+            Some(format!("\"{esc}*\""))
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+fn sync_failure_fts_insert(conn: &rusqlite::Connection, node_id: &str, body: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM ainl_failures_fts WHERE node_id = ?1",
+        [node_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO ainl_failures_fts(node_id, body) VALUES (?1, ?2)",
+        rusqlite::params![node_id, body],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn persist_edge(
@@ -313,6 +360,11 @@ fn persist_node(conn: &rusqlite::Connection, node: &AinlMemoryNode) -> Result<()
         )?;
     }
 
+    if let Some(body) = failure_fts_body(node) {
+        // Best-effort: graph row is authoritative; FTS is auxiliary for search.
+        let _ = sync_failure_fts_insert(conn, &node.id.to_string(), &body);
+    }
+
     Ok(())
 }
 
@@ -349,6 +401,44 @@ fn try_insert_edge_ignore(conn: &rusqlite::Connection, edge: &SnapshotEdge) -> R
         ],
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn migrate_failures_fts_v1(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS ainl_failures_fts USING fts5(
+            node_id UNINDEXED,
+            body,
+            tokenize = 'unicode61 remove_diacritics 1'
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+fn migrate_trajectories_v1(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ainl_trajectories (
+            id TEXT PRIMARY KEY,
+            episode_id TEXT NOT NULL,
+            graph_trajectory_node_id TEXT,
+            agent_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            project_id TEXT,
+            recorded_at INTEGER NOT NULL,
+            outcome_json TEXT NOT NULL,
+            ainl_source_hash TEXT,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            steps_json TEXT NOT NULL,
+            FOREIGN KEY (episode_id) REFERENCES ainl_graph_nodes(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ainl_traj_agent_time
+         ON ainl_trajectories(agent_id, recorded_at DESC)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -399,6 +489,8 @@ impl SqliteGraphStore {
 
         migrate_edge_columns(conn)?;
         migrate_edges_add_foreign_keys(conn)?;
+        migrate_trajectories_v1(conn)?;
+        migrate_failures_fts_v1(conn)?;
         Ok(())
     }
 
@@ -805,6 +897,184 @@ impl SqliteGraphStore {
 
         result
     }
+
+    /// Large-step trajectory row (sibling table); episode row must exist first.
+    pub fn insert_trajectory_detail(&self, row: &TrajectoryDetailRecord) -> Result<(), String> {
+        let steps_json = serde_json::to_string(&row.steps).map_err(|e| e.to_string())?;
+        let outcome_json = serde_json::to_string(&row.outcome).map_err(|e| e.to_string())?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO ainl_trajectories (
+                    id, episode_id, graph_trajectory_node_id, agent_id, session_id, project_id,
+                    recorded_at, outcome_json, ainl_source_hash, duration_ms, steps_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    row.id.to_string(),
+                    row.episode_id.to_string(),
+                    row.graph_trajectory_node_id.map(|u| u.to_string()),
+                    row.agent_id,
+                    row.session_id,
+                    row.project_id,
+                    row.recorded_at,
+                    outcome_json,
+                    row.ainl_source_hash,
+                    row.duration_ms as i64,
+                    steps_json,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Recent trajectory detail rows for an agent (newest first).
+    pub fn list_trajectories_for_agent(
+        &self,
+        agent_id: &str,
+        limit: usize,
+        since_timestamp: Option<i64>,
+    ) -> Result<Vec<TrajectoryDetailRecord>, String> {
+        let cap = limit.clamp(1, 500) as i64;
+        let sql = if since_timestamp.is_some() {
+            "SELECT id, episode_id, graph_trajectory_node_id, agent_id, session_id, project_id,
+                    recorded_at, outcome_json, ainl_source_hash, duration_ms, steps_json
+             FROM ainl_trajectories
+             WHERE agent_id = ?1 AND recorded_at >= ?2
+             ORDER BY recorded_at DESC
+             LIMIT ?3"
+        } else {
+            "SELECT id, episode_id, graph_trajectory_node_id, agent_id, session_id, project_id,
+                    recorded_at, outcome_json, ainl_source_hash, duration_ms, steps_json
+             FROM ainl_trajectories
+             WHERE agent_id = ?1
+             ORDER BY recorded_at DESC
+             LIMIT ?2"
+        };
+
+        let mut stmt = self.conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = if let Some(since) = since_timestamp {
+            stmt.query_map(rusqlite::params![agent_id, since, cap], map_trajectory_row)
+        } else {
+            stmt.query_map(rusqlite::params![agent_id, cap], map_trajectory_row)
+        }
+        .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(out)
+    }
+
+    /// Full-text search over persisted failure nodes for one agent (`node_type = failure`).
+    ///
+    /// Returns matching [`AinlMemoryNode`] rows (newest first). Invalid FTS syntax yields an empty list.
+    pub fn search_failures_fts_for_agent(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        let fts_q = fts5_prefix_match_query(query);
+        if fts_q.is_empty() || agent_id.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let cap = limit.clamp(1, 200) as i64;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.payload
+                 FROM ainl_failures_fts AS f
+                 INNER JOIN ainl_graph_nodes AS n ON n.id = f.node_id
+                 WHERE n.node_type = 'failure'
+                   AND json_extract(n.payload, '$.agent_id') = ?1
+                   AND f.body MATCH ?2
+                 ORDER BY n.timestamp DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt.query_map(rusqlite::params![agent_id, fts_q, cap], |row| {
+            let payload: String = row.get(0)?;
+            Ok(payload)
+        });
+
+        let mut out = Vec::new();
+        let rows = match rows {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("fts5") || msg.to_ascii_lowercase().contains("syntax") {
+                    return Ok(Vec::new());
+                }
+                return Err(msg);
+            }
+        };
+        for row in rows {
+            match row {
+                Ok(payload) => {
+                    if let Ok(node) = serde_json::from_str::<AinlMemoryNode>(&payload) {
+                        out.push(node);
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("fts5") || msg.to_ascii_lowercase().contains("syntax") {
+                        return Ok(Vec::new());
+                    }
+                    return Err(msg);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn map_trajectory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrajectoryDetailRecord> {
+    let id_s: String = row.get(0)?;
+    let episode_s: String = row.get(1)?;
+    let graph_traj: Option<String> = row.get(2)?;
+    let agent_id: String = row.get(3)?;
+    let session_id: String = row.get(4)?;
+    let project_id: Option<String> = row.get(5)?;
+    let recorded_at: i64 = row.get(6)?;
+    let outcome_json: String = row.get(7)?;
+    let hash: Option<String> = row.get(8)?;
+    let duration_ms: i64 = row.get(9)?;
+    let steps_json: String = row.get(10)?;
+    let id = Uuid::parse_str(&id_s).map_err(|_| {
+        rusqlite::Error::InvalidColumnType(0, "id".into(), rusqlite::types::Type::Text)
+    })?;
+    let episode_id = Uuid::parse_str(&episode_s).map_err(|_| {
+        rusqlite::Error::InvalidColumnType(1, "episode_id".into(), rusqlite::types::Type::Text)
+    })?;
+    let graph_trajectory_node_id = graph_traj
+        .filter(|s| !s.is_empty())
+        .map(|s| Uuid::parse_str(&s))
+        .transpose()
+        .map_err(|_| {
+            rusqlite::Error::InvalidColumnType(2, "graph_trajectory_node_id".into(), rusqlite::types::Type::Text)
+        })?;
+    let outcome: TrajectoryOutcome =
+        serde_json::from_str(&outcome_json).map_err(|_| {
+            rusqlite::Error::InvalidColumnType(7, "outcome_json".into(), rusqlite::types::Type::Text)
+        })?;
+    let steps: Vec<TrajectoryStep> = serde_json::from_str(&steps_json)
+        .map_err(|_| {
+            rusqlite::Error::InvalidColumnType(10, "steps_json".into(), rusqlite::types::Type::Text)
+        })?;
+    Ok(TrajectoryDetailRecord {
+        id,
+        episode_id,
+        graph_trajectory_node_id,
+        agent_id,
+        session_id,
+        project_id,
+        recorded_at,
+        outcome,
+        ainl_source_hash: hash,
+        duration_ms: duration_ms.max(0) as u64,
+        steps,
+    })
 }
 
 impl GraphStore for SqliteGraphStore {

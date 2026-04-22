@@ -4,12 +4,28 @@
 //! input compressor. It is intentionally embedding-free and dependency-light
 //! so it can be reused across hosts without shipping local ML models.
 //!
+//! Companion modules (no I/O; host wiring stays out-of-crate):
+//! - [`profiles`] — built-in **compression profiles** and project→profile hints
+//! - [`adaptive`] — **content-shaped** `EfficientMode` recommendations
+//! - [`cache`] — **TTL hysteresis** for cache-aware coordination
+//!
 //! Set `RUST_LOG=ainl_compression=debug` to enable full before/after text
 //! logging per call (useful for tuning preserve lists and retention ratios).
 
 use std::collections::HashSet;
 use std::time::Instant;
 use tracing::debug;
+
+pub mod adaptive;
+pub mod cache;
+pub mod profiles;
+
+pub use adaptive::{recommend_mode_for_content, AdaptiveRecommendation};
+pub use cache::{cache_policy_summary, effective_ttl_with_hysteresis, CacheTtlResult};
+pub use profiles::{
+    list_builtin_profiles, resolve_builtin_profile, suggest_profile_id_for_project,
+    CompressionProfile, BUILTIN_PROFILES,
+};
 
 /// Input compression aggressiveness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

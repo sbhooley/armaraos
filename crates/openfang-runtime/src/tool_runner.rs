@@ -246,9 +246,69 @@ pub async fn execute_tool(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     orchestration_live: Option<&OrchestrationLive>,
 ) -> ToolResult {
+    execute_tool_with_trajectory(
+        tool_use_id,
+        tool_name,
+        input,
+        kernel,
+        allowed_tools,
+        caller_agent_id,
+        skill_registry,
+        mcp_connections,
+        web_ctx,
+        browser_ctx,
+        allowed_env_vars,
+        workspace_root,
+        ainl_library_root,
+        media_engine,
+        exec_policy,
+        tts_engine,
+        docker_config,
+        process_manager,
+        orchestration_live,
+        None,
+    )
+    .await
+}
+
+/// Like [`execute_tool`] with optional per-slot trajectory recording (OpenFang self-learning).
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_tool_with_trajectory(
+    tool_use_id: &str,
+    tool_name: &str,
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    allowed_tools: Option<&[String]>,
+    caller_agent_id: Option<&str>,
+    skill_registry: Option<&SkillRegistry>,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+    web_ctx: Option<&WebToolsContext>,
+    browser_ctx: Option<&crate::browser::BrowserManager>,
+    allowed_env_vars: Option<&[String]>,
+    workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    exec_policy: Option<&openfang_types::config::ExecPolicy>,
+    tts_engine: Option<&crate::tts::TtsEngine>,
+    docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    orchestration_live: Option<&OrchestrationLive>,
+    trajectory_capture: Option<(std::sync::Arc<crate::trajectory_turn::TrajectoryTurnBuffer>, usize)>,
+) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
     let tool_name = normalize_tool_name(tool_name);
+    let t_tool = std::time::Instant::now();
+    let finish_traj = |tr: ToolResult| -> ToolResult {
+        crate::trajectory_turn::record_trajectory_tool_step(
+            &trajectory_capture,
+            tool_name,
+            tool_use_id,
+            t_tool,
+            &tr,
+        );
+        tr
+    };
 
     // Auto-correct a common hallucination where models run MCP tools via shell_exec.
     // Re-route before capability checks so agents that grant MCP but not shell_exec still work.
@@ -257,14 +317,14 @@ pub async fn execute_tool(
             if let Some(allowed) = allowed_tools {
                 if !allowed.iter().any(|t| t == &mcp_tool_name) {
                     warn!(tool = %mcp_tool_name, "Capability denied: auto-routed MCP tool not in allowed list");
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!(
                             "Permission denied: agent does not have capability to use tool '{}'",
                             mcp_tool_name
                         ),
                         is_error: true,
-                    };
+                    });
                 }
             }
 
@@ -277,16 +337,16 @@ pub async fn execute_tool(
             let rerouted =
                 dispatch_mcp_tool_by_name(&mcp_tool_name, &empty_args, mcp_connections).await;
             return match rerouted {
-                Ok(content) => ToolResult {
+                Ok(content) => finish_traj(ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
                     is_error: false,
-                },
-                Err(err) => ToolResult {
+                }),
+                Err(err) => finish_traj(ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content: format!("Error: {err}"),
                     is_error: true,
-                },
+                }),
             };
         }
     }
@@ -295,13 +355,13 @@ pub async fn execute_tool(
     if let Some(allowed) = allowed_tools {
         if !allowed.iter().any(|t| t == tool_name) {
             warn!(tool_name, "Capability denied: tool not in allowed list");
-            return ToolResult {
+            return finish_traj(ToolResult {
                 tool_use_id: tool_use_id.to_string(),
                 content: format!(
                     "Permission denied: agent does not have capability to use tool '{tool_name}'"
                 ),
                 is_error: true,
-            };
+            });
         }
     }
 
@@ -340,22 +400,22 @@ pub async fn execute_tool(
                 }
                 Ok(false) => {
                     warn!(tool_name, "Approval denied — blocking tool execution");
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!(
                             "Execution denied: '{}' requires human approval and was denied or timed out. The operation was not performed.",
                             tool_name
                         ),
                         is_error: true,
-                    };
+                    });
                 }
                 Err(e) => {
                     warn!(tool_name, error = %e, "Approval system error");
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!("Approval system error: {e}"),
                         is_error: true,
-                    };
+                    });
                 }
             }
         }
@@ -381,11 +441,11 @@ pub async fn execute_tool(
             // Taint check: block URLs containing secrets/PII from being exfiltrated
             let url = input["url"].as_str().unwrap_or("");
             if let Some(violation) = check_taint_net_fetch(url) {
-                return ToolResult {
+                return finish_traj(ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content: format!("Taint violation: {violation}"),
                     is_error: true,
-                };
+                });
             }
             let method = input["method"].as_str().unwrap_or("GET");
             let headers = input.get("headers").and_then(|v| v.as_object());
@@ -422,7 +482,7 @@ pub async fn execute_tool(
                 if let Some(reason) =
                     crate::subprocess_sandbox::contains_shell_metacharacters(command)
                 {
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!(
                             "shell_exec blocked: command contains {reason}. \
@@ -430,7 +490,7 @@ pub async fn execute_tool(
                              exec_policy.mode = 'full' in the agent manifest."
                         ),
                         is_error: true,
-                    };
+                    });
                 }
             }
 
@@ -439,7 +499,7 @@ pub async fn execute_tool(
                 if let Err(reason) =
                     crate::subprocess_sandbox::validate_command_allowlist(command, policy)
                 {
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!(
                             "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
@@ -447,17 +507,17 @@ pub async fn execute_tool(
                             policy.mode
                         ),
                         is_error: true,
-                    };
+                    });
                 }
             }
             // Skip heuristic taint patterns for Full exec policy (e.g. hand agents that need curl)
             if !is_full_exec {
                 if let Some(violation) = check_taint_shell_exec(command) {
-                    return ToolResult {
+                    return finish_traj(ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!("Taint violation: {violation}"),
                         is_error: true,
-                    };
+                    });
                 }
             }
             tool_shell_exec(
@@ -574,11 +634,11 @@ pub async fn execute_tool(
         "browser_navigate" => {
             let url = input["url"].as_str().unwrap_or("");
             if let Some(violation) = check_taint_net_fetch(url) {
-                return ToolResult {
+                return finish_traj(ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content: format!("Taint violation: {violation}"),
                     is_error: true,
-                };
+                });
             }
             match browser_ctx {
                 Some(mgr) => {
@@ -720,16 +780,16 @@ pub async fn execute_tool(
     };
 
     match result {
-        Ok(content) => ToolResult {
+        Ok(content) => finish_traj(ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content,
             is_error: false,
-        },
-        Err(err) => ToolResult {
+        }),
+        Err(err) => finish_traj(ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: format!("Error: {err}"),
             is_error: true,
-        },
+        }),
     }
 }
 
@@ -1370,13 +1430,13 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "media_transcribe".to_string(),
-            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript. For dashboard/voice uploads, file_id must be the **UUID** string from the Voice/audio attachments hint (or the user message) — never the browser display name like voice_123.webm.".to_string(),
+            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). For dashboard/voice uploads, `file_id` and `content_type` are in the `[ARMAVOS_VOICE_CONTEXT]` block at the **start** of the current user message (lines `ARMAVOS_VOICE file_id=… content_type=…`). **Do not ask the user to paste a UUID** — it is not visible in the chat UI. Never use the browser display name (e.g. `voice_123.webm`) as `file_id`. Call this tool in the same turn as the voice message so the temp file is still on the server.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Path to the audio file (workspace-relative or absolute). Supported extensions: mp3, wav, ogg, flac, m4a, webm." },
-                    "file_id": { "type": "string", "description": "The server's upload UUID only (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx). For voice recordings this is NOT the voice_….webm label — copy the UUID from the attachment hint or user message." },
-                    "content_type": { "type": "string", "description": "MIME type when using file_id (e.g. audio/webm). Defaults to audio/webm if omitted." },
+                    "file_id": { "type": "string", "description": "Server upload UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) from the `[ARMAVOS_VOICE_CONTEXT]` block in the current user message — not the `voice_….webm` label." },
+                    "content_type": { "type": "string", "description": "MIME from `[ARMAVOS_VOICE_CONTEXT]` (e.g. audio/webm). Defaults to audio/webm if omitted." },
                     "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
                 }
             }),

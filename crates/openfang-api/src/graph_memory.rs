@@ -9,8 +9,11 @@
 //! - `POST /api/graph-memory/rollback`
 //! - `POST /api/graph-memory/reset`
 //! - `POST /api/graph-memory/delete-node`
+//! - `GET /api/trajectories` — replay surface: recent rows from `ainl_trajectories`
+//! - `GET /api/graph-memory/failures/search` — FTS search over typed `failure` graph nodes
+//! - `GET /api/graph-memory/failures/recent` — recent typed `failure` graph rows (newest first)
 
-use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
+use ainl_memory::{AinlMemoryNode, AinlNodeKind, AinlNodeType, GraphMemory};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -66,6 +69,37 @@ pub struct GraphMemoryAuditQuery {
     pub agent_id: String,
     #[serde(default = "default_audit_limit")]
     pub limit: usize,
+}
+
+/// Query for [`get_trajectories`] (`GET /api/trajectories`).
+#[derive(serde::Deserialize)]
+pub struct TrajectoriesQuery {
+    pub agent_id: String,
+    #[serde(default = "default_trajectories_limit")]
+    pub limit: usize,
+    /// Minimum `recorded_at` (unix seconds), inclusive — filters `ainl_trajectories`.
+    #[serde(default)]
+    pub since_recorded_at: Option<i64>,
+}
+
+/// Query for [`get_graph_memory_failures_search`] (`GET /api/graph-memory/failures/search`).
+#[derive(serde::Deserialize)]
+pub struct FailuresSearchQuery {
+    pub agent_id: String,
+    pub q: String,
+    #[serde(default = "default_failures_search_limit")]
+    pub limit: usize,
+}
+
+/// Query for [`get_graph_memory_failures_recent`] (`GET /api/graph-memory/failures/recent`).
+#[derive(serde::Deserialize)]
+pub struct FailuresRecentQuery {
+    pub agent_id: String,
+    #[serde(default = "default_failures_recent_limit")]
+    pub limit: usize,
+    /// Only nodes with `timestamp >= now - since_seconds` (default 90 days).
+    #[serde(default = "default_failures_recent_since_seconds")]
+    pub since_seconds: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -144,6 +178,8 @@ pub struct GraphMemoryControlsPayload {
     pub include_conflicts: bool,
     #[serde(default = "default_true")]
     pub include_procedural_hints: bool,
+    #[serde(default = "default_true")]
+    pub include_failure_recall: bool,
 }
 
 impl Default for GraphMemoryControlsPayload {
@@ -156,6 +192,7 @@ impl Default for GraphMemoryControlsPayload {
             include_semantic_facts: true,
             include_conflicts: true,
             include_procedural_hints: true,
+            include_failure_recall: true,
         }
     }
 }
@@ -170,6 +207,22 @@ const fn default_since_seconds() -> i64 {
 
 const fn default_audit_limit() -> usize {
     100
+}
+
+const fn default_trajectories_limit() -> usize {
+    100
+}
+
+const fn default_failures_search_limit() -> usize {
+    40
+}
+
+const fn default_failures_recent_limit() -> usize {
+    50
+}
+
+const fn default_failures_recent_since_seconds() -> i64 {
+    60 * 60 * 24 * 90
 }
 
 fn default_graph_edge_mode() -> String {
@@ -251,6 +304,8 @@ fn node_kind(row_type: &str) -> &'static str {
         "procedural" => "procedural",
         "persona" => "persona",
         "runtime_state" => "runtime_state",
+        "trajectory" => "trajectory",
+        "failure" => "failure",
         _ => "semantic",
     }
 }
@@ -414,6 +469,8 @@ fn count_nodes_by_kind(conn: &rusqlite::Connection) -> Value {
         "procedural": 0_u64,
         "persona": 0_u64,
         "runtime_state": 0_u64,
+        "trajectory": 0_u64,
+        "failure": 0_u64,
         "total": 0_u64
     });
     if let Ok(mut stmt) =
@@ -563,6 +620,55 @@ fn label_for_node(node: &AinlMemoryNode) -> NodeLabelTuple {
                 "last_extraction_at_turn": runtime_state.last_extraction_at_turn,
             })),
         ),
+        AinlNodeType::Trajectory { trajectory } => {
+            let label = format!(
+                "Trajectory · {:?} · {} steps",
+                trajectory.outcome,
+                trajectory.steps.len()
+            );
+            (
+                label,
+                None,
+                None,
+                None,
+                None,
+                Some(json!({
+                    "episode_id": trajectory.episode_id.to_string(),
+                    "recorded_at": trajectory.recorded_at,
+                    "session_id": trajectory.session_id,
+                    "project_id": trajectory.project_id,
+                    "ainl_source_hash": trajectory.ainl_source_hash,
+                    "outcome": format!("{:?}", trajectory.outcome),
+                    "step_count": trajectory.steps.len(),
+                    "duration_ms": trajectory.duration_ms,
+                })),
+            )
+        }
+        AinlNodeType::Failure { failure } => {
+            let tool = failure
+                .tool_name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("—");
+            let label = format!(
+                "Failure · {} · {}",
+                failure.source,
+                openfang_types::truncate_str(failure.message.as_str(), 80)
+            );
+            (
+                label,
+                None,
+                None,
+                None,
+                None,
+                Some(json!({
+                    "source": failure.source,
+                    "tool_name": tool,
+                    "recorded_at": failure.recorded_at,
+                    "session_id": failure.session_id,
+                })),
+            )
+        }
     }
 }
 
@@ -718,6 +824,47 @@ fn explainability_for_node(
                 "evidence": json!({
                     "turn_count": runtime_state.turn_count,
                     "last_extraction_at_turn": runtime_state.last_extraction_at_turn,
+                }),
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::Trajectory { trajectory } => {
+            json!({
+                "what_happened": format!(
+                    "Execution trajectory ({:?}) with {} steps linked to episode {}.",
+                    trajectory.outcome,
+                    trajectory.steps.len(),
+                    trajectory.episode_id
+                ),
+                "why_happened": "Stores ordered tool/adapter steps for trajectory-based learning and dashboard inspection.",
+                "evidence": json!({
+                    "episode_id": trajectory.episode_id.to_string(),
+                    "recorded_at": trajectory.recorded_at,
+                    "session_id": trajectory.session_id,
+                    "project_id": trajectory.project_id,
+                    "ainl_source_hash": trajectory.ainl_source_hash,
+                    "duration_ms": trajectory.duration_ms,
+                    "steps_preview": trajectory.steps.iter().take(8).map(|s| s.step_id.as_str()).collect::<Vec<_>>(),
+                }),
+                "relations": neighbors,
+                "node_kind": ui_kind,
+            })
+        }
+        AinlNodeType::Failure { failure } => {
+            json!({
+                "what_happened": format!(
+                    "Recorded failure ({}) for tool {:?}: {}",
+                    failure.source,
+                    failure.tool_name,
+                    openfang_types::truncate_str(failure.message.as_str(), 200)
+                ),
+                "why_happened": "Typed failures support operator search, dashboards, and avoiding repeated dead-end tool paths.".to_string(),
+                "evidence": json!({
+                    "source": failure.source,
+                    "tool_name": failure.tool_name,
+                    "recorded_at": failure.recorded_at,
+                    "session_id": failure.session_id,
                 }),
                 "relations": neighbors,
                 "node_kind": ui_kind,
@@ -972,6 +1119,73 @@ pub async fn get_graph_memory(
     let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
     let options = graph_load_options(&q.edge_mode, q.ego_expand_1hop, q.synthetic_provenance);
     Json(load_graph_from_db(&path, q.limit, q.since_seconds, options))
+}
+
+/// GET /api/trajectories?agent_id=…&limit=…&since_recorded_at=…
+///
+/// Live check for Phase 1: lists recent [`ainl_memory::TrajectoryDetailRecord`] rows (newest first),
+/// including optional `ainl_source_hash` and per-step payloads when present.
+pub async fn get_trajectories(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TrajectoriesQuery>,
+) -> Json<Value> {
+    let Ok(agent_id) = sanitize_agent_id(&q.agent_id) else {
+        return Json(json!({ "trajectories": [] }));
+    };
+    let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let gm = match GraphMemory::new(&path) {
+        Ok(g) => g,
+        Err(_) => return Json(json!({ "trajectories": [] })),
+    };
+    match gm.list_trajectories_for_agent(&agent_id, q.limit, q.since_recorded_at) {
+        Ok(rows) => Json(json!({ "trajectories": rows })),
+        Err(_) => Json(json!({ "trajectories": [] })),
+    }
+}
+
+/// GET /api/graph-memory/failures/search?agent_id=…&q=…&limit=…
+pub async fn get_graph_memory_failures_search(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FailuresSearchQuery>,
+) -> Json<Value> {
+    let Ok(agent_id) = sanitize_agent_id(&q.agent_id) else {
+        return Json(json!({ "failures": [] }));
+    };
+    let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let gm = match GraphMemory::new(&path) {
+        Ok(g) => g,
+        Err(_) => return Json(json!({ "failures": [] })),
+    };
+    match gm.search_failures_for_agent(&agent_id, q.q.trim(), q.limit) {
+        Ok(nodes) => Json(json!({ "failures": nodes })),
+        Err(_) => Json(json!({ "failures": [] })),
+    }
+}
+
+/// GET /api/graph-memory/failures/recent?agent_id=…&limit=…&since_seconds=…
+///
+/// Lists recent [`ainl_memory::AinlNodeType::Failure`] rows for the agent DB (newest first),
+/// without FTS (operator dashboard / Phase 2 visibility).
+pub async fn get_graph_memory_failures_recent(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FailuresRecentQuery>,
+) -> Json<Value> {
+    let Ok(agent_id) = sanitize_agent_id(&q.agent_id) else {
+        return Json(json!({ "failures": [] }));
+    };
+    let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let gm = match GraphMemory::new(&path) {
+        Ok(g) => g,
+        Err(_) => return Json(json!({ "failures": [] })),
+    };
+    let cap = q.limit.clamp(1, 200);
+    match gm.recall_by_type(AinlNodeKind::Failure, q.since_seconds) {
+        Ok(mut nodes) => {
+            nodes.truncate(cap);
+            Json(json!({ "failures": nodes }))
+        }
+        Err(_) => Json(json!({ "failures": [] })),
+    }
 }
 
 /// GET /api/graph-memory/snapshot-graph?agent_id=…&snapshot_id=…
@@ -1374,6 +1588,8 @@ pub async fn post_graph_memory_delete_node(
                 AinlNodeType::Procedural { .. } => "procedural".to_string(),
                 AinlNodeType::Persona { .. } => "persona".to_string(),
                 AinlNodeType::RuntimeState { .. } => "runtime_state".to_string(),
+                AinlNodeType::Trajectory { .. } => "trajectory".to_string(),
+                AinlNodeType::Failure { .. } => "failure".to_string(),
             };
             node_label = label_for_node(&node).0;
         }
@@ -1458,6 +1674,7 @@ pub async fn put_graph_memory_controls(
         include_semantic_facts: req.include_semantic_facts,
         include_conflicts: req.include_conflicts,
         include_procedural_hints: req.include_procedural_hints,
+        include_failure_recall: req.include_failure_recall,
     };
     let path = controls_path(&state.kernel.config.home_dir, &agent_id);
     if let Some(parent) = path.parent() {
@@ -1495,6 +1712,7 @@ pub async fn put_graph_memory_controls(
             "include_semantic_facts": controls.include_semantic_facts,
             "include_conflicts": controls.include_conflicts,
             "include_procedural_hints": controls.include_procedural_hints,
+            "include_failure_recall": controls.include_failure_recall,
         }),
     );
     (
@@ -1520,6 +1738,8 @@ pub struct GraphMemoryControlsPayloadWithAgent {
     pub include_conflicts: bool,
     #[serde(default = "default_true")]
     pub include_procedural_hints: bool,
+    #[serde(default = "default_true")]
+    pub include_failure_recall: bool,
 }
 
 /// POST /api/graph-memory/remember

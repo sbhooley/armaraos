@@ -45,9 +45,34 @@ function analyticsPage() {
       try {
         this.summary = await OpenFangAPI.get('/api/usage/summary');
       } catch(e) {
-        this.summary = { total_input_tokens: 0, total_output_tokens: 0, total_cost_usd: 0, call_count: 0, total_tool_calls: 0 };
+        this.summary = {
+          total_input_tokens: 0,
+          total_output_tokens: 0,
+          total_cost_usd: 0,
+          call_count: 0,
+          total_tool_calls: 0,
+          quota_enforcement: {}
+        };
         throw e;
       }
+    },
+
+    quotaBlockCount() {
+      var q = (this.summary && this.summary.quota_enforcement) || {};
+      var n = Number(q.block_count || 0);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+    },
+
+    quotaCostAvoidedUsd() {
+      var q = (this.summary && this.summary.quota_enforcement) || {};
+      var n = Number(q.total_est_cost_avoided_usd || 0);
+      return Number.isFinite(n) ? Math.max(0, n) : 0;
+    },
+
+    quotaInputTokensAvoided() {
+      var q = (this.summary && this.summary.quota_enforcement) || {};
+      var n = Number(q.total_est_input_tokens_avoided || 0);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
     },
 
     async loadByModel() {

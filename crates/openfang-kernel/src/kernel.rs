@@ -1393,10 +1393,11 @@ impl OpenFangKernel {
             Arc::new(StubDriver) as Arc<dyn LlmDriver>
         };
 
-        // Initialize metering engine (shares the same SQLite connection as the memory substrate)
-        let metering = Arc::new(MeteringEngine::new(Arc::new(
-            openfang_memory::usage::UsageStore::new(memory.usage_conn()),
-        )));
+        // Initialize metering engine (shares the same SQLite connection as the memory substrate).
+        // Hold an Arc to the underlying UsageStore so the post-catalog backfill below can use it
+        // without going through a MeteringEngine accessor.
+        let usage_store = Arc::new(openfang_memory::usage::UsageStore::new(memory.usage_conn()));
+        let metering = Arc::new(MeteringEngine::new(usage_store.clone()));
 
         let supervisor = Supervisor::new();
         let background = BackgroundExecutor::new(supervisor.subscribe());
@@ -1434,6 +1435,43 @@ impl OpenFangKernel {
         info!(
             "Model catalog: {total_count} models, {available_count} available from configured providers ({local_count} local)"
         );
+
+        // One-shot data repair for historical compression telemetry.
+        //
+        // Why: rows persisted before schema v15 (or by any path that didn't snapshot pricing)
+        // landed in `eco_compression_events` with `provider = ''`, `input_price_per_million_usd
+        // = 0`, `est_input_cost_saved_usd = 0`, and `billed_input_tokens = 0`. The dashboard's
+        // "USD NOT SPENT (EST.)" then reads near-zero even after thousands of compressed turns
+        // because the rollup multiplies saved tokens by the missing price.
+        //
+        // Both helpers are idempotent — they only touch rows where the relevant fields are
+        // genuinely zero / blank — so re-running on every boot is safe but effectively a no-op
+        // after the first successful pass. Catalog price drift over time is preserved: rows
+        // already carrying a non-zero price snapshot are NEVER re-priced.
+        {
+            let pricing_lookup = |model: &str| {
+                model_catalog.find_model(model).map(|entry| {
+                    openfang_memory::usage::CompressionPricingSnapshot {
+                        provider: entry.provider.clone(),
+                        input_per_million_usd: entry.input_cost_per_m,
+                    }
+                })
+            };
+            match usage_store.backfill_compression_pricing(&pricing_lookup) {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "Backfilled compression pricing on {n} historical eco_compression_events row(s)"
+                ),
+                Err(e) => warn!("Compression pricing backfill failed: {e}"),
+            }
+            match usage_store.backfill_compression_billed_tokens() {
+                Ok(0) => {}
+                Ok(n) => info!(
+                    "Backfilled billed_input_tokens on {n} historical eco_compression_events row(s) from usage_events"
+                ),
+                Err(e) => warn!("Compression billed-tokens backfill failed: {e}"),
+            }
+        }
 
         // Initialize skill registry
         let skills_dir = config.home_dir.join("skills");
@@ -2535,9 +2573,19 @@ impl OpenFangKernel {
 
         let llm_billing_id = self.llm_quota_billing_agent(agent_id);
         // Enforce quota before running the agent loop
-        self.scheduler
-            .check_quota(llm_billing_id)
-            .map_err(KernelError::OpenFang)?;
+        match self.scheduler.check_quota(llm_billing_id) {
+            Ok(()) => {}
+            Err(e @ OpenFangError::QuotaExceeded(_)) => {
+                self.record_openfang_quota_exceeded_best_effort(
+                    llm_billing_id,
+                    &e,
+                    message,
+                    content_blocks.as_deref(),
+                );
+                return Err(KernelError::OpenFang(e));
+            }
+            Err(e) => return Err(KernelError::OpenFang(e)),
+        }
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
@@ -2651,9 +2699,19 @@ impl OpenFangKernel {
 
         let llm_billing_id = self.llm_quota_billing_agent(agent_id);
         // Enforce quota before spawning the streaming task
-        self.scheduler
-            .check_quota(llm_billing_id)
-            .map_err(KernelError::OpenFang)?;
+        match self.scheduler.check_quota(llm_billing_id) {
+            Ok(()) => {}
+            Err(e @ OpenFangError::QuotaExceeded(_)) => {
+                self.record_openfang_quota_exceeded_best_effort(
+                    llm_billing_id,
+                    &e,
+                    message,
+                    content_blocks.as_deref(),
+                );
+                return Err(KernelError::OpenFang(e));
+            }
+            Err(e) => return Err(KernelError::OpenFang(e)),
+        }
 
         let is_wasm = entry.manifest.module.starts_with("wasm:");
         let is_python = entry.manifest.module.starts_with("python:");
@@ -3134,14 +3192,29 @@ impl OpenFangKernel {
                         .scheduler
                         .record_usage(bill_id, &result.total_usage);
 
-                    // Persist usage to database (same as non-streaming path)
-                    let model = &manifest.model.model;
+                    // Persist usage to database (same as non-streaming path).
+                    //
+                    // Attribution: when a fallback model serviced the turn (primary 429 / overload
+                    // / ModelNotFound, OpenRouter free-tier, etc.) `result.actual_model` /
+                    // `result.actual_provider` carry the model that actually billed the call.
+                    // We snapshot pricing from THAT model so `usage_events` and
+                    // `eco_compression_events` reflect reality, not the manifest's requested model.
+                    let billing_model = result
+                        .actual_model
+                        .as_deref()
+                        .unwrap_or(manifest.model.model.as_str())
+                        .to_string();
+                    let billing_provider = result
+                        .actual_provider
+                        .as_deref()
+                        .unwrap_or(manifest.model.provider.as_str())
+                        .to_string();
                     let catalog_cost = MeteringEngine::estimate_cost_with_catalog(
                         &kernel_clone
                             .model_catalog
                             .read()
                             .unwrap_or_else(|e| e.into_inner()),
-                        model,
+                        &billing_model,
                         result.total_usage.input_tokens,
                         result.total_usage.output_tokens,
                     );
@@ -3151,7 +3224,7 @@ impl OpenFangKernel {
                         .metering
                         .record(&openfang_memory::usage::UsageRecord {
                             agent_id: bill_id,
-                            model: model.clone(),
+                            model: billing_model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             cost_usd: cost,
@@ -3173,12 +3246,44 @@ impl OpenFangKernel {
                         .as_ref()
                         .map(|s| (s.len() / 4 + 1) as u64)
                         .unwrap_or(original_tokens_est);
+                    let input_tokens_saved = original_tokens_est
+                        .saturating_sub(compressed_tokens_est);
+                    let (input_price, est_input_usd) = {
+                        let catalog = kernel_clone
+                            .model_catalog
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let input_price = MeteringEngine::catalog_input_price_per_million(
+                            &*catalog,
+                            &billing_model,
+                        );
+                        let est_input_usd =
+                            MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
+                                &*catalog,
+                                &billing_model,
+                                input_tokens_saved,
+                            );
+                        (input_price, est_input_usd)
+                    };
+                    let billed_input_tokens = result.total_usage.input_tokens;
+                    let billed_input_cost_usd = if input_price > 0.0 && billed_input_tokens > 0 {
+                        (billed_input_tokens as f64 / 1_000_000.0) * input_price
+                    } else {
+                        0.0
+                    };
                     let _ = kernel_clone.metering.record_compression(
                         &openfang_memory::usage::CompressionUsageRecord {
                             agent_id: bill_id,
                             mode,
+                            model: billing_model,
+                            provider: billing_provider,
                             original_tokens_est,
                             compressed_tokens_est,
+                            input_tokens_saved,
+                            input_price_per_million_usd: input_price,
+                            est_input_cost_saved_usd: est_input_usd,
+                            billed_input_tokens,
+                            billed_input_cost_usd,
                             savings_pct: result.compression_savings_pct,
                             semantic_preservation_score: result.compression_semantic_score,
                         },
@@ -3352,6 +3457,8 @@ impl OpenFangKernel {
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
+                    actual_provider: None,
+                    actual_model: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
                     compression_semantic_score: None,
@@ -3439,6 +3546,8 @@ impl OpenFangKernel {
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
+                    actual_provider: None,
+                    actual_model: None,
                     compression_savings_pct: 0,
                     compressed_input: None,
                     compression_semantic_score: None,
@@ -3496,10 +3605,6 @@ impl OpenFangKernel {
             .get(llm_billing_id)
             .map(|e| e.manifest.resources.clone())
             .unwrap_or_else(|| entry.manifest.resources.clone());
-        // Check metering quota before starting (cost pools follow LLM billing agent when inheriting)
-        self.metering
-            .check_quota(llm_billing_id, &billing_resources)
-            .map_err(KernelError::OpenFang)?;
 
         if let Some(ref ctx) = trace_ctx {
             if ctx.depth == 0
@@ -3575,6 +3680,50 @@ impl OpenFangKernel {
                     }
                 }
             }
+        }
+
+        // Cost / global budget gates (after compaction) — estimates include session + this turn.
+        match self.metering.check_quota(llm_billing_id, &billing_resources) {
+            Ok(()) => {}
+            Err(OpenFangError::QuotaExceeded(ref msg)) => {
+                let reason = Self::map_quota_block_reason(msg);
+                let (est_in, est_out) = Self::estimate_quota_block_tokens_pre_llm(
+                    &session,
+                    entry,
+                    message,
+                    content_blocks.as_deref(),
+                );
+                self.record_quota_block_best_effort(
+                    llm_billing_id,
+                    reason,
+                    Some(entry.manifest.model.model.as_str()),
+                    est_in,
+                    est_out,
+                );
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(msg.clone())));
+            }
+            Err(e) => return Err(KernelError::OpenFang(e)),
+        }
+        match self.metering.check_global_budget(&self.config.budget) {
+            Ok(()) => {}
+            Err(OpenFangError::QuotaExceeded(ref msg)) => {
+                let reason = Self::map_quota_block_reason(msg);
+                let (est_in, est_out) = Self::estimate_quota_block_tokens_pre_llm(
+                    &session,
+                    entry,
+                    message,
+                    content_blocks.as_deref(),
+                );
+                self.record_quota_block_best_effort(
+                    llm_billing_id,
+                    reason,
+                    Some(entry.manifest.model.model.as_str()),
+                    est_in,
+                    est_out,
+                );
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(msg.clone())));
+            }
+            Err(e) => return Err(KernelError::OpenFang(e)),
         }
 
         let messages_before = session.messages.len();
@@ -3956,11 +4105,24 @@ impl OpenFangKernel {
             append_daily_memory_log(workspace, &result.response);
         }
 
-        // Record usage in the metering engine (uses catalog pricing as single source of truth)
-        let model = &manifest.model.model;
+        // Record usage in the metering engine (uses catalog pricing as single source of truth).
+        //
+        // Attribution: prefer `result.actual_*` over manifest defaults so fallback-driven turns
+        // (primary 429 / overload / ModelNotFound, OpenRouter free-tier) are billed against the
+        // model that actually serviced the call. See `AgentLoopResult::actual_provider`.
+        let billing_model = result
+            .actual_model
+            .as_deref()
+            .unwrap_or(manifest.model.model.as_str())
+            .to_string();
+        let billing_provider = result
+            .actual_provider
+            .as_deref()
+            .unwrap_or(manifest.model.provider.as_str())
+            .to_string();
         let catalog_cost = MeteringEngine::estimate_cost_with_catalog(
             &self.model_catalog.read().unwrap_or_else(|e| e.into_inner()),
-            model,
+            &billing_model,
             result.total_usage.input_tokens,
             result.total_usage.output_tokens,
         );
@@ -3968,7 +4130,7 @@ impl OpenFangKernel {
         let cost = catalog_cost + engine_addon;
         let _ = self.metering.record(&openfang_memory::usage::UsageRecord {
             agent_id: llm_billing_id,
-            model: model.clone(),
+            model: billing_model.clone(),
             input_tokens: result.total_usage.input_tokens,
             output_tokens: result.total_usage.output_tokens,
             cost_usd: cost,
@@ -3988,13 +4150,41 @@ impl OpenFangKernel {
             .as_ref()
             .map(|s| (s.len() / 4 + 1) as u64)
             .unwrap_or(original_tokens_est);
+        let input_tokens_saved = original_tokens_est.saturating_sub(compressed_tokens_est);
+        let (input_price, est_input_usd) = {
+            let catalog = self
+                .model_catalog
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let input_price =
+                MeteringEngine::catalog_input_price_per_million(&*catalog, &billing_model);
+            let est_input_usd = MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
+                &*catalog,
+                &billing_model,
+                input_tokens_saved,
+            );
+            (input_price, est_input_usd)
+        };
+        let billed_input_tokens = result.total_usage.input_tokens;
+        let billed_input_cost_usd = if input_price > 0.0 && billed_input_tokens > 0 {
+            (billed_input_tokens as f64 / 1_000_000.0) * input_price
+        } else {
+            0.0
+        };
         let _ = self
             .metering
             .record_compression(&openfang_memory::usage::CompressionUsageRecord {
                 agent_id: llm_billing_id,
                 mode,
+                model: billing_model,
+                provider: billing_provider,
                 original_tokens_est,
                 compressed_tokens_est,
+                input_tokens_saved,
+                input_price_per_million_usd: input_price,
+                est_input_cost_saved_usd: est_input_usd,
+                billed_input_tokens,
+                billed_input_cost_usd,
                 savings_pct: result.compression_savings_pct,
                 semantic_preservation_score: result.compression_semantic_score,
             });
@@ -5689,6 +5879,138 @@ impl OpenFangKernel {
             };
             id = p;
         }
+    }
+
+    fn map_quota_block_reason(msg: &str) -> &'static str {
+        if msg.contains("Token limit exceeded") {
+            return "hourly_llm_tokens";
+        }
+        if msg.contains("hourly cost quota") {
+            return "hourly_cost_usd";
+        }
+        if msg.contains("daily cost quota") {
+            return "daily_cost_usd";
+        }
+        if msg.contains("monthly cost quota") {
+            return "monthly_cost_usd";
+        }
+        if msg.contains("Global hourly budget") {
+            return "global_hourly_usd";
+        }
+        if msg.contains("Global daily budget") {
+            return "global_daily_usd";
+        }
+        if msg.contains("Global monthly budget") {
+            return "global_monthly_usd";
+        }
+        "quota_unknown"
+    }
+
+    /// Rough tokens for the *incoming* user turn (message + optional blocks) plus small overhead.
+    fn rough_quota_block_tokens_from_incoming(
+        message: &str,
+        content_blocks: Option<&[openfang_types::message::ContentBlock]>,
+    ) -> (u64, u64) {
+        let mut chars = message.len();
+        if let Some(blocks) = content_blocks {
+            use openfang_types::message::ContentBlock;
+            for b in blocks {
+                match b {
+                    ContentBlock::Text { text, .. } => {
+                        chars = chars.saturating_add(text.len());
+                    }
+                    ContentBlock::Image { data, .. } => {
+                        chars = chars.saturating_add(data.len().min(400_000));
+                    }
+                    ContentBlock::Thinking { thinking } => {
+                        chars = chars.saturating_add(thinking.len());
+                    }
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        chars = chars.saturating_add(name.len());
+                        if let Ok(s) = serde_json::to_string(input) {
+                            chars = chars.saturating_add(s.len().min(50_000));
+                        }
+                    }
+                    ContentBlock::ToolResult { content, .. } => {
+                        chars = chars.saturating_add(content.len().min(100_000));
+                    }
+                    ContentBlock::Unknown => {
+                        chars = chars.saturating_add(64);
+                    }
+                }
+            }
+        }
+        let est_in = (chars / 4).saturating_add(200) as u64;
+        (est_in, 512u64)
+    }
+
+    fn record_quota_block_best_effort(
+        &self,
+        billing_agent: AgentId,
+        reason: &str,
+        model_hint: Option<&str>,
+        est_input: u64,
+        est_output: u64,
+    ) {
+        let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
+        let model = model_hint.unwrap_or("unknown");
+        let cost = MeteringEngine::estimate_cost_with_catalog(
+            &catalog,
+            model,
+            est_input,
+            est_output,
+        );
+        let _ = self.metering.record_quota_block(&openfang_memory::usage::QuotaBlockRecord {
+            agent_id: billing_agent,
+            reason: reason.to_string(),
+            est_input_tokens: est_input,
+            est_output_tokens: est_output,
+            est_cost_usd: cost,
+        });
+    }
+
+    fn record_openfang_quota_exceeded_best_effort(
+        &self,
+        billing_agent: AgentId,
+        err: &OpenFangError,
+        message: &str,
+        content_blocks: Option<&[openfang_types::message::ContentBlock]>,
+    ) {
+        let OpenFangError::QuotaExceeded(msg) = err else {
+            return;
+        };
+        let reason = Self::map_quota_block_reason(msg);
+        let (est_in, est_out) =
+            Self::rough_quota_block_tokens_from_incoming(message, content_blocks);
+        let model_owned = self
+            .registry
+            .get(billing_agent)
+            .map(|e| e.manifest.model.model.clone());
+        self.record_quota_block_best_effort(
+            billing_agent,
+            reason,
+            model_owned.as_deref(),
+            est_in,
+            est_out,
+        );
+    }
+
+    fn estimate_quota_block_tokens_pre_llm(
+        session: &openfang_memory::session::Session,
+        entry: &AgentEntry,
+        message: &str,
+        content_blocks: Option<&[openfang_types::message::ContentBlock]>,
+    ) -> (u64, u64) {
+        use openfang_runtime::compactor::estimate_token_count;
+        let sess_est =
+            estimate_token_count(
+                &session.messages,
+                Some(entry.manifest.model.system_prompt.as_str()),
+                None,
+            ) as u64;
+        let (incoming_in, default_out) =
+            Self::rough_quota_block_tokens_from_incoming(message, content_blocks);
+        (sess_est.saturating_add(incoming_in), default_out)
     }
 
     /// Quota + usage snapshot for an agent and its spawned descendants (`GET /api/orchestration/quota-tree/...`).
@@ -9392,10 +9714,49 @@ impl KernelHandle for OpenFangKernel {
             EventPayload::System(SystemEvent::GraphMemoryWrite {
                 agent_id: aid,
                 kind: kind.to_string(),
-                provenance,
+                provenance: provenance.clone(),
             }),
         );
         let _ = OpenFangKernel::publish_event(self, event).await;
+
+        // Narrow, operator-facing events for dashboards (SSE) — mirror graph writes without replacing `GraphMemoryWrite`.
+        if kind == "trajectory" {
+            if let Some(ref p) = provenance {
+                let trajectory_node_id = p.node_ids.first().cloned().unwrap_or_default();
+                if !trajectory_node_id.is_empty() {
+                    let episode_node_id = p.node_ids.get(1).cloned();
+                    let ev2 = Event::new(
+                        aid,
+                        EventTarget::Broadcast,
+                        EventPayload::System(SystemEvent::TrajectoryRecorded {
+                            agent_id: aid,
+                            trajectory_node_id,
+                            episode_node_id,
+                            summary: p.summary.clone(),
+                        }),
+                    );
+                    let _ = OpenFangKernel::publish_event(self, ev2).await;
+                }
+            }
+        } else if kind == "failure" {
+            if let Some(ref p) = provenance {
+                let failure_node_id = p.node_ids.first().cloned().unwrap_or_default();
+                if !failure_node_id.is_empty() {
+                    let ev3 = Event::new(
+                        aid,
+                        EventTarget::Broadcast,
+                        EventPayload::System(SystemEvent::FailureLearned {
+                            agent_id: aid,
+                            failure_node_id,
+                            tool_name: p.tool_name.clone(),
+                            source: p.reason.clone(),
+                            message_preview: p.summary.clone(),
+                        }),
+                    );
+                    let _ = OpenFangKernel::publish_event(self, ev3).await;
+                }
+            }
+        }
         Ok(())
     }
 

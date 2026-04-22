@@ -3,6 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod learner;
+pub mod vitals;
+
+pub use learner::{FailureKind, ProposalEnvelope, TrajectoryOutcome, TrajectoryStep};
+pub use vitals::{CognitivePhase, CognitiveVitals, VitalsGate};
+
 /// Telemetry / metrics field names — keep identical across ArmaraOS, AINL MCP, and optional inference-server.
 pub mod telemetry {
     /// Label: normalized repo-intel capability state (e.g. `ready`, `degraded`, `absent`).
@@ -11,10 +17,26 @@ pub mod telemetry {
     pub const FRESHNESS_STATE_AT_DECISION: &str = "freshness_state_at_decision";
     /// Counter/gauge: whether impact was assessed before a risky write.
     pub const IMPACT_CHECKED_BEFORE_WRITE: &str = "impact_checked_before_write";
+    /// Trajectory + failure + proposal + compression (learner suite).
+    pub const TRAJECTORY_RECORDED: &str = "trajectory_recorded";
+    pub const TRAJECTORY_OUTCOME: &str = "trajectory_outcome";
+    pub const TRAJECTORY_STEP_DURATION_MS: &str = "trajectory_step_duration_ms";
+    pub const FAILURE_RECORDED: &str = "failure_recorded";
+    pub const FAILURE_RESOLUTION_HIT: &str = "failure_resolution_hit";
+    pub const FAILURE_PREVENTED_COUNT: &str = "failure_prevented_count";
+    pub const PROPOSAL_VALIDATED: &str = "proposal_validated";
+    pub const PROPOSAL_ADOPTED: &str = "proposal_adopted";
+    pub const COMPRESSION_PROFILE_TUNED: &str = "compression_profile_tuned";
+    pub const COMPRESSION_CACHE_HIT: &str = "compression_cache_hit";
+    pub const PERSONA_AXIS_DELTA: &str = "persona_axis_delta";
+    pub const VITALS_GATE_AT_TURN: &str = "vitals_gate_at_turn";
 }
 
 /// Version for JSON serialization of policy contract payloads (bump on breaking enum changes).
 pub const CONTRACT_SCHEMA_VERSION: u32 = 1;
+
+/// Schema version for [`ProposalEnvelope`] and other learner wire types.
+pub const LEARNER_SCHEMA_VERSION: u32 = 1;
 
 /// Class of repo-intelligence MCP tool (GitNexus-class naming).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -132,6 +154,41 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn cognitive_vitals_json_roundtrip() {
+        let v = CognitiveVitals {
+            gate: VitalsGate::Pass,
+            phase: "reasoning:0.71".into(),
+            trust: 0.82,
+            mean_logprob: -0.4,
+            entropy: 0.12,
+            sample_tokens: 12,
+        };
+        let j = serde_json::to_value(&v).unwrap();
+        let back: CognitiveVitals = serde_json::from_value(j).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn trajectory_step_json_roundtrip() {
+        let s = TrajectoryStep {
+            step_id: "s1".into(),
+            timestamp_ms: 1,
+            adapter: "http".into(),
+            operation: "GET".into(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 3,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: Some(ContextFreshness::Fresh),
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        let back: TrajectoryStep = serde_json::from_value(j).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
     fn contract_json_roundtrip() {
         let p = RepoIntelCapabilityProfile {
             schema_version: CONTRACT_SCHEMA_VERSION,
@@ -164,5 +221,131 @@ mod tests {
                 "ainl_run"
             ]
         );
+    }
+
+    #[test]
+    fn cognitive_phase_json_roundtrip() {
+        let p = CognitivePhase::Retrieval;
+        let j = serde_json::to_value(&p).unwrap();
+        let back: CognitivePhase = serde_json::from_value(j).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn trajectory_outcome_json_roundtrip() {
+        for o in [
+            TrajectoryOutcome::Success,
+            TrajectoryOutcome::PartialSuccess,
+            TrajectoryOutcome::Failure,
+            TrajectoryOutcome::Aborted,
+        ] {
+            let j = serde_json::to_value(&o).unwrap();
+            let back: TrajectoryOutcome = serde_json::from_value(j).unwrap();
+            assert_eq!(o, back);
+        }
+    }
+
+    #[test]
+    fn failure_kind_json_roundtrip_variants() {
+        let cases = vec![
+            FailureKind::AdapterTypo {
+                offered: "httP".into(),
+                suggestion: Some("http".into()),
+            },
+            FailureKind::ValidatorReject {
+                rule: "no_raw_shell".into(),
+            },
+            FailureKind::AdapterTimeout {
+                adapter: "web".into(),
+                ms: 5000,
+            },
+            FailureKind::ToolError {
+                tool: "file_read".into(),
+                message: "ENOENT".into(),
+            },
+            FailureKind::LoopGuardFire {
+                tool: "noop".into(),
+                repeat_count: 3,
+            },
+            FailureKind::Other {
+                message: "misc".into(),
+            },
+        ];
+        for fk in cases {
+            let j = serde_json::to_value(&fk).unwrap();
+            let back: FailureKind = serde_json::from_value(j).unwrap();
+            assert_eq!(fk, back);
+        }
+    }
+
+    #[test]
+    fn proposal_envelope_json_roundtrip() {
+        let pe = ProposalEnvelope {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            original_hash: "abc".into(),
+            proposed_hash: "def".into(),
+            kind: "promote_pattern".into(),
+            rationale: "recurrence".into(),
+            freshness_at_proposal: ContextFreshness::Stale,
+            impact_decision: ImpactDecision::RequireImpactFirst,
+        };
+        let j = serde_json::to_value(&pe).unwrap();
+        let back: ProposalEnvelope = serde_json::from_value(j).unwrap();
+        assert_eq!(pe, back);
+    }
+
+    #[test]
+    fn trajectory_step_with_nested_vitals_roundtrip() {
+        let v = CognitiveVitals {
+            gate: VitalsGate::Warn,
+            phase: "reasoning:0.5".into(),
+            trust: 0.5,
+            mean_logprob: -0.2,
+            entropy: 0.1,
+            sample_tokens: 8,
+        };
+        let s = TrajectoryStep {
+            step_id: "s2".into(),
+            timestamp_ms: 2,
+            adapter: "builtin".into(),
+            operation: "list".into(),
+            inputs_preview: Some("a".into()),
+            outputs_preview: Some("b".into()),
+            duration_ms: 9,
+            success: false,
+            error: Some("boom".into()),
+            vitals: Some(v.clone()),
+            freshness_at_step: Some(ContextFreshness::Unknown),
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        let back: TrajectoryStep = serde_json::from_value(j).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn telemetry_learner_keys_are_unique_and_non_empty() {
+        use telemetry::*;
+        let keys = [
+            TRAJECTORY_RECORDED,
+            TRAJECTORY_OUTCOME,
+            TRAJECTORY_STEP_DURATION_MS,
+            FAILURE_RECORDED,
+            FAILURE_RESOLUTION_HIT,
+            FAILURE_PREVENTED_COUNT,
+            PROPOSAL_VALIDATED,
+            PROPOSAL_ADOPTED,
+            COMPRESSION_PROFILE_TUNED,
+            COMPRESSION_CACHE_HIT,
+            PERSONA_AXIS_DELTA,
+            VITALS_GATE_AT_TURN,
+        ];
+        for k in keys {
+            assert!(!k.is_empty());
+        }
+        for i in 0..keys.len() {
+            for j in (i + 1)..keys.len() {
+                assert_ne!(keys[i], keys[j], "duplicate telemetry key");
+            }
+        }
     }
 }

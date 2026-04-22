@@ -55,6 +55,7 @@ pub async fn build_router(
         ainl_register_hits: dashmap::DashMap::new(),
         daemon_resources: crate::daemon_resources::DaemonResources::spawn_collector(),
     });
+    routes::spawn_upload_expiry_sweeper();
 
     // CORS: allow localhost origins by default. If API key is set, the API
     // is protected anyway. For development, permissive CORS is convenient.
@@ -158,6 +159,18 @@ pub async fn build_router(
         .route(
             "/api/graph-memory",
             axum::routing::get(crate::graph_memory::get_graph_memory),
+        )
+        .route(
+            "/api/trajectories",
+            axum::routing::get(crate::graph_memory::get_trajectories),
+        )
+        .route(
+            "/api/graph-memory/failures/search",
+            axum::routing::get(crate::graph_memory::get_graph_memory_failures_search),
+        )
+        .route(
+            "/api/graph-memory/failures/recent",
+            axum::routing::get(crate::graph_memory::get_graph_memory_failures_recent),
         )
         .route(
             "/api/graph-memory/snapshots",
@@ -593,6 +606,10 @@ pub async fn build_router(
         .route(
             "/api/system/network-hints",
             axum::routing::get(routes::system_network_hints),
+        )
+        .route(
+            "/api/system/local-voice",
+            axum::routing::get(routes::system_local_voice),
         )
         .route(
             "/api/system/daemon-resources",

@@ -20,13 +20,14 @@ use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_runtime::workspace_sandbox::resolve_sandbox_path;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
+use openfang_types::media::normalize_mime_type;
 use openfang_types::message::Role;
 use openfang_types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
@@ -529,9 +530,231 @@ pub fn workspace_upload_hints(workspace_root: &FsPath, attachments: &[Attachment
     }
 }
 
+/// Environment: `ARMARAOS_VOICE_UPLOAD_TTL_SEC` (default 3600), `ARMARAOS_UPLOAD_TTL_SEC` (default
+/// 14400 for non-audio), `ARMARAOS_UPLOAD_SWEEP_INTERVAL_SEC` (default 60).
+fn env_duration_secs(name: &str, default: u64) -> Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n: &u64| n > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(default))
+}
+
+fn upload_expires_instant_for(content_type: &str) -> Option<Instant> {
+    if content_type.starts_with("audio/") {
+        return Some(Instant::now() + env_duration_secs("ARMARAOS_VOICE_UPLOAD_TTL_SEC", 3_600));
+    }
+    Some(Instant::now() + env_duration_secs("ARMARAOS_UPLOAD_TTL_SEC", 14_400))
+}
+
+/// True when every **audio** attachment in this turn has a non-empty server-side `transcription`
+/// in `UPLOAD_REGISTRY` (ingest or upload path). Drives: omit `media_transcribe` tool hints
+/// and feed AINL / the main loop with the transcript text (see
+/// `prepare_user_message_for_audio_turn`).
+fn all_audio_fully_transcribed(attachments: &[AttachmentRef]) -> bool {
+    let mut n_audio = 0usize;
+    for att in attachments {
+        if uuid::Uuid::parse_str(&att.file_id).is_err() {
+            return false;
+        }
+        let Some(m) = UPLOAD_REGISTRY.get(&att.file_id) else {
+            return false;
+        };
+        if !m.content_type.starts_with("audio/") {
+            continue;
+        }
+        n_audio += 1;
+        let t_ok = m
+            .transcription
+            .as_deref()
+            .map(str::trim)
+            .map_or(false, |s| !s.is_empty());
+        if !t_ok {
+            return false;
+        }
+    }
+    n_audio > 0
+}
+
+fn looks_like_voice_tool_placeholder(s: &str) -> bool {
+    let t = s.to_lowercase();
+    t.contains("media_transcribe") && (t.contains("file_id") || t.contains('`'))
+}
+
+/// Deterministic merge: turn-level **text** the LLM and ainl-runtime see, given STT per clip
+/// (same order as collected from attachments). Unit-tested without a kernel.
+pub(crate) fn merge_client_with_voice_transcripts(
+    client_message: &str,
+    transcripts: &[String],
+) -> String {
+    if transcripts.is_empty() {
+        return client_message.to_string();
+    }
+    let joined = transcripts.join("\n\n");
+    let c = client_message.trim();
+    if c.is_empty() {
+        return joined;
+    }
+    if looks_like_voice_tool_placeholder(c) {
+        return joined;
+    }
+    if c == joined.trim() {
+        return joined;
+    }
+    if c.contains(&joined) {
+        return joined;
+    }
+    format!("{c}\n\n[Voice]:\n{joined}")
+}
+
+/// Reconcile the client `message` with **authoritative** audio transcripts: registry from upload
+/// STT, or re-transcribe from temp disk before the turn reaches the model / ainl-runtime prelude
+/// (same path as a typed user message).
+pub async fn prepare_user_message_for_audio_turn(
+    kernel: &OpenFangKernel,
+    client_message: &str,
+    attachments: &[AttachmentRef],
+) -> String {
+    if attachments.is_empty() {
+        return client_message.to_string();
+    }
+
+    let has_audio = attachments.iter().any(|a| {
+        if uuid::Uuid::parse_str(&a.file_id).is_ok() {
+            if let Some(m) = UPLOAD_REGISTRY.get(&a.file_id) {
+                return m.content_type.starts_with("audio/");
+            }
+        }
+        a.content_type.to_ascii_lowercase().starts_with("audio/")
+    });
+    if !has_audio {
+        return client_message.to_string();
+    }
+
+    let mut transcripts: Vec<String> = Vec::new();
+    for att in attachments {
+        if uuid::Uuid::parse_str(&att.file_id).is_err() {
+            continue;
+        }
+        let meta = UPLOAD_REGISTRY.get(&att.file_id);
+        let content_type: String = if let Some(ref m) = meta {
+            m.content_type.clone()
+        } else {
+            att.content_type.clone()
+        };
+        if !content_type.to_ascii_lowercase().trim().starts_with("audio/") {
+            continue;
+        }
+        let ct_norm = normalize_mime_type(content_type.as_str());
+        let path = std::env::temp_dir()
+            .join("openfang_uploads")
+            .join(&att.file_id);
+
+        let t_opt: Option<String> = meta
+            .as_ref()
+            .and_then(|m| m.transcription.as_deref().map(str::trim))
+            .filter(|s| !s.is_empty())
+            .map(std::string::ToString::to_string);
+
+        let t_res: Option<String> = if let Some(t) = t_opt {
+            Some(t)
+        } else if path.is_file() {
+            use openfang_types::media::{MediaAttachment, MediaSource, MediaType};
+            let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let mref = MediaAttachment {
+                media_type: MediaType::Audio,
+                mime_type: ct_norm.clone(),
+                source: MediaSource::FilePath {
+                    path: path.to_string_lossy().to_string(),
+                },
+                size_bytes,
+            };
+            match kernel.media_engine.transcribe_audio(&mref).await {
+                Ok(r) => {
+                    let t = r.description.trim().to_string();
+                    if t.is_empty() {
+                        None
+                    } else if let Some(mut w) = UPLOAD_REGISTRY.get_mut(&att.file_id) {
+                        w.transcription = Some(t.clone());
+                        Some(t)
+                    } else {
+                        UPLOAD_REGISTRY.insert(
+                            att.file_id.clone(),
+                            UploadMeta {
+                                filename: if att.filename.is_empty() {
+                                    "voice.ogg".to_string()
+                                } else {
+                                    att.filename.clone()
+                                },
+                                content_type: ct_norm.clone(),
+                                transcription: Some(t.clone()),
+                                expires_at: upload_expires_instant_for(ct_norm.as_str()),
+                            },
+                        );
+                        Some(t)
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, file_id = %att.file_id, "prepare_user_message: STT retry failed");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(t) = t_res {
+            transcripts.push(t);
+        }
+    }
+
+    merge_client_with_voice_transcripts(client_message, &transcripts)
+}
+
+/// **Prepend** to the user turn (before the human-readable text) so the model always sees
+/// `file_id` + `content_type` for `media_transcribe` at the start of the message. Stops the model
+/// from asking the user to "paste the UUID" (not visible in the chat UI).
+pub fn audio_upload_ingress_lead(attachments: &[AttachmentRef]) -> String {
+    if all_audio_fully_transcribed(attachments) {
+        return String::new();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for att in attachments {
+        if uuid::Uuid::parse_str(&att.file_id).is_err() {
+            continue;
+        }
+        let meta = UPLOAD_REGISTRY.get(&att.file_id);
+        let content_type = meta
+            .as_ref()
+            .map(|m| m.content_type.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(att.content_type.as_str());
+        let content_type = normalize_mime_type(content_type);
+        if !content_type.starts_with("audio/") {
+            continue;
+        }
+        lines.push(format!(
+            "ARMAVOS_VOICE file_id={} content_type={}",
+            att.file_id, content_type
+        ));
+    }
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "[ARMAVOS_VOICE_CONTEXT]\nThe fields below are for this user turn only. Call `media_transcribe` with these exact `file_id` and `content_type` values. **Do not ask the user to provide a UUID** — it is in this block.\n{}\n[/ARMAVOS_VOICE_CONTEXT]",
+            lines.join("\n")
+        )
+    }
+}
+
 /// Voice/audio chat uploads are stored under the temp upload dir as a UUID (no workspace copy).
 /// Append this so the model calls `media_transcribe` with `file_id`, not the display `voice_*.webm` name.
 pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
+    if all_audio_fully_transcribed(attachments) {
+        return String::new();
+    }
     let mut lines: Vec<String> = Vec::new();
     for att in attachments {
         if uuid::Uuid::parse_str(&att.file_id).is_err() {
@@ -565,7 +788,7 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
         String::new()
     } else {
         format!(
-            "\n\n**Voice/audio attachments** (server temp store, not workspace/uploads):\n{}\n**Important:** `file_id` must be the UUID listed here, never the client-side `voice_…` filename.\n",
+            "\n\n**Voice/audio attachments** (server temp store, not workspace/uploads):\n{}\n**Important:** `file_id` is also at the start of this message in `[ARMAVOS_VOICE_CONTEXT]`. Do not ask the user to paste a UUID.\n",
             lines.join("\n")
         )
     }
@@ -671,7 +894,17 @@ pub async fn send_message(
         None
     };
 
-    let mut message_for_agent = req.message.clone();
+    let base_message = prepare_user_message_for_audio_turn(
+        state.kernel.as_ref(),
+        &req.message,
+        &req.attachments,
+    )
+    .await;
+    let mut message_for_agent = base_message;
+    let lead = audio_upload_ingress_lead(&req.attachments);
+    if !lead.is_empty() {
+        message_for_agent = format!("{lead}\n\n{message_for_agent}");
+    }
     if !req.attachments.is_empty() {
         if let Some(entry) = state.kernel.registry.get(agent_id) {
             if let Some(ref ws) = entry.manifest.workspace {
@@ -947,6 +1180,10 @@ pub async fn get_agent_session(
                                                     media_type.rsplit('/').next().unwrap_or("png")
                                                 ),
                                                 content_type: media_type.clone(),
+                                                transcription: None,
+                                                expires_at: upload_expires_instant_for(
+                                                    media_type.as_str(),
+                                                ),
                                             },
                                         );
                                         msg_images.push(serde_json::json!({
@@ -1306,10 +1543,47 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .and_then(Result::ok)
         .unwrap_or_else(|| serde_json::json!({"window":"7d","modes":{},"agents":[]}));
 
+    let quota_enforcement = match state.kernel.memory.usage().query_quota_block_summary(Some(7)) {
+        Ok(q) => {
+            let by_reason: serde_json::Map<String, serde_json::Value> = q
+                .by_reason
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        serde_json::json!({
+                            "count": v.count,
+                            "est_input_tokens": v.est_input_tokens,
+                            "est_output_tokens": v.est_output_tokens,
+                            "est_cost_usd": v.est_cost_usd,
+                        }),
+                    )
+                })
+                .collect();
+            serde_json::json!({
+                "window": q.window,
+                "block_count": q.block_count,
+                "total_est_input_tokens_avoided": q.total_est_input_tokens,
+                "total_est_output_tokens_avoided": q.total_est_output_tokens,
+                "total_est_cost_avoided_usd": q.total_est_cost_usd,
+                "by_reason": by_reason,
+            })
+        }
+        Err(_) => serde_json::json!({
+            "window": "7d",
+            "block_count": 0,
+            "total_est_input_tokens_avoided": 0,
+            "total_est_output_tokens_avoided": 0,
+            "total_est_cost_avoided_usd": 0.0,
+            "by_reason": {},
+        }),
+    };
+
     let adaptive_eco = state.kernel.adaptive_eco_config();
     let memory_context_metrics = openfang_runtime::graph_memory_context::memory_context_metrics();
     let memory_selection_debug = openfang_runtime::graph_memory_context::latest_selection_debug(20);
     let memory_contract_metrics = openfang_runtime::ainl_inbox_reader::inbox_contract_metrics();
+    let graph_memory_learning_metrics = openfang_runtime::graph_memory_learning_metrics();
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1328,7 +1602,9 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "graph_memory_context_metrics": memory_context_metrics,
         "graph_memory_selection_debug": memory_selection_debug,
         "graph_memory_contract_metrics": memory_contract_metrics,
+        "graph_memory_learning_metrics": graph_memory_learning_metrics,
         "eco_compression": eco_compression,
+        "quota_enforcement": quota_enforcement,
         "adaptive_eco": {
             "enabled": adaptive_eco.enabled,
             "enforce": adaptive_eco.enforce,
@@ -2384,7 +2660,17 @@ pub async fn send_message_stream(
         .into_response();
     }
 
-    let mut message_for_agent = req.message.clone();
+    let base_message = prepare_user_message_for_audio_turn(
+        state.kernel.as_ref(),
+        &req.message,
+        &req.attachments,
+    )
+    .await;
+    let mut message_for_agent = base_message;
+    let lead = audio_upload_ingress_lead(&req.attachments);
+    if !lead.is_empty() {
+        message_for_agent = format!("{lead}\n\n{message_for_agent}");
+    }
     if !req.attachments.is_empty() {
         if let Some(entry) = state.kernel.registry.get(agent_id) {
             if let Some(ref ws) = entry.manifest.workspace {
@@ -7083,6 +7369,17 @@ pub async fn system_network_hints() -> impl IntoResponse {
     Json(crate::network_hints::collect())
 }
 
+/// GET /api/system/local-voice — Piper / Whisper readiness for WebChat (spoken reply, local STT).
+pub async fn system_local_voice(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let lv = &state.kernel.config.local_voice;
+    Json(serde_json::json!({
+        "enabled": lv.enabled,
+        "auto_download": lv.auto_download,
+        "piper_ready": lv.piper_ready(),
+        "whisper_ready": lv.whisper_ready(),
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Tools endpoint
 // ---------------------------------------------------------------------------
@@ -7939,21 +8236,99 @@ pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
 /// GET /api/usage/summary — Get overall usage summary from UsageStore.
 pub async fn usage_summary(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let quota = state
+        .kernel
+        .memory
+        .usage()
+        .query_quota_block_summary(None)
+        .unwrap_or_default();
+    let by_reason: serde_json::Map<String, serde_json::Value> = quota
+        .by_reason
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::json!({
+                    "count": v.count,
+                    "est_input_tokens": v.est_input_tokens,
+                    "est_output_tokens": v.est_output_tokens,
+                    "est_cost_usd": v.est_cost_usd,
+                }),
+            )
+        })
+        .collect();
+    let quota_json = serde_json::json!({
+        "window": quota.window,
+        "block_count": quota.block_count,
+        "total_est_input_tokens_avoided": quota.total_est_input_tokens,
+        "total_est_output_tokens_avoided": quota.total_est_output_tokens,
+        "total_est_cost_avoided_usd": quota.total_est_cost_usd,
+        "by_reason": by_reason,
+    });
+    let compression_savings = state
+        .kernel
+        .memory
+        .usage()
+        .query_compression_summary(None)
+        .ok()
+        .map(|c| {
+            let by_provider_model: Vec<serde_json::Value> = c
+                .by_provider_model
+                .iter()
+                .map(|pm| {
+                    serde_json::json!({
+                        "provider": pm.provider,
+                        "model": pm.model,
+                        "turns": pm.turns,
+                        "original_input_tokens": pm.original_input_tokens,
+                        "compressed_input_tokens": pm.compressed_input_tokens,
+                        "billed_input_tokens": pm.billed_input_tokens,
+                        "input_tokens_saved": pm.input_tokens_saved,
+                        "input_price_per_million_usd": pm.input_price_per_million_usd,
+                        "est_input_cost_saved_usd": pm.est_input_cost_saved_usd,
+                        "billed_input_cost_usd": pm.billed_input_cost_usd,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "window": c.window,
+                "estimated_total_input_tokens_saved": c.estimated_total_input_tokens_saved,
+                "estimated_total_cost_saved_usd": c.estimated_total_cost_saved_usd,
+                "estimated_compression_tokens_saved": c.estimated_compression_tokens_saved,
+                "estimated_compression_cost_saved_usd": c.estimated_compression_cost_saved_usd,
+                "cache_read_input_tokens": c.cache_read_input_tokens,
+                "estimated_cache_cost_saved_usd": c.estimated_cache_cost_saved_usd,
+                "original_input_tokens_total": c.original_input_tokens_total,
+                "billed_input_tokens_total": c.billed_input_tokens_total,
+                "billed_input_cost_usd_total": c.billed_input_cost_usd_total,
+                "by_provider_model": by_provider_model,
+            })
+        });
+
+    let merge_compression = |mut v: serde_json::Value| -> serde_json::Value {
+        if let (Some(m), Some(cs)) = (v.as_object_mut(), compression_savings.as_ref()) {
+            m.insert("compression_savings".to_string(), cs.clone());
+        }
+        v
+    };
+
     match state.kernel.memory.usage().query_summary(None) {
-        Ok(s) => Json(serde_json::json!({
+        Ok(s) => Json(merge_compression(serde_json::json!({
             "total_input_tokens": s.total_input_tokens,
             "total_output_tokens": s.total_output_tokens,
             "total_cost_usd": s.total_cost_usd,
             "call_count": s.call_count,
             "total_tool_calls": s.total_tool_calls,
-        })),
-        Err(_) => Json(serde_json::json!({
-            "total_input_tokens": 0,
-            "total_output_tokens": 0,
+            "quota_enforcement": quota_json,
+        }))),
+        Err(_) => Json(merge_compression(serde_json::json!({
+            "total_input_tokens": 0u64,
+            "total_output_tokens": 0u64,
             "total_cost_usd": 0.0,
-            "call_count": 0,
-            "total_tool_calls": 0,
-        })),
+            "call_count": 0u64,
+            "total_tool_calls": 0u64,
+            "quota_enforcement": quota_json,
+        }))),
     }
 }
 
@@ -15088,10 +15463,70 @@ struct UploadMeta {
     #[allow(dead_code)]
     filename: String,
     content_type: String,
+    /// Server STT for audio; drives `prepare_user_message_for_audio_turn` + ainl-runtime prelude.
+    transcription: Option<String>,
+    /// Wall-clock temp eviction (temp dir; see `sweep_expired_uploads` + per-agent voice replace).
+    expires_at: Option<Instant>,
 }
 
 /// In-memory upload metadata registry.
 static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::new(DashMap::new);
+
+/// Latest voice `file_id` per agent. A new voice upload for the same agent removes the
+/// previous temp so only the newest clip is retained by default.
+static AGENT_LAST_VOICE_FILE: LazyLock<DashMap<AgentId, String>> = LazyLock::new(DashMap::new);
+
+fn remove_stored_upload_file(file_id: &str) {
+    if uuid::Uuid::parse_str(file_id).is_err() {
+        return;
+    }
+    let p = std::env::temp_dir().join("openfang_uploads").join(file_id);
+    let _ = std::fs::remove_file(p);
+    UPLOAD_REGISTRY.remove(file_id);
+    let to_clear: Vec<AgentId> = AGENT_LAST_VOICE_FILE
+        .iter()
+        .filter(|e| e.value().as_str() == file_id)
+        .map(|e| e.key().clone())
+        .collect();
+    for a in to_clear {
+        let _ = AGENT_LAST_VOICE_FILE.remove(&a);
+    }
+}
+
+fn on_new_voice_for_agent(agent_id: AgentId, new_fid: &str) {
+    if let Some(old) = AGENT_LAST_VOICE_FILE.insert(agent_id, new_fid.to_string()) {
+        if old != new_fid {
+            remove_stored_upload_file(&old);
+        }
+    }
+}
+
+fn sweep_expired_uploads() {
+    let now = Instant::now();
+    let to_remove: Vec<String> = UPLOAD_REGISTRY
+        .iter()
+        .filter_map(|e| {
+            let ex = e.value().expires_at?;
+            (now > ex).then(|| e.key().clone())
+        })
+        .collect();
+    for k in to_remove {
+        remove_stored_upload_file(&k);
+    }
+}
+
+/// Starts a background task that evicts `openfang_uploads` by `UploadMeta::expires_at`.
+pub fn spawn_upload_expiry_sweeper() {
+    let every = env_duration_secs("ARMARAOS_UPLOAD_SWEEP_INTERVAL_SEC", 60);
+    tokio::task::spawn(async move {
+        let mut intv = tokio::time::interval(every);
+        intv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            intv.tick().await;
+            sweep_expired_uploads();
+        }
+    });
+}
 
 /// Register server-generated bytes (e.g. Piper WAV) for playback at `/api/uploads/{file_id}`.
 pub(crate) fn register_generated_upload(
@@ -15115,6 +15550,8 @@ pub(crate) fn register_generated_upload(
         UploadMeta {
             filename: suggested_filename.to_string(),
             content_type: content_type.to_string(),
+            transcription: None,
+            expires_at: upload_expires_instant_for(content_type),
         },
     );
     Ok(format!("/api/uploads/{file_id}"))
@@ -15443,7 +15880,7 @@ pub async fn upload_file(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/upload";
-    let _agent_id: AgentId = match id.parse() {
+    let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
             return api_json_error(
@@ -15590,13 +16027,10 @@ pub async fn upload_file(
     }
 
     let size = body.len();
-    UPLOAD_REGISTRY.insert(
-        file_id.clone(),
-        UploadMeta {
-            filename: filename.clone(),
-            content_type: content_type.clone(),
-        },
-    );
+
+    if content_type.starts_with("audio/") {
+        on_new_voice_for_agent(agent_id, &file_id);
+    }
 
     // Auto-transcribe audio uploads using the media engine
     let transcription = if content_type.starts_with("audio/") {
@@ -15626,6 +16060,17 @@ pub async fn upload_file(
     } else {
         None
     };
+
+    let expires = upload_expires_instant_for(content_type.as_str());
+    UPLOAD_REGISTRY.insert(
+        file_id.clone(),
+        UploadMeta {
+            filename: filename.clone(),
+            content_type: content_type.clone(),
+            transcription: transcription.clone(),
+            expires_at: expires,
+        },
+    );
 
     (
         StatusCode::CREATED,
@@ -18553,5 +18998,179 @@ mod channel_config_tests {
                 .unwrap()
                 .required
         );
+    }
+}
+
+/// Voice / STT pipeline helpers: shared global `UPLOAD_REGISTRY` — use `#[serial]` to avoid races.
+#[cfg(test)]
+mod voice_message_tests {
+    use crate::types::AttachmentRef;
+    use openfang_types::agent::AgentId;
+    use serial_test::serial;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_looks_like_placeholder_detects_client_fallback() {
+        let s = "transcribe with **media_transcribe** using file_id `abc`";
+        assert!(super::looks_like_voice_tool_placeholder(s));
+        let plain = "What is 2+2?";
+        assert!(!super::looks_like_voice_tool_placeholder(plain));
+    }
+
+    #[test]
+    fn test_merge_client_with_voice_transcripts() {
+        let ts = |xs: &[&str]| {
+            xs.iter()
+                .map(|x| std::string::String::from(*x))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            super::merge_client_with_voice_transcripts("hello", &[]),
+            "hello"
+        );
+        assert_eq!(
+            super::merge_client_with_voice_transcripts("", &ts(&["a"])),
+            "a"
+        );
+        assert_eq!(
+            super::merge_client_with_voice_transcripts("  \n  ", &ts(&["x", "y"])),
+            "x\n\ny"
+        );
+        let ph = "transcribe with **media_transcribe** and file_id `u`";
+        assert_eq!(
+            super::merge_client_with_voice_transcripts(ph, &ts(&["fixed stt"])),
+            "fixed stt"
+        );
+        assert_eq!(
+            super::merge_client_with_voice_transcripts("user said", &ts(&["user said"])),
+            "user said"
+        );
+        assert_eq!(
+            super::merge_client_with_voice_transcripts(
+                "prefix that contains user said in voice",
+                &ts(&["user said in voice"]),
+            ),
+            "user said in voice"
+        );
+        let out = super::merge_client_with_voice_transcripts("Caption here", &ts(&["voice only"]));
+        assert_eq!(out, "Caption here\n\n[Voice]:\nvoice only");
+    }
+
+    #[test]
+    #[serial]
+    fn test_all_audio_fully_transcribed_happy() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let att = vec![AttachmentRef {
+            file_id: id.clone(),
+            filename: "a.webm".into(),
+            content_type: "audio/webm".into(),
+        }];
+        assert!(!super::all_audio_fully_transcribed(&att));
+        super::UPLOAD_REGISTRY.insert(
+            id.clone(),
+            super::UploadMeta {
+                filename: "a.webm".into(),
+                content_type: "audio/webm".to_string(),
+                transcription: Some("hello there".to_string()),
+                expires_at: None,
+            },
+        );
+        assert!(super::all_audio_fully_transcribed(&att));
+        super::remove_stored_upload_file(&id);
+    }
+
+    #[test]
+    #[serial]
+    fn test_audio_ingress_lead_and_hints_empty_when_fully_transcribed() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let atts = vec![AttachmentRef {
+            file_id: id.clone(),
+            filename: "v.ogg".into(),
+            content_type: "audio/ogg".into(),
+        }];
+        super::UPLOAD_REGISTRY.insert(
+            id.clone(),
+            super::UploadMeta {
+                filename: "v.ogg".into(),
+                content_type: "audio/ogg".to_string(),
+                transcription: Some("turn text".to_string()),
+                expires_at: None,
+            },
+        );
+        let lead = super::audio_upload_ingress_lead(&atts);
+        let hint = super::audio_upload_tool_hints(&atts);
+        assert!(lead.is_empty(), "lead: {lead:?}");
+        assert!(hint.is_empty(), "hint: {hint:?}");
+        super::remove_stored_upload_file(&id);
+    }
+
+    #[test]
+    #[serial]
+    fn test_sweep_removes_expired() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = std::env::temp_dir().join("openfang_uploads");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(&id);
+        std::fs::write(&path, b"dummy").expect("write temp upload");
+        assert!(path.is_file());
+        super::UPLOAD_REGISTRY.insert(
+            id.clone(),
+            super::UploadMeta {
+                filename: "a.webm".into(),
+                content_type: "audio/webm".to_string(),
+                transcription: None,
+                expires_at: Some(Instant::now() - Duration::from_secs(60)),
+            },
+        );
+        super::sweep_expired_uploads();
+        assert!(!path.exists());
+        assert!(!super::UPLOAD_REGISTRY.contains_key(&id));
+    }
+
+    #[test]
+    #[serial]
+    fn test_on_new_voice_drops_previous_file() {
+        let dir = std::env::temp_dir().join("openfang_uploads");
+        let _ = std::fs::create_dir_all(&dir);
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let aid = AgentId::new();
+        let path_a = dir.join(a.to_string());
+        let path_b = dir.join(b.to_string());
+        std::fs::write(&path_a, b"a").expect("a");
+        assert!(path_a.is_file());
+        super::UPLOAD_REGISTRY.insert(
+            a.to_string(),
+            super::UploadMeta {
+                filename: "1.webm".into(),
+                content_type: "audio/webm".to_string(),
+                transcription: None,
+                expires_at: None,
+            },
+        );
+        // First voice for this agent — nothing to replace
+        super::on_new_voice_for_agent(aid, &a.to_string());
+        assert!(path_a.is_file());
+        let want = a.to_string();
+        assert!(super::AGENT_LAST_VOICE_FILE
+            .get(&aid)
+            .map_or(false, |e| e.value() == &want));
+        // Second upload: previous voice temp is removed
+        std::fs::write(&path_b, b"b").expect("b");
+        super::UPLOAD_REGISTRY.insert(
+            b.to_string(),
+            super::UploadMeta {
+                filename: "2.webm".into(),
+                content_type: "audio/webm".to_string(),
+                transcription: None,
+                expires_at: None,
+            },
+        );
+        super::on_new_voice_for_agent(aid, &b.to_string());
+        assert!(!path_a.exists());
+        assert!(!super::UPLOAD_REGISTRY.contains_key(&a.to_string()));
+        assert!(path_b.is_file());
+        super::remove_stored_upload_file(&b.to_string());
+        let _ = super::AGENT_LAST_VOICE_FILE.remove(&aid);
     }
 }

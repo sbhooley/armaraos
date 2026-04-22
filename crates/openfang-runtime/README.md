@@ -49,6 +49,26 @@ Slim build without the crates.io dependency:
 cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution
 ```
 
+## Graph-memory learning stack (trajectories + failures)
+
+**Master switch — `AINL_LEARNING`:** when set to a falsy token (`0`, `false`, `no`, `off`), the agent loop disables **both** (a) per-turn trajectory slot capture **and** (b) typed `Failure` graph writes, regardless of the subsystem envs below. When **`AINL_LEARNING` is unset**, you can opt an agent out with **`manifest.metadata["ainl_learning"]`** using the same tokens.
+
+When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_ENABLED`**, **`AINL_FAILURE_LEARNING_ENABLED`** (see `graph_memory_writer`).
+
+**Introspection:** `openfang_runtime::graph_memory_learning_metrics()` returns best-effort counters (recorded vs skipped vs write-none) for operators / status surfaces.
+
+## Trajectory rows (`Trajectory` nodes)
+
+After each successful **`record_turn`**, the loop may persist a **`Trajectory`** graph node (one coarse step per tool name on the turn) and an edge **`trajectory_of`** from that node to the episode row. This mirrors **extractor opt-out** semantics:
+
+```bash
+export AINL_TRAJECTORY_ENABLED=0  # also: false, no, off
+```
+
+When the variable is **unset**, trajectory recording is **on** (unless **`AINL_LEARNING`** turned the whole stack off). Falsy values disable it so you can turn off SQLite writes without rebuilding.
+
+Optional **`AINL_MEMORY_PROJECT_ID`** (if set) is stored on the trajectory payload for future multi-project agents; when unset, the field is omitted.
+
 ## AINL graph memory JSON export (Python `ainl_graph_memory` bridge)
 
 After persona evolution, **`run_agent_loop`** refreshes a JSON **`AgentGraphSnapshot`** so **ainativelang** **`GraphStore`** can load the same subgraph as dashboard SQLite without a manual **`openfang memory graph-export`**.

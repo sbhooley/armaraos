@@ -232,7 +232,7 @@ pub struct GraphMemoryWriteProvenance {
     /// Node ids (UUID strings) tied to this write notification.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_ids: Vec<String>,
-    /// `episode` | `semantic` | `procedural` | `persona` | `runtime_state` when known.
+    /// `episode` | `semantic` | `procedural` | `persona` | `runtime_state` | `trajectory` | `failure` when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_kind: Option<String>,
     /// Machine-readable reason, e.g. `turn_complete`, `pattern_persisted`, `graph_extractor_pass`.
@@ -244,6 +244,9 @@ pub struct GraphMemoryWriteProvenance {
     /// Orchestration / trace correlation when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    /// Tool name when the write is tool-scoped (e.g. loop-guard failure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
 }
 
 /// System-level event.
@@ -336,6 +339,30 @@ pub enum SystemEvent {
         phase: String,
         /// Tool name when `phase` is `tool_use`, optional otherwise.
         detail: Option<String>,
+    },
+    /// Execution trajectory persisted to graph memory / `ainl_trajectories` (operator UX).
+    TrajectoryRecorded {
+        /// Agent that produced the trajectory.
+        agent_id: AgentId,
+        /// Graph node id for the trajectory row.
+        trajectory_node_id: String,
+        /// Episode graph node id when known (same order as write provenance).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        episode_node_id: Option<String>,
+        /// Short summary for live feeds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+    },
+    /// Typed failure node persisted (e.g. loop guard) for dashboards / recall.
+    FailureLearned {
+        agent_id: AgentId,
+        failure_node_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_preview: Option<String>,
     },
     /// A dangerous tool call is waiting for human approval (dashboard / desktop notify).
     ApprovalPending {
@@ -557,6 +584,7 @@ mod tests {
                 reason: Some("pattern_persisted".into()),
                 summary: Some("Pattern test".into()),
                 trace_id: Some("trace-1".into()),
+                tool_name: None,
             }),
         };
         let json = serde_json::to_string(&ev).unwrap();

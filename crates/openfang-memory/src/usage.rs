@@ -75,14 +75,48 @@ pub struct DailyBreakdown {
 }
 
 /// Durable prompt-compression telemetry event.
+///
+/// One row per agent turn that ran through the prompt compressor (including `off` for audits).
+/// All token counts are pre-LLM heuristic estimates **except** [Self::billed_input_tokens] and
+/// [Self::billed_input_cost_usd], which are populated from the provider's reported `usage` after
+/// the LLM returns (so dashboards can show *true* input billed vs the pre-compression input).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressionUsageRecord {
     pub agent_id: AgentId,
     pub mode: String,
+    /// Model id used for this turn (must match [UsageRecord::model] / model catalog key).
+    pub model: String,
+    /// Provider id (e.g. `anthropic`, `openai`, `openrouter`) — empty if unknown.
+    #[serde(default)]
+    pub provider: String,
     pub original_tokens_est: u64,
     pub compressed_tokens_est: u64,
+    /// `original_tokens_est` − `compressed_tokens_est` (input side); persisted for audits.
+    pub input_tokens_saved: u64,
+    /// Snapshot: catalog input $/1M in USD for `model` at insert time.
+    pub input_price_per_million_usd: f64,
+    /// (input_tokens_saved / 1e6) * input_price_per_million_usd — not billable, counterfactual savings.
+    pub est_input_cost_saved_usd: f64,
+    /// Provider-reported input tokens for this turn (post-compression, what the provider actually billed).
+    /// `0` means "unknown" — older turns recorded before v15 will report 0 here.
+    #[serde(default)]
+    pub billed_input_tokens: u64,
+    /// Catalog-priced cost of [Self::billed_input_tokens] in USD.
+    #[serde(default)]
+    pub billed_input_cost_usd: f64,
     pub savings_pct: u8,
     pub semantic_preservation_score: Option<f32>,
+}
+
+impl CompressionUsageRecord {
+    fn input_tokens_saturated(&self) -> u64 {
+        if self.input_tokens_saved > 0 {
+            self.input_tokens_saved
+        } else {
+            self.original_tokens_est
+                .saturating_sub(self.compressed_tokens_est)
+        }
+    }
 }
 
 /// Aggregated compression effectiveness for a mode bucket.
@@ -116,9 +150,49 @@ pub struct CompressionSummary {
     pub estimated_cache_cost_saved_usd: f64,
     pub estimated_compression_cost_saved_usd: f64,
     pub estimated_total_cost_saved_usd: f64,
+    /// Sum of pre-compression input tokens across recorded compression turns (audit baseline).
+    #[serde(default)]
+    pub original_input_tokens_total: u64,
+    /// Sum of provider-reported (billed) input tokens across recorded compression turns.
+    /// `0` if no rows include billed counts (pre-v15 data only).
+    #[serde(default)]
+    pub billed_input_tokens_total: u64,
+    /// Sum of catalog-priced input cost actually paid for the rows above (post-compression).
+    #[serde(default)]
+    pub billed_input_cost_usd_total: f64,
+    /// Per-provider/model rollup of original vs billed input tokens & cost.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_provider_model: Vec<CompressionProviderModelRollup>,
     /// Same window as compression rows: adaptive eco summary + full replay report (also on dedicated endpoints).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_eco: Option<CompressionAdaptiveEcoBundle>,
+}
+
+/// One row of the (provider, model) rollup attached to [CompressionSummary::by_provider_model].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionProviderModelRollup {
+    pub provider: String,
+    pub model: String,
+    pub turns: u64,
+    pub original_input_tokens: u64,
+    pub compressed_input_tokens: u64,
+    pub billed_input_tokens: u64,
+    pub input_tokens_saved: u64,
+    pub input_price_per_million_usd: f64,
+    pub est_input_cost_saved_usd: f64,
+    pub billed_input_cost_usd: f64,
+}
+
+/// Catalog-priced snapshot for a single model id, returned by the closure passed into
+/// [`UsageStore::backfill_compression_pricing`]. Lets the memory crate stay decoupled from the
+/// kernel's `ModelCatalog` while still using current catalog pricing/provider mapping to repair
+/// pre-v15 rows.
+#[derive(Debug, Clone)]
+pub struct CompressionPricingSnapshot {
+    /// Provider id (e.g. `anthropic`, `openrouter`) sourced from the catalog entry.
+    pub provider: String,
+    /// Catalog input $/1M (USD). `0.0` is treated as "unknown" and skips the price write.
+    pub input_per_million_usd: f64,
 }
 
 /// Adaptive eco telemetry bundled for `GET /api/usage/compression` (same `window` as parent).
@@ -132,6 +206,35 @@ pub struct CompressionAdaptiveEcoBundle {
 pub struct CompressionAgentSummary {
     pub agent_id: String,
     pub modes: BTreeMap<String, CompressionModeSummary>,
+}
+
+/// One persisted row when a turn is blocked by token or cost quotas / global budget (before LLM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaBlockRecord {
+    pub agent_id: AgentId,
+    pub reason: String,
+    pub est_input_tokens: u64,
+    pub est_output_tokens: u64,
+    pub est_cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaBlockReasonRollup {
+    pub count: u64,
+    pub est_input_tokens: u64,
+    pub est_output_tokens: u64,
+    pub est_cost_usd: f64,
+}
+
+/// Aggregated quota-block telemetry for dashboards (`GET /api/usage/summary`, analytics).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QuotaBlockSummary {
+    pub window: String,
+    pub block_count: u64,
+    pub total_est_input_tokens: u64,
+    pub total_est_output_tokens: u64,
+    pub total_est_cost_usd: f64,
+    pub by_reason: BTreeMap<String, QuotaBlockReasonRollup>,
 }
 
 /// Usage store backed by SQLite.
@@ -181,6 +284,120 @@ impl UsageStore {
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         Ok(())
+    }
+
+    /// Record a quota / budget block (turn not started — estimates only).
+    pub fn record_quota_block(&self, record: &QuotaBlockRecord) -> OpenFangResult<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO quota_block_events (id, timestamp, agent_id, reason, est_input_tokens, est_output_tokens, est_cost_usd)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                id,
+                now,
+                record.agent_id.0.to_string(),
+                record.reason,
+                record.est_input_tokens as i64,
+                record.est_output_tokens as i64,
+                record.est_cost_usd,
+            ],
+        )
+        .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Aggregate quota-block rows for dashboards.
+    ///
+    /// `window_days`: `Some(N)` => last N days; `None` => all time.
+    pub fn query_quota_block_summary(
+        &self,
+        window_days: Option<u32>,
+    ) -> OpenFangResult<QuotaBlockSummary> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let window = window_days
+            .map(|d| format!("{d}d"))
+            .unwrap_or_else(|| "all".to_string());
+        let where_clause = match window_days {
+            Some(d) => format!("WHERE timestamp >= datetime('now', '-{d} days')"),
+            None => String::new(),
+        };
+
+        let totals: (u64, u64, u64, f64) = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*),
+                            COALESCE(SUM(est_input_tokens), 0),
+                            COALESCE(SUM(est_output_tokens), 0),
+                            COALESCE(SUM(est_cost_usd), 0.0)
+                     FROM quota_block_events {}",
+                    where_clause
+                ),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as u64,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, i64>(2)? as u64,
+                        row.get::<_, f64>(3)?,
+                    ))
+                },
+            )
+            .unwrap_or((0, 0, 0, 0.0));
+
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT reason,
+                        COUNT(*),
+                        COALESCE(SUM(est_input_tokens), 0),
+                        COALESCE(SUM(est_output_tokens), 0),
+                        COALESCE(SUM(est_cost_usd), 0.0)
+                 FROM quota_block_events {}
+                 GROUP BY reason
+                 ORDER BY COUNT(*) DESC",
+                where_clause
+            ))
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let mut by_reason = BTreeMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, i64>(3)? as u64,
+                    row.get::<_, f64>(4)?,
+                ))
+            })
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        for r in rows {
+            let (reason, count, tin, tout, cost) = r.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            by_reason.insert(
+                reason,
+                QuotaBlockReasonRollup {
+                    count,
+                    est_input_tokens: tin,
+                    est_output_tokens: tout,
+                    est_cost_usd: cost,
+                },
+            );
+        }
+
+        Ok(QuotaBlockSummary {
+            window,
+            block_count: totals.0,
+            total_est_input_tokens: totals.1,
+            total_est_output_tokens: totals.2,
+            total_est_cost_usd: totals.3,
+            by_reason,
+        })
     }
 
     /// Recent semantic preservation scores (newest first), up to `limit`, excluding NULLs.
@@ -562,24 +779,287 @@ impl UsageStore {
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
+        let input_saved = record.input_tokens_saturated();
+        let price = if record.input_price_per_million_usd > 0.0 {
+            record.input_price_per_million_usd
+        } else if !record.model.is_empty() {
+            estimate_input_per_million(&record.model)
+        } else {
+            0.0
+        };
+        let mut usd = record.est_input_cost_saved_usd;
+        if usd == 0.0 && input_saved > 0 && price > 0.0 {
+            usd = (input_saved as f64 / 1_000_000.0) * price;
+        }
+        let billed_input_tokens = record.billed_input_tokens;
+        let billed_input_cost_usd = if record.billed_input_cost_usd > 0.0 {
+            record.billed_input_cost_usd
+        } else if billed_input_tokens > 0 && price > 0.0 {
+            (billed_input_tokens as f64 / 1_000_000.0) * price
+        } else {
+            0.0
+        };
         conn.execute(
             "INSERT INTO eco_compression_events (
-                id, agent_id, timestamp, mode,
-                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                id, agent_id, timestamp, mode, model,
+                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                input_tokens_saved, input_price_per_million_usd, est_input_cost_saved_usd,
+                provider, billed_input_tokens, billed_input_cost_usd
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 id,
                 record.agent_id.0.to_string(),
                 now,
                 record.mode.to_ascii_lowercase(),
+                record.model.as_str(),
                 record.original_tokens_est as i64,
                 record.compressed_tokens_est as i64,
                 record.savings_pct as i64,
                 record.semantic_preservation_score.map(|v| v as f64),
+                input_saved as i64,
+                price,
+                usd,
+                record.provider.as_str(),
+                billed_input_tokens as i64,
+                billed_input_cost_usd,
             ],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         Ok(())
+    }
+
+    /// Idempotent one-shot repair of historical `eco_compression_events` rows that were persisted
+    /// **before schema v15** (or by a code path that didn't snapshot pricing).
+    ///
+    /// Symptoms this fixes on the dashboard:
+    /// - `compression_savings.estimated_compression_cost_saved_usd` stuck near `$0.00` despite
+    ///   thousands of compressed turns ("USD NOT SPENT (EST.)" reads `<$0.01`).
+    /// - `by_provider_model[]` rows missing `provider`, weighted price = 0.
+    ///
+    /// For every row where we have evidence the turn happened (`input_tokens_saved > 0` OR
+    /// `billed_input_tokens > 0` OR `original_tokens_est > 0`) AND any of the priced fields are
+    /// zero / provider is blank, we look up the model in `lookup` and:
+    ///
+    /// 1. Set `input_price_per_million_usd` to the catalog snapshot when missing.
+    /// 2. Recompute `est_input_cost_saved_usd = (input_tokens_saved / 1e6) * price` if zero.
+    /// 3. Recompute `billed_input_cost_usd = (billed_input_tokens / 1e6) * price` if zero.
+    /// 4. Fill `provider` from the catalog when blank.
+    ///
+    /// Already-priced rows are NOT mutated — once a turn captures a pricing snapshot we keep it
+    /// (catalog prices change over time; we want history to reflect the price at insert time).
+    /// Returns the number of rows actually updated.
+    pub fn backfill_compression_pricing<F>(&self, lookup: F) -> OpenFangResult<u64>
+    where
+        F: Fn(&str) -> Option<CompressionPricingSnapshot>,
+    {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+
+        // Snapshot of repair candidates. We materialize before opening the write transaction so
+        // we don't hold the SELECT statement open across UPDATEs (rusqlite borrow rules).
+        let candidates: Vec<(String, String, String, i64, i64, f64, f64, f64)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, model, COALESCE(provider, ''),
+                            COALESCE(input_tokens_saved, 0),
+                            COALESCE(billed_input_tokens, 0),
+                            COALESCE(input_price_per_million_usd, 0.0),
+                            COALESCE(est_input_cost_saved_usd, 0.0),
+                            COALESCE(billed_input_cost_usd, 0.0)
+                     FROM eco_compression_events
+                     WHERE COALESCE(input_price_per_million_usd, 0.0) <= 0.0
+                        OR (COALESCE(input_tokens_saved, 0) > 0
+                            AND COALESCE(est_input_cost_saved_usd, 0.0) <= 0.0)
+                        OR (COALESCE(billed_input_tokens, 0) > 0
+                            AND COALESCE(billed_input_cost_usd, 0.0) <= 0.0)
+                        OR COALESCE(provider, '') = ''",
+                )
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        row.get::<_, f64>(6)?,
+                        row.get::<_, f64>(7)?,
+                    ))
+                })
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| OpenFangError::Memory(e.to_string()))?);
+            }
+            out
+        };
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let mut updated: u64 = 0;
+        for (id, model, provider, saved_i, billed_i, mut price, mut est_saved, mut billed_cost) in
+            candidates
+        {
+            let saved = saved_i.max(0) as u64;
+            let billed = billed_i.max(0) as u64;
+            let snapshot = match lookup(&model) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let mut changed = false;
+            if price <= 0.0 && snapshot.input_per_million_usd > 0.0 {
+                price = snapshot.input_per_million_usd;
+                changed = true;
+            }
+            if est_saved <= 0.0 && saved > 0 && price > 0.0 {
+                est_saved = (saved as f64 / 1_000_000.0) * price;
+                changed = true;
+            }
+            if billed_cost <= 0.0 && billed > 0 && price > 0.0 {
+                billed_cost = (billed as f64 / 1_000_000.0) * price;
+                changed = true;
+            }
+            let new_provider = if provider.is_empty() {
+                snapshot.provider.clone()
+            } else {
+                provider.clone()
+            };
+            if new_provider != provider {
+                changed = true;
+            }
+            if !changed {
+                continue;
+            }
+            tx.execute(
+                "UPDATE eco_compression_events
+                    SET input_price_per_million_usd = ?1,
+                        est_input_cost_saved_usd = ?2,
+                        billed_input_cost_usd = ?3,
+                        provider = ?4
+                  WHERE id = ?5",
+                rusqlite::params![price, est_saved, billed_cost, new_provider, id],
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            updated += 1;
+        }
+        tx.commit()
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        Ok(updated)
+    }
+
+    /// Idempotent one-shot repair: backfills `billed_input_tokens` (and the matching
+    /// `billed_input_cost_usd`) on historical compression rows by joining to the closest
+    /// `usage_events` row for the same agent within ±60 seconds of the compression event.
+    ///
+    /// Why this works: every compression turn writes a `usage_events` row a few milliseconds
+    /// before / after the `eco_compression_events` row in the same kernel turn-handler. So we
+    /// can recover the **provider-billed** input token count for pre-v15 rows that only have
+    /// the heuristic `compressed_tokens_est`.
+    ///
+    /// Returns the number of rows updated. Should be called **after**
+    /// [`UsageStore::backfill_compression_pricing`] so the cost recomputation has a price to
+    /// multiply against.
+    pub fn backfill_compression_billed_tokens(&self) -> OpenFangResult<u64> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+
+        // SQLite cross-version note: a correlated UPDATE that references the target table by
+        // name inside the subquery (e.g. `eco_compression_events.timestamp`) is rejected by
+        // some bundled rusqlite/SQLite versions. We therefore do the join in Rust — collect
+        // candidate (id, agent_id, timestamp) tuples first, look up the closest usage event in
+        // a follow-up query per row, then UPDATE in a transaction.
+        let candidates: Vec<(String, String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, agent_id, timestamp
+                       FROM eco_compression_events
+                      WHERE COALESCE(billed_input_tokens, 0) = 0",
+                )
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| OpenFangError::Memory(e.to_string()))?);
+            }
+            out
+        };
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+
+        let mut copied: u64 = 0;
+        for (row_id, agent_id, ts) in candidates {
+            // Closest usage_events.input_tokens for this agent within ±60s of the comp row.
+            let billed: Option<i64> = tx
+                .query_row(
+                    "SELECT input_tokens FROM usage_events
+                      WHERE agent_id = ?1
+                        AND ABS(julianday(timestamp) - julianday(?2)) < (60.0 / 86400.0)
+                        AND input_tokens > 0
+                      ORDER BY ABS(julianday(timestamp) - julianday(?2))
+                      LIMIT 1",
+                    rusqlite::params![agent_id, ts],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok();
+            let Some(b) = billed.filter(|n| *n > 0) else {
+                continue;
+            };
+            tx.execute(
+                "UPDATE eco_compression_events
+                    SET billed_input_tokens = ?1
+                  WHERE id = ?2",
+                rusqlite::params![b, row_id],
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            copied += 1;
+        }
+
+        // Recompute billed_input_cost_usd for any rows that now have tokens + a price snapshot
+        // but were never priced. This statement is target-only (no correlated subquery) so it
+        // works on every SQLite version we ship with.
+        let _ = tx
+            .execute(
+                "UPDATE eco_compression_events
+                    SET billed_input_cost_usd =
+                        (CAST(billed_input_tokens AS REAL) / 1000000.0)
+                        * input_price_per_million_usd
+                  WHERE COALESCE(billed_input_tokens, 0) > 0
+                    AND COALESCE(input_price_per_million_usd, 0.0) > 0.0
+                    AND COALESCE(billed_input_cost_usd, 0.0) <= 0.0",
+                [],
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+
+        Ok(copied)
     }
 
     /// Query total cost in the last hour for an agent.
@@ -824,6 +1304,12 @@ impl UsageStore {
                 [],
             )
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+        let _ = conn.execute(
+            &format!(
+                "DELETE FROM quota_block_events WHERE timestamp < datetime('now', '-{days} days')"
+            ),
+            [],
+        );
         Ok(deleted)
     }
 
@@ -913,15 +1399,41 @@ impl UsageStore {
             .pool
             .get()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        #[derive(Default)]
+        struct PmAgg {
+            turns: u64,
+            original: u64,
+            compressed: u64,
+            billed_input: u64,
+            input_saved: u64,
+            est_saved_usd: f64,
+            billed_cost_usd: f64,
+            // weighted average input price ($/1M) by input tokens saved
+            price_weight: f64,
+            price_weight_tokens: u64,
+        }
+
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match window_days {
             Some(days) => (
-                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
+                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                        COALESCE(est_input_cost_saved_usd, 0.0),
+                        COALESCE(provider, ''), COALESCE(model, ''),
+                        COALESCE(input_tokens_saved, 0),
+                        COALESCE(input_price_per_million_usd, 0.0),
+                        COALESCE(billed_input_tokens, 0),
+                        COALESCE(billed_input_cost_usd, 0.0)
                  FROM eco_compression_events
                  WHERE timestamp > datetime('now', ?1)",
                 vec![Box::new(format!("-{} days", days))],
             ),
             None => (
-                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score
+                "SELECT agent_id, mode, original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                        COALESCE(est_input_cost_saved_usd, 0.0),
+                        COALESCE(provider, ''), COALESCE(model, ''),
+                        COALESCE(input_tokens_saved, 0),
+                        COALESCE(input_price_per_million_usd, 0.0),
+                        COALESCE(billed_input_tokens, 0),
+                        COALESCE(billed_input_cost_usd, 0.0)
                  FROM eco_compression_events",
                 vec![],
             ),
@@ -940,16 +1452,46 @@ impl UsageStore {
                     row.get::<_, i64>(3)? as u64,
                     row.get::<_, i64>(4)? as u8,
                     row.get::<_, Option<f64>>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, i64>(9)? as u64,
+                    row.get::<_, f64>(10)?,
+                    row.get::<_, i64>(11)? as u64,
+                    row.get::<_, f64>(12)?,
                 ))
             })
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
         let mut mode_agg: HashMap<String, Agg> = HashMap::new();
         let mut agent_mode_agg: HashMap<(String, String), Agg> = HashMap::new();
+        let mut pm_agg: HashMap<(String, String), PmAgg> = HashMap::new();
         let mut total_compression_tokens_saved: u64 = 0;
+        let mut per_row_comp_usd: f64 = 0.0;
+        let mut original_input_tokens_total: u64 = 0;
+        let mut billed_input_tokens_total: u64 = 0;
+        let mut billed_input_cost_usd_total: f64 = 0.0;
         for row in rows {
-            let (agent_id, mode_raw, original, compressed, savings_pct, semantic_score) =
-                row.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let (
+                agent_id,
+                mode_raw,
+                original,
+                compressed,
+                savings_pct,
+                semantic_score,
+                row_usd,
+                provider,
+                model,
+                input_saved,
+                input_price_per_million_usd,
+                billed_input_tokens,
+                billed_input_cost_usd,
+            ) = row.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            per_row_comp_usd += row_usd;
+            original_input_tokens_total = original_input_tokens_total.saturating_add(original);
+            billed_input_tokens_total =
+                billed_input_tokens_total.saturating_add(billed_input_tokens);
+            billed_input_cost_usd_total += billed_input_cost_usd;
             if original > compressed {
                 total_compression_tokens_saved =
                     total_compression_tokens_saved.saturating_add(original - compressed);
@@ -980,6 +1522,20 @@ impl UsageStore {
                 if let Some(v) = semantic_score {
                     a.semantic_samples.push(v);
                 }
+            }
+            // Per-(provider, model) rollup keyed by lowercase ids.
+            let pkey = (provider.to_ascii_lowercase(), model.to_ascii_lowercase());
+            let pm = pm_agg.entry(pkey).or_default();
+            pm.turns = pm.turns.saturating_add(1);
+            pm.original = pm.original.saturating_add(original);
+            pm.compressed = pm.compressed.saturating_add(compressed);
+            pm.input_saved = pm.input_saved.saturating_add(input_saved);
+            pm.billed_input = pm.billed_input.saturating_add(billed_input_tokens);
+            pm.est_saved_usd += row_usd;
+            pm.billed_cost_usd += billed_input_cost_usd;
+            if input_price_per_million_usd > 0.0 && input_saved > 0 {
+                pm.price_weight += input_price_per_million_usd * input_saved as f64;
+                pm.price_weight_tokens = pm.price_weight_tokens.saturating_add(input_saved);
             }
         }
 
@@ -1057,8 +1613,11 @@ impl UsageStore {
         } else {
             weighted_input_rate_sum / weighted_rate_tokens as f64
         };
-        let estimated_compression_cost_saved_usd =
-            total_compression_tokens_saved as f64 * avg_input_rate_per_token;
+        let estimated_compression_cost_saved_usd = if per_row_comp_usd > 1e-9 {
+            per_row_comp_usd
+        } else {
+            total_compression_tokens_saved as f64 * avg_input_rate_per_token
+        };
         let estimated_total_input_tokens_saved =
             total_compression_tokens_saved.saturating_add(cache_read_tokens);
         let estimated_total_cost_saved_usd =
@@ -1072,6 +1631,36 @@ impl UsageStore {
             _ => None,
         };
 
+        let mut by_provider_model: Vec<CompressionProviderModelRollup> = pm_agg
+            .into_iter()
+            .map(|((provider, model), pm)| {
+                let avg_price = if pm.price_weight_tokens > 0 {
+                    pm.price_weight / pm.price_weight_tokens as f64
+                } else {
+                    0.0
+                };
+                CompressionProviderModelRollup {
+                    provider,
+                    model,
+                    turns: pm.turns,
+                    original_input_tokens: pm.original,
+                    compressed_input_tokens: pm.compressed,
+                    billed_input_tokens: pm.billed_input,
+                    input_tokens_saved: pm.input_saved,
+                    input_price_per_million_usd: avg_price,
+                    est_input_cost_saved_usd: pm.est_saved_usd,
+                    billed_input_cost_usd: pm.billed_cost_usd,
+                }
+            })
+            .collect();
+        by_provider_model.sort_by(|a, b| {
+            b.est_input_cost_saved_usd
+                .partial_cmp(&a.est_input_cost_saved_usd)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.provider.cmp(&b.provider))
+                .then_with(|| a.model.cmp(&b.model))
+        });
+
         Ok(CompressionSummary {
             window: window_days
                 .map(|d| format!("{d}d"))
@@ -1084,6 +1673,10 @@ impl UsageStore {
             estimated_cache_cost_saved_usd,
             estimated_compression_cost_saved_usd,
             estimated_total_cost_saved_usd,
+            original_input_tokens_total,
+            billed_input_tokens_total,
+            billed_input_cost_usd_total,
+            by_provider_model,
             adaptive_eco,
         })
     }
@@ -1337,6 +1930,37 @@ mod tests {
     }
 
     #[test]
+    fn test_record_and_query_quota_block_summary() {
+        let store = setup();
+        let agent_id = AgentId::new();
+        store
+            .record_quota_block(&QuotaBlockRecord {
+                agent_id,
+                reason: "hourly_llm_tokens".to_string(),
+                est_input_tokens: 1000,
+                est_output_tokens: 512,
+                est_cost_usd: 0.02,
+            })
+            .unwrap();
+        store
+            .record_quota_block(&QuotaBlockRecord {
+                agent_id,
+                reason: "global_daily_usd".to_string(),
+                est_input_tokens: 500,
+                est_output_tokens: 512,
+                est_cost_usd: 0.01,
+            })
+            .unwrap();
+
+        let s = store.query_quota_block_summary(None).unwrap();
+        assert_eq!(s.block_count, 2);
+        assert_eq!(s.total_est_input_tokens, 1500);
+        assert_eq!(s.total_est_output_tokens, 1024);
+        assert!((s.total_est_cost_usd - 0.03).abs() < 0.0001);
+        assert_eq!(s.by_reason.get("hourly_llm_tokens").unwrap().count, 1);
+    }
+
+    #[test]
     fn test_record_and_query_compression_summary() {
         let store = setup();
         let a1 = AgentId::new();
@@ -1346,8 +1970,15 @@ mod tests {
             .record_compression(&CompressionUsageRecord {
                 agent_id: a1,
                 mode: "balanced".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                provider: "anthropic".to_string(),
                 original_tokens_est: 100,
                 compressed_tokens_est: 60,
+                input_tokens_saved: 40,
+                input_price_per_million_usd: 3.0,
+                est_input_cost_saved_usd: 40.0 * 3.0 / 1_000_000.0,
+                billed_input_tokens: 60,
+                billed_input_cost_usd: 60.0 * 3.0 / 1_000_000.0,
                 savings_pct: 40,
                 semantic_preservation_score: Some(0.92),
             })
@@ -1356,8 +1987,15 @@ mod tests {
             .record_compression(&CompressionUsageRecord {
                 agent_id: a1,
                 mode: "balanced".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                provider: "anthropic".to_string(),
                 original_tokens_est: 120,
                 compressed_tokens_est: 90,
+                input_tokens_saved: 30,
+                input_price_per_million_usd: 3.0,
+                est_input_cost_saved_usd: 30.0 * 3.0 / 1_000_000.0,
+                billed_input_tokens: 90,
+                billed_input_cost_usd: 90.0 * 3.0 / 1_000_000.0,
                 savings_pct: 25,
                 semantic_preservation_score: None,
             })
@@ -1366,8 +2004,15 @@ mod tests {
             .record_compression(&CompressionUsageRecord {
                 agent_id: a2,
                 mode: "off".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                provider: "anthropic".to_string(),
                 original_tokens_est: 80,
                 compressed_tokens_est: 80,
+                input_tokens_saved: 0,
+                input_price_per_million_usd: 3.0,
+                est_input_cost_saved_usd: 0.0,
+                billed_input_tokens: 80,
+                billed_input_cost_usd: 80.0 * 3.0 / 1_000_000.0,
                 savings_pct: 0,
                 semantic_preservation_score: None,
             })
@@ -1405,6 +2050,20 @@ mod tests {
         assert!(summary.estimated_cache_cost_saved_usd > 0.0);
         assert!(summary.estimated_compression_cost_saved_usd > 0.0);
         assert!(summary.estimated_total_cost_saved_usd > 0.0);
+        // Pre-compression input baseline + provider-billed input both persisted.
+        assert_eq!(summary.original_input_tokens_total, 300);
+        assert_eq!(summary.billed_input_tokens_total, 230);
+        assert!(summary.billed_input_cost_usd_total > 0.0);
+        // by_provider_model rolls up to one entry (anthropic / claude-sonnet-4-6).
+        assert_eq!(summary.by_provider_model.len(), 1);
+        let pm = &summary.by_provider_model[0];
+        assert_eq!(pm.provider, "anthropic");
+        assert_eq!(pm.model, "claude-sonnet-4-6");
+        assert_eq!(pm.turns, 3);
+        assert_eq!(pm.original_input_tokens, 300);
+        assert_eq!(pm.billed_input_tokens, 230);
+        assert_eq!(pm.input_tokens_saved, 70);
+        assert!((pm.input_price_per_million_usd - 3.0).abs() < 1e-9);
         assert!(summary.adaptive_eco.is_some());
         let bundle = summary.adaptive_eco.as_ref().unwrap();
         assert_eq!(bundle.summary.window, "all");
@@ -1419,8 +2078,15 @@ mod tests {
             .record_compression(&CompressionUsageRecord {
                 agent_id: a1,
                 mode: "balanced".to_string(),
+                model: "claude-3-5-sonnet".to_string(),
+                provider: "anthropic".to_string(),
                 original_tokens_est: 50,
                 compressed_tokens_est: 40,
+                input_tokens_saved: 10,
+                input_price_per_million_usd: 3.0,
+                est_input_cost_saved_usd: 10.0 * 3.0 / 1_000_000.0,
+                billed_input_tokens: 40,
+                billed_input_cost_usd: 40.0 * 3.0 / 1_000_000.0,
                 savings_pct: 20,
                 semantic_preservation_score: None,
             })
@@ -1432,6 +2098,245 @@ mod tests {
 
         let s_all = store.query_compression_summary(None).unwrap();
         assert_eq!(s_all.window, "all");
+    }
+
+    /// Verifies the v15 fallback-attribution contract: when a turn is serviced by a fallback
+    /// model (different `provider` + `model` from the requested ones, e.g. an OpenRouter free
+    /// model after a primary 429), `record_compression` snapshots the *actually-used* provider /
+    /// model + their pricing. `query_compression_summary().by_provider_model` must then split
+    /// across providers so dashboards attribute cost to the model that really billed the call.
+    #[test]
+    fn test_compression_records_actual_provider_when_fallback() {
+        let store = setup();
+        let agent = AgentId::new();
+
+        // Primary turn: requested model (anthropic / claude-sonnet-4-6) actually billed.
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: agent,
+                mode: "balanced".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+                provider: "anthropic".to_string(),
+                original_tokens_est: 200,
+                compressed_tokens_est: 120,
+                input_tokens_saved: 80,
+                input_price_per_million_usd: 3.0,
+                est_input_cost_saved_usd: 80.0 * 3.0 / 1_000_000.0,
+                billed_input_tokens: 120,
+                billed_input_cost_usd: 120.0 * 3.0 / 1_000_000.0,
+                savings_pct: 40,
+                semantic_preservation_score: Some(0.93),
+            })
+            .unwrap();
+
+        // Fallback turn: primary 429 forced OpenRouter free-tier; provider/model differ from manifest.
+        store
+            .record_compression(&CompressionUsageRecord {
+                agent_id: agent,
+                mode: "balanced".to_string(),
+                model: "stepfun/step-3.5-flash:free".to_string(),
+                provider: "openrouter".to_string(),
+                original_tokens_est: 200,
+                compressed_tokens_est: 130,
+                input_tokens_saved: 70,
+                input_price_per_million_usd: 0.0,
+                est_input_cost_saved_usd: 0.0,
+                billed_input_tokens: 130,
+                billed_input_cost_usd: 0.0,
+                savings_pct: 35,
+                semantic_preservation_score: Some(0.88),
+            })
+            .unwrap();
+
+        let summary = store.query_compression_summary(None).unwrap();
+
+        // Aggregated totals span both providers.
+        assert_eq!(summary.original_input_tokens_total, 400);
+        assert_eq!(summary.billed_input_tokens_total, 250);
+        assert!(summary.billed_input_cost_usd_total > 0.0);
+        assert_eq!(summary.estimated_compression_tokens_saved, 150);
+
+        // by_provider_model must split: one row per (provider, model). This is the contract that
+        // makes fallback attribution observable in the dashboard.
+        assert_eq!(summary.by_provider_model.len(), 2);
+
+        let anth = summary
+            .by_provider_model
+            .iter()
+            .find(|r| r.provider == "anthropic")
+            .expect("anthropic rollup");
+        assert_eq!(anth.model, "claude-sonnet-4-6");
+        assert_eq!(anth.turns, 1);
+        assert_eq!(anth.original_input_tokens, 200);
+        assert_eq!(anth.billed_input_tokens, 120);
+        assert_eq!(anth.input_tokens_saved, 80);
+        assert!((anth.input_price_per_million_usd - 3.0).abs() < 1e-9);
+        assert!(anth.billed_input_cost_usd > 0.0);
+
+        let or = summary
+            .by_provider_model
+            .iter()
+            .find(|r| r.provider == "openrouter")
+            .expect("openrouter rollup");
+        assert_eq!(or.model, "stepfun/step-3.5-flash:free");
+        assert_eq!(or.turns, 1);
+        assert_eq!(or.original_input_tokens, 200);
+        assert_eq!(or.billed_input_tokens, 130);
+        assert_eq!(or.input_tokens_saved, 70);
+        // `record_compression` falls back to `estimate_input_per_million(model)` when the caller
+        // passes `0.0`. For a model id not matched by any heuristic ("stepfun/...:free"), the
+        // estimator returns the conservative default of 1.0/M. The contract being asserted here
+        // is that the rollup carries the **persisted** price for the actually-used model — not
+        // the manifest's, which would have been Anthropic's $3/M.
+        assert!((or.input_price_per_million_usd - 1.0).abs() < 1e-9);
+        assert!(or.billed_input_cost_usd > 0.0);
+    }
+
+    /// Verifies the v15+ historical-data repair contract.
+    ///
+    /// Simulates a pre-v15 row: `provider = ''`, `input_price_per_million_usd = 0`,
+    /// `est_input_cost_saved_usd = 0`, `billed_input_tokens = 0`, `billed_input_cost_usd = 0` —
+    /// the exact shape of every compression event written before pricing was snapshotted on
+    /// each row. Then runs both backfills and asserts the row is now fully priced AND the
+    /// dashboard rollup (`compression_savings`) reflects the recovered USD.
+    #[test]
+    fn test_backfill_compression_pricing_repairs_pre_v15_rows() {
+        let store = setup();
+        let agent = AgentId::new();
+
+        // Direct INSERT to bypass record_compression()'s heuristic price fallback — we want a
+        // genuine pre-v15 row shape (NULL provider, zero pricing, zero saved-USD).
+        let conn = store.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO eco_compression_events (
+                id, agent_id, timestamp, mode, model,
+                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                input_tokens_saved, input_price_per_million_usd, est_input_cost_saved_usd,
+                provider, billed_input_tokens, billed_input_cost_usd
+            ) VALUES (?1, ?2, datetime('now'), ?3, ?4, ?5, ?6, ?7, NULL, ?8, 0.0, 0.0, '', 0, 0.0)",
+            rusqlite::params![
+                "row-pre-v15".to_string(),
+                agent.0.to_string(),
+                "balanced",
+                "claude-sonnet-4-6",
+                500i64,
+                300i64,
+                40i64,
+                200i64,
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Pre-condition: rollup shows zero saved USD, blank provider.
+        let before = store.query_compression_summary(None).unwrap();
+        assert!(before.estimated_compression_cost_saved_usd <= 0.0);
+        let before_rollup = before
+            .by_provider_model
+            .iter()
+            .find(|r| r.model == "claude-sonnet-4-6")
+            .expect("model rollup");
+        assert_eq!(before_rollup.provider, "");
+        assert!((before_rollup.input_price_per_million_usd - 0.0).abs() < 1e-9);
+
+        // Catalog says: claude-sonnet-4-6 → anthropic, $3/M input.
+        let lookup = |model: &str| -> Option<CompressionPricingSnapshot> {
+            if model == "claude-sonnet-4-6" {
+                Some(CompressionPricingSnapshot {
+                    provider: "anthropic".to_string(),
+                    input_per_million_usd: 3.0,
+                })
+            } else {
+                None
+            }
+        };
+
+        let updated = store.backfill_compression_pricing(lookup).unwrap();
+        assert_eq!(updated, 1, "exactly one pre-v15 row should be repaired");
+
+        // Idempotency: a second run is a no-op (no rows match the WHERE filter anymore).
+        let updated_again = store.backfill_compression_pricing(lookup).unwrap();
+        assert_eq!(
+            updated_again, 0,
+            "second run must be a no-op (already-priced rows are not re-priced)"
+        );
+
+        let after = store.query_compression_summary(None).unwrap();
+        assert!(
+            after.estimated_compression_cost_saved_usd > 0.0,
+            "saved USD should be recovered after backfill (got {})",
+            after.estimated_compression_cost_saved_usd
+        );
+        let after_rollup = after
+            .by_provider_model
+            .iter()
+            .find(|r| r.model == "claude-sonnet-4-6")
+            .expect("model rollup");
+        assert_eq!(after_rollup.provider, "anthropic");
+        assert!((after_rollup.input_price_per_million_usd - 3.0).abs() < 1e-9);
+        // 200 saved tokens * $3/M = $0.0006
+        let expected_saved = (200.0_f64 / 1_000_000.0) * 3.0;
+        assert!((after_rollup.est_input_cost_saved_usd - expected_saved).abs() < 1e-9);
+    }
+
+    /// Verifies that `backfill_compression_billed_tokens` recovers `billed_input_tokens` (and the
+    /// matching cost) for pre-v15 rows by joining to the nearest `usage_events` row for the same
+    /// agent. The kernel writes both within the same turn, so a ±60s window always finds them.
+    #[test]
+    fn test_backfill_compression_billed_tokens_from_usage_events() {
+        let store = setup();
+        let agent = AgentId::new();
+
+        // The provider-billed input for this turn (what we want to recover into the comp row).
+        store
+            .record(&UsageRecord {
+                agent_id: agent,
+                model: "claude-sonnet-4-6".to_string(),
+                input_tokens: 1234,
+                output_tokens: 256,
+                cost_usd: 0.0,
+                tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            })
+            .unwrap();
+
+        // Pre-v15 compression row with a price snapshot already (so the backfill can recompute
+        // billed_input_cost_usd) but with billed_input_tokens / billed_input_cost_usd zero.
+        let conn = store.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO eco_compression_events (
+                id, agent_id, timestamp, mode, model,
+                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                input_tokens_saved, input_price_per_million_usd, est_input_cost_saved_usd,
+                provider, billed_input_tokens, billed_input_cost_usd
+            ) VALUES (?1, ?2, datetime('now'), 'balanced', ?3, 600, 400, 33, NULL,
+                      200, 3.0, 0.0006, 'anthropic', 0, 0.0)",
+            rusqlite::params![
+                "row-needs-billed".to_string(),
+                agent.0.to_string(),
+                "claude-sonnet-4-6",
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let copied = store.backfill_compression_billed_tokens().unwrap();
+        assert_eq!(copied, 1, "one row should have billed_input_tokens copied in");
+
+        let after = store.query_compression_summary(None).unwrap();
+        assert_eq!(
+            after.billed_input_tokens_total, 1234,
+            "billed_input_tokens_total must reflect provider-reported input from usage_events"
+        );
+        assert!(
+            after.billed_input_cost_usd_total > 0.0,
+            "billed_input_cost_usd_total must be recomputed once tokens + price are both present"
+        );
+
+        // Idempotency: a second run touches no compression rows that already have billed values.
+        let copied_again = store.backfill_compression_billed_tokens().unwrap();
+        assert_eq!(copied_again, 0);
     }
 
     #[test]

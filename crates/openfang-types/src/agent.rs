@@ -322,7 +322,7 @@ impl ToolProfile {
     pub fn tools(&self) -> Vec<String> {
         match self {
             // `media_transcribe` is included so dashboard/voice uploads work with every profile
-            // (the API appends `media_transcribe` hints for audio attachments; see `audio_upload_tool_hints`).
+            // (the API prepends `audio_upload_ingress_lead` and appends hints; see `openfang-api` `routes.rs`).
             Self::Minimal => vec![
                 "file_read",
                 "file_list",

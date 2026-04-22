@@ -1,9 +1,11 @@
 //! AINL graph node types - the vocabulary of agent memory.
 //!
-//! Four core memory types: Episode (episodic), Semantic, Procedural, Persona.
+//! Core memory types: Episode (episodic), Semantic, Procedural, Persona, Trajectory (execution trace),
+//! typed **Failure** nodes for operator recall, plus `RuntimeState` for ainl-runtime session counters.
 //! Designed to be standalone (zero ArmaraOS deps) yet compatible with
 //! OrchestrationTraceEvent serialization.
 
+use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -55,6 +57,10 @@ pub enum AinlNodeKind {
     Persona,
     /// Agent-scoped persisted session counters / persona cache (see [`RuntimeStateNode`]).
     RuntimeState,
+    /// Step-level execution trace, typically linked to an [`EpisodicNode`].
+    Trajectory,
+    /// Typed failure (e.g. loop guard) for search / dashboards.
+    Failure,
 }
 
 impl AinlNodeKind {
@@ -65,6 +71,8 @@ impl AinlNodeKind {
             Self::Procedural => "procedural",
             Self::Persona => "persona",
             Self::RuntimeState => "runtime_state",
+            Self::Trajectory => "trajectory",
+            Self::Failure => "failure",
         }
     }
 }
@@ -79,6 +87,10 @@ pub enum MemoryCategory {
     Procedural,
     /// Agent-scoped runtime session counters / cache hints (persisted by `ainl-runtime`).
     RuntimeState,
+    /// Recorded tool/adapter trajectory for learning and replay.
+    Trajectory,
+    /// Operator-visible failure substrate (loop guard, runtime gates, …).
+    Failure,
 }
 
 impl MemoryCategory {
@@ -89,6 +101,8 @@ impl MemoryCategory {
             AinlNodeType::Procedural { .. } => MemoryCategory::Procedural,
             AinlNodeType::Persona { .. } => MemoryCategory::Persona,
             AinlNodeType::RuntimeState { .. } => MemoryCategory::RuntimeState,
+            AinlNodeType::Trajectory { .. } => MemoryCategory::Trajectory,
+            AinlNodeType::Failure { .. } => MemoryCategory::Failure,
         }
     }
 }
@@ -372,6 +386,40 @@ pub struct RuntimeStateNode {
     pub updated_at: i64,
 }
 
+/// Execution trajectory: tool/adapter steps for learning and replay (schema from `ainl_contracts`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TrajectoryNode {
+    /// Episode this trajectory augments.
+    pub episode_id: Uuid,
+    /// Unix seconds when the trajectory was recorded.
+    pub recorded_at: i64,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub ainl_source_hash: Option<String>,
+    pub outcome: TrajectoryOutcome,
+    #[serde(default)]
+    pub steps: Vec<TrajectoryStep>,
+    #[serde(default)]
+    pub duration_ms: u64,
+}
+
+/// Typed failure payload (persisted as `node_type = "failure"`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct FailureNode {
+    /// Unix seconds when the failure was recorded.
+    pub recorded_at: i64,
+    /// Origin label, e.g. `loop_guard:block` or `loop_guard:circuit_break`.
+    pub source: String,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
 /// Core AINL node types - the vocabulary of agent memory.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -402,6 +450,16 @@ pub enum AinlNodeType {
 
     /// Runtime session state (turn counters, extraction cadence, persona cache snapshot).
     RuntimeState { runtime_state: RuntimeStateNode },
+
+    /// Step-level execution trace linked to an episode (self-learning substrate).
+    Trajectory {
+        trajectory: TrajectoryNode,
+    },
+
+    /// Failure / guard outcome stored for recall (Phase 2 failure learning).
+    Failure {
+        failure: FailureNode,
+    },
 }
 
 /// A node in the AINL memory graph
@@ -639,6 +697,114 @@ impl AinlMemoryNode {
         )
     }
 
+    /// Create a trajectory node linked to an episode graph row (`episode_id` = episode node's `id`).
+    pub fn new_trajectory(trajectory: TrajectoryNode, agent_id: impl Into<String>) -> Self {
+        Self::base(
+            MemoryCategory::Trajectory,
+            default_importance_score(),
+            agent_id.into(),
+            AinlNodeType::Trajectory { trajectory },
+        )
+    }
+
+    /// Failure node from the agent loop loop-guard (`verdict_label`: `block` | `circuit_break`).
+    pub fn new_loop_guard_failure(
+        verdict_label: &str,
+        tool_name: Option<&str>,
+        message: impl Into<String>,
+        session_id: Option<&str>,
+    ) -> Self {
+        let recorded_at = chrono::Utc::now().timestamp();
+        let source = format!("loop_guard:{verdict_label}");
+        let failure = FailureNode {
+            recorded_at,
+            source,
+            tool_name: tool_name.map(str::to_string),
+            message: message.into(),
+            session_id: session_id.map(str::to_string),
+        };
+        Self::base(
+            MemoryCategory::Failure,
+            default_importance_score(),
+            String::new(),
+            AinlNodeType::Failure { failure },
+        )
+    }
+
+    /// Failure node from a host tool execution error (OpenFang `tool_runner`, MCP dispatch, etc.).
+    ///
+    /// `source` is fixed to `tool_runner:error` for FTS recall alongside loop-guard failures.
+    pub fn new_tool_execution_failure(
+        tool_name: &str,
+        message: impl Into<String>,
+        session_id: Option<&str>,
+    ) -> Self {
+        let recorded_at = chrono::Utc::now().timestamp();
+        let source = "tool_runner:error".to_string();
+        let failure = FailureNode {
+            recorded_at,
+            source,
+            tool_name: Some(tool_name.to_string()),
+            message: message.into(),
+            session_id: session_id.map(str::to_string),
+        };
+        Self::base(
+            MemoryCategory::Failure,
+            default_importance_score(),
+            String::new(),
+            AinlNodeType::Failure { failure },
+        )
+    }
+
+    /// Failure node for tool calls rejected in the agent loop **before** `execute_tool` (hooks,
+    /// required-parameter validation, etc.). `kind` becomes `agent_loop:{kind}` in [`FailureNode::source`]
+    /// (e.g. `hook_blocked`, `param_validation`) for FTS recall alongside `tool_runner:error`.
+    pub fn new_agent_loop_precheck_failure(
+        kind: &str,
+        tool_name: &str,
+        message: impl Into<String>,
+        session_id: Option<&str>,
+    ) -> Self {
+        let recorded_at = chrono::Utc::now().timestamp();
+        let source = format!("agent_loop:{kind}");
+        let failure = FailureNode {
+            recorded_at,
+            source,
+            tool_name: Some(tool_name.to_string()),
+            message: message.into(),
+            session_id: session_id.map(str::to_string),
+        };
+        Self::base(
+            MemoryCategory::Failure,
+            default_importance_score(),
+            String::new(),
+            AinlNodeType::Failure { failure },
+        )
+    }
+
+    /// Failure node when `ainl-runtime` rejects a turn because the loaded graph fails validation
+    /// (dangling edges, etc.). Fixed `source` for FTS recall with other failure origins.
+    pub fn new_ainl_runtime_graph_validation_failure(
+        message: impl Into<String>,
+        session_id: Option<&str>,
+    ) -> Self {
+        let recorded_at = chrono::Utc::now().timestamp();
+        let source = "ainl_runtime:graph_validation".to_string();
+        let failure = FailureNode {
+            recorded_at,
+            source,
+            tool_name: None,
+            message: message.into(),
+            session_id: session_id.map(str::to_string),
+        };
+        Self::base(
+            MemoryCategory::Failure,
+            default_importance_score(),
+            String::new(),
+            AinlNodeType::Failure { failure },
+        )
+    }
+
     pub fn episodic(&self) -> Option<&EpisodicNode> {
         match &self.node_type {
             AinlNodeType::Episode { episodic } => Some(episodic),
@@ -667,11 +833,75 @@ impl AinlMemoryNode {
         }
     }
 
+    pub fn trajectory(&self) -> Option<&TrajectoryNode> {
+        match &self.node_type {
+            AinlNodeType::Trajectory { trajectory } => Some(trajectory),
+            _ => None,
+        }
+    }
+
+    pub fn failure(&self) -> Option<&FailureNode> {
+        match &self.node_type {
+            AinlNodeType::Failure { failure } => Some(failure),
+            _ => None,
+        }
+    }
+
     /// Add an edge to another node
     pub fn add_edge(&mut self, target_id: Uuid, label: impl Into<String>) {
         self.edges.push(AinlEdge {
             target_id,
             label: label.into(),
         });
+    }
+}
+
+#[cfg(test)]
+mod trajectory_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn trajectory_node_serde_roundtrip() {
+        let traj = TrajectoryNode {
+            episode_id: Uuid::nil(),
+            recorded_at: 1700000000,
+            session_id: "sess".into(),
+            project_id: Some("proj".into()),
+            ainl_source_hash: Some("abc".into()),
+            outcome: TrajectoryOutcome::Success,
+            steps: vec![TrajectoryStep {
+                step_id: "1".into(),
+                timestamp_ms: 1,
+                adapter: "http".into(),
+                operation: "GET".into(),
+                inputs_preview: None,
+                outputs_preview: None,
+                duration_ms: 2,
+                success: true,
+                error: None,
+                vitals: None,
+                freshness_at_step: None,
+            }],
+            duration_ms: 10,
+        };
+        let node = AinlMemoryNode {
+            id: Uuid::nil(),
+            memory_category: MemoryCategory::Trajectory,
+            importance_score: 0.5,
+            agent_id: "agent".into(),
+            node_type: AinlNodeType::Trajectory { trajectory: traj },
+            edges: Vec::new(),
+        };
+        let json = serde_json::to_string(&node).expect("serialize");
+        let back: AinlMemoryNode = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(
+            back.node_type,
+            AinlNodeType::Trajectory { .. }
+        ));
+        assert_eq!(
+            back.trajectory().map(|t| t.episode_id),
+            Some(Uuid::nil())
+        );
     }
 }

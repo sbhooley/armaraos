@@ -18,8 +18,8 @@ use ainl_memory::{
 use uuid::Uuid;
 
 use super::{
-    compile_persona_from_nodes, emit_target_name, normalize_tools_for_episode,
-    persona_snapshot_if_evolved, procedural_label, record_turn_episode,
+    compile_persona_from_nodes, emit_target_name, maybe_persist_trajectory_after_episode,
+    normalize_tools_for_episode, persona_snapshot_if_evolved, procedural_label, record_turn_episode,
     try_export_graph_json_armaraos,
 };
 use crate::adapters::GraphPatchAdapter;
@@ -324,6 +324,40 @@ impl super::AinlRuntime {
             }
         }
 
+        if !episode_id.is_nil() {
+            let agent_id_traj = agent_id.clone();
+            let input_traj = input.clone();
+            let tools_traj = tools_canonical.clone();
+            let patches_traj = patch_dispatch_results.clone();
+            let eid = episode_id;
+            match graph_spawn(Arc::clone(&arc), move |m| {
+                maybe_persist_trajectory_after_episode(
+                    m,
+                    &agent_id_traj,
+                    eid,
+                    &tools_traj,
+                    &patches_traj,
+                    &input_traj,
+                )
+            })
+            .await
+            {
+                Ok(()) => {}
+                Err(e) => {
+                    let e = e.to_string();
+                    tracing::warn!(
+                        phase = ?TurnPhase::EpisodeWrite,
+                        error = %e,
+                        "non-fatal trajectory persist failed — continuing"
+                    );
+                    turn_warnings.push(TurnWarning {
+                        phase: TurnPhase::EpisodeWrite,
+                        error: format!("trajectory_persist: {e}"),
+                    });
+                }
+            }
+        }
+
         self.turn_count = self.turn_count.wrapping_add(1);
 
         let should_extract = self.config.extraction_interval > 0
@@ -566,6 +600,7 @@ impl super::AinlRuntime {
                     skip_reason: Some(PatchSkipReason::NotProcedural),
                     adapter_output: None,
                     adapter_name: None,
+                    dispatch_duration_ms: 0,
                 });
             }
         };
@@ -580,6 +615,7 @@ impl super::AinlRuntime {
                 skip_reason: Some(PatchSkipReason::ZeroVersion),
                 adapter_output: None,
                 adapter_name: None,
+                dispatch_duration_ms: 0,
             });
         }
         if retired {
@@ -592,6 +628,7 @@ impl super::AinlRuntime {
                 skip_reason: Some(PatchSkipReason::Retired),
                 adapter_output: None,
                 adapter_name: None,
+                dispatch_duration_ms: 0,
             });
         }
         for key in &reads {
@@ -605,6 +642,7 @@ impl super::AinlRuntime {
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead(key.clone())),
                     adapter_output: None,
                     adapter_name: None,
+                    dispatch_duration_ms: 0,
                 });
             }
         }
@@ -616,13 +654,14 @@ impl super::AinlRuntime {
             node,
             frame,
         };
-        let (adapter_output, adapter_name) = if let Some(adapter) = self
+        let (adapter_output, adapter_name, dispatch_duration_ms) = if let Some(adapter) = self
             .adapter_registry
             .get(adapter_key)
             .or_else(|| self.adapter_registry.get(GraphPatchAdapter::NAME))
         {
             let aname = adapter.name().to_string();
-            match adapter.execute_patch(&ctx) {
+            let t_exec = Instant::now();
+            let (out, name) = match adapter.execute_patch(&ctx) {
                 Ok(output) => {
                     tracing::debug!(
                         label = %patch_label,
@@ -640,9 +679,11 @@ impl super::AinlRuntime {
                     );
                     (None, Some(aname))
                 }
-            }
+            };
+            let ms = t_exec.elapsed().as_millis() as u64;
+            (out, name, ms)
         } else {
-            (None, None)
+            (None, None, 0u64)
         };
 
         let fitness_before = fitness_opt.unwrap_or(0.5);
@@ -671,6 +712,7 @@ impl super::AinlRuntime {
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead("node_row".into())),
                     adapter_output,
                     adapter_name,
+                    dispatch_duration_ms,
                 });
             }
         };
@@ -687,6 +729,7 @@ impl super::AinlRuntime {
                 skip_reason: Some(PatchSkipReason::PersistFailed(e)),
                 adapter_output,
                 adapter_name,
+                dispatch_duration_ms,
             });
         }
 
@@ -703,6 +746,7 @@ impl super::AinlRuntime {
                 )),
                 adapter_output,
                 adapter_name,
+                dispatch_duration_ms,
             });
         }
 
@@ -726,6 +770,7 @@ impl super::AinlRuntime {
             skip_reason: None,
             adapter_output,
             adapter_name,
+            dispatch_duration_ms,
         })
     }
 }

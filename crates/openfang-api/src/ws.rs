@@ -484,9 +484,10 @@ async fn handle_text_message(
 
             let voice_reply = parsed["voice_reply"].as_bool().unwrap_or(false);
 
-            // Sanitize inbound user input
-            let mut content = sanitize_user_input(&raw_content);
-            if content.is_empty() {
+            // Sanitize inbound user input, then prepend voice `file_id` / MIME so the model sees
+            // them at the start of the user turn (same as non-WS `routes` message path).
+            let user_sanitized = sanitize_user_input(&raw_content);
+            if user_sanitized.is_empty() {
                 let _ = send_json(
                     sender,
                     &serde_json::json!({
@@ -497,6 +498,18 @@ async fn handle_text_message(
                 .await;
                 return;
             }
+            let base_user = crate::routes::prepare_user_message_for_audio_turn(
+                state.kernel.as_ref(),
+                &user_sanitized,
+                &attachment_refs,
+            )
+            .await;
+            let lead = crate::routes::audio_upload_ingress_lead(&attachment_refs);
+            let mut content = if lead.is_empty() {
+                base_user
+            } else {
+                format!("{lead}\n\n{base_user}")
+            };
 
             if !attachment_refs.is_empty() {
                 if let Some(entry) = state.kernel.registry.get(agent_id) {

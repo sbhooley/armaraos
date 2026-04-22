@@ -367,4 +367,21 @@ mod tests {
     fn test_max_audio_constant() {
         assert_eq!(MAX_AUDIO_RESPONSE_BYTES, 10 * 1024 * 1024);
     }
+
+    #[tokio::test]
+    async fn test_synthesize_piper_local_rejects_empty() {
+        let c = openfang_types::config::LocalVoiceConfig::default();
+        let e = super::synthesize_piper_local("  ", &c).await.unwrap_err();
+        assert!(e.contains("empty") || e.contains("Empty"), "{e}");
+    }
+
+    /// Local Piper: without `[local_voice]` / piper on PATH, the fast path is "not ready".
+    #[tokio::test]
+    async fn test_synthesize_piper_local_not_configured() {
+        let c = openfang_types::config::LocalVoiceConfig::default();
+        let e = super::synthesize_piper_local("Hello, world.", &c)
+            .await
+            .unwrap_err();
+        assert!(e.contains("Piper") || e.contains("not configured"), "{e}");
+    }
 }

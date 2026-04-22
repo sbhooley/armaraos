@@ -85,4 +85,44 @@ mod tests {
     fn truncate_str_empty() {
         assert_eq!(truncate_str("", 10), "");
     }
+
+    /// Phase 0 gate: `openfang_types::vitals` must remain the same types as `ainl_contracts::vitals`.
+    #[test]
+    fn vitals_types_are_canonical_ainl_contracts_reexports() {
+        use std::any::TypeId;
+
+        use crate::vitals::{CognitivePhase, CognitiveVitals, VitalsGate};
+        use ainl_contracts::vitals as ac;
+
+        assert_eq!(
+            TypeId::of::<CognitiveVitals>(),
+            TypeId::of::<ac::CognitiveVitals>()
+        );
+        assert_eq!(TypeId::of::<VitalsGate>(), TypeId::of::<ac::VitalsGate>());
+        assert_eq!(
+            TypeId::of::<CognitivePhase>(),
+            TypeId::of::<ac::CognitivePhase>()
+        );
+    }
+
+    #[test]
+    fn vitals_json_roundtrip_matches_ainl_contracts_wire_format() {
+        use crate::vitals::{CognitiveVitals, VitalsGate};
+        use ainl_contracts::vitals::CognitiveVitals as AcVitals;
+
+        let v = CognitiveVitals {
+            gate: VitalsGate::Pass,
+            phase: "reasoning:0.71".into(),
+            trust: 0.9,
+            mean_logprob: -0.1,
+            entropy: 0.2,
+            sample_tokens: 16,
+        };
+        let json_of = serde_json::to_string(&v).unwrap();
+        let v2: AcVitals = serde_json::from_str(&json_of).unwrap();
+        let json_ac = serde_json::to_string(&v2).unwrap();
+        assert_eq!(json_of, json_ac);
+        assert_eq!(v.gate, v2.gate);
+        assert_eq!(v.trust, v2.trust);
+    }
 }

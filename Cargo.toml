@@ -25,6 +25,7 @@ members = [
     "crates/ainl-repo-intel",
     "crates/ainl-context-freshness",
     "crates/ainl-impact-policy",
+    "crates/ainl-trajectory",
     "xtask",
 ]
 

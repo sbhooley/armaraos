@@ -125,6 +125,8 @@ pub struct PatchDispatchResult {
     pub adapter_output: Option<serde_json::Value>,
     /// Name of the adapter that was invoked (including on execution failure).
     pub adapter_name: Option<String>,
+    /// Wall time for `execute_patch` when an adapter ran; zero if no adapter matched or the node was skipped before dispatch.
+    pub dispatch_duration_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

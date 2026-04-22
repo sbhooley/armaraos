@@ -53,16 +53,25 @@
 //! - **Runtime state** (`RuntimeStateNode`, `node_type = runtime_state`): Optional persisted session
 //!   counters and persona snapshot JSON for **ainl-runtime** (see [`GraphMemory::read_runtime_state`] /
 //!   [`GraphMemory::write_runtime_state`]).
+//! - **Trajectory** (`TrajectoryNode`): execution traces for replay / learning.
+//! - **Failure** (`FailureNode`): typed failures (e.g. loop guard) with optional FTS search
+//!   ([`GraphMemory::search_failures_for_agent`]).
 
 pub mod node;
 pub mod query;
 pub mod snapshot;
 pub mod store;
+pub mod trajectory_table;
+mod trajectory_persist;
+
+pub use trajectory_persist::{
+    persist_trajectory_coarse_tools, persist_trajectory_for_episode, trajectory_env_enabled,
+};
 
 pub use node::{
-    AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, MemoryCategory,
+    AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, FailureNode, MemoryCategory,
     PersonaLayer, PersonaNode, PersonaSource, ProceduralNode, ProcedureType, RuntimeStateNode,
-    SemanticNode, Sentiment, StrengthEvent,
+    SemanticNode, Sentiment, StrengthEvent, TrajectoryNode,
 };
 pub use query::{
     count_by_topic_cluster, find_high_confidence_facts, find_patterns, find_strong_traits,
@@ -76,6 +85,7 @@ pub use snapshot::{
     SNAPSHOT_SCHEMA_VERSION,
 };
 pub use store::{GraphStore, GraphValidationError, SnapshotImportError, SqliteGraphStore};
+pub use trajectory_table::TrajectoryDetailRecord;
 
 use uuid::Uuid;
 
@@ -294,6 +304,33 @@ impl GraphMemory {
     pub fn write_node(&self, node: &AinlMemoryNode) -> Result<(), String> {
         self.store.write_node(node)
     }
+
+    /// Insert a detailed trajectory row (see [`SqliteGraphStore::insert_trajectory_detail`]).
+    pub fn insert_trajectory_detail(&self, row: &TrajectoryDetailRecord) -> Result<(), String> {
+        self.store.insert_trajectory_detail(row)
+    }
+
+    /// Recent trajectory detail rows for an agent (see [`SqliteGraphStore::list_trajectories_for_agent`]).
+    pub fn list_trajectories_for_agent(
+        &self,
+        agent_id: &str,
+        limit: usize,
+        since_timestamp: Option<i64>,
+    ) -> Result<Vec<TrajectoryDetailRecord>, String> {
+        self.store
+            .list_trajectories_for_agent(agent_id, limit, since_timestamp)
+    }
+
+    /// Search persisted [`FailureNode`] rows for an agent (FTS5 over `ainl_failures_fts`).
+    pub fn search_failures_for_agent(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        self.store
+            .search_failures_fts_for_agent(agent_id, query, limit)
+    }
 }
 
 #[cfg(test)]
@@ -360,5 +397,135 @@ mod tests {
         // Query it back
         let patterns = find_patterns(memory.store(), "research").expect("Query failed");
         assert_eq!(patterns.len(), 1);
+    }
+
+    /// End-to-end: `Failure` graph row + `ainl_failures_fts` sync + `search_failures_for_agent`.
+    #[test]
+    fn failure_write_and_fts_search_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_failure_fts_smoke.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent_id = "agent-smoke-fts";
+
+        let mut node = AinlMemoryNode::new_loop_guard_failure(
+            "block",
+            Some("shell_exec"),
+            "repeated identical tool invocation blocked by loop guard",
+            Some("session-xyz"),
+        );
+        node.agent_id = agent_id.to_string();
+        let nid = node.id;
+        memory.write_node(&node).expect("write failure node");
+
+        let hits = memory
+            .search_failures_for_agent(agent_id, "loop", 10)
+            .expect("search loop");
+        assert_eq!(hits.len(), 1, "expected one FTS hit for token 'loop'");
+        assert_eq!(hits[0].id, nid);
+        assert!(
+            matches!(&hits[0].node_type, AinlNodeType::Failure { .. }),
+            "expected Failure node type"
+        );
+
+        let hits2 = memory
+            .search_failures_for_agent(agent_id, "shell_exec", 10)
+            .expect("search tool name");
+        assert_eq!(hits2.len(), 1);
+        assert_eq!(hits2[0].id, nid);
+
+        let empty = memory
+            .search_failures_for_agent(agent_id, "   ", 10)
+            .expect("whitespace-only query");
+        assert!(empty.is_empty());
+
+        let wrong_agent = memory
+            .search_failures_for_agent("other-agent", "loop", 10)
+            .expect("wrong agent id");
+        assert!(wrong_agent.is_empty());
+    }
+
+    #[test]
+    fn tool_execution_failure_write_and_fts_search_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_tool_failure_fts.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent_id = "agent-tool-ft";
+
+        let mut node = AinlMemoryNode::new_tool_execution_failure(
+            "file_read",
+            "ENOENT: no such file or directory",
+            Some("sess-tool-1"),
+        );
+        node.agent_id = agent_id.to_string();
+        let nid = node.id;
+        memory.write_node(&node).expect("write tool failure node");
+
+        let hits = memory
+            .search_failures_for_agent(agent_id, "ENOENT", 10)
+            .expect("search ENOENT");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, nid);
+
+        let src_hits = memory
+            .search_failures_for_agent(agent_id, "tool_runner", 10)
+            .expect("search source");
+        assert_eq!(src_hits.len(), 1);
+        assert_eq!(src_hits[0].id, nid);
+    }
+
+    #[test]
+    fn agent_loop_precheck_failure_write_and_fts_search_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_precheck_failure_fts.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent_id = "agent-precheck-ft";
+
+        let mut node = AinlMemoryNode::new_agent_loop_precheck_failure(
+            "param_validation",
+            "file_write",
+            "missing required field: path",
+            Some("sess-pv-1"),
+        );
+        node.agent_id = agent_id.to_string();
+        let nid = node.id;
+        memory.write_node(&node).expect("write precheck failure");
+
+        let hits = memory
+            .search_failures_for_agent(agent_id, "param_validation", 10)
+            .expect("search kind");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, nid);
+
+        let hits2 = memory
+            .search_failures_for_agent(agent_id, "agent_loop", 10)
+            .expect("search agent_loop prefix");
+        assert_eq!(hits2.len(), 1);
+    }
+
+    #[test]
+    fn ainl_runtime_graph_validation_failure_write_and_fts_search_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_graph_validation_failure_fts.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent_id = "agent-graph-val-ft";
+
+        let mut node = AinlMemoryNode::new_ainl_runtime_graph_validation_failure(
+            "graph validation failed before turn: dangling edges …",
+            Some("sess-gv-1"),
+        );
+        node.agent_id = agent_id.to_string();
+        let nid = node.id;
+        memory.write_node(&node).expect("write graph validation failure");
+
+        let hits = memory
+            .search_failures_for_agent(agent_id, "graph_validation", 10)
+            .expect("search source label");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, nid);
+
+        let hits2 = memory
+            .search_failures_for_agent(agent_id, "dangling", 10)
+            .expect("search message body");
+        assert_eq!(hits2.len(), 1);
     }
 }

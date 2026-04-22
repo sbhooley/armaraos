@@ -302,6 +302,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/pages/orchestration-traces.js"),
     "\n",
     include_str!("../static/js/pages/graph-memory.js"),
+    "\n",
+    include_str!("../static/js/pages/trajectories.js"),
     "\n</script>\n",
     // Alpine.js MUST be last — it processes x-data and fires alpine:init
     "<script nonce=\"__NONCE__\">\n",

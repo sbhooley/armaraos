@@ -117,6 +117,7 @@ async fn evolve_from_turn_impl(
             reason: Some("turn_axis_ingest".to_string()),
             summary: Some(summary),
             trace_id: None,
+            tool_name: None,
         }),
     );
     Ok(())

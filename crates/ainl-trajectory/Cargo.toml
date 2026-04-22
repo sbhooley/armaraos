@@ -1,0 +1,17 @@
+[package]
+name = "ainl-trajectory"
+description = "Execution trajectory capture for AINL self-learning (steps, outcomes, episode link)"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ainl-contracts = { path = "../ainl-contracts" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

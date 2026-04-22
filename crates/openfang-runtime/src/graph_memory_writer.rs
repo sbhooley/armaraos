@@ -16,9 +16,11 @@
 
 #[cfg(feature = "ainl-extractor")]
 use ainl_graph_extractor::GraphExtractorTask;
+use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
+use openfang_types::agent::AgentManifest;
 use openfang_types::event::GraphMemoryWriteProvenance;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -52,6 +54,74 @@ impl PersonaEvolutionExtractionReport {
 /// Horizon for “any persona row exists” checks (per-agent DB; long window ≈ all history).
 pub(crate) const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
 const CONSOLIDATION_MIN_INTERVAL_SECS: i64 = 60;
+
+/// When **unset** or any non-falsy value: record [`TrajectoryNode`] rows after each successful
+/// [`GraphMemoryWriter::record_turn`] (opt-out mirrors `AINL_EXTRACTOR_ENABLED`).
+/// Falsy: `0`, `false`, `no`, `off` (case-insensitive).
+#[must_use]
+pub fn trajectory_env_enabled() -> bool {
+    ainl_memory::trajectory_env_enabled()
+}
+
+/// When **unset** or any non-falsy value: record [`ainl_memory::FailureNode`] rows for loop-guard outcomes.
+/// Falsy: `0`, `false`, `no`, `off` (case-insensitive).
+#[must_use]
+pub fn failure_learning_env_enabled() -> bool {
+    match std::env::var("AINL_FAILURE_LEARNING_ENABLED") {
+        Ok(v) => {
+            let t = v.trim().to_ascii_lowercase();
+            !matches!(t.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        Err(_) => true,
+    }
+}
+
+/// Resolve optional AINL source fingerprint for trajectory rows: process env first, then manifest
+/// metadata string keys (`ainl_source_hash`, `ainl_bundle_sha256`).
+#[must_use]
+pub fn ainl_source_hash_for_trajectory_persist(manifest: &AgentManifest) -> Option<String> {
+    for key in ["AINL_SOURCE_HASH", "AINL_BUNDLE_SHA256"] {
+        if let Ok(v) = std::env::var(key) {
+            let t = v.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    for meta_key in ["ainl_source_hash", "ainl_bundle_sha256"] {
+        let Some(raw) = manifest.metadata.get(meta_key) else {
+            continue;
+        };
+        if let Some(s) = raw.as_str() {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn trajectory_steps_from_tools(tools: &[String]) -> Vec<TrajectoryStep> {
+    let base_ms = chrono::Utc::now().timestamp_millis();
+    tools
+        .iter()
+        .enumerate()
+        .map(|(i, name)| TrajectoryStep {
+            step_id: format!("step_{i}"),
+            timestamp_ms: base_ms + i as i64,
+            adapter: "builtin".into(),
+            operation: name.clone(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 0,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+        })
+        .collect()
+}
 
 fn consolidation_tracker() -> &'static StdMutex<HashMap<String, i64>> {
     static TRACKER: OnceLock<StdMutex<HashMap<String, i64>>> = OnceLock::new();
@@ -174,6 +244,7 @@ impl GraphMemoryWriter {
                             "Imported {imported} node(s) from Python graph-memory inbox"
                         )),
                         trace_id: None,
+                        tool_name: None,
                     }),
                 );
             }
@@ -281,6 +352,7 @@ impl GraphMemoryWriter {
                         reason: Some(reason.to_string()),
                         summary: Some(summary),
                         trace_id: trace_id_for_hook,
+                        tool_name: None,
                     }),
                 );
                 Some(id)
@@ -290,6 +362,296 @@ impl GraphMemoryWriter {
                     agent_id = %self.agent_id,
                     error = %e,
                     "AINL graph memory: failed to write episode"
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist a [`TrajectoryNode`] for the given episode graph row and link it with edge
+    /// `trajectory_of` → episode. No-op when [`trajectory_env_enabled`] is false.
+    ///
+    /// `episode_graph_id` is the episode **node id** returned from [`Self::record_turn`] (same id
+    /// space as semantic `source_turn_id`).
+    ///
+    /// When `detailed_steps` is `Some`, per-tool steps (from `execute_tool_with_trajectory`) are
+    /// persisted; otherwise coarse steps are derived from `tools_fallback`.
+    pub async fn record_trajectory_for_episode(
+        &self,
+        episode_graph_id: Uuid,
+        tools_fallback: &[String],
+        detailed_steps: Option<Vec<TrajectoryStep>>,
+        outcome: TrajectoryOutcome,
+        session_id: &str,
+        project_id: Option<&str>,
+        duration_ms: u64,
+        ainl_source_hash: Option<&str>,
+    ) -> Option<Uuid> {
+        if !trajectory_env_enabled() {
+            return None;
+        }
+        let steps = detailed_steps.unwrap_or_else(|| trajectory_steps_from_tools(tools_fallback));
+        let step_count = steps.len();
+        let res = {
+            let inner = self.inner.lock().await;
+            ainl_memory::persist_trajectory_for_episode(
+                &*inner,
+                &self.agent_id,
+                episode_graph_id,
+                steps,
+                outcome,
+                session_id,
+                project_id,
+                ainl_source_hash,
+                duration_ms,
+            )
+        };
+        match res {
+            Ok((graph_tid, _detail_id)) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    trajectory_id = %graph_tid,
+                    episode_id = %episode_graph_id,
+                    "AINL graph memory: trajectory written (graph + ainl_trajectories row)"
+                );
+                self.fire_write_hook(
+                    "trajectory",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![graph_tid.to_string(), episode_graph_id.to_string()],
+                        node_kind: Some("trajectory".to_string()),
+                        reason: Some("turn_trajectory".to_string()),
+                        summary: Some(format!(
+                            "Trajectory for episode {} ({} steps)",
+                            episode_graph_id, step_count
+                        )),
+                        trace_id: None,
+                        tool_name: None,
+                    }),
+                );
+                Some(graph_tid)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write trajectory"
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist a [`ainl_memory::FailureNode`] for a loop-guard outcome (`verdict_label`: `block` | `circuit_break`).
+    pub async fn record_loop_guard_failure(
+        &self,
+        verdict_label: &str,
+        tool_name: Option<&str>,
+        message: &str,
+        session_id: Option<&str>,
+    ) -> Option<Uuid> {
+        if !failure_learning_env_enabled() {
+            return None;
+        }
+        let res = {
+            let inner = self.inner.lock().await;
+            let mut node = AinlMemoryNode::new_loop_guard_failure(
+                verdict_label,
+                tool_name,
+                message,
+                session_id,
+            );
+            node.agent_id = self.agent_id.clone();
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    failure_id = %id,
+                    verdict = %verdict_label,
+                    "AINL graph memory: loop-guard failure written"
+                );
+                self.fire_write_hook(
+                    "failure",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("failure".to_string()),
+                        reason: Some(format!("loop_guard_{verdict_label}")),
+                        summary: Some(format!(
+                            "Loop guard {verdict_label}: {}",
+                            openfang_types::truncate_str(message, 200)
+                        )),
+                        trace_id: None,
+                        tool_name: tool_name.map(str::to_string),
+                    }),
+                );
+                Some(id)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write loop-guard failure node"
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist a [`ainl_memory::FailureNode`] after a tool returned `is_error` (execution, timeout, MCP, etc.).
+    pub async fn record_tool_execution_failure(
+        &self,
+        tool_name: &str,
+        message: &str,
+        session_id: Option<&str>,
+    ) -> Option<Uuid> {
+        if !failure_learning_env_enabled() {
+            return None;
+        }
+        let msg = openfang_types::truncate_str(message, 8000);
+        let res = {
+            let inner = self.inner.lock().await;
+            let mut node = AinlMemoryNode::new_tool_execution_failure(tool_name, msg, session_id);
+            node.agent_id = self.agent_id.clone();
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    failure_id = %id,
+                    tool = %tool_name,
+                    "AINL graph memory: tool execution failure written"
+                );
+                self.fire_write_hook(
+                    "failure",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("failure".to_string()),
+                        reason: Some("tool_runner:error".to_string()),
+                        summary: Some(
+                            openfang_types::truncate_str(message, 200).to_string(),
+                        ),
+                        trace_id: None,
+                        tool_name: Some(tool_name.to_string()),
+                    }),
+                );
+                Some(id)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write tool execution failure node"
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist a [`ainl_memory::FailureNode`] for a tool rejected before dispatch (`kind`: e.g.
+    /// `hook_blocked`, `param_validation` → source `agent_loop:{kind}`).
+    pub async fn record_agent_loop_tool_precheck_failure(
+        &self,
+        kind: &str,
+        tool_name: &str,
+        message: &str,
+        session_id: Option<&str>,
+    ) -> Option<Uuid> {
+        if !failure_learning_env_enabled() {
+            return None;
+        }
+        let msg = openfang_types::truncate_str(message, 8000);
+        let source = format!("agent_loop:{kind}");
+        let res = {
+            let inner = self.inner.lock().await;
+            let mut node =
+                AinlMemoryNode::new_agent_loop_precheck_failure(kind, tool_name, msg, session_id);
+            node.agent_id = self.agent_id.clone();
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    failure_id = %id,
+                    tool = %tool_name,
+                    kind = %kind,
+                    "AINL graph memory: agent-loop tool precheck failure written"
+                );
+                self.fire_write_hook(
+                    "failure",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("failure".to_string()),
+                        reason: Some(source),
+                        summary: Some(
+                            openfang_types::truncate_str(message, 200).to_string(),
+                        ),
+                        trace_id: None,
+                        tool_name: Some(tool_name.to_string()),
+                    }),
+                );
+                Some(id)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write agent-loop precheck failure node"
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist a [`ainl_memory::FailureNode`] when `ainl-runtime` fails graph validation before a turn.
+    pub async fn record_ainl_runtime_graph_validation_failure(
+        &self,
+        message: &str,
+        session_id: Option<&str>,
+    ) -> Option<Uuid> {
+        if !failure_learning_env_enabled() {
+            return None;
+        }
+        let msg = openfang_types::truncate_str(message, 8000);
+        let res = {
+            let inner = self.inner.lock().await;
+            let mut node = AinlMemoryNode::new_ainl_runtime_graph_validation_failure(msg, session_id);
+            node.agent_id = self.agent_id.clone();
+            let id = node.id;
+            inner.write_node(&node).map(|()| id)
+        };
+        match res {
+            Ok(id) => {
+                debug!(
+                    agent_id = %self.agent_id,
+                    failure_id = %id,
+                    "AINL graph memory: ainl-runtime graph validation failure written"
+                );
+                self.fire_write_hook(
+                    "failure",
+                    Some(GraphMemoryWriteProvenance {
+                        node_ids: vec![id.to_string()],
+                        node_kind: Some("failure".to_string()),
+                        reason: Some("ainl_runtime:graph_validation".to_string()),
+                        summary: Some(
+                            openfang_types::truncate_str(message, 200).to_string(),
+                        ),
+                        trace_id: None,
+                        tool_name: None,
+                    }),
+                );
+                Some(id)
+            }
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write ainl-runtime graph validation failure node"
                 );
                 None
             }
@@ -335,6 +697,7 @@ impl GraphMemoryWriter {
                         reason: Some("pattern_persisted".to_string()),
                         summary: Some(summary),
                         trace_id,
+                        tool_name: None,
                     }),
                 );
             }
@@ -392,6 +755,7 @@ impl GraphMemoryWriter {
                         reason: Some("fact_extracted".to_string()),
                         summary: Some(format!("Fact: {fact_preview}")),
                         trace_id: None,
+                        tool_name: None,
                     }),
                 );
             }
@@ -589,6 +953,7 @@ impl GraphMemoryWriter {
                         reason: Some(reason.to_string()),
                         summary: Some(summary),
                         trace_id: None,
+                        tool_name: None,
                     }),
                 );
             }
@@ -679,6 +1044,7 @@ impl GraphMemoryWriter {
                         "Consolidation removed {deleted} duplicate semantic row(s)"
                     )),
                     trace_id: None,
+                    tool_name: None,
                 }),
             );
             debug!(
@@ -707,8 +1073,61 @@ mod tests {
     use super::*;
     #[cfg(feature = "ainl-persona-evolution")]
     use ainl_persona::EVOLUTION_TRAIT_NAME;
+    use ainl_contracts::TrajectoryOutcome;
+    use ainl_memory::AinlNodeType;
+    use openfang_types::agent::AgentManifest;
     use serde_json::json;
     use std::sync::Mutex as StdMutex;
+
+    fn env_lock() -> &'static tokio::sync::Mutex<()> {
+        crate::runtime_env_test_lock()
+    }
+
+    fn restore_trajectory_env(prev: Option<String>) {
+        if let Some(p) = prev {
+            std::env::set_var("AINL_TRAJECTORY_ENABLED", p);
+        } else {
+            std::env::remove_var("AINL_TRAJECTORY_ENABLED");
+        }
+    }
+
+    fn restore_source_hash_env(prev_src: Option<String>, prev_bundle: Option<String>) {
+        match prev_src {
+            Some(p) => std::env::set_var("AINL_SOURCE_HASH", p),
+            None => std::env::remove_var("AINL_SOURCE_HASH"),
+        }
+        match prev_bundle {
+            Some(p) => std::env::set_var("AINL_BUNDLE_SHA256", p),
+            None => std::env::remove_var("AINL_BUNDLE_SHA256"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ainl_source_hash_prefers_env_then_manifest_metadata() {
+        let _guard = env_lock().lock().await;
+        let prev_src = std::env::var("AINL_SOURCE_HASH").ok();
+        let prev_bundle = std::env::var("AINL_BUNDLE_SHA256").ok();
+        std::env::remove_var("AINL_SOURCE_HASH");
+        std::env::remove_var("AINL_BUNDLE_SHA256");
+
+        let mut m = AgentManifest::default();
+        m.metadata.insert(
+            "ainl_source_hash".into(),
+            serde_json::Value::String("from-manifest".into()),
+        );
+        assert_eq!(
+            ainl_source_hash_for_trajectory_persist(&m).as_deref(),
+            Some("from-manifest")
+        );
+
+        std::env::set_var("AINL_SOURCE_HASH", "  env-val  ");
+        assert_eq!(
+            ainl_source_hash_for_trajectory_persist(&m).as_deref(),
+            Some("env-val")
+        );
+
+        restore_source_hash_env(prev_src, prev_bundle);
+    }
 
     #[tokio::test]
     #[cfg(feature = "ainl-persona-evolution")]
@@ -1052,5 +1471,134 @@ mod tests {
             .find(|n| n["node_type"]["type"] == "procedural")
             .expect("procedural in export");
         assert_eq!(proc_json["node_type"]["trace_id"], "trace-z99");
+    }
+
+    #[tokio::test]
+    async fn trajectory_env_enabled_opt_out_semantics() {
+        let _guard = env_lock().lock().await;
+        let prev = std::env::var("AINL_TRAJECTORY_ENABLED").ok();
+        std::env::remove_var("AINL_TRAJECTORY_ENABLED");
+        assert!(trajectory_env_enabled());
+        std::env::set_var("AINL_TRAJECTORY_ENABLED", "0");
+        assert!(!trajectory_env_enabled());
+        std::env::set_var("AINL_TRAJECTORY_ENABLED", "false");
+        assert!(!trajectory_env_enabled());
+        std::env::set_var("AINL_TRAJECTORY_ENABLED", " no ");
+        assert!(!trajectory_env_enabled());
+        std::env::set_var("AINL_TRAJECTORY_ENABLED", "1");
+        assert!(trajectory_env_enabled());
+        restore_trajectory_env(prev);
+    }
+
+    #[tokio::test]
+    async fn record_trajectory_for_episode_writes_node_and_trajectory_of_edge() {
+        let _guard = env_lock().lock().await;
+        let prev = std::env::var("AINL_TRAJECTORY_ENABLED").ok();
+        std::env::remove_var("AINL_TRAJECTORY_ENABLED");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("traj_path.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let hooks: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+        let hooks_for_cb = Arc::clone(&hooks);
+        let hook: GraphMemoryWriteNotifyFn = Arc::new(
+            move |_agent: String, kind: String, _prov: Option<GraphMemoryWriteProvenance>| {
+                if let Ok(mut v) = hooks_for_cb.lock() {
+                    v.push(kind);
+                }
+            },
+        );
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "traj-agent".to_string(),
+            on_write: Some(hook),
+        };
+
+        let tools = vec!["tool_a".to_string(), "tool_b".to_string()];
+        let episode_id = writer
+            .record_turn(tools.clone(), None, None, &[], None, None, None)
+            .await
+            .expect("episode");
+
+        let traj_id = writer
+            .record_trajectory_for_episode(
+                episode_id,
+                &tools,
+                None,
+                TrajectoryOutcome::Success,
+                "sess-ci",
+                Some("proj-ci"),
+                0,
+                None,
+            )
+            .await
+            .expect("trajectory id");
+
+        let gm = GraphMemory::new(&db_path).expect("reopen");
+        let targets = gm
+            .store()
+            .walk_edges(traj_id, "trajectory_of")
+            .expect("walk trajectory_of");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].id, episode_id);
+
+        let traj_node = gm.store().read_node(traj_id).expect("read").expect("traj");
+        match &traj_node.node_type {
+            AinlNodeType::Trajectory { trajectory } => {
+                assert_eq!(trajectory.episode_id, episode_id);
+                assert_eq!(trajectory.session_id, "sess-ci");
+                assert_eq!(trajectory.project_id.as_deref(), Some("proj-ci"));
+                assert_eq!(trajectory.steps.len(), 2);
+                assert_eq!(trajectory.steps[0].operation, "tool_a");
+                assert_eq!(trajectory.steps[1].operation, "tool_b");
+                assert_eq!(trajectory.outcome, TrajectoryOutcome::Success);
+            }
+            _ => panic!("expected Trajectory node"),
+        }
+
+        let kinds = hooks.lock().expect("hook lock").clone();
+        assert!(kinds.iter().any(|k| k == "trajectory"));
+
+        restore_trajectory_env(prev);
+    }
+
+    #[tokio::test]
+    async fn record_trajectory_for_episode_noop_when_env_disabled() {
+        let _guard = env_lock().lock().await;
+        let prev = std::env::var("AINL_TRAJECTORY_ENABLED").ok();
+        std::env::set_var("AINL_TRAJECTORY_ENABLED", "off");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("traj_off.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "traj-off-agent".to_string(),
+            on_write: None,
+        };
+
+        let episode_id = writer
+            .record_turn(vec!["only".into()], None, None, &[], None, None, None)
+            .await
+            .expect("episode");
+
+        let out = writer
+            .record_trajectory_for_episode(
+                episode_id,
+                &[String::from("only")],
+                None,
+                TrajectoryOutcome::Success,
+                "sess",
+                None,
+                0,
+                None,
+            )
+            .await;
+        assert!(out.is_none());
+
+        let gm = GraphMemory::new(&db_path).expect("reopen");
+        assert!(gm.store().find_by_type("trajectory").expect("query").is_empty());
+
+        restore_trajectory_env(prev);
     }
 }

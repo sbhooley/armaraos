@@ -13,6 +13,7 @@ static INJECTED_EPISODIC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_SEMANTIC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_CONFLICT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_PROCEDURAL_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INJECTED_FAILURE_RECALL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TRUNCATION_HITS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_LOW_QUALITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TEMP_MODE_SUPPRESSED_READS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -51,6 +52,9 @@ pub struct MemoryContextPolicy {
     pub include_semantic_facts: bool,
     pub include_conflicts: bool,
     pub include_procedural_hints: bool,
+    /// When true (and learning policy allows failure stack), recent matching `failure` nodes
+    /// are injected into the graph-memory prompt block from FTS over the user message.
+    pub include_failure_recall: bool,
     pub max_episodic_lines: usize,
     pub max_semantic_lines: usize,
     pub max_conflict_lines: usize,
@@ -59,6 +63,8 @@ pub struct MemoryContextPolicy {
     pub max_semantic_chars: usize,
     pub max_conflict_chars: usize,
     pub max_procedural_chars: usize,
+    pub max_failure_recall_lines: usize,
+    pub max_failure_recall_chars: usize,
     pub recall_window_secs: i64,
     pub semantic_confidence_floor: f32,
     pub contradiction_confidence_floor: f32,
@@ -79,6 +85,7 @@ impl Default for MemoryContextPolicy {
             include_semantic_facts: true,
             include_conflicts: true,
             include_procedural_hints: true,
+            include_failure_recall: true,
             max_episodic_lines: 4,
             max_semantic_lines: 5,
             max_conflict_lines: 3,
@@ -87,6 +94,8 @@ impl Default for MemoryContextPolicy {
             max_semantic_chars: 800,
             max_conflict_chars: 420,
             max_procedural_chars: 420,
+            max_failure_recall_lines: 5,
+            max_failure_recall_chars: 600,
             recall_window_secs: 60 * 60 * 24 * 30,
             semantic_confidence_floor: 0.55,
             contradiction_confidence_floor: 0.70,
@@ -105,6 +114,7 @@ pub struct PromptMemoryContext {
     pub semantic_lines: Vec<String>,
     pub conflict_lines: Vec<String>,
     pub procedural_lines: Vec<String>,
+    pub failure_recall_lines: Vec<String>,
     pub skipped_low_quality: usize,
     pub truncation_hits: usize,
     pub provenance_lines: usize,
@@ -117,11 +127,13 @@ impl PromptMemoryContext {
             && self.semantic_lines.is_empty()
             && self.conflict_lines.is_empty()
             && self.procedural_lines.is_empty()
+            && self.failure_recall_lines.is_empty()
     }
 
     pub fn to_prompt_block(&self) -> String {
         crate::prompt_builder::build_graph_memory_sections(
             &self.episodic_lines,
+            &self.failure_recall_lines,
             &self.semantic_lines,
             &self.conflict_lines,
             &self.procedural_lines,
@@ -171,6 +183,7 @@ pub fn memory_context_metrics() -> serde_json::Value {
         "injected_semantic_total": semantic_total,
         "injected_conflict_total": conflict_total,
         "injected_procedural_total": INJECTED_PROCEDURAL_TOTAL.load(AtomicOrdering::Relaxed),
+        "injected_failure_recall_total": INJECTED_FAILURE_RECALL_TOTAL.load(AtomicOrdering::Relaxed),
         "truncation_hits_total": TRUNCATION_HITS_TOTAL.load(AtomicOrdering::Relaxed),
         "skipped_low_quality_total": SKIPPED_LOW_QUALITY_TOTAL.load(AtomicOrdering::Relaxed),
         "temp_mode_suppressed_reads_total": TEMP_MODE_SUPPRESSED_READS_TOTAL.load(AtomicOrdering::Relaxed),
@@ -226,6 +239,11 @@ impl MemoryContextPolicy {
                 "memory_include_procedural_hints",
                 true,
             ),
+            include_failure_recall: metadata_bool(
+                &manifest.metadata,
+                "memory_include_failure_recall",
+                true,
+            ),
             ..Default::default()
         };
 
@@ -251,6 +269,10 @@ impl MemoryContextPolicy {
         if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_CONFLICTS") {
             policy.include_conflicts =
                 parse_bool_with_default(Some(v.as_str()), policy.include_conflicts);
+        }
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_FAILURE_RECALL") {
+            policy.include_failure_recall =
+                parse_bool_with_default(Some(v.as_str()), policy.include_failure_recall);
         }
         policy.ab_variant = manifest
             .metadata
@@ -347,6 +369,11 @@ impl MemoryContextPolicy {
         {
             self.include_procedural_hints = include_procedural_hints;
         }
+        if let Some(include_failure_recall) =
+            v.get("include_failure_recall").and_then(|x| x.as_bool())
+        {
+            self.include_failure_recall = include_failure_recall;
+        }
     }
 }
 
@@ -361,6 +388,8 @@ pub fn record_temp_mode_write_suppressed() {
 pub async fn build_prompt_memory_context(
     gm: &GraphMemoryWriter,
     policy: &MemoryContextPolicy,
+    user_message: Option<&str>,
+    failure_recall_enabled: bool,
 ) -> PromptMemoryContext {
     let mut ctx = PromptMemoryContext::default();
     if !policy.allow_reads() {
@@ -666,6 +695,64 @@ pub async fn build_prompt_memory_context(
         }
     }
 
+    if failure_recall_enabled && policy.include_failure_recall {
+        if let Some(msg) = user_message.filter(|m| !m.trim().is_empty()) {
+            if let Some(fts_q) = crate::graph_memory_learning::failure_recall_fts_query(msg) {
+                let fetch_cap = policy
+                    .max_failure_recall_lines
+                    .saturating_mul(2)
+                    .max(8)
+                    .min(50);
+                let hits = {
+                    let inner = gm.inner.lock().await;
+                    inner.search_failures_for_agent(gm.agent_id(), fts_q.as_str(), fetch_cap)
+                };
+                if let Ok(nodes) = hits {
+                    let mut seen_keys = HashSet::new();
+                    let mut candidates: Vec<String> = Vec::new();
+                    for n in nodes {
+                        let AinlNodeType::Failure { ref failure } = n.node_type else {
+                            continue;
+                        };
+                        let tool_s = failure.tool_name.as_deref().unwrap_or("_");
+                        let msg_preview: String = failure.message.chars().take(120).collect();
+                        let key = format!(
+                            "{}|{}|{}",
+                            failure.source,
+                            tool_s,
+                            msg_preview.to_ascii_lowercase()
+                        );
+                        if !seen_keys.insert(key) {
+                            continue;
+                        }
+                        let line = format!(
+                            "source={} tool={} msg={}",
+                            failure.source,
+                            tool_s,
+                            truncate_with_ellipsis(&failure.message, 160),
+                        );
+                        candidates.push(line);
+                    }
+                    let before = ctx.failure_recall_lines.len();
+                    append_limited_lines(
+                        &mut ctx.failure_recall_lines,
+                        candidates,
+                        policy.max_failure_recall_lines,
+                        policy.max_failure_recall_chars,
+                        &mut ctx.truncation_hits,
+                    );
+                    for line in ctx.failure_recall_lines.iter().skip(before) {
+                        ctx.selection_debug.push(serde_json::json!({
+                            "block": "FailureRecall",
+                            "fts_query": fts_q,
+                            "selected_line": line,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
     if !semantic_to_touch.is_empty() {
         let now_u = now_ts.max(0) as u64;
         let inner = gm.inner.lock().await;
@@ -682,11 +769,16 @@ pub async fn build_prompt_memory_context(
     let injected_lines = (ctx.episodic_lines.len()
         + ctx.semantic_lines.len()
         + ctx.conflict_lines.len()
-        + ctx.procedural_lines.len()) as u64;
+        + ctx.procedural_lines.len()
+        + ctx.failure_recall_lines.len()) as u64;
     INJECTED_EPISODIC_TOTAL.fetch_add(ctx.episodic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_SEMANTIC_TOTAL.fetch_add(ctx.semantic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_CONFLICT_TOTAL.fetch_add(ctx.conflict_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_PROCEDURAL_TOTAL.fetch_add(ctx.procedural_lines.len() as u64, AtomicOrdering::Relaxed);
+    INJECTED_FAILURE_RECALL_TOTAL.fetch_add(
+        ctx.failure_recall_lines.len() as u64,
+        AtomicOrdering::Relaxed,
+    );
     TRUNCATION_HITS_TOTAL.fetch_add(ctx.truncation_hits as u64, AtomicOrdering::Relaxed);
     SKIPPED_LOW_QUALITY_TOTAL.fetch_add(ctx.skipped_low_quality as u64, AtomicOrdering::Relaxed);
     INJECTED_LINES_TOTAL.fetch_add(injected_lines, AtomicOrdering::Relaxed);
@@ -699,6 +791,7 @@ pub async fn build_prompt_memory_context(
         semantic = ctx.semantic_lines.len(),
         conflict = ctx.conflict_lines.len(),
         procedural = ctx.procedural_lines.len(),
+        failure_recall = ctx.failure_recall_lines.len(),
         skipped_low_quality = ctx.skipped_low_quality,
         truncation_hits = ctx.truncation_hits,
         provenance_lines = ctx.provenance_lines,
@@ -775,6 +868,8 @@ fn recency_score(ts: i64, now_ts: i64) -> f32 {
 fn node_timestamp(node: &AinlMemoryNode) -> i64 {
     match &node.node_type {
         AinlNodeType::Episode { episodic } => episodic.timestamp,
+        AinlNodeType::Trajectory { trajectory } => trajectory.recorded_at,
+        AinlNodeType::RuntimeState { runtime_state } => runtime_state.updated_at,
         _ => chrono::Utc::now().timestamp(),
     }
 }
@@ -795,6 +890,7 @@ fn count_provenance_lines(ctx: &PromptMemoryContext) -> usize {
         .chain(ctx.semantic_lines.iter())
         .chain(ctx.conflict_lines.iter())
         .chain(ctx.procedural_lines.iter())
+        .chain(ctx.failure_recall_lines.iter())
     {
         if line.contains('[') && line.contains(']') {
             total += 1;
@@ -866,6 +962,62 @@ mod tests {
         inner.write_node(&node).expect("write procedural");
     }
 
+    async fn write_tool_failure(
+        writer: &crate::graph_memory_writer::GraphMemoryWriter,
+        tool_name: &str,
+        message: &str,
+    ) {
+        let mut node =
+            AinlMemoryNode::new_tool_execution_failure(tool_name, message, None::<&str>);
+        node.agent_id = writer.agent_id().to_string();
+        let inner = writer.inner.lock().await;
+        inner.write_node(&node).expect("write failure");
+    }
+
+    #[tokio::test]
+    async fn failure_recall_injects_matching_rows_when_enabled() {
+        let writer = test_writer("ctx-failure-recall");
+        write_tool_failure(
+            &writer,
+            "shell_exec",
+            "ENOENT opening quantumretirement config",
+        )
+        .await;
+
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            Some("quantumretirement shell_exec tool_runner"),
+            true,
+        )
+        .await;
+        assert!(
+            !ctx.failure_recall_lines.is_empty(),
+            "expected failure recall, got {:?}",
+            ctx.failure_recall_lines
+        );
+        let block = ctx.to_prompt_block();
+        assert!(block.contains("## FailureRecall"));
+        assert!(
+            block.contains("quantumretirement")
+                || ctx.failure_recall_lines[0].contains("quantumretirement")
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_recall_skipped_when_learning_gate_off() {
+        let writer = test_writer("ctx-failure-recall-off");
+        write_tool_failure(&writer, "shell_exec", "bad quantumretirement").await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            Some("quantumretirement shell_exec tool_runner"),
+            false,
+        )
+        .await;
+        assert!(ctx.failure_recall_lines.is_empty());
+    }
+
     #[tokio::test]
     async fn semantic_ranking_prefers_reference_count_and_dedupes() {
         let writer = test_writer("ctx-semantic-test");
@@ -877,7 +1029,7 @@ mod tests {
             max_semantic_lines: 2,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
         assert_eq!(ctx.semantic_lines.len(), 2);
         assert!(
             ctx.semantic_lines[0]
@@ -914,7 +1066,7 @@ mod tests {
             contradiction_confidence_floor: 0.70,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
         assert_eq!(ctx.conflict_lines.len(), 1);
         assert!(ctx.conflict_lines[0].contains("high confidence conflict"));
     }
@@ -925,7 +1077,9 @@ mod tests {
         write_procedure(&writer, "good_proc", 0.9, Some(0.95), false).await;
         write_procedure(&writer, "retired_proc", 0.99, Some(0.99), true).await;
 
-        let ctx = build_prompt_memory_context(&writer, &MemoryContextPolicy::default()).await;
+        let ctx =
+            build_prompt_memory_context(&writer, &MemoryContextPolicy::default(), None, false)
+                .await;
         assert!(ctx
             .procedural_lines
             .iter()
@@ -949,7 +1103,7 @@ mod tests {
             include_procedural_hints: true,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
         assert!(ctx.episodic_lines.is_empty());
         assert!(ctx.semantic_lines.is_empty());
         assert!(ctx.conflict_lines.is_empty());
@@ -1011,5 +1165,6 @@ mod tests {
         assert!(metrics
             .get("graph_memory_kernel_notify_err_total")
             .is_some());
+        assert!(metrics.get("injected_failure_recall_total").is_some());
     }
 }

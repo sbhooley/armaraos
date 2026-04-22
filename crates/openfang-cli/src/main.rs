@@ -13,12 +13,14 @@ mod templates;
 mod tui;
 mod ui;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use openfang_api::server::read_daemon_info;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
-use std::io::{self, BufRead, Write};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 #[cfg(windows)]
@@ -74,6 +76,14 @@ const AFTER_HELP: &str = "\
   openfang channel setup        Interactive channel setup wizard
   openfang cron list            List scheduled jobs
   openfang orchestration list   Recent multi-agent orchestration traces
+  openfang trajectory list <agent>
+  openfang trajectory search <agent> <query>
+  openfang trajectory analyze <agent>
+  openfang trajectory export <agent> --output traces.jsonl
+  openfang memory graph-validate <agent>
+  openfang memory graph-inspect <agent> --scope agent_private
+  openfang compression test --mode aggressive --file prompt.txt
+  openfang compression profiles map-project my-repo-ci --json
   openfang uninstall            Completely remove OpenFang from your system
 
 \x1b[1;36mQuick Start:\x1b[0m
@@ -247,9 +257,15 @@ enum Commands {
     /// Security tools and audit trail [*].
     #[command(subcommand)]
     Security(SecurityCommands),
-    /// Search and manage agent memory (KV store) [*].
+    /// Search and manage agent memory (KV store + graph-memory helpers) [*].
     #[command(subcommand)]
     Memory(MemoryCommands),
+    /// Export execution trajectories from graph memory (`ainl_trajectories` → JSONL) [*].
+    #[command(subcommand)]
+    Trajectory(TrajectoryCommands),
+    /// AINL eco-mode prompt compression (`ainl-compression`) — test/score/detect + profiles/adaptive/cache [*].
+    #[command(subcommand)]
+    Compression(CompressionCommands),
     /// Device pairing and token management [*].
     #[command(subcommand)]
     Devices(DevicesCommands),
@@ -798,6 +814,82 @@ enum MemoryCommands {
         #[arg(short = 'o', long = "output")]
         output: Option<std::path::PathBuf>,
     },
+    /// Search graph-memory nodes (daemon; substring over JSON node payload from `GET /api/graph-memory`).
+    GraphSearch {
+        /// Agent id (same as dashboard graph memory).
+        agent: String,
+        /// Case-insensitive substring to match against each node’s exported fields.
+        query: String,
+        /// Maximum nodes to load from the graph API (1–2000; server clamps).
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        /// Only nodes with `created_at` ≥ now − `since_seconds` (unix age window; omit for server default, 90 days).
+        #[arg(long)]
+        since_seconds: Option<i64>,
+        /// Output as JSON (`{ "nodes": [...] }` of matches only).
+        #[arg(long)]
+        json: bool,
+    },
+    /// List persona graph nodes for an agent (daemon; filters `kind == "persona"` from `GET /api/graph-memory`).
+    GraphPersona {
+        /// Agent id.
+        agent: String,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        #[arg(long)]
+        since_seconds: Option<i64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate `ainl_memory.db` for an agent (offline; structural checks via `ainl_memory::GraphMemory::validate_graph`).
+    GraphValidate {
+        /// Agent id.
+        agent: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recent graph-memory audit entries (daemon; `GET /api/graph-memory/audit`).
+    GraphAudit {
+        /// Agent id.
+        agent: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List scoped semantic facts (daemon; `GET /api/graph-memory/inspect`).
+    GraphInspect {
+        /// Agent id.
+        agent: String,
+        /// Scope: `agent_private`, `workspace_shared`, or `org_shared`.
+        #[arg(long, default_value = "agent_private")]
+        scope: String,
+        /// Maximum rows (1–200; server clamps).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Insert a semantic fact into graph memory (daemon; `POST /api/graph-memory/remember`).
+    GraphRemember {
+        /// Agent id.
+        agent: String,
+        /// Fact text to store (quote for multiple words).
+        fact: String,
+        /// Confidence in \[0, 1\] (server clamps).
+        #[arg(long, default_value_t = 0.9)]
+        confidence: f32,
+        /// Scope: `agent_private`, `workspace_shared`, or `org_shared`.
+        #[arg(long, default_value = "agent_private")]
+        scope: String,
+    },
+    /// Delete semantic facts matching exact fact text (daemon; `POST /api/graph-memory/forget`).
+    GraphForget {
+        /// Agent id.
+        agent: String,
+        /// Fact text to match for deletion (must match stored text).
+        fact: String,
+    },
     /// List KV pairs for an agent.
     List {
         /// Agent name or ID.
@@ -831,6 +923,184 @@ enum MemoryCommands {
         agent: String,
         /// Key name.
         key: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrajectoryCommands {
+    /// List recent trajectory rows (table, or `--json` for `TrajectoryDetailRecord[]`).
+    List {
+        /// Agent id (directory name under the OpenFang home `agents/` tree, same as graph memory).
+        agent: String,
+        /// Maximum rows (newest first); capped at 500 in the store.
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Only include rows with `recorded_at` ≥ this Unix timestamp (seconds).
+        #[arg(long)]
+        since_recorded_at: Option<i64>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write recent trajectory rows as JSONL (one JSON object per line; ainl_trajectory replay schema).
+    Export {
+        /// Agent id (directory name under the OpenFang home `agents/` tree, same as graph memory).
+        agent: String,
+        /// Write JSONL to this file instead of stdout.
+        #[arg(short = 'o', long = "output")]
+        output: Option<std::path::PathBuf>,
+        /// Maximum rows (newest first); capped at 500 in the store.
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Only include rows with `recorded_at` ≥ this Unix timestamp (seconds).
+        #[arg(long)]
+        since_recorded_at: Option<i64>,
+    },
+    /// Search recent trajectory rows (case-insensitive substring over ids, session, hashes, outcome, step text).
+    ///
+    /// Matches only within the newest `--scan-limit` rows (same cap as the store: 500).
+    Search {
+        /// Agent id (directory name under the OpenFang home `agents/` tree, same as graph memory).
+        agent: String,
+        /// Substring to match (case-insensitive).
+        query: String,
+        /// How many newest rows to load from SQLite before filtering (1–500).
+        #[arg(long, default_value_t = 500)]
+        scan_limit: usize,
+        /// Only include rows with `recorded_at` ≥ this Unix timestamp (seconds).
+        #[arg(long)]
+        since_recorded_at: Option<i64>,
+        /// Output as JSON for scripting (`TrajectoryDetailRecord[]` of matches).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Summarize recent trajectories (counts by outcome, duration/step stats, top adapters).
+    Analyze {
+        /// Agent id (directory name under the OpenFang home `agents/` tree, same as graph memory).
+        agent: String,
+        /// How many newest rows to include in the summary (1–500).
+        #[arg(long, default_value_t = 500)]
+        scan_limit: usize,
+        /// Only include rows with `recorded_at` ≥ this Unix timestamp (seconds).
+        #[arg(long)]
+        since_recorded_at: Option<i64>,
+        /// Output as JSON for scripting.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum CompressionEfficiencyArg {
+    Off,
+    #[default]
+    Balanced,
+    Aggressive,
+}
+
+impl From<CompressionEfficiencyArg> for ainl_compression::EfficientMode {
+    fn from(a: CompressionEfficiencyArg) -> Self {
+        match a {
+            CompressionEfficiencyArg::Off => Self::Off,
+            CompressionEfficiencyArg::Balanced => Self::Balanced,
+            CompressionEfficiencyArg::Aggressive => Self::Aggressive,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum CompressionCommands {
+    /// Compress input using `ainl-compression` (stdin, `--file`, or optional `TEXT`).
+    Test {
+        /// Inline text (quote for spaces). Omit to use `--file` or stdin.
+        text: Option<String>,
+        /// Read input from this UTF-8 file.
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+        /// Compression profile.
+        #[arg(long, value_enum, default_value_t = CompressionEfficiencyArg::Balanced)]
+        mode: CompressionEfficiencyArg,
+        /// Print JSON (`compressed`, token metrics, semantic score, elapsed_ms).
+        #[arg(long)]
+        json: bool,
+        /// Print a one-line summary to stderr (ignored with `--json`).
+        #[arg(long)]
+        stats: bool,
+    },
+    /// Lexical semantic-preservation score in \[0, 1\] between two UTF-8 files.
+    Score {
+        /// Original text (before compression).
+        #[arg(long)]
+        before: PathBuf,
+        /// Compressed text (after compression).
+        #[arg(long)]
+        after: PathBuf,
+    },
+    /// Resolve eco mode from natural-language intent (same rules as `EfficientMode::parse_natural_language`).
+    Detect {
+        /// Hint such as "use aggressive eco mode" or "compression off".
+        hint: String,
+    },
+    /// Built-in compression profiles (`ainl_compression::profiles`).
+    #[command(subcommand)]
+    Profiles(CompressionProfilesCommands),
+    /// Adaptive eco mode from content shape (`ainl_compression::adaptive`).
+    #[command(subcommand)]
+    Adaptive(CompressionAdaptiveCommands),
+    /// Cache TTL hysteresis helpers (`ainl_compression::cache`).
+    #[command(subcommand)]
+    Cache(CompressionCacheCommands),
+}
+
+#[derive(Subcommand)]
+enum CompressionProfilesCommands {
+    /// List built-in profile ids and default modes.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one built-in profile (`default`, `cost_sensitive`, `quality_preserve`).
+    Show {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Suggest a profile id for a project slug (heuristic).
+    MapProject {
+        /// Project id, repo slug, or directory name.
+        project_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CompressionAdaptiveCommands {
+    /// Recommend `EfficientMode` from content (stdin, `--file`, or optional `TEXT`).
+    Suggest {
+        text: Option<String>,
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CompressionCacheCommands {
+    /// Effective TTL after same-key hit hysteresis.
+    Ttl {
+        #[arg(long, default_value_t = 300)]
+        base_ttl_secs: u64,
+        #[arg(long, default_value_t = 0)]
+        hits: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print built-in cache / TTL policy summary.
+    Policy {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1231,10 +1501,106 @@ fn main() {
             MemoryCommands::GraphExport { agent, output } => {
                 cmd_memory_graph_export(&agent, output.as_deref())
             }
+            MemoryCommands::GraphSearch {
+                agent,
+                query,
+                limit,
+                since_seconds,
+                json,
+            } => cmd_memory_graph_search(&agent, &query, limit, since_seconds, json),
+            MemoryCommands::GraphPersona {
+                agent,
+                limit,
+                since_seconds,
+                json,
+            } => cmd_memory_graph_persona(&agent, limit, since_seconds, json),
+            MemoryCommands::GraphValidate { agent, json } => cmd_memory_graph_validate(&agent, json),
+            MemoryCommands::GraphAudit { agent, limit, json } => {
+                cmd_memory_graph_audit(&agent, limit, json)
+            }
+            MemoryCommands::GraphInspect {
+                agent,
+                scope,
+                limit,
+                json,
+            } => cmd_memory_graph_inspect(&agent, &scope, limit, json),
+            MemoryCommands::GraphRemember {
+                agent,
+                fact,
+                confidence,
+                scope,
+            } => cmd_memory_graph_remember(&agent, &fact, confidence, &scope),
+            MemoryCommands::GraphForget { agent, fact } => cmd_memory_graph_forget(&agent, &fact),
             MemoryCommands::List { agent, json } => cmd_memory_list(&agent, json),
             MemoryCommands::Get { agent, key, json } => cmd_memory_get(&agent, &key, json),
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
+        },
+        Some(Commands::Trajectory(sub)) => match sub {
+            TrajectoryCommands::List {
+                agent,
+                limit,
+                since_recorded_at,
+                json,
+            } => cmd_trajectory_list(&agent, limit, since_recorded_at, json),
+            TrajectoryCommands::Export {
+                agent,
+                output,
+                limit,
+                since_recorded_at,
+            } => cmd_trajectory_export(&agent, output.as_deref(), limit, since_recorded_at),
+            TrajectoryCommands::Search {
+                agent,
+                query,
+                scan_limit,
+                since_recorded_at,
+                json,
+            } => cmd_trajectory_search(
+                &agent,
+                &query,
+                scan_limit,
+                since_recorded_at,
+                json,
+            ),
+            TrajectoryCommands::Analyze {
+                agent,
+                scan_limit,
+                since_recorded_at,
+                json,
+            } => cmd_trajectory_analyze(&agent, scan_limit, since_recorded_at, json),
+        },
+        Some(Commands::Compression(sub)) => match sub {
+            CompressionCommands::Test {
+                text,
+                file,
+                mode,
+                json,
+                stats,
+            } => cmd_compression_test(text.as_deref(), file.as_deref(), mode.into(), json, stats),
+            CompressionCommands::Score { before, after } => cmd_compression_score(&before, &after),
+            CompressionCommands::Detect { hint } => cmd_compression_detect(&hint),
+            CompressionCommands::Profiles(p) => match p {
+                CompressionProfilesCommands::List { json } => cmd_compression_profiles_list(json),
+                CompressionProfilesCommands::Show { name, json } => {
+                    cmd_compression_profiles_show(&name, json)
+                }
+                CompressionProfilesCommands::MapProject { project_id, json } => {
+                    cmd_compression_profiles_map_project(&project_id, json)
+                }
+            },
+            CompressionCommands::Adaptive(a) => match a {
+                CompressionAdaptiveCommands::Suggest { text, file, json } => {
+                    cmd_compression_adaptive_suggest(text.as_deref(), file.as_deref(), json)
+                }
+            },
+            CompressionCommands::Cache(c) => match c {
+                CompressionCacheCommands::Ttl {
+                    base_ttl_secs,
+                    hits,
+                    json,
+                } => cmd_compression_cache_ttl(base_ttl_secs, hits, json),
+                CompressionCacheCommands::Policy { json } => cmd_compression_cache_policy(json),
+            },
         },
         Some(Commands::Devices(sub)) => match sub {
             DevicesCommands::List { json } => cmd_devices_list(json),
@@ -6791,6 +7157,391 @@ fn cmd_security_verify() {
     }
 }
 
+fn memory_daemon_get_graph_memory(
+    base: &str,
+    agent: &str,
+    limit: usize,
+    since_seconds: Option<i64>,
+) -> serde_json::Value {
+    let client = daemon_client();
+    let limit = limit.clamp(1, 2000);
+    let limit_s = limit.to_string();
+    match since_seconds {
+        None => daemon_json(
+            client
+                .get(format!("{base}/api/graph-memory"))
+                .query(&[("agent_id", agent), ("limit", limit_s.as_str())])
+                .send(),
+        ),
+        Some(s) => {
+            let since_s = s.to_string();
+            daemon_json(
+                client
+                    .get(format!("{base}/api/graph-memory"))
+                    .query(&[
+                        ("agent_id", agent),
+                        ("limit", limit_s.as_str()),
+                        ("since_seconds", since_s.as_str()),
+                    ])
+                    .send(),
+            )
+        }
+    }
+}
+
+fn graph_node_haystack_lower(node: &serde_json::Value) -> String {
+    node.to_string().to_lowercase()
+}
+
+fn cmd_memory_graph_search(
+    agent: &str,
+    query: &str,
+    limit: usize,
+    since_seconds: Option<i64>,
+    json: bool,
+) {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        eprintln!("memory graph-search: query must not be empty (after trim).");
+        std::process::exit(1);
+    }
+    let base = require_daemon("memory graph-search");
+    let body = memory_daemon_get_graph_memory(&base, agent, limit, since_seconds);
+    let Some(nodes) = body["nodes"].as_array() else {
+        eprintln!("memory graph-search: daemon returned unexpected JSON (missing nodes array).");
+        std::process::exit(1);
+    };
+    let matched: Vec<&serde_json::Value> = nodes
+        .iter()
+        .filter(|n| graph_node_haystack_lower(n).contains(&needle))
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "nodes": matched })).unwrap_or_default()
+        );
+        return;
+    }
+    if matched.is_empty() {
+        println!(
+            "No graph-memory nodes matching {:?} for agent '{agent}' (limit={}).",
+            query.trim(),
+            limit.clamp(1, 2000)
+        );
+        return;
+    }
+    println!(
+        "{} match(es) for agent '{}' (limit={}).",
+        matched.len(),
+        agent,
+        limit.clamp(1, 2000)
+    );
+    println!(
+        "{:<10}  {:<36}  {}",
+        "KIND", "ID", "LABEL"
+    );
+    println!("{}", "-".repeat(86));
+    for n in matched {
+        let kind = n["kind"].as_str().unwrap_or("?");
+        let id = n["id"].as_str().unwrap_or("?");
+        let label = n["label"].as_str().unwrap_or("");
+        println!(
+            "{:<10}  {:<36}  {}",
+            ellip_str(kind, 10),
+            ellip_str(id, 36),
+            ellip_str(label, 72)
+        );
+    }
+}
+
+fn cmd_memory_graph_persona(
+    agent: &str,
+    limit: usize,
+    since_seconds: Option<i64>,
+    json: bool,
+) {
+    let base = require_daemon("memory graph-persona");
+    let body = memory_daemon_get_graph_memory(&base, agent, limit, since_seconds);
+    let Some(nodes) = body["nodes"].as_array() else {
+        eprintln!("memory graph-persona: daemon returned unexpected JSON (missing nodes array).");
+        std::process::exit(1);
+    };
+    let matched: Vec<&serde_json::Value> = nodes
+        .iter()
+        .filter(|n| n["kind"].as_str() == Some("persona"))
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "nodes": matched })).unwrap_or_default()
+        );
+        return;
+    }
+    if matched.is_empty() {
+        println!("No persona nodes in graph memory for agent '{agent}' (limit={}).", limit.clamp(1, 2000));
+        return;
+    }
+    println!(
+        "{} persona node(s) for agent '{}' (limit={}).",
+        matched.len(),
+        agent,
+        limit.clamp(1, 2000)
+    );
+    println!(
+        "{:<36}  {:<8}  {}",
+        "ID", "STRENGTH", "LABEL"
+    );
+    println!("{}", "-".repeat(86));
+    for n in matched {
+        let id = n["id"].as_str().unwrap_or("?");
+        let label = n["label"].as_str().unwrap_or("");
+        let strength = n["strength"]
+            .as_f64()
+            .map(|x| format!("{x:.2}"))
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<36}  {:<8}  {}",
+            ellip_str(id, 36),
+            strength,
+            ellip_str(label, 72)
+        );
+    }
+}
+
+fn cmd_memory_graph_validate(agent: &str, json: bool) {
+    let db_path = match openfang_runtime::graph_memory_writer::GraphMemoryWriter::sqlite_database_path_for_agent(agent) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let gm = match ainl_memory::GraphMemory::new(&db_path) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!(
+                "Failed to open graph memory DB {}: {e}",
+                db_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let rep = match gm.validate_graph(agent) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("validate_graph: {e}");
+            std::process::exit(1);
+        }
+    };
+    if json {
+        let details: Vec<serde_json::Value> = rep
+            .dangling_edge_details
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "source_id": d.source_id,
+                    "target_id": d.target_id,
+                    "edge_type": d.edge_type,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "agent_id": rep.agent_id,
+                "is_valid": rep.is_valid,
+                "node_count": rep.node_count,
+                "edge_count": rep.edge_count,
+                "dangling_edges": rep.dangling_edges,
+                "dangling_edge_details": details,
+                "cross_agent_boundary_edges": rep.cross_agent_boundary_edges,
+                "orphan_nodes": rep.orphan_nodes,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!("Graph validation for agent '{}'", agent);
+    println!("  DB: {}", db_path.display());
+    println!(
+        "  Valid: {}  (nodes={}, edges={})",
+        rep.is_valid, rep.node_count, rep.edge_count
+    );
+    println!("  Cross-agent boundary edges (informational): {}", rep.cross_agent_boundary_edges);
+    if !rep.dangling_edge_details.is_empty() {
+        println!("  Dangling edges:");
+        for d in &rep.dangling_edge_details {
+            println!(
+                "    {} → {} [{}]",
+                ellip_str(&d.source_id, 14),
+                ellip_str(&d.target_id, 14),
+                d.edge_type
+            );
+        }
+    } else if !rep.dangling_edges.is_empty() {
+        for (a, b) in &rep.dangling_edges {
+            println!("    {a} → {b}");
+        }
+    }
+    if !rep.orphan_nodes.is_empty() {
+        println!("  Orphan nodes (sample, up to 12):");
+        for id in rep.orphan_nodes.iter().take(12) {
+            println!("    {}", ellip_str(id, 40));
+        }
+        if rep.orphan_nodes.len() > 12 {
+            println!("    … and {} more", rep.orphan_nodes.len() - 12);
+        }
+    }
+    if !rep.is_valid {
+        std::process::exit(2);
+    }
+}
+
+fn cmd_memory_graph_audit(agent: &str, limit: usize, json: bool) {
+    let base = require_daemon("memory graph-audit");
+    let client = daemon_client();
+    let lim = limit.clamp(1, 500);
+    let lim_s = lim.to_string();
+    let body = daemon_json(
+        client
+            .get(format!("{base}/api/graph-memory/audit"))
+            .query(&[("agent_id", agent), ("limit", lim_s.as_str())])
+            .send(),
+    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    let Some(entries) = body["entries"].as_array() else {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        return;
+    };
+    if entries.is_empty() {
+        println!("No graph-memory audit entries for agent '{agent}'.");
+        return;
+    }
+    println!("Graph-memory audit for agent '{}' (limit={})", agent, lim);
+    println!("{:<22}  {}", "ACTION", "SUMMARY");
+    println!("{}", "-".repeat(86));
+    for e in entries {
+        let action = e["action"].as_str().unwrap_or("?");
+        let summary = e
+            .get("node_id")
+            .or_else(|| e.get("fact"))
+            .or_else(|| e.get("snapshot_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| ellip_str(&e.to_string(), 70));
+        println!("{:<22}  {}", ellip_str(action, 22), summary);
+    }
+}
+
+fn cmd_memory_graph_inspect(agent: &str, scope: &str, limit: usize, json: bool) {
+    let base = require_daemon("memory graph-inspect");
+    let client = daemon_client();
+    let lim = limit.clamp(1, 200);
+    let lim_s = lim.to_string();
+    let body = daemon_json(
+        client
+            .get(format!("{base}/api/graph-memory/inspect"))
+            .query(&[
+                ("agent_id", agent),
+                ("scope", scope),
+                ("limit", lim_s.as_str()),
+            ])
+            .send(),
+    );
+    if body.get("ok") == Some(&serde_json::Value::Bool(false)) {
+        let err = body["error"].as_str().unwrap_or("graph-memory inspect failed");
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return;
+    }
+    let Some(entries) = body["entries"].as_array() else {
+        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+        return;
+    };
+    if entries.is_empty() {
+        println!(
+            "No scoped semantic facts for agent '{}' (scope={}, limit={}).",
+            agent, scope, lim
+        );
+        return;
+    }
+    println!(
+        "Graph-memory inspect for agent '{}' (scope={}, limit={})",
+        agent, scope, lim
+    );
+    println!("{:<38}  {:>6}  {}", "ID", "CONF", "FACT");
+    println!("{}", "-".repeat(86));
+    for e in entries {
+        let id = e["id"].as_str().unwrap_or("?");
+        let fact = e["fact"].as_str().unwrap_or("");
+        let conf = e["confidence"].as_f64().unwrap_or(0.0);
+        println!(
+            "{:<38}  {:>6.2}  {}",
+            ellip_str(id, 38),
+            conf,
+            ellip_str(fact, 72)
+        );
+    }
+}
+
+fn cmd_memory_graph_remember(agent: &str, fact: &str, confidence: f32, scope: &str) {
+    let base = require_daemon("memory graph-remember");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .post(format!("{base}/api/graph-memory/remember"))
+            .json(&serde_json::json!({
+                "agent_id": agent,
+                "fact": fact,
+                "confidence": confidence,
+                "scope": scope,
+            }))
+            .send(),
+    );
+    if body.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        let err = body["error"].as_str().unwrap_or("remember failed");
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    let nid = body["node_id"].as_str().unwrap_or("?");
+    ui::success(&format!("Remembered fact for agent '{agent}' (node_id={nid})."));
+}
+
+fn cmd_memory_graph_forget(agent: &str, fact: &str) {
+    let base = require_daemon("memory graph-forget");
+    let client = daemon_client();
+    let body = daemon_json(
+        client
+            .post(format!("{base}/api/graph-memory/forget"))
+            .json(&serde_json::json!({
+                "agent_id": agent,
+                "fact": fact,
+            }))
+            .send(),
+    );
+    if body.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        let err = body["error"].as_str().unwrap_or("forget failed");
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    let deleted = body["deleted"].as_u64().unwrap_or(0);
+    ui::success(&format!(
+        "Forget request for agent '{agent}': removed {deleted} row(s) matching the fact text."
+    ));
+}
+
 fn cmd_memory_graph_export(agent: &str, output: Option<&std::path::Path>) {
     match openfang_runtime::graph_memory_writer::GraphMemoryWriter::export_graph_json_for_agent(
         agent,
@@ -6810,6 +7561,730 @@ fn cmd_memory_graph_export(agent: &str, output: Option<&std::path::Path>) {
             eprintln!("{e}");
             std::process::exit(1);
         }
+    }
+}
+
+fn load_trajectory_detail_rows(
+    agent: &str,
+    limit: usize,
+    since_recorded_at: Option<i64>,
+) -> Result<Vec<ainl_memory::TrajectoryDetailRecord>, String> {
+    let db_path =
+        openfang_runtime::graph_memory_writer::GraphMemoryWriter::sqlite_database_path_for_agent(
+            agent,
+        )?;
+    let gm = ainl_memory::GraphMemory::new(&db_path).map_err(|e| {
+        format!(
+            "Failed to open graph memory DB {}: {e}",
+            db_path.display()
+        )
+    })?;
+    gm.list_trajectories_for_agent(agent, limit, since_recorded_at)
+        .map_err(|e| format!("Failed to list trajectories: {e}"))
+}
+
+fn ellip_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let take = max_chars.saturating_sub(1);
+    s.chars().take(take).collect::<String>() + "…"
+}
+
+/// List `ainl_trajectories` rows (offline; same DB path as graph memory).
+fn cmd_trajectory_list(
+    agent: &str,
+    limit: usize,
+    since_recorded_at: Option<i64>,
+    json: bool,
+) {
+    let rows = match load_trajectory_detail_rows(agent, limit, since_recorded_at) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into())
+        );
+        return;
+    }
+    if rows.is_empty() {
+        println!("No trajectory rows for agent '{agent}'.");
+        return;
+    }
+    println!(
+        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
+        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE", "SESSION"
+    );
+    println!("{}", "-".repeat(86));
+    for r in &rows {
+        let ep = ellip_str(&r.episode_id.to_string(), 14);
+        let sess = ellip_str(&r.session_id, 14);
+        println!(
+            "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
+            r.recorded_at,
+            ellip_str(&format!("{:?}", r.outcome), 14),
+            r.duration_ms,
+            r.steps.len(),
+            ep,
+            sess
+        );
+    }
+}
+
+/// Export `ainl_trajectories` rows for `agent` as JSONL (offline; reads the same SQLite path as graph memory).
+/// Lowercase haystack for substring search across trajectory metadata and steps.
+fn trajectory_row_haystack_lower(record: &ainl_memory::TrajectoryDetailRecord) -> String {
+    let mut buf = String::with_capacity(256usize.saturating_add(record.steps.len().saturating_mul(48)));
+    buf.push_str(&record.id.to_string());
+    buf.push(' ');
+    buf.push_str(&record.episode_id.to_string());
+    buf.push(' ');
+    buf.push_str(&record.session_id);
+    buf.push(' ');
+    if let Some(p) = record.project_id.as_deref() {
+        buf.push_str(p);
+        buf.push(' ');
+    }
+    if let Some(g) = record.graph_trajectory_node_id {
+        buf.push_str(&g.to_string());
+        buf.push(' ');
+    }
+    if let Some(h) = record.ainl_source_hash.as_deref() {
+        buf.push_str(h);
+        buf.push(' ');
+    }
+    buf.push_str(&format!("{:?}", record.outcome));
+    buf.push(' ');
+    for st in &record.steps {
+        buf.push_str(&st.step_id);
+        buf.push(' ');
+        buf.push_str(&st.adapter);
+        buf.push(' ');
+        buf.push_str(&st.operation);
+        buf.push(' ');
+        if let Some(i) = st.inputs_preview.as_deref() {
+            buf.push_str(i);
+            buf.push(' ');
+        }
+        if let Some(o) = st.outputs_preview.as_deref() {
+            buf.push_str(o);
+            buf.push(' ');
+        }
+        if let Some(e) = st.error.as_deref() {
+            buf.push_str(e);
+            buf.push(' ');
+        }
+    }
+    buf.to_lowercase()
+}
+
+fn trajectory_row_matches_query(
+    record: &ainl_memory::TrajectoryDetailRecord,
+    needle_lower: &str,
+) -> bool {
+    !needle_lower.is_empty() && trajectory_row_haystack_lower(record).contains(needle_lower)
+}
+
+fn cmd_trajectory_search(
+    agent: &str,
+    query: &str,
+    scan_limit: usize,
+    since_recorded_at: Option<i64>,
+    json: bool,
+) {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        eprintln!("trajectory search: query must not be empty (after trim).");
+        std::process::exit(1);
+    }
+    let cap = scan_limit.clamp(1, 500);
+    let rows = match load_trajectory_detail_rows(agent, cap, since_recorded_at) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let matched: Vec<&ainl_memory::TrajectoryDetailRecord> = rows
+        .iter()
+        .filter(|r| trajectory_row_matches_query(r, &needle))
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&matched).unwrap_or_else(|_| "[]".into())
+        );
+        return;
+    }
+    if matched.is_empty() {
+        println!(
+            "No trajectory rows matching {:?} in the newest {} row(s) for agent '{agent}'.",
+            query.trim(),
+            cap
+        );
+        return;
+    }
+    println!(
+        "{} match(es) in newest {} row(s) for agent '{agent}' (query {:?}).",
+        matched.len(),
+        cap,
+        query.trim()
+    );
+    println!(
+        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
+        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE", "SESSION"
+    );
+    println!("{}", "-".repeat(86));
+    for r in matched {
+        let ep = ellip_str(&r.episode_id.to_string(), 14);
+        let sess = ellip_str(&r.session_id, 14);
+        println!(
+            "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
+            r.recorded_at,
+            ellip_str(&format!("{:?}", r.outcome), 14),
+            r.duration_ms,
+            r.steps.len(),
+            ep,
+            sess
+        );
+    }
+}
+
+#[derive(Serialize)]
+struct TrajectoryAnalyzeReport {
+    agent_id: String,
+    scan_limit: usize,
+    since_recorded_at: Option<i64>,
+    trajectories_scanned: usize,
+    by_outcome: HashMap<String, usize>,
+    duration_ms: TrajectoryStatBlock,
+    steps_per_trajectory: TrajectoryStatBlock,
+    total_steps: usize,
+    successful_steps: usize,
+    failed_steps: usize,
+    step_success_rate: f64,
+    trajectories_with_any_failed_step: usize,
+    top_adapters: Vec<AdapterCount>,
+}
+
+#[derive(Serialize)]
+struct TrajectoryStatBlock {
+    min: u64,
+    max: u64,
+    sum: u128,
+    count: usize,
+}
+
+impl TrajectoryStatBlock {
+    fn empty() -> Self {
+        Self {
+            min: 0,
+            max: 0,
+            sum: 0,
+            count: 0,
+        }
+    }
+
+    fn from_samples(samples: &[u64]) -> Self {
+        if samples.is_empty() {
+            return Self::empty();
+        }
+        let mut min = u64::MAX;
+        let mut max = 0u64;
+        let mut sum = 0u128;
+        for &v in samples {
+            min = min.min(v);
+            max = max.max(v);
+            sum += u128::from(v);
+        }
+        Self {
+            min,
+            max,
+            sum,
+            count: samples.len(),
+        }
+    }
+
+    fn avg(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum as f64 / self.count as f64
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AdapterCount {
+    adapter: String,
+    count: usize,
+}
+
+fn cmd_trajectory_analyze(
+    agent: &str,
+    scan_limit: usize,
+    since_recorded_at: Option<i64>,
+    json: bool,
+) {
+    let cap = scan_limit.clamp(1, 500);
+    let rows = match load_trajectory_detail_rows(agent, cap, since_recorded_at) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut by_outcome: HashMap<String, usize> = HashMap::new();
+    let mut durations: Vec<u64> = Vec::with_capacity(rows.len());
+    let mut step_counts: Vec<u64> = Vec::with_capacity(rows.len());
+    let mut adapter_counts: HashMap<String, usize> = HashMap::new();
+    let mut total_steps = 0usize;
+    let mut successful_steps = 0usize;
+    let mut failed_steps = 0usize;
+    let mut trajectories_with_any_failed_step = 0usize;
+
+    for r in &rows {
+        *by_outcome
+            .entry(format!("{:?}", r.outcome))
+            .or_insert(0) += 1;
+        durations.push(r.duration_ms);
+        step_counts.push(r.steps.len() as u64);
+
+        let mut row_failed = false;
+        for st in &r.steps {
+            total_steps += 1;
+            if st.success {
+                successful_steps += 1;
+            } else {
+                failed_steps += 1;
+                row_failed = true;
+            }
+            *adapter_counts.entry(st.adapter.clone()).or_insert(0) += 1;
+        }
+        if row_failed {
+            trajectories_with_any_failed_step += 1;
+        }
+    }
+
+    let mut top: Vec<AdapterCount> = adapter_counts
+        .into_iter()
+        .map(|(adapter, count)| AdapterCount { adapter, count })
+        .collect();
+    top.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.adapter.cmp(&b.adapter)));
+    top.truncate(15);
+
+    let step_success_rate = if total_steps == 0 {
+        0.0
+    } else {
+        successful_steps as f64 / total_steps as f64
+    };
+
+    let duration_ms = TrajectoryStatBlock::from_samples(&durations);
+    let steps_per_trajectory = TrajectoryStatBlock::from_samples(&step_counts);
+
+    let report = TrajectoryAnalyzeReport {
+        agent_id: agent.to_string(),
+        scan_limit: cap,
+        since_recorded_at,
+        trajectories_scanned: rows.len(),
+        by_outcome,
+        duration_ms,
+        steps_per_trajectory,
+        total_steps,
+        successful_steps,
+        failed_steps,
+        step_success_rate,
+        trajectories_with_any_failed_step,
+        top_adapters: top,
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
+        );
+        return;
+    }
+
+    if rows.is_empty() {
+        println!("No trajectory rows for agent '{agent}' in the newest {} row(s).", cap);
+        return;
+    }
+
+    println!("Trajectory analysis for agent '{agent}' (newest {} row(s))", cap);
+    if let Some(s) = since_recorded_at {
+        println!("Since recorded_at >= {s} (unix seconds)");
+    }
+    println!("Trajectories scanned: {}", report.trajectories_scanned);
+    println!();
+    println!("By outcome:");
+    let mut outcomes: Vec<_> = report.by_outcome.iter().collect();
+    outcomes.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (k, v) in outcomes {
+        println!("  {:<18} {}", k, v);
+    }
+    println!();
+    println!(
+        "Duration ms (per trajectory): min={} max={} avg={:.1}",
+        report.duration_ms.min,
+        report.duration_ms.max,
+        report.duration_ms.avg()
+    );
+    println!(
+        "Steps per trajectory: min={} max={} avg={:.1}",
+        report.steps_per_trajectory.min,
+        report.steps_per_trajectory.max,
+        report.steps_per_trajectory.avg()
+    );
+    println!();
+    println!("Steps (all trajectories): total={}", total_steps);
+    println!(
+        "  successful={}  failed={}  step_success_rate={:.1}%",
+        successful_steps,
+        failed_steps,
+        step_success_rate * 100.0
+    );
+    println!(
+        "Trajectories with ≥1 failed step: {}",
+        trajectories_with_any_failed_step
+    );
+    println!();
+    println!("Top adapters (by step count, max 15):");
+    if report.top_adapters.is_empty() {
+        println!("  (none)");
+    } else {
+        for a in &report.top_adapters {
+            println!("  {:<40} {}", ellip_str(&a.adapter, 40), a.count);
+        }
+    }
+}
+
+fn cmd_trajectory_export(
+    agent: &str,
+    output: Option<&std::path::Path>,
+    limit: usize,
+    since_recorded_at: Option<i64>,
+) {
+    let rows = match load_trajectory_detail_rows(agent, limit, since_recorded_at) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Some(path) = output {
+        let mut w = match std::fs::File::create(path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Failed to create {}: {e}", path.display());
+                std::process::exit(1);
+            }
+        };
+        for row in &rows {
+            let line = match row.to_replay_jsonl() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Serialize trajectory row {}: {e}", row.id);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = w.write_all(line.as_bytes()) {
+                eprintln!("Write failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        let stdout = io::stdout();
+        let mut w = stdout.lock();
+        for row in &rows {
+            let line = match row.to_replay_jsonl() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Serialize trajectory row {}: {e}", row.id);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = w.write_all(line.as_bytes()) {
+                eprintln!("Write failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn read_compression_input(text: Option<&str>, file: Option<&Path>) -> Result<String, String> {
+    let inline = text.and_then(|t| {
+        let t = t.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        }
+    });
+    if file.is_some() && inline.is_some() {
+        return Err("Pass only one of --file or TEXT, not both.".into());
+    }
+    if let Some(p) = file {
+        return std::fs::read_to_string(p)
+            .map_err(|e| format!("Failed to read {}: {e}", p.display()));
+    }
+    if let Some(s) = inline {
+        return Ok(s);
+    }
+    let mut buf = String::new();
+    io::stdin()
+        .lock()
+        .read_to_string(&mut buf)
+        .map_err(|e| format!("Failed to read stdin: {e}"))?;
+    Ok(buf)
+}
+
+fn efficient_mode_slug(mode: ainl_compression::EfficientMode) -> &'static str {
+    match mode {
+        ainl_compression::EfficientMode::Off => "off",
+        ainl_compression::EfficientMode::Balanced => "balanced",
+        ainl_compression::EfficientMode::Aggressive => "aggressive",
+    }
+}
+
+fn cmd_compression_test(
+    text: Option<&str>,
+    file: Option<&Path>,
+    mode: ainl_compression::EfficientMode,
+    json: bool,
+    stats: bool,
+) {
+    let input = match read_compression_input(text, file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if input.trim().is_empty() {
+        eprintln!("compression test: no input (use TEXT, --file, or pipe stdin).");
+        std::process::exit(1);
+    }
+    let (compressed, metrics) =
+        ainl_compression::compress_with_metrics(&input, mode, None);
+    if json {
+        let score = metrics
+            .semantic_preservation_score
+            .unwrap_or_else(|| ainl_compression::estimate_semantic_preservation_score(&input, &compressed.text));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": efficient_mode_slug(metrics.mode),
+                "compressed": compressed.text,
+                "original_tokens": metrics.original_tokens,
+                "compressed_tokens": metrics.compressed_tokens,
+                "tokens_saved": metrics.tokens_saved,
+                "savings_ratio_pct": metrics.savings_ratio_pct,
+                "semantic_preservation_score": score,
+                "elapsed_ms": metrics.elapsed_ms,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    print!("{}", compressed.text);
+    if !compressed.text.ends_with('\n') {
+        println!();
+    }
+    if stats {
+        eprintln!(
+            "compression: mode={} orig_tokens={} out_tokens={} saved={} ({:.1}%) semantic≈{:.2} time={}ms",
+            efficient_mode_slug(metrics.mode),
+            metrics.original_tokens,
+            metrics.compressed_tokens,
+            metrics.tokens_saved,
+            metrics.savings_ratio_pct,
+            metrics.semantic_preservation_score.unwrap_or(0.0),
+            metrics.elapsed_ms
+        );
+    }
+}
+
+fn cmd_compression_score(before: &Path, after: &Path) {
+    let orig = match std::fs::read_to_string(before) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to read {}: {e}", before.display());
+            std::process::exit(1);
+        }
+    };
+    let comp = match std::fs::read_to_string(after) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to read {}: {e}", after.display());
+            std::process::exit(1);
+        }
+    };
+    let score = ainl_compression::estimate_semantic_preservation_score(&orig, &comp);
+    println!("{score:.4}");
+}
+
+fn cmd_compression_detect(hint: &str) {
+    let mode = ainl_compression::EfficientMode::parse_natural_language(hint);
+    println!("{}", efficient_mode_slug(mode));
+}
+
+fn cmd_compression_profiles_list(json: bool) {
+    let rows: Vec<serde_json::Value> = ainl_compression::list_builtin_profiles()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "display_name": p.display_name,
+                "default_mode": efficient_mode_slug(p.default_mode),
+                "description": p.description,
+            })
+        })
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "profiles": rows })).unwrap_or_default()
+        );
+        return;
+    }
+    println!("{:<20}  {:<12}  {}", "ID", "MODE", "DESCRIPTION");
+    println!("{}", "-".repeat(86));
+    for p in ainl_compression::list_builtin_profiles() {
+        println!(
+            "{:<20}  {:<12}  {}",
+            p.id,
+            efficient_mode_slug(p.default_mode),
+            p.description
+        );
+    }
+}
+
+fn cmd_compression_profiles_show(name: &str, json: bool) {
+    let Some(p) = ainl_compression::resolve_builtin_profile(name) else {
+        eprintln!("Unknown profile '{name}'. Try: openfang compression profiles list");
+        std::process::exit(1);
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": p.id,
+                "display_name": p.display_name,
+                "default_mode": efficient_mode_slug(p.default_mode),
+                "description": p.description,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!("{} ({})", p.display_name, p.id);
+    println!("  default_mode: {}", efficient_mode_slug(p.default_mode));
+    println!("  {}", p.description);
+}
+
+fn cmd_compression_profiles_map_project(project_id: &str, json: bool) {
+    let id = ainl_compression::suggest_profile_id_for_project(project_id);
+    let p = ainl_compression::resolve_builtin_profile(id).unwrap_or_else(|| {
+        ainl_compression::resolve_builtin_profile("default")
+            .expect("default builtin profile")
+    });
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "project_id": project_id,
+                "suggested_profile_id": id,
+                "profile": {
+                    "id": p.id,
+                    "display_name": p.display_name,
+                    "default_mode": efficient_mode_slug(p.default_mode),
+                    "description": p.description,
+                }
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!("project_id={project_id} → profile={} ({})", id, p.display_name);
+    println!("  default_mode: {}", efficient_mode_slug(p.default_mode));
+}
+
+fn cmd_compression_adaptive_suggest(text: Option<&str>, file: Option<&Path>, json: bool) {
+    let input = match read_compression_input(text, file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if input.trim().is_empty() {
+        eprintln!("compression adaptive suggest: no input (use TEXT, --file, or pipe stdin).");
+        std::process::exit(1);
+    }
+    let r = ainl_compression::recommend_mode_for_content(&input);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": efficient_mode_slug(r.mode),
+                "confidence": r.confidence,
+                "reasons": r.reasons,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "recommended_mode={}  confidence={:.2}",
+        efficient_mode_slug(r.mode),
+        r.confidence
+    );
+    if !r.reasons.is_empty() {
+        println!("reasons: {}", r.reasons.join(", "));
+    }
+}
+
+fn cmd_compression_cache_ttl(base_ttl_secs: u64, hits: u32, json: bool) {
+    let r = ainl_compression::effective_ttl_with_hysteresis(base_ttl_secs, hits);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "base_ttl_secs": r.base_ttl_secs,
+                "consecutive_hits_same_key": r.consecutive_hits_same_key,
+                "effective_ttl_secs": r.effective_ttl_secs,
+                "hit_global_cap": r.hit_global_cap,
+            }))
+            .unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "base_ttl_secs={}  hits={}  →  effective_ttl_secs={}  (global_cap={})",
+        r.base_ttl_secs,
+        r.consecutive_hits_same_key,
+        r.effective_ttl_secs,
+        r.hit_global_cap
+    );
+}
+
+fn cmd_compression_cache_policy(json: bool) {
+    let s = ainl_compression::cache_policy_summary();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "summary": s })).unwrap_or_default()
+        );
+    } else {
+        println!("{s}");
     }
 }
 

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 12;
+const SCHEMA_VERSION: u32 = 15;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -54,6 +54,15 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     }
     if current_version < 12 {
         migrate_v12(conn)?;
+    }
+    if current_version < 13 {
+        migrate_v13(conn)?;
+    }
+    if current_version < 14 {
+        migrate_v14(conn)?;
+    }
+    if current_version < 15 {
+        migrate_v15(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -462,6 +471,93 @@ fn migrate_v12(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 13: Token / cost quota enforcement blocks (estimated avoided usage).
+fn migrate_v13(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS quota_block_events (
+            id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            est_input_tokens INTEGER NOT NULL DEFAULT 0,
+            est_output_tokens INTEGER NOT NULL DEFAULT 0,
+            est_cost_usd REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_quota_block_timestamp ON quota_block_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_quota_block_agent_time ON quota_block_events(agent_id, timestamp);
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (13, datetime('now'), 'Add quota_block_events for budget/token cap telemetry');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 14: Catalog-priced compression savings on `eco_compression_events` (durable, queryable for all-time USD).
+fn migrate_v14(conn: &Connection) -> Result<(), rusqlite::Error> {
+    for (name, typedef) in &[
+        ("model", "TEXT NOT NULL DEFAULT ''"),
+        (
+            "input_tokens_saved",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "input_price_per_million_usd",
+            "REAL NOT NULL DEFAULT 0.0",
+        ),
+        (
+            "est_input_cost_saved_usd",
+            "REAL NOT NULL DEFAULT 0.0",
+        ),
+    ] {
+        if !column_exists(conn, "eco_compression_events", name) {
+            conn.execute(
+                &format!("ALTER TABLE eco_compression_events ADD COLUMN {name} {typedef}"),
+                [],
+            )?;
+        }
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (14, datetime('now'), 'Catalog-priced compression savings columns on eco_compression_events')",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Version 15: provider + provider-reported input billing on `eco_compression_events`.
+///
+/// Each compression event now records the **provider** label, the **input tokens the provider
+/// actually billed** (`billed_input_tokens`), and the **catalog-priced billable USD** for that
+/// input (`billed_input_cost_usd`). These columns let dashboards compute true
+/// pre-compression vs post-compression totals per agent / provider / model — not only the
+/// pre-LLM `compressed_tokens_est` heuristic — and survive daemon restarts.
+fn migrate_v15(conn: &Connection) -> Result<(), rusqlite::Error> {
+    for (name, typedef) in &[
+        ("provider", "TEXT NOT NULL DEFAULT ''"),
+        ("billed_input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("billed_input_cost_usd", "REAL NOT NULL DEFAULT 0.0"),
+    ] {
+        if !column_exists(conn, "eco_compression_events", name) {
+            conn.execute(
+                &format!("ALTER TABLE eco_compression_events ADD COLUMN {name} {typedef}"),
+                [],
+            )?;
+        }
+    }
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_eco_compression_provider_model_time
+            ON eco_compression_events(provider, model, timestamp);
+        ",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (15, datetime('now'), 'Provider + billed input tokens/cost on eco_compression_events')",
+        [],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,6 +584,7 @@ mod tests {
         assert!(tables.contains(&"relations".to_string()));
         assert!(tables.contains(&"eco_compression_events".to_string()));
         assert!(tables.contains(&"adaptive_eco_events".to_string()));
+        assert!(tables.contains(&"quota_block_events".to_string()));
     }
 
     #[test]

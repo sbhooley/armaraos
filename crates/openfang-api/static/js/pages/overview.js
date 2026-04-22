@@ -225,10 +225,19 @@ function overviewPage() {
           total_tokens: totalTokens,
           total_tools: totalTools,
           total_cost: totalCost,
-          agent_count: appAgents.length
+          agent_count: appAgents.length,
+          quota_enforcement: summary.quota_enforcement || {},
+          compression_savings: summary.compression_savings || null
         };
       } catch(e) {
-        this.usageSummary = { total_tokens: 0, total_tools: 0, total_cost: 0, agent_count: 0 };
+        this.usageSummary = {
+          total_tokens: 0,
+          total_tools: 0,
+          total_cost: 0,
+          agent_count: 0,
+          quota_enforcement: {},
+          compression_savings: null
+        };
       }
     },
 
@@ -491,13 +500,103 @@ function overviewPage() {
     },
 
     formatUptime(secs) {
-      if (!secs) return '-';
-      var d = Math.floor(secs / 86400);
-      var h = Math.floor((secs % 86400) / 3600);
-      var m = Math.floor((secs % 3600) / 60);
+      var n = secs == null || secs === '' ? NaN : Number(secs);
+      if (!Number.isFinite(n) || n < 0) return '—';
+      n = Math.floor(n);
+      if (n < 60) return n + 's';
+      var d = Math.floor(n / 86400);
+      var h = Math.floor((n % 86400) / 3600);
+      var m = Math.floor((n % 3600) / 60);
       if (d > 0) return d + 'd ' + h + 'h';
       if (h > 0) return h + 'h ' + m + 'm';
       return m + 'm';
+    },
+
+    /** Input tokens avoided by caps/budget (all-time from usage summary; else 7d from status). */
+    get overviewQuotaInputAvoided() {
+      var sum = (this.usageSummary && this.usageSummary.quota_enforcement) || {};
+      var st = (this.status && this.status.quota_enforcement) || {};
+      var v = sum.total_est_input_tokens_avoided;
+      if (v == null || v === undefined) v = st.total_est_input_tokens_avoided;
+      var n = v == null ? 0 : Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+    },
+
+    get overviewQuotaCostAvoidedUsd() {
+      var sum = (this.usageSummary && this.usageSummary.quota_enforcement) || {};
+      var st = (this.status && this.status.quota_enforcement) || {};
+      var v = sum.total_est_cost_avoided_usd;
+      if (v == null || v === undefined) v = st.total_est_cost_avoided_usd;
+      var n = v == null ? 0 : Number(v);
+      return Number.isFinite(n) ? Math.max(0, n) : 0;
+    },
+
+    /**
+     * Compression + prompt-cache counterfactuals (SQLite all-time) plus quota-avoided input.
+     * Falls back to `/api/status` 7d eco when summary has no `compression_savings` yet.
+     */
+    get overviewTokensSaved() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      if (cs && cs.estimated_total_input_tokens_saved != null) {
+        return (Number(cs.estimated_total_input_tokens_saved) || 0) + this.overviewQuotaInputAvoided;
+      }
+      var ec = (this.status && this.status.eco_compression) || {};
+      var v = ec.estimated_total_input_tokens_saved;
+      var n = v == null ? 0 : Number(v);
+      var comp = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+      return comp + this.overviewQuotaInputAvoided;
+    },
+
+    get overviewCostSavedUsd() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      if (cs && cs.estimated_total_cost_saved_usd != null) {
+        return (Number(cs.estimated_total_cost_saved_usd) || 0) + this.overviewQuotaCostAvoidedUsd;
+      }
+      var ec = (this.status && this.status.eco_compression) || {};
+      var v = ec.estimated_total_cost_saved_usd;
+      var n = v == null ? 0 : Number(v);
+      var comp = Number.isFinite(n) ? Math.max(0, n) : 0;
+      return comp + this.overviewQuotaCostAvoidedUsd;
+    },
+
+    /**
+     * Sum of pre-compression input tokens (audit baseline) across persisted compression turns.
+     * Persisted in `eco_compression_events.original_tokens_est` per turn since v15. `0` when no rows.
+     */
+    get overviewOriginalInputTokensTotal() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      var v = cs && cs.original_input_tokens_total;
+      var n = v == null ? 0 : Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+    },
+
+    /**
+     * Sum of provider-reported (billed) input tokens across persisted compression turns.
+     * `0` for rows persisted before v15 (provider usage was not yet captured per row).
+     */
+    get overviewBilledInputTokensTotal() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      var v = cs && cs.billed_input_tokens_total;
+      var n = v == null ? 0 : Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+    },
+
+    /** Catalog-priced cost actually billed for the input tokens above (USD). */
+    get overviewBilledInputCostUsdTotal() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      var v = cs && cs.billed_input_cost_usd_total;
+      var n = v == null ? 0 : Number(v);
+      return Number.isFinite(n) ? Math.max(0, n) : 0;
+    },
+
+    /**
+     * Per-(provider, model) rollup: turns, original vs billed input tokens, USD saved/billed.
+     * Empty array when API doesn't return `compression_savings.by_provider_model`.
+     */
+    get overviewCompressionByProviderModel() {
+      var cs = (this.usageSummary && this.usageSummary.compression_savings) || null;
+      var arr = cs && cs.by_provider_model;
+      return Array.isArray(arr) ? arr : [];
     },
 
     formatNumber(n) {

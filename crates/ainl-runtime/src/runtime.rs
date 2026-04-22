@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_memory::{
     AinlMemoryNode, AinlNodeType, GraphStore, GraphValidationReport, PersonaNode, ProceduralNode,
@@ -574,6 +575,27 @@ impl AinlRuntime {
             });
         }
 
+        if let Err(e) = self.memory.with(|m| {
+            maybe_persist_trajectory_after_episode(
+                m,
+                &self.config.agent_id,
+                episode_id,
+                &tools_canonical,
+                &patch_dispatch_results,
+                &input,
+            )
+        }) {
+            tracing::warn!(
+                phase = ?TurnPhase::EpisodeWrite,
+                error = %e,
+                "non-fatal trajectory persist failed — continuing"
+            );
+            turn_warnings.push(TurnWarning {
+                phase: TurnPhase::EpisodeWrite,
+                error: format!("trajectory_persist: {e}"),
+            });
+        }
+
         self.turn_count = self.turn_count.wrapping_add(1);
 
         let should_extract = self.config.extraction_interval > 0
@@ -893,6 +915,7 @@ impl AinlRuntime {
                     skip_reason: Some(PatchSkipReason::NotProcedural),
                     adapter_output: None,
                     adapter_name: None,
+                    dispatch_duration_ms: 0,
                 };
             }
         };
@@ -907,6 +930,7 @@ impl AinlRuntime {
                 skip_reason: Some(PatchSkipReason::ZeroVersion),
                 adapter_output: None,
                 adapter_name: None,
+                dispatch_duration_ms: 0,
             };
         }
         if retired {
@@ -919,6 +943,7 @@ impl AinlRuntime {
                 skip_reason: Some(PatchSkipReason::Retired),
                 adapter_output: None,
                 adapter_name: None,
+                dispatch_duration_ms: 0,
             };
         }
         for key in &reads {
@@ -932,6 +957,7 @@ impl AinlRuntime {
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead(key.clone())),
                     adapter_output: None,
                     adapter_name: None,
+                    dispatch_duration_ms: 0,
                 };
             }
         }
@@ -943,13 +969,14 @@ impl AinlRuntime {
             node,
             frame,
         };
-        let (adapter_output, adapter_name) = if let Some(adapter) = self
+        let (adapter_output, adapter_name, dispatch_duration_ms) = if let Some(adapter) = self
             .adapter_registry
             .get(adapter_key)
             .or_else(|| self.adapter_registry.get(GraphPatchAdapter::NAME))
         {
             let aname = adapter.name().to_string();
-            match adapter.execute_patch(&ctx) {
+            let t_exec = Instant::now();
+            let (out, name) = match adapter.execute_patch(&ctx) {
                 Ok(output) => {
                     tracing::debug!(
                         label = %patch_label,
@@ -967,9 +994,11 @@ impl AinlRuntime {
                     );
                     (None, Some(aname))
                 }
-            }
+            };
+            let ms = t_exec.elapsed().as_millis() as u64;
+            (out, name, ms)
         } else {
-            (None, None)
+            (None, None, 0u64)
         };
 
         let fitness_before = fitness_opt.unwrap_or(0.5);
@@ -995,6 +1024,7 @@ impl AinlRuntime {
                     skip_reason: Some(PatchSkipReason::MissingDeclaredRead("node_row".into())),
                     adapter_output,
                     adapter_name,
+                    dispatch_duration_ms,
                 };
             }
             Err(e) => {
@@ -1007,6 +1037,7 @@ impl AinlRuntime {
                     skip_reason: Some(PatchSkipReason::PersistFailed(e)),
                     adapter_output,
                     adapter_name,
+                    dispatch_duration_ms,
                 };
             }
         };
@@ -1023,6 +1054,7 @@ impl AinlRuntime {
                 skip_reason: Some(PatchSkipReason::PersistFailed(e)),
                 adapter_output,
                 adapter_name,
+                dispatch_duration_ms,
             };
         }
 
@@ -1036,6 +1068,7 @@ impl AinlRuntime {
                 skip_reason: Some(PatchSkipReason::PersistFailed(e)),
                 adapter_output,
                 adapter_name,
+                dispatch_duration_ms,
             };
         }
 
@@ -1051,6 +1084,7 @@ impl AinlRuntime {
             skip_reason: None,
             adapter_output,
             adapter_name,
+            dispatch_duration_ms,
         }
     }
 }
@@ -1063,6 +1097,16 @@ pub(crate) fn emit_target_name(n: &AinlMemoryNode) -> String {
         AinlNodeType::Episode { episodic } => episodic.turn_id.to_string(),
         AinlNodeType::RuntimeState { runtime_state } => {
             format!("runtime_state:{}", runtime_state.agent_id)
+        }
+        AinlNodeType::Trajectory { trajectory } => {
+            format!("trajectory:{}", trajectory.episode_id)
+        }
+        AinlNodeType::Failure { failure } => {
+            format!(
+                "failure:{}:{}",
+                failure.source,
+                failure.tool_name.as_deref().unwrap_or("")
+            )
         }
     }
 }
@@ -1140,8 +1184,6 @@ fn format_persona_line(p: &PersonaNode) -> String {
     )
 }
 
-/// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
-/// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
 /// Refresh `{AINL_GRAPH_MEMORY_ARMARAOS_EXPORT}/{agent_id}_graph_export.json` when the env var is set.
 pub(crate) fn try_export_graph_json_armaraos(
     store: &SqliteGraphStore,
@@ -1165,6 +1207,8 @@ pub(crate) fn try_export_graph_json_armaraos(
     Ok(())
 }
 
+/// Canonical tool names for episodic storage: [`tag_tool_names`] → `TagNamespace::Tool` values,
+/// deduplicated and sorted (lexicographic). Empty input yields `["turn"]` (same sentinel as before).
 pub(crate) fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<String> {
     if tools_invoked.is_empty() {
         return vec!["turn".to_string()];
@@ -1181,6 +1225,137 @@ pub(crate) fn normalize_tools_for_episode(tools_invoked: &[String]) -> Vec<Strin
     } else {
         seen.into_iter().collect()
     }
+}
+
+const TRAJECTORY_PREVIEW_MAX: usize = 512;
+
+fn truncate_trajectory_preview(s: String) -> String {
+    if s.len() <= TRAJECTORY_PREVIEW_MAX {
+        return s;
+    }
+    let mut t = s;
+    t.truncate(TRAJECTORY_PREVIEW_MAX);
+    t.push('…');
+    t
+}
+
+/// Build [`TrajectoryStep`]s in turn order: procedural patch dispatch attempts, then normalized tool names.
+pub(crate) fn trajectory_steps_for_runtime_turn(
+    patch_results: &[PatchDispatchResult],
+    tools_canonical: &[String],
+) -> Vec<TrajectoryStep> {
+    let base_ms = chrono::Utc::now().timestamp_millis();
+    let mut steps = Vec::new();
+
+    for (i, r) in patch_results.iter().enumerate() {
+        let adapter = r
+            .adapter_name
+            .clone()
+            .unwrap_or_else(|| "patch".to_string());
+        let operation = if r.label.is_empty() {
+            "procedural_patch".to_string()
+        } else {
+            r.label.clone()
+        };
+        let (success, error) = if r.dispatched {
+            if r.adapter_output.is_some() {
+                (true, None)
+            } else if r.adapter_name.is_some() {
+                (
+                    false,
+                    Some("adapter_execute_patch_failed".to_string()),
+                )
+            } else {
+                (true, None)
+            }
+        } else {
+            (true, None)
+        };
+        let outputs_preview = r
+            .adapter_output
+            .as_ref()
+            .and_then(|v| serde_json::to_string(v).ok())
+            .map(truncate_trajectory_preview);
+
+        steps.push(TrajectoryStep {
+            step_id: format!("patch_{i}"),
+            timestamp_ms: base_ms + i as i64,
+            adapter,
+            operation,
+            inputs_preview: None,
+            outputs_preview,
+            duration_ms: r.dispatch_duration_ms,
+            success,
+            error,
+            vitals: None,
+            freshness_at_step: None,
+        });
+    }
+
+    let tool_base = base_ms + patch_results.len() as i64;
+    for (i, name) in tools_canonical.iter().enumerate() {
+        steps.push(TrajectoryStep {
+            step_id: format!("tool_{i}"),
+            timestamp_ms: tool_base + i as i64,
+            adapter: "builtin".into(),
+            operation: name.clone(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 0,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+        });
+    }
+
+    steps
+}
+
+/// After a successful [`record_turn_episode`], persist trajectory graph node + `ainl_trajectories`
+/// row when [`ainl_memory::trajectory_env_enabled`]: per-patch dispatch (timing + adapter) then tool steps.
+pub(crate) fn maybe_persist_trajectory_after_episode(
+    memory: &ainl_memory::GraphMemory,
+    agent_id: &str,
+    episode_id: Uuid,
+    tools_canonical: &[String],
+    patch_dispatch_results: &[PatchDispatchResult],
+    input: &TurnInput,
+) -> Result<(), String> {
+    if episode_id.is_nil() || !ainl_memory::trajectory_env_enabled() {
+        return Ok(());
+    }
+    let session_id = input
+        .trace_event
+        .as_ref()
+        .and_then(|v| v.get("session_id").and_then(|x| x.as_str()))
+        .unwrap_or("ainl-runtime");
+    let project_id = std::env::var("AINL_MEMORY_PROJECT_ID").ok();
+    let hash = std::env::var("AINL_SOURCE_HASH")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let steps = trajectory_steps_for_runtime_turn(patch_dispatch_results, tools_canonical);
+    let duration_ms: u64 = steps.iter().map(|s| s.duration_ms).sum();
+    let outcome = if steps.iter().any(|s| !s.success) {
+        TrajectoryOutcome::PartialSuccess
+    } else {
+        TrajectoryOutcome::Success
+    };
+
+    ainl_memory::persist_trajectory_for_episode(
+        memory,
+        agent_id,
+        episode_id,
+        steps,
+        outcome,
+        session_id,
+        project_id.as_deref(),
+        hash.as_deref(),
+        duration_ms,
+    )?;
+    Ok(())
 }
 
 pub(crate) fn record_turn_episode(
@@ -1210,6 +1385,61 @@ pub(crate) fn record_turn_episode(
     }
     memory.write_node(&node)?;
     Ok(node.id)
+}
+
+#[cfg(test)]
+mod trajectory_step_builder_tests {
+    use super::trajectory_steps_for_runtime_turn;
+    use crate::engine::PatchDispatchResult;
+
+    fn sample_patch(
+        dispatched: bool,
+        adapter_name: Option<String>,
+        adapter_output: Option<serde_json::Value>,
+        dispatch_duration_ms: u64,
+    ) -> PatchDispatchResult {
+        PatchDispatchResult {
+            label: "my_patch".into(),
+            patch_version: 1,
+            fitness_before: 0.5,
+            fitness_after: 0.6,
+            dispatched,
+            skip_reason: None,
+            adapter_output,
+            adapter_name,
+            dispatch_duration_ms,
+        }
+    }
+
+    #[test]
+    fn trajectory_steps_orders_patches_then_tools() {
+        let patches = vec![sample_patch(
+            true,
+            Some("graph".into()),
+            Some(serde_json::json!({"ok": true})),
+            12,
+        )];
+        let tools = vec!["turn".to_string()];
+        let steps = trajectory_steps_for_runtime_turn(&patches, &tools);
+        assert_eq!(steps.len(), 2);
+        assert!(steps[0].step_id.starts_with("patch_"));
+        assert!(steps[1].step_id.starts_with("tool_"));
+        assert_eq!(steps[0].duration_ms, 12);
+        assert!(steps[0].success);
+    }
+
+    #[test]
+    fn adapter_failure_marks_step_failed() {
+        let patches = vec![sample_patch(
+            true,
+            Some("graph".into()),
+            None,
+            5,
+        )];
+        let steps = trajectory_steps_for_runtime_turn(&patches, &[]);
+        assert_eq!(steps.len(), 1);
+        assert!(!steps[0].success);
+    }
 }
 
 #[cfg(feature = "async")]

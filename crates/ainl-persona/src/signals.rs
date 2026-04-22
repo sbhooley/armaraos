@@ -462,5 +462,7 @@ pub fn extract_from_node(node: &AinlMemoryNode) -> Vec<RawSignal> {
         }
         ainl_memory::AinlNodeType::Persona { persona } => extract_persona_priors(id, persona),
         ainl_memory::AinlNodeType::RuntimeState { .. } => Vec::new(),
+        ainl_memory::AinlNodeType::Trajectory { .. } => Vec::new(),
+        ainl_memory::AinlNodeType::Failure { .. } => Vec::new(),
     }
 }

@@ -205,6 +205,17 @@ function chatPage() {
     _audioChunks: [],
     recordingTime: 0,
     _recordingTimer: null,
+    /**
+     * When true, send `voice_reply: true` with the next message (HTTP/WS) so the daemon
+     * may return Piper TTS if `[local_voice]` is configured. Persists in localStorage.
+     * Default off: assistant replies are text unless the user opts in.
+     */
+    voiceReplyEnabled: (function() {
+      var s = localStorage.getItem('armaraos-voice-reply');
+      if (s === '1') return true;
+      if (s === '0') return false;
+      return false;
+    }()),
     // Model autocomplete state
     showModelPicker: false,
     modelPickerList: [],
@@ -2155,13 +2166,10 @@ function chatPage() {
         }
       }
 
-      // Try WebSocket first
-      var voiceReply = !!(uploadedFiles && uploadedFiles.some(function(f) {
-        return f.content_type && f.content_type.indexOf('audio/') === 0;
-      }));
+      // Try WebSocket first — `voice_reply` when the user enabled spoken reply (Piper) in the UI
       var wsPayload = { type: 'message', content: finalText };
       if (uploadedFiles && uploadedFiles.length) wsPayload.attachments = uploadedFiles;
-      if (voiceReply) wsPayload.voice_reply = true;
+      if (this.voiceReplyEnabled) wsPayload.voice_reply = true;
       if (OpenFangAPI.wsSend(wsPayload)) {
         // Track in-flight so onClose can retry if the connection drops while waiting
         this._wsInFlightMsg = { text: finalText, files: uploadedFiles || [], images: msgImages || [] };
@@ -2183,10 +2191,7 @@ function chatPage() {
         var self = this;
         var httpBody = { message: finalText };
         if (uploadedFiles && uploadedFiles.length) httpBody.attachments = uploadedFiles;
-        var voiceReplyHttp = !!(uploadedFiles && uploadedFiles.some(function(f) {
-          return f.content_type && f.content_type.indexOf('audio/') === 0;
-        }));
-        if (voiceReplyHttp) httpBody.voice_reply = true;
+        if (self.voiceReplyEnabled) httpBody.voice_reply = true;
         var res = await OpenFangAPI.post('/api/agents/' + this.currentAgent.id + '/message', httpBody);
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
         if (res.turn_wall_ms != null) this.lastTurnWallMs = res.turn_wall_ms;
@@ -2589,6 +2594,46 @@ function chatPage() {
 
     renderMarkdown: renderMarkdown,
     escapeHtml: escapeHtml,
+
+    /**
+     * Toggle whether to request a Piper spoken reply from the daemon (text or voice turn).
+     * When turning on, preflight `GET /api/system/local-voice` so the UI only enables if Piper
+     * is actually ready; otherwise a toast explains typical fixes (first online launch, config).
+     */
+    toggleVoiceReply: async function() {
+      if (this.voiceReplyEnabled) {
+        this.voiceReplyEnabled = false;
+        try { localStorage.setItem('armaraos-voice-reply', '0'); } catch (e) { /* non-fatal */ }
+        return;
+      }
+      if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error('Spoken reply check unavailable: API client not loaded.');
+        }
+        return;
+      }
+      var self = this;
+      try {
+        var s = await OpenFangAPI.get('/api/system/local-voice');
+        if (s && s.piper_ready) {
+          self.voiceReplyEnabled = true;
+          try { localStorage.setItem('armaraos-voice-reply', '1'); } catch (e2) { /* non-fatal */ }
+        } else {
+          var notEnabled = s && s.enabled === false;
+          var msg = notEnabled
+            ? 'Spoken reply needs local Piper TTS, but [local_voice] is disabled in config. Enable it in config.toml, or set paths manually. See "Local voice" in the docs.'
+            : (s && s.auto_download === false
+              ? 'Spoken reply needs Piper (TTS) but auto-download is off. Go online to place binaries under ~/.armaraos/voice/, or set [local_voice] paths in config.toml. See "Local voice" in the docs.'
+              : 'Spoken reply is not available yet: Piper (local TTS) is not ready. The first daemon run on a working network usually auto-downloads it; if you were fully offline, connect, restart the daemon, and try again. See "Local voice" (Whisper + Piper) in the docs.');
+          if (typeof OpenFangToast !== 'undefined') OpenFangToast.warn(msg);
+        }
+      } catch (err) {
+        var m = (err && err.message) ? err.message : 'request failed';
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error('Could not verify local voice / Piper: ' + m);
+        }
+      }
+    },
 
     // Cycle eco mode: Off → Balanced → Aggressive → Off.
     // Persists per-agent via ui-prefs and syncs the runtime global config so

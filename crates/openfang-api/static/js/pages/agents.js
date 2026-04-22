@@ -261,6 +261,720 @@ function agentsPage() {
       return this.agents.filter(function(a) { return a.state !== 'Running'; }).length;
     },
 
+    // ── Fleet vitals (All Agents card grid) ──
+    demoMode: false,
+    demoProfile: 'standard',
+    displayActiveCount: 0,
+    tasksToday: 0,
+    fleetGraphNodeTotal: 0,
+    fleetSpendHour: 0,
+    fleetSavedHour: 0,
+    fleetLastCost: null,
+    fleetLastSaved: null,
+    _fleetLastSummaryCalls: 0,
+    _fleetSpendsMs: [],
+    _fleetSpendsAmt: [],
+    _fleetSavedsMs: [],
+    _fleetSavedsAmt: [],
+    _fleetInt: null,
+    _fleetDemoInt: null,
+    _activitySyncInt: null,
+    _demoKey: null,
+    _tweenRaf: null,
+    _fleetInFlight: false,
+    _graphGen: 0,
+    _prevToolByAgent: {},
+    _prevGraphNodeByAgent: {},
+    _activitySeenTsByAgent: {},
+    usageByAgent: {},
+    graphVitalsByAgent: {},
+    graphNodeCountByAgent: {},
+    agentPinging: {},
+    activityFeedByAgent: {},
+
+    /** Usage series for small sparkline / activity (0–1 normalized). */
+    fleetActivityNorm: 0.35,
+    perAgentActivityNorm: {},
+
+    normalizeDemoProfile(raw) {
+      var p = raw != null ? String(raw).trim().toLowerCase() : '';
+      if (p === 'cinema' || p === 'film') return 'cinema';
+      return 'standard';
+    },
+
+    readFleetDemoProfileFromEnv() {
+      var profile = 'standard';
+      try {
+        var p = (typeof location !== 'undefined' && location.search) ? new URLSearchParams(location.search) : null;
+        if (p) {
+          var viaProfile = p.get('demoProfile');
+          if (viaProfile) profile = this.normalizeDemoProfile(viaProfile);
+          var viaDemo = p.get('demo') || p.get('demoMode');
+          if (viaDemo && !/^(1|true|yes|on)$/i.test(String(viaDemo).trim())) {
+            profile = this.normalizeDemoProfile(viaDemo);
+          }
+        }
+      } catch (e0) { /* ignore */ }
+      try {
+        var ls = localStorage.getItem('armaraos-fleet-demo-profile');
+        if (ls && profile === 'standard') profile = this.normalizeDemoProfile(ls);
+      } catch (e1) { /* ignore */ }
+      return profile;
+    },
+
+    readFleetDemoFromEnv() {
+      var demo = false;
+      try {
+        var p = (typeof location !== 'undefined' && location.search) ? new URLSearchParams(location.search) : null;
+        if (p) {
+          var d = p.get('demo') || p.get('demoMode');
+          if (d && (/^(1|true|yes|on)$/i.test(String(d).trim()) || this.normalizeDemoProfile(d) === 'cinema')) demo = true;
+        }
+      } catch (e0) { /* ignore */ }
+      try {
+        if (!demo && localStorage.getItem('armaraos-fleet-demo') === '1') demo = true;
+      } catch (e1) { /* ignore */ }
+      return demo;
+    },
+
+    applyDemoThemeIfNeeded() {
+      if (!this.demoMode) return;
+      try {
+        localStorage.setItem('armaraos-theme-mode', 'dark');
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } catch (e) { /* ignore */ }
+    },
+
+    toggleFleetDemoMode() {
+      this.demoMode = !this.demoMode;
+      try {
+        localStorage.setItem('armaraos-fleet-demo', this.demoMode ? '1' : '0');
+        localStorage.setItem('armaraos-fleet-demo-profile', this.demoProfile || 'standard');
+      } catch (e) { /* ignore */ }
+      this.applyDemoThemeIfNeeded();
+      if (this.demoMode) {
+        this.fleetStartDemo();
+      } else if (this._fleetDemoInt) {
+        try { clearInterval(this._fleetDemoInt); } catch (e2) { /* ignore */ }
+        this._fleetDemoInt = null;
+      }
+    },
+
+    cycleFleetDemoProfile() {
+      this.demoProfile = this.demoProfile === 'cinema' ? 'standard' : 'cinema';
+      this.demoMode = true;
+      try {
+        localStorage.setItem('armaraos-fleet-demo', '1');
+        localStorage.setItem('armaraos-fleet-demo-profile', this.demoProfile);
+      } catch (e) { /* ignore */ }
+      this.applyDemoThemeIfNeeded();
+      this.fleetStartDemo();
+    },
+
+    isDemoPresetActive(preset) {
+      var norm = this.normalizeDemoProfile(preset);
+      return this.demoMode && this.demoProfile === norm;
+    },
+
+    applyDemoPresetUrl(preset) {
+      var norm = this.normalizeDemoProfile(preset);
+      try {
+        var qp = new URLSearchParams((typeof location !== 'undefined' && location.search) ? location.search : '');
+        if (norm === 'cinema') {
+          qp.set('demo', 'cinema');
+          qp.delete('demoProfile');
+          qp.delete('demoMode');
+        } else {
+          qp.set('demo', '1');
+          qp.delete('demoProfile');
+          qp.delete('demoMode');
+        }
+        var q = qp.toString();
+        var base = (typeof location !== 'undefined') ? location.pathname : '';
+        var h = (typeof location !== 'undefined') ? (location.hash || '') : '';
+        var nextUrl = base + (q ? ('?' + q) : '') + h;
+        if (typeof history !== 'undefined' && history.replaceState) {
+          history.replaceState({}, '', nextUrl);
+        }
+      } catch (e) { /* ignore */ }
+
+      this.demoProfile = norm;
+      this.demoMode = true;
+      try {
+        localStorage.setItem('armaraos-fleet-demo', '1');
+        localStorage.setItem('armaraos-fleet-demo-profile', this.demoProfile);
+      } catch (e2) { /* ignore */ }
+      this.applyDemoThemeIfNeeded();
+      this.fleetStartDemo();
+    },
+
+    isAgentRunningState(agent) {
+      return agent && String(agent.state) === 'Running';
+    },
+
+    isReducedMotion() {
+      try {
+        return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch (e) { return false; }
+    },
+
+    _pad2: function(n) { return n < 10 ? '0' + n : String(n); },
+    todayIsoYmd: function() {
+      var d = new Date();
+      return d.getFullYear() + '-' + this._pad2(d.getMonth() + 1) + '-' + this._pad2(d.getDate());
+    },
+
+    todayCallsFromDaily(daysPayload) {
+      if (!daysPayload) return 0;
+      var days = daysPayload.days;
+      if (!Array.isArray(days) || !days.length) {
+        if (typeof daysPayload.today_cost_usd === 'number' && (daysPayload.fallback_today_calls != null)) {
+          return Math.max(0, Math.floor(daysPayload.fallback_today_calls));
+        }
+        return 0;
+      }
+      var t = this.todayIsoYmd();
+      for (var i = 0; i < days.length; i++) {
+        if (String(days[i].date) === t) {
+          return Math.max(0, Math.floor(Number(days[i].calls) || 0));
+        }
+      }
+      if (days.length) {
+        return Math.max(0, Math.floor(Number(days[0].calls) || 0));
+      }
+      return 0;
+    },
+
+    _pushSeries(arr, val, cap) {
+      var a = (arr || []).concat();
+      a.push(val);
+      if (a.length > cap) a = a.slice(a.length - cap, a.length);
+      return a;
+    },
+
+    _seriesPolyline(ser, w, h) {
+      if (!ser || !ser.length) {
+        return String(w * 0.1) + ',' + (h * 0.5) + ' ' + w + ',' + (h * 0.5);
+      }
+      var maxv = 0.0001;
+      for (var i = 0; i < ser.length; i++) maxv = Math.max(maxv, ser[i]);
+      var out = [];
+      for (var j = 0; j < ser.length; j++) {
+        var t = (ser.length <= 1) ? 0 : (j / (ser.length - 1));
+        var x = 2 + t * (w - 4);
+        var y = 2 + (1 - (ser[j] / maxv)) * (h - 4);
+        out.push((Math.round(x * 100) / 100) + ',' + (Math.round(y * 100) / 100));
+      }
+      return out.join(' ');
+    },
+
+    fleetActivityPolyline: function() {
+      return this._seriesPolyline(this.fleetSparks || [], 120, 28);
+    },
+    perAgentActivityPolyline: function(aid) {
+      var s = (this.perAgentSparks && this.perAgentSparks[aid]) ? this.perAgentSparks[aid] : [0, 0];
+      return this._seriesPolyline(s, 120, 22);
+    },
+
+    fleetSparks: [],
+    perAgentSparks: {},
+
+    agentsFleetTweakSparks(fromCallsDelta) {
+      var v = Math.max(0, Number(fromCallsDelta) || 0);
+      var s = 0.08 * Math.log1p(v) + 0.02;
+      s = Math.min(1, s);
+      this.fleetActivityNorm = 0.65 * this.fleetActivityNorm + 0.35 * s;
+      this.fleetSparks = this._pushSeries(this.fleetSparks, this.fleetActivityNorm, 32);
+    },
+
+    agentTweakSpark(agentId) {
+      var id = String(agentId);
+      var m = (this.perAgentActivityNorm && this.perAgentActivityNorm[id]) != null
+        ? this.perAgentActivityNorm[id]
+        : 0.25;
+      m = 0.62 * m + 0.38 * Math.min(1, 0.15 + 0.02 * (Math.random() * 1.0));
+      var nextM = Object.assign({}, this.perAgentActivityNorm || {});
+      nextM[id] = m;
+      this.perAgentActivityNorm = nextM;
+      var ar = (this.perAgentSparks && this.perAgentSparks[id]) ? this.perAgentSparks[id].concat() : [];
+      ar.push(m);
+      if (ar.length > 20) ar = ar.slice(-20, ar.length);
+      var ps = Object.assign({}, this.perAgentSparks);
+      ps[id] = ar;
+      this.perAgentSparks = ps;
+    },
+
+    nudgeDisplayActive: function() {
+      var self = this;
+      var target = this.runningCount;
+      var start = (typeof this.displayActiveCount === 'number' && !isNaN(this.displayActiveCount))
+        ? this.displayActiveCount
+        : target;
+      if (this._tweenRaf) {
+        try { cancelAnimationFrame(this._tweenRaf); } catch (e) { /* ignore */ }
+        this._tweenRaf = null;
+      }
+      if (this.isReducedMotion()) {
+        this.displayActiveCount = target;
+        return;
+      }
+      var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      var dur = 300;
+      function step(now) {
+        var t = (typeof performance !== 'undefined' && performance.now) ? performance.now() : now;
+        var u = Math.min(1, (t - t0) / dur);
+        var s = 0.5 - 0.5 * Math.cos(u * Math.PI);
+        self.displayActiveCount = Math.round(start + (target - start) * s);
+        if (u < 1) self._tweenRaf = requestAnimationFrame(step);
+        else {
+          self.displayActiveCount = target;
+          self._tweenRaf = null;
+        }
+      }
+      this._tweenRaf = requestAnimationFrame(step);
+    },
+
+    fleetBuildSpendThisHour: function() {
+      var t = Date.now();
+      var c = 0.0;
+      for (var i = 0; i < (this._fleetSpendsMs || []).length; i++) {
+        if (t - this._fleetSpendsMs[i] <= 3600000) c += this._fleetSpendsAmt[i] || 0;
+      }
+      this.fleetSpendHour = Math.max(0, c);
+    },
+
+    fleetSummaryTotalSavedUsd: function(s) {
+      if (!s || typeof s !== 'object') return null;
+      var q = (s.quota_enforcement && typeof s.quota_enforcement === 'object') ? s.quota_enforcement : null;
+      var cs = (s.compression_savings && typeof s.compression_savings === 'object') ? s.compression_savings : null;
+      if (!q && !cs) return null;
+      var qSaved = q && typeof q.total_est_cost_avoided_usd === 'number' ? q.total_est_cost_avoided_usd : 0;
+      var csSaved = cs && typeof cs.estimated_total_cost_saved_usd === 'number' ? cs.estimated_total_cost_saved_usd : 0;
+      return Math.max(0, qSaved + csSaved);
+    },
+
+    fleetBuildSavedThisHour: function() {
+      var t = Date.now();
+      var c = 0.0;
+      for (var i = 0; i < (this._fleetSavedsMs || []).length; i++) {
+        if (t - this._fleetSavedsMs[i] <= 3600000) c += this._fleetSavedsAmt[i] || 0;
+      }
+      this.fleetSavedHour = Math.max(0, c);
+    },
+
+    fleetOnSummary: function(s) {
+      if (!s) return;
+      var calls = typeof s.call_count === 'number' ? s.call_count : 0;
+      if (this._fleetLastSummaryCalls > 0) {
+        var d = Math.max(0, calls - this._fleetLastSummaryCalls);
+        this.agentsFleetTweakSparks(d);
+        if (d > 0) this.fleetOnAgentPing('__global__', d);
+      }
+      this._fleetLastSummaryCalls = calls;
+      var cost = typeof s.total_cost_usd === 'number' ? s.total_cost_usd : 0;
+      if (this.fleetLastCost != null) {
+        var del = cost - (this.fleetLastCost || 0);
+        if (del > 0) {
+          this._fleetSpendsMs = this._pushSeries(this._fleetSpendsMs, Date.now(), 800);
+          this._fleetSpendsAmt = this._pushSeries(this._fleetSpendsAmt, del, 800);
+        }
+      }
+      this.fleetLastCost = cost;
+      this.fleetBuildSpendThisHour();
+
+      var saved = this.fleetSummaryTotalSavedUsd(s);
+      if (saved != null) {
+        if (this.fleetLastSaved != null) {
+          var sdel = saved - (this.fleetLastSaved || 0);
+          if (sdel > 0) {
+            this._fleetSavedsMs = this._pushSeries(this._fleetSavedsMs, Date.now(), 800);
+            this._fleetSavedsAmt = this._pushSeries(this._fleetSavedsAmt, sdel, 800);
+          }
+        }
+        this.fleetLastSaved = saved;
+      }
+      this.fleetBuildSavedThisHour();
+    },
+
+    fleetOnAgentPing: function(aid, steps) {
+      if (this.isReducedMotion()) return;
+      if (steps == null || (typeof steps === 'number' && steps <= 0)) return;
+      var o = Object.assign({}, this.agentPinging);
+      o[aid] = true;
+      this.agentPinging = o;
+      var self = this;
+      setTimeout(function() {
+        var p = Object.assign({}, self.agentPinging);
+        p[aid] = false;
+        self.agentPinging = p;
+      }, 250);
+    },
+
+    pickVitalsText: function(n) {
+      if (!n) return '';
+      var p = n.vitals_phase;
+      var tr = n.vitals_trust;
+      if (p && tr != null) return p + ' · t ' + (Math.round((Number(tr) || 0) * 100) / 100);
+      if (p) return String(p);
+      if (tr != null) return 'trust ' + (Math.round((Number(tr) || 0) * 100) / 100);
+      if (n.vitals_gate) return 'gate: ' + String(n.vitals_gate);
+      return '';
+    },
+
+    graphScanVitals: function(nodes) {
+      if (!Array.isArray(nodes)) return null;
+      for (var i = 0; i < Math.min(80, nodes.length); i++) {
+        var o = nodes[i];
+        if (o && (o.vitals_phase || o.vitals_trust != null || o.vitals_gate)) return o;
+      }
+      return null;
+    },
+
+    loadGraphVitalsForAgent: async function(aid) {
+      try {
+        var res = await OpenFangAPI.get(
+          '/api/graph-memory?agent_id=' + encodeURIComponent(aid) + '&limit=2000&since_seconds=7776000&edge_mode=strict'
+        );
+        var n = (res && res.nodes) ? res.nodes : [];
+        var c = n.length;
+        var prev = (this._prevGraphNodeByAgent && this._prevGraphNodeByAgent[aid] != null)
+          ? Number(this._prevGraphNodeByAgent[aid]) || 0
+          : null;
+        this.graphNodeCountByAgent = Object.assign({}, this.graphNodeCountByAgent, (function() { var o = {}; o[aid] = c; return o; })());
+        this.graphVitalsByAgent = Object.assign({}, this.graphVitalsByAgent, (function() {
+          var o = {};
+          o[aid] = n.length ? this.pickVitalsText(this.graphScanVitals(n)) : '';
+          return o;
+        }).call(this));
+        this._prevGraphNodeByAgent = Object.assign({}, this._prevGraphNodeByAgent, (function() { var o = {}; o[aid] = c; return o; })());
+
+        if (prev != null && c > prev) {
+          var delta = c - prev;
+          this.fleetOnAgentPing(aid, delta);
+          this.agentTweakSpark(aid);
+          try {
+            var appStore = Alpine.store('app');
+            if (appStore && typeof appStore.setAgentActivityLine === 'function') {
+              appStore.setAgentActivityLine(aid, 'Graph memory + ' + delta + ' nodes');
+            }
+          } catch (e2) { /* ignore */ }
+        }
+      } catch (e) {
+        this.graphVitalsByAgent = Object.assign({}, this.graphVitalsByAgent, (function() { var o = {}; o[aid] = ''; return o; })());
+        this.graphNodeCountByAgent = Object.assign({}, this.graphNodeCountByAgent, (function() { var o = {}; o[aid] = 0; return o; })());
+        this._prevGraphNodeByAgent = Object.assign({}, this._prevGraphNodeByAgent, (function() { var o = {}; o[aid] = 0; return o; })());
+      }
+    },
+
+    loadFleetGraphNodeTotal: async function(agents) {
+      var list = (agents || []).filter(function(a) { return a && a.id; }).slice(0, 8);
+      var sum = 0;
+      for (var i = 0; i < list.length; i++) {
+        try {
+          var r = await OpenFangAPI.get(
+            '/api/graph-memory?agent_id=' + encodeURIComponent(String(list[i].id)) + '&limit=2000&since_seconds=7776000&edge_mode=strict'
+          );
+          var arr = (r && r.nodes) ? r.nodes : [];
+          sum += arr.length;
+        } catch (e) { /* ignore */ }
+      }
+      this.fleetGraphNodeTotal = sum;
+    },
+
+    refreshFleetVitals: async function() {
+      if (this._fleetInFlight) return;
+      if (this.activeChatAgent) return;
+      this._fleetInFlight = true;
+      var self = this;
+      var prev = this._prevToolByAgent || {};
+      var usageRows = { agents: [] };
+      var summary = null;
+      var daily = { days: [] };
+      try { summary = await OpenFangAPI.get('/api/usage/summary').catch(function() { return null; }); } catch (e1) { /* ignore */ }
+      try { daily = await OpenFangAPI.get('/api/usage/daily').catch(function() { return { days: [] }; }); } catch (e2) { daily = { days: [] }; }
+      this.tasksToday = this.todayCallsFromDaily(daily);
+      if (summary) this.fleetOnSummary(summary);
+      else { this.fleetBuildSpendThisHour(); this.fleetBuildSavedThisHour(); }
+      try { usageRows = await OpenFangAPI.get('/api/usage').catch(function() { return { agents: [] }; }); } catch (e3) { usageRows = { agents: [] }; }
+      var m = {};
+      (usageRows && usageRows.agents ? usageRows.agents : []).forEach(function(r) {
+        m[String(r.agent_id)] = { tool_calls: r.tool_calls || 0, cost_usd: r.cost_usd || 0, total_tokens: r.total_tokens || 0 };
+      });
+      for (var id in m) {
+        if (!Object.prototype.hasOwnProperty.call(m, id)) continue;
+        var ptc = (prev[id] != null) ? prev[id] : 0;
+        if (m[id].tool_calls > ptc) {
+          self.fleetOnAgentPing(id, m[id].tool_calls - ptc);
+        }
+        if (m[id].tool_calls !== ptc) {
+          self.agentTweakSpark(id);
+        }
+      }
+      for (var id2 in m) {
+        if (Object.prototype.hasOwnProperty.call(m, id2)) {
+          this._prevToolByAgent[id2] = m[id2].tool_calls;
+        }
+      }
+      this.usageByAgent = m;
+      this.nudgeDisplayActive();
+      this._graphGen = (this._graphGen + 1) % 3;
+      if (this._graphGen === 0) {
+        try {
+          await this.loadFleetGraphNodeTotal(this.chatPickerPrimaryAgents);
+        } catch (e1) { /* ignore */ }
+      }
+      var toScan = (this.chatPickerPrimaryAgents || []).map(function(x) { return x.id; }).slice(0, 12);
+      await Promise.all(toScan.map((function(id) {
+        return this.loadGraphVitalsForAgent(String(id)).catch(function() { /* ignore */ });
+      }).bind(this)));
+      this._fleetInFlight = false;
+    },
+
+    formatSecondsAgo: function(iso) {
+      if (!iso) return '—';
+      var t;
+      try { t = new Date(iso).getTime(); } catch (e) { return '—'; }
+      if (isNaN(t)) return '—';
+      var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm';
+      return Math.floor(s / 3600) + 'h';
+    },
+
+    lastActivityLabel: function(agent) {
+      if (!agent) return '—';
+      var lines = null;
+      try { lines = Alpine.store('app').agentActivityLines; } catch (e) { lines = null; }
+      var a = lines && lines[agent.id];
+      if (a && a.ts) {
+        return 'Last activity · ' + this.formatSecondsAgo(new Date(a.ts).toISOString());
+      }
+      return 'Last activity · ' + this.formatSecondsAgo(agent && agent.last_active);
+    },
+
+    toolCallsForAgent: function(a) {
+      if (!a) return 0;
+      var u = this.usageByAgent && this.usageByAgent[a.id];
+      if (u && u.tool_calls != null) return u.tool_calls;
+      return 0;
+    },
+
+    nodeDeltaText: function(a) {
+      if (!a) return '—';
+      var n = this.graphNodeCountByAgent && this.graphNodeCountByAgent[a.id];
+      if (n == null) return 'Knowledge · —';
+      if (n === 0) return 'Knowledge · 0 nodes';
+      if (n >= 2000) return 'Knowledge · 2000+ nodes';
+      return 'Knowledge · ' + n + ' nodes';
+    },
+
+    cognitiveVitals: function(a) {
+      if (!a) return '';
+      var t = (this.graphVitalsByAgent && this.graphVitalsByAgent[a.id]) ? this.graphVitalsByAgent[a.id] : '';
+      if (t) return t;
+      var m = (a.mode != null) ? String(a.mode).toLowerCase() : 'full';
+      if (m === 'observe') return 'Observe';
+      if (m === 'assist') return 'Assist';
+      if (m === 'full') return 'Full';
+      return m;
+    },
+
+    fleetLogLine: function(a) {
+      if (!a) return '';
+      var lines = null;
+      try { lines = Alpine.store('app').agentActivityLines; } catch (e) { lines = null; }
+      var aal = lines && lines[a.id];
+      if (aal && aal.text) return aal.text;
+      return (a.model_name || 'model') + ' · ' + (a.model_provider || '');
+    },
+
+    getAgentActivityEntry: function(agent) {
+      if (!agent || !agent.id) return null;
+      var lines = null;
+      try { lines = Alpine.store('app').agentActivityLines; } catch (e) { lines = null; }
+      return lines && lines[agent.id] ? lines[agent.id] : null;
+    },
+
+    agentCurrentPhaseClass: function(agent) {
+      if (!agent) return 'idle';
+      var st = String(agent.state || '');
+      if (st === 'Crashed') return 'error';
+      if (st !== 'Running') return 'idle';
+      var entry = this.getAgentActivityEntry(agent);
+      if (!entry || !entry.text) return 'running';
+      var t = String(entry.text).toLowerCase();
+      if (t.indexOf('thinking') >= 0) return 'thinking';
+      if (t.indexOf('using tool') >= 0 || t.indexOf('tool') >= 0) return 'tool';
+      if (t.indexOf('writing response') >= 0 || t.indexOf('stream') >= 0 || t.indexOf('reply') >= 0) return 'streaming';
+      if (t.indexOf('waiting') >= 0) return 'waiting';
+      return 'running';
+    },
+
+    agentCurrentPhaseLabel: function(agent) {
+      var ph = this.agentCurrentPhaseClass(agent);
+      if (ph === 'error') return 'Error';
+      if (ph === 'thinking') return 'Thinking';
+      if (ph === 'tool') return 'Tool run';
+      if (ph === 'streaming') return 'Responding';
+      if (ph === 'waiting') return 'Waiting';
+      if (ph === 'running') return 'Live';
+      return 'Idle';
+    },
+
+    agentPhaseGlyph: function(agent) {
+      var ph = this.agentCurrentPhaseClass(agent);
+      if (ph === 'thinking') return '…';
+      if (ph === 'tool') return '⚙';
+      if (ph === 'streaming') return '▸';
+      if (ph === 'waiting') return '○';
+      if (ph === 'running') return '●';
+      if (ph === 'error') return '!';
+      return '·';
+    },
+
+    agentCurrentPhaseDetail: function(agent) {
+      if (!agent) return '';
+      var entry = this.getAgentActivityEntry(agent);
+      if (entry && entry.text) return String(entry.text);
+      if (String(agent.state || '') === 'Running') {
+        return 'Awaiting input';
+      }
+      if (String(agent.state || '') === 'Crashed') return 'Agent crashed — inspect diagnostics';
+      return 'No live activity';
+    },
+
+    agentCurrentPhaseFreshness: function(agent) {
+      var entry = this.getAgentActivityEntry(agent);
+      if (entry && entry.ts) {
+        try {
+          return this.formatSecondsAgo(new Date(entry.ts).toISOString()) + ' ago';
+        } catch (e) { /* ignore */ }
+      }
+      return this.lastActivityLabel(agent).replace('Last activity · ', '') + ' ago';
+    },
+
+    agentCurrentPhaseIntensity: function(agent) {
+      var ph = this.agentCurrentPhaseClass(agent);
+      var base = 22;
+      if (ph === 'thinking') base = 58;
+      else if (ph === 'tool') base = 74;
+      else if (ph === 'streaming') base = 90;
+      else if (ph === 'running') base = 46;
+      else if (ph === 'waiting') base = 36;
+      else if (ph === 'error') base = 100;
+
+      var ts = null;
+      var entry = this.getAgentActivityEntry(agent);
+      if (entry && entry.ts) ts = Number(entry.ts) || null;
+      if (!ts && agent && agent.last_active) {
+        try { ts = new Date(agent.last_active).getTime(); } catch (e) { ts = null; }
+      }
+      var freshnessBoost = 0;
+      if (ts) {
+        var age = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+        if (age <= 5) freshnessBoost = 14;
+        else if (age <= 15) freshnessBoost = 8;
+        else if (age <= 45) freshnessBoost = 3;
+        else if (age >= 180) freshnessBoost = -8;
+      }
+      var pingBoost = (agent && agent.id && this.agentPinging && this.agentPinging[agent.id]) ? 12 : 0;
+      var out = Math.round(base + freshnessBoost + pingBoost);
+      if (out < 16) out = 16;
+      if (out > 100) out = 100;
+      return out;
+    },
+
+    syncAgentActivityFeeds: function() {
+      var lines = null;
+      try { lines = Alpine.store('app').agentActivityLines; } catch (e) { lines = null; }
+      if (!lines) return;
+      var next = Object.assign({}, this.activityFeedByAgent || {});
+      var seen = Object.assign({}, this._activitySeenTsByAgent || {});
+      var changed = false;
+      for (var aid in lines) {
+        if (!Object.prototype.hasOwnProperty.call(lines, aid)) continue;
+        var ent = lines[aid];
+        if (!ent || !ent.text || !ent.ts) continue;
+        var ts = Number(ent.ts) || 0;
+        var prevTs = Number(seen[aid] || 0);
+        if (ts <= prevTs) continue;
+        var row = {
+          ts: ts,
+          text: String(ent.text),
+          phase: (function(t) {
+            var low = String(t || '').toLowerCase();
+            if (low.indexOf('thinking') >= 0) return 'thinking';
+            if (low.indexOf('using tool') >= 0 || low.indexOf('tool') >= 0) return 'tool';
+            if (low.indexOf('writing response') >= 0 || low.indexOf('stream') >= 0 || low.indexOf('reply') >= 0) return 'streaming';
+            if (low.indexOf('waiting') >= 0) return 'waiting';
+            return 'running';
+          })(ent.text)
+        };
+        var arr = (next[aid] || []).slice();
+        arr.unshift(row);
+        if (arr.length > 5) arr = arr.slice(0, 5);
+        next[aid] = arr;
+        seen[aid] = ts;
+        changed = true;
+      }
+      if (changed) {
+        this.activityFeedByAgent = next;
+        this._activitySeenTsByAgent = seen;
+      }
+    },
+
+    agentActivityFeed: function(agent) {
+      if (!agent || !agent.id) return [];
+      return (this.activityFeedByAgent && this.activityFeedByAgent[agent.id]) ? this.activityFeedByAgent[agent.id] : [];
+    },
+
+    fleetActionsStop: function(ev) {
+      if (ev) {
+        try { if (ev.stopPropagation) ev.stopPropagation(); } catch (e) { /* ignore */ }
+        try { if (ev.preventDefault) ev.preventDefault(); } catch (e2) { /* ignore */ }
+      }
+    },
+
+    fleetClickCard: function(agent, ev) {
+      this.chatWithAgent(agent);
+    },
+
+    fleetStartPeriodic: function() {
+      this.fleetLastCost = null;
+      this._fleetLastSummaryCalls = 0;
+      this.displayActiveCount = this.runningCount;
+      var self = this;
+      this.refreshFleetVitals();
+      if (this._fleetInt) { try { clearInterval(this._fleetInt); } catch (e) { /* ignore */ } this._fleetInt = null; }
+      this._fleetInt = setInterval(function() { self.refreshFleetVitals(); }, 5000);
+      this.nudgeDisplayActive();
+    },
+
+    fleetTeardown: function() {
+      if (this._fleetInt) { try { clearInterval(this._fleetInt); } catch (e) { /* ignore */ } this._fleetInt = null; }
+      if (this._fleetDemoInt) { try { clearInterval(this._fleetDemoInt); } catch (e) { /* ignore */ } this._fleetDemoInt = null; }
+      if (this._activitySyncInt) { try { clearInterval(this._activitySyncInt); } catch (e0) { /* ignore */ } this._activitySyncInt = null; }
+      if (this._tweenRaf) { try { cancelAnimationFrame(this._tweenRaf); } catch (e) { /* ignore */ } this._tweenRaf = null; }
+      if (this._demoKey) { try { document.removeEventListener('keydown', this._demoKey, true); } catch (e) { /* ignore */ } this._demoKey = null; }
+    },
+
+    fleetStartDemo: function() {
+      if (!this.demoMode) return;
+      var self = this;
+      if (this._fleetDemoInt) { try { clearInterval(this._fleetDemoInt); } catch (e) { /* ignore */ } this._fleetDemoInt = null; }
+      this._fleetDemoInt = setInterval(function() {
+        if (self.activeChatAgent) return;
+        var a = (self.chatPickerPrimaryAgents && self.chatPickerPrimaryAgents[0]) ? self.chatPickerPrimaryAgents[0] : null;
+        if (a) {
+          self.agentTweakSpark(a.id);
+        }
+        self.fleetOnAgentPing('__global__', 0.1);
+        self.fleetOnSummary({ call_count: (self._fleetLastSummaryCalls || 0) + 1, total_cost_usd: (self.fleetLastCost != null ? self.fleetLastCost : 0) + 0.0004 });
+        self.fleetBuildSpendThisHour();
+        self.nudgeDisplayActive();
+      }, 2000);
+    },
+
     // -- Templates computed --
     get categories() {
       var cats = { 'All': true };
@@ -321,6 +1035,32 @@ function agentsPage() {
       this.$watch('$store.app.pendingAgent', function(agent) {
         if (agent) {
           self.activeChatAgent = agent;
+        }
+      });
+      this.demoProfile = this.readFleetDemoProfileFromEnv();
+      this.demoMode = this.readFleetDemoFromEnv();
+      this.applyDemoThemeIfNeeded();
+      this._demoKey = function(e) {
+        if (e.ctrlKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+          e.preventDefault();
+          self.toggleFleetDemoMode();
+          if (self.demoMode) self.fleetStartDemo();
+        } else if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C')) {
+          e.preventDefault();
+          self.cycleFleetDemoProfile();
+        }
+      };
+      try { document.addEventListener('keydown', this._demoKey, true); } catch (eK) { /* ignore */ }
+      this.$nextTick(function() {
+        self.syncAgentActivityFeeds();
+        self.fleetStartPeriodic();
+        if (self._activitySyncInt) { try { clearInterval(self._activitySyncInt); } catch (eA) { /* ignore */ } self._activitySyncInt = null; }
+        self._activitySyncInt = setInterval(function() { self.syncAgentActivityFeeds(); }, 650);
+        if (self.demoMode) self.fleetStartDemo();
+      });
+      this.$watch('activeChatAgent', function(v) {
+        if (!v) {
+          self.$nextTick(function() { self.refreshFleetVitals(); });
         }
       });
     },
@@ -384,6 +1124,7 @@ function agentsPage() {
 
     /** Called before leaving the Agents page (sidebar / hash). Detach chat handlers but keep WS alive for unread + smooth return. */
     onAgentsPageLeave() {
+      this.fleetTeardown();
       this.activeChatAgent = null;
       try {
         var st = Alpine.store('app');

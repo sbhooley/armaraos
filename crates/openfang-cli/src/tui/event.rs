@@ -444,6 +444,8 @@ pub fn spawn_daemon_stream(
             directives: Default::default(),
             latency_ms: None,
             llm_fallback_note: None,
+            actual_provider: None,
+            actual_model: None,
             compression_savings_pct: 0,
             compressed_input: None,
             compression_semantic_score: None,
@@ -511,6 +513,8 @@ fn daemon_fallback(
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
             latency_ms: body["latency_ms"].as_u64(),
             llm_fallback_note: body["llm_fallback_note"].as_str().map(|s| s.to_string()),
+            actual_provider: body["actual_provider"].as_str().map(|s| s.to_string()),
+            actual_model: body["actual_model"].as_str().map(|s| s.to_string()),
             ainl_runtime_telemetry: None,
         })
     } else {

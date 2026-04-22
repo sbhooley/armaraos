@@ -666,6 +666,35 @@ fn describe_event(event: &Event) -> String {
                 }
                 s
             }
+            SystemEvent::TrajectoryRecorded {
+                agent_id,
+                trajectory_node_id,
+                episode_node_id,
+                summary,
+            } => {
+                let ep = episode_node_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("—");
+                let sum = summary.as_deref().unwrap_or("");
+                format!(
+                    "Trajectory recorded: agent {agent_id}, traj={trajectory_node_id}, episode={ep}: {sum}"
+                )
+            }
+            SystemEvent::FailureLearned {
+                agent_id,
+                failure_node_id,
+                tool_name,
+                source,
+                message_preview,
+            } => {
+                let tool = tool_name.as_deref().unwrap_or("—");
+                let src = source.as_deref().unwrap_or("—");
+                let msg = message_preview.as_deref().unwrap_or("");
+                format!(
+                    "Failure learned: agent {agent_id}, id={failure_node_id}, tool={tool}, source={src}: {msg}"
+                )
+            }
             SystemEvent::WorkflowRunFinished {
                 workflow_name,
                 run_id,

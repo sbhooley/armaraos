@@ -1,7 +1,8 @@
 //! Metering engine — tracks LLM cost and enforces spending quotas.
 
 use openfang_memory::usage::{
-    CompressionSummary, CompressionUsageRecord, ModelUsage, UsageRecord, UsageStore, UsageSummary,
+    CompressionSummary, CompressionUsageRecord, ModelUsage, QuotaBlockRecord, UsageRecord,
+    UsageStore, UsageSummary,
 };
 use openfang_types::adaptive_eco::{
     AdaptiveEcoReplayReport, AdaptiveEcoUsageRecord, AdaptiveEcoUsageSummary,
@@ -35,6 +36,11 @@ impl MeteringEngine {
     /// Record adaptive eco policy telemetry (durable SQLite).
     pub fn record_adaptive_eco(&self, record: &AdaptiveEcoUsageRecord) -> OpenFangResult<()> {
         self.store.record_adaptive_eco(record)
+    }
+
+    /// Record a token/cost/budget block before an LLM turn starts (estimates only).
+    pub fn record_quota_block(&self, record: &QuotaBlockRecord) -> OpenFangResult<()> {
+        self.store.record_quota_block(record)
     }
 
     /// Aggregate adaptive eco events for dashboards.
@@ -243,6 +249,24 @@ impl MeteringEngine {
         let input_cost = (input_tokens as f64 / 1_000_000.0) * input_per_m;
         let output_cost = (output_tokens as f64 / 1_000_000.0) * output_per_m;
         input_cost + output_cost
+    }
+
+    /// Catalog **input** $/1M for `model` (used when persisting compression “would have cost” counterfactuals).
+    pub fn catalog_input_price_per_million(
+        catalog: &openfang_runtime::model_catalog::ModelCatalog,
+        model: &str,
+    ) -> f64 {
+        catalog.pricing(model).map(|(i, _)| i).unwrap_or(1.0)
+    }
+
+    /// Catalog-priced USD for **input** tokens that were not sent because of compression (counterfactual).
+    pub fn catalog_est_input_usd_for_saved_input_tokens(
+        catalog: &openfang_runtime::model_catalog::ModelCatalog,
+        model: &str,
+        input_tokens_saved: u64,
+    ) -> f64 {
+        let p = Self::catalog_input_price_per_million(catalog, model);
+        (input_tokens_saved as f64 / 1_000_000.0) * p
     }
 
     /// Clean up old usage records.
