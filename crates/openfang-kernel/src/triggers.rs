@@ -712,6 +712,17 @@ fn describe_event(event: &Event) -> String {
             } => {
                 format!("Agent '{agent_name}' ({agent_id}) replied: {message_preview}")
             }
+            SystemEvent::ImprovementProposalAdopted {
+                agent_id,
+                proposal_id,
+                graph_node_id,
+                kind,
+            } => {
+                let k = if kind.is_empty() { "—" } else { kind.as_str() };
+                format!(
+                    "Improvement proposal adopted: agent {agent_id}, proposal={proposal_id}, graph={graph_node_id}, kind={k}"
+                )
+            }
         },
         EventPayload::OrchestrationTrace(ev) => {
             format!(

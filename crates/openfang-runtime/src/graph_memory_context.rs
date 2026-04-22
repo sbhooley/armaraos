@@ -13,6 +13,7 @@ static INJECTED_EPISODIC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_SEMANTIC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_CONFLICT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_PROCEDURAL_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INJECTED_PATTERN_CANDIDATE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_FAILURE_RECALL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TRUNCATION_HITS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_LOW_QUALITY_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -52,6 +53,8 @@ pub struct MemoryContextPolicy {
     pub include_semantic_facts: bool,
     pub include_conflicts: bool,
     pub include_procedural_hints: bool,
+    /// Non-promoted tool-sequence procedurals (`!prompt_eligible`) as `## SuggestedPatternCandidates`.
+    pub include_suggested_pattern_candidates: bool,
     /// When true (and learning policy allows failure stack), recent matching `failure` nodes
     /// are injected into the graph-memory prompt block from FTS over the user message.
     pub include_failure_recall: bool,
@@ -59,10 +62,12 @@ pub struct MemoryContextPolicy {
     pub max_semantic_lines: usize,
     pub max_conflict_lines: usize,
     pub max_procedural_lines: usize,
+    pub max_pattern_candidate_lines: usize,
     pub max_episodic_chars: usize,
     pub max_semantic_chars: usize,
     pub max_conflict_chars: usize,
     pub max_procedural_chars: usize,
+    pub max_pattern_candidate_chars: usize,
     pub max_failure_recall_lines: usize,
     pub max_failure_recall_chars: usize,
     pub recall_window_secs: i64,
@@ -85,15 +90,18 @@ impl Default for MemoryContextPolicy {
             include_semantic_facts: true,
             include_conflicts: true,
             include_procedural_hints: true,
+            include_suggested_pattern_candidates: true,
             include_failure_recall: true,
             max_episodic_lines: 4,
             max_semantic_lines: 5,
             max_conflict_lines: 3,
             max_procedural_lines: 3,
+            max_pattern_candidate_lines: 2,
             max_episodic_chars: 700,
             max_semantic_chars: 800,
             max_conflict_chars: 420,
             max_procedural_chars: 420,
+            max_pattern_candidate_chars: 320,
             max_failure_recall_lines: 5,
             max_failure_recall_chars: 600,
             recall_window_secs: 60 * 60 * 24 * 30,
@@ -115,6 +123,8 @@ pub struct PromptMemoryContext {
     pub conflict_lines: Vec<String>,
     pub procedural_lines: Vec<String>,
     pub failure_recall_lines: Vec<String>,
+    /// Not-yet-promoted tool-sequence patterns (Phase 3 candidate pool).
+    pub pattern_candidate_lines: Vec<String>,
     pub skipped_low_quality: usize,
     pub truncation_hits: usize,
     pub provenance_lines: usize,
@@ -127,6 +137,7 @@ impl PromptMemoryContext {
             && self.semantic_lines.is_empty()
             && self.conflict_lines.is_empty()
             && self.procedural_lines.is_empty()
+            && self.pattern_candidate_lines.is_empty()
             && self.failure_recall_lines.is_empty()
     }
 
@@ -136,6 +147,7 @@ impl PromptMemoryContext {
             &self.failure_recall_lines,
             &self.semantic_lines,
             &self.conflict_lines,
+            &self.pattern_candidate_lines,
             &self.procedural_lines,
         )
     }
@@ -183,6 +195,8 @@ pub fn memory_context_metrics() -> serde_json::Value {
         "injected_semantic_total": semantic_total,
         "injected_conflict_total": conflict_total,
         "injected_procedural_total": INJECTED_PROCEDURAL_TOTAL.load(AtomicOrdering::Relaxed),
+        "injected_pattern_candidate_total": INJECTED_PATTERN_CANDIDATE_TOTAL
+            .load(AtomicOrdering::Relaxed),
         "injected_failure_recall_total": INJECTED_FAILURE_RECALL_TOTAL.load(AtomicOrdering::Relaxed),
         "truncation_hits_total": TRUNCATION_HITS_TOTAL.load(AtomicOrdering::Relaxed),
         "skipped_low_quality_total": SKIPPED_LOW_QUALITY_TOTAL.load(AtomicOrdering::Relaxed),
@@ -239,6 +253,11 @@ impl MemoryContextPolicy {
                 "memory_include_procedural_hints",
                 true,
             ),
+            include_suggested_pattern_candidates: metadata_bool(
+                &manifest.metadata,
+                "memory_include_suggested_pattern_candidates",
+                true,
+            ),
             include_failure_recall: metadata_bool(
                 &manifest.metadata,
                 "memory_include_failure_recall",
@@ -257,6 +276,10 @@ impl MemoryContextPolicy {
         if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_PROCEDURAL_HINTS") {
             policy.include_procedural_hints =
                 parse_bool_with_default(Some(v.as_str()), policy.include_procedural_hints);
+        }
+        if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_SUGGESTED_PATTERN_CANDIDATES") {
+            policy.include_suggested_pattern_candidates =
+                parse_bool_with_default(Some(v.as_str()), policy.include_suggested_pattern_candidates);
         }
         if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_EPISODIC_HINTS") {
             policy.include_episodic_hints =
@@ -368,6 +391,12 @@ impl MemoryContextPolicy {
             v.get("include_procedural_hints").and_then(|x| x.as_bool())
         {
             self.include_procedural_hints = include_procedural_hints;
+        }
+        if let Some(b) = v
+            .get("include_suggested_pattern_candidates")
+            .and_then(|x| x.as_bool())
+        {
+            self.include_suggested_pattern_candidates = b;
         }
         if let Some(include_failure_recall) =
             v.get("include_failure_recall").and_then(|x| x.as_bool())
@@ -625,6 +654,77 @@ pub async fn build_prompt_memory_context(
         );
     }
 
+    if policy.include_suggested_pattern_candidates {
+        let mut candidate_scored: Vec<(f32, String)> = recent_procedural
+            .iter()
+            .filter_map(|n| {
+                let AinlNodeType::Procedural { procedural } = &n.node_type else {
+                    return None;
+                };
+                if procedural.retired {
+                    return None;
+                }
+                if procedural.prompt_eligible {
+                    return None;
+                }
+                if procedural.tool_sequence.is_empty() {
+                    return None;
+                }
+                let base = procedural
+                    .fitness
+                    .unwrap_or(procedural.success_rate)
+                    .clamp(0.0, 1.0);
+                let freshness = if procedural.last_invoked_at == 0 {
+                    0.1
+                } else {
+                    recency_score(procedural.last_invoked_at as i64, now_ts)
+                };
+                let score = (base * 0.8) + (freshness * 0.2);
+                let mut line = format!(
+                    "{} -> {}",
+                    if procedural.pattern_name.is_empty() {
+                        "procedure".to_string()
+                    } else {
+                        procedural.pattern_name.clone()
+                    },
+                    procedural.tool_sequence.join(" -> ")
+                );
+                if policy.include_provenance {
+                    line.push_str(&format!(
+                        " [candidate obs={} fitness={}]",
+                        procedural.pattern_observation_count,
+                        procedural
+                            .fitness
+                            .map(|f| format!("{f:.2}"))
+                            .unwrap_or_else(|| "n/a".to_string())
+                    ));
+                    if let Some(trace_id) = &procedural.trace_id {
+                        line.push_str(&format!(" [trace:{}]", short_id_str(trace_id)));
+                    }
+                }
+                Some((score, line))
+            })
+            .collect();
+        candidate_scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        let selected_pc = ctx.pattern_candidate_lines.len();
+        append_limited_lines(
+            &mut ctx.pattern_candidate_lines,
+            candidate_scored
+                .into_iter()
+                .map(|(_, line)| truncate_with_ellipsis(&line, 180))
+                .collect(),
+            policy.max_pattern_candidate_lines,
+            policy.max_pattern_candidate_chars,
+            &mut ctx.truncation_hits,
+        );
+        for line in ctx.pattern_candidate_lines.iter().skip(selected_pc) {
+            ctx.selection_debug.push(serde_json::json!({
+                "block": "SuggestedPatternCandidates",
+                "selected_line": line,
+            }));
+        }
+    }
+
     if policy.include_procedural_hints {
         let mut procedure_scored: Vec<(f32, String)> = recent_procedural
             .iter()
@@ -633,6 +733,9 @@ pub async fn build_prompt_memory_context(
                     return None;
                 };
                 if procedural.retired {
+                    return None;
+                }
+                if !procedural.prompt_eligible {
                     return None;
                 }
                 let base = procedural
@@ -770,11 +873,16 @@ pub async fn build_prompt_memory_context(
         + ctx.semantic_lines.len()
         + ctx.conflict_lines.len()
         + ctx.procedural_lines.len()
+        + ctx.pattern_candidate_lines.len()
         + ctx.failure_recall_lines.len()) as u64;
     INJECTED_EPISODIC_TOTAL.fetch_add(ctx.episodic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_SEMANTIC_TOTAL.fetch_add(ctx.semantic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_CONFLICT_TOTAL.fetch_add(ctx.conflict_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_PROCEDURAL_TOTAL.fetch_add(ctx.procedural_lines.len() as u64, AtomicOrdering::Relaxed);
+    INJECTED_PATTERN_CANDIDATE_TOTAL.fetch_add(
+        ctx.pattern_candidate_lines.len() as u64,
+        AtomicOrdering::Relaxed,
+    );
     INJECTED_FAILURE_RECALL_TOTAL.fetch_add(
         ctx.failure_recall_lines.len() as u64,
         AtomicOrdering::Relaxed,
@@ -791,6 +899,7 @@ pub async fn build_prompt_memory_context(
         semantic = ctx.semantic_lines.len(),
         conflict = ctx.conflict_lines.len(),
         procedural = ctx.procedural_lines.len(),
+        pattern_candidates = ctx.pattern_candidate_lines.len(),
         failure_recall = ctx.failure_recall_lines.len(),
         skipped_low_quality = ctx.skipped_low_quality,
         truncation_hits = ctx.truncation_hits,
@@ -890,6 +999,7 @@ fn count_provenance_lines(ctx: &PromptMemoryContext) -> usize {
         .chain(ctx.semantic_lines.iter())
         .chain(ctx.conflict_lines.iter())
         .chain(ctx.procedural_lines.iter())
+        .chain(ctx.pattern_candidate_lines.iter())
         .chain(ctx.failure_recall_lines.iter())
     {
         if line.contains('[') && line.contains(']') {
@@ -956,10 +1066,29 @@ mod tests {
             procedural.fitness = fitness;
             procedural.retired = retired;
             procedural.last_invoked_at = chrono::Utc::now().timestamp() as u64;
+            procedural.prompt_eligible = true;
+            procedural.pattern_observation_count = procedural
+                .pattern_observation_count
+                .max(ainl_memory::pattern_promotion::DEFAULT_MIN_OBSERVATIONS);
         }
         node.agent_id = writer.agent_id().to_string();
         let inner = writer.inner.lock().await;
         inner.write_node(&node).expect("write procedural");
+    }
+
+    /// Ineligible (pre-promotion) tool-sequence row for SuggestedPatternCandidates.
+    async fn write_pattern_candidate(writer: &crate::graph_memory_writer::GraphMemoryWriter, name: &str) {
+        let mut node = AinlMemoryNode::new_procedural_tools(
+            name.to_string(),
+            vec!["file_read".to_string(), "shell_exec".to_string()],
+            0.8,
+        );
+        if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+            procedural.last_invoked_at = chrono::Utc::now().timestamp() as u64;
+        }
+        node.agent_id = writer.agent_id().to_string();
+        let inner = writer.inner.lock().await;
+        inner.write_node(&node).expect("write pattern candidate");
     }
 
     async fn write_tool_failure(
@@ -1088,6 +1217,33 @@ mod tests {
             .procedural_lines
             .iter()
             .all(|line| !line.contains("retired_proc")));
+    }
+
+    #[tokio::test]
+    async fn pattern_candidates_appear_in_prompt_before_suggested_procedure() {
+        let writer = test_writer("ctx-pat-cand");
+        write_pattern_candidate(&writer, "emerging_pat").await;
+        write_procedure(&writer, "ready_proc", 0.9, Some(0.95), false).await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy {
+                include_suggested_pattern_candidates: true,
+                ..Default::default()
+            },
+            None,
+            false,
+        )
+        .await;
+        let block = ctx.to_prompt_block();
+        let p_c = block
+            .find("## SuggestedPatternCandidates")
+            .expect("candidates block");
+        let p_s = block
+            .find("## SuggestedProcedure")
+            .expect("suggested block");
+        assert!(p_c < p_s, "candidates should precede suggested procedure, got {block}");
+        assert!(block.contains("emerging_pat"), "{block}");
+        assert!(block.contains("ready_proc"), "{block}");
     }
 
     #[tokio::test]

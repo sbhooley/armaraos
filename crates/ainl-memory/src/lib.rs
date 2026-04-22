@@ -59,6 +59,7 @@
 
 pub mod anchored_summary;
 pub mod node;
+pub mod pattern_promotion;
 pub mod query;
 pub mod snapshot;
 pub mod store;
@@ -187,17 +188,34 @@ impl GraphMemory {
     }
 
     /// Store a procedural pattern derived from a live tool sequence (heuristic extraction).
+    ///
+    /// This path treats the row as **curated** (prompt-eligible) so a single write is visible in
+    /// suggested-procedure style recall; use [`Self::write_node`] with a hand-built node if you
+    /// need candidate-only semantics.
     pub fn write_procedural(
         &self,
         pattern_name: &str,
         tool_sequence: Vec<String>,
         confidence: f32,
     ) -> Result<Uuid, String> {
-        let node = AinlMemoryNode::new_procedural_tools(
+        let mut node = AinlMemoryNode::new_procedural_tools(
             pattern_name.to_string(),
             tool_sequence,
             confidence,
         );
+        if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+            procedural.pattern_observation_count =
+                procedural
+                    .pattern_observation_count
+                    .max(crate::pattern_promotion::DEFAULT_MIN_OBSERVATIONS);
+            let floor = crate::pattern_promotion::DEFAULT_FITNESS_FLOOR;
+            if let Some(f) = procedural.fitness {
+                procedural.fitness = Some(f.max(floor));
+            } else {
+                procedural.fitness = Some(floor);
+            }
+            procedural.prompt_eligible = true;
+        }
         let node_id = node.id;
         self.store.write_node(&node)?;
         Ok(node_id)
@@ -229,6 +247,42 @@ impl GraphMemory {
         let since = chrono::Utc::now().timestamp() - seconds_ago;
         self.store
             .query_nodes_by_type_since(kind.as_str(), since, 500)
+    }
+
+    /// Find a recent procedural (tool-sequence) row for this agent whose `tool_sequence` matches
+    /// `tool_sequence` (per-element trim). Returns the **newest** match if several exist
+    /// (e.g. legacy duplicates before merge).
+    pub fn find_procedural_by_tool_sequence(
+        &self,
+        agent_id: &str,
+        tool_sequence: &[String],
+    ) -> Result<Option<AinlMemoryNode>, String> {
+        let norm: Vec<String> = tool_sequence.iter().map(|s| s.trim().to_string()).collect();
+        if norm.is_empty() {
+            return Ok(None);
+        }
+        let nodes = self.recall_by_type(AinlNodeKind::Procedural, 60 * 60 * 24 * 365 * 5)?;
+        for n in nodes {
+            if n.agent_id != agent_id {
+                continue;
+            }
+            let AinlNodeType::Procedural { ref procedural } = n.node_type else {
+                continue;
+            };
+            if procedural.tool_sequence.len() != norm.len() {
+                continue;
+            }
+            let same = procedural
+                .tool_sequence
+                .iter()
+                .zip(norm.iter())
+                .all(|(a, b)| a.trim() == b.trim());
+            if same {
+                // `recall_by_type` is most-recent first; first hit is the canonical row to update.
+                return Ok(Some(n));
+            }
+        }
+        Ok(None)
     }
 
     /// Write a persona trait node.

@@ -16,8 +16,9 @@ For a shorter product overview and benchmarks, see the root [README.md](../READM
 | `off` | 100 % | 0 % | No compression. |
 | `balanced` | ~55 % of tokens | ~40–56 % | Default; strong safety on technical content. |
 | `aggressive` | ~35 % of tokens | ~55–74 % on conversational text | Higher savings; smaller gap vs Balanced on **dense technical** prompts (many opcodes/URLs) because more lines are “hard-locked”. |
+| `adaptive` | (per turn) | (per turn) | **User intent:** run the **adaptive eco** pipeline (model catalog, optional `AINL_ADAPTIVE_COMPRESSION` content hints, circuit breaker, policy). The kernel resolves this to a **concrete** `off` / `balanced` / `aggressive` on each turn before the compressor runs; circuit baseline starts from **balanced**. Selecting adaptive in the UI still runs the resolver even if global `[adaptive_eco].enabled` is `false` (per-request opt-in). |
 
-\*Actual savings depend on length, structure, and how many sentences match **hard** vs **soft** preserve rules (see below).
+\*Actual savings depend on length, structure, and how many sentences match **hard** vs **soft** preserve rules (see below). For `adaptive`, the applied tier and savings follow the **resolved** mode for that turn.
 
 **Passthrough:** Prompts under **80 estimated tokens** skip compression (no benefit after overhead).
 
@@ -55,7 +56,7 @@ The exact lists live in source; tune there for your deployment vocabulary.
 ### Global (`config.toml`)
 
 ```toml
-# balanced (default) | aggressive | off
+# off | balanced | aggressive | adaptive
 efficient_mode = "balanced"   # default is "off"; set here to enable
 
 # Optional — adaptive eco (shadow by default; uses model catalog + durable semantic scores)
@@ -88,8 +89,8 @@ If the agent manifest includes **`metadata.efficient_mode`**, it **wins** over t
 
 ### Dashboard
 
-- **Settings → Budget** — card **Ultra Cost-Efficient Mode** with a dropdown, compression telemetry (window **7d / 30d / all**), and an **Adaptive eco policy** block that loads **`GET /api/usage/adaptive-eco`** and **`/replay`** for the same window.
-- **Chat (agent open)** — header **⚡ eco** pill cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`). The **authoritative per-agent map** is stored in **`~/.armaraos/ui-prefs.json`** under **`agent_eco_modes`** (merged into `localStorage` **`armaraos-eco-modes-v1`** on load) so each agent remembers its own mode across navigation and **desktop reinstalls** that wipe WebView storage. The UI still calls **`POST /api/config/set`** with **`path: "efficient_mode"`** so the running kernel applies the mode for the **currently open** agent’s next message. Global default remains **`efficient_mode`** in **`config.toml`** / **`GET /api/config`** for new installs and for agents without an entry in **`agent_eco_modes`**.
+- **Settings → Budget** — card **Ultra Cost-Efficient Mode** with a dropdown (**Off / Balanced / Aggressive / Adaptive**), compression telemetry (window **7d / 30d / all**), and an **Adaptive eco policy** block (`[adaptive_eco].enabled` / `.enforce`) that loads **`GET /api/usage/adaptive-eco`** and **`/replay`** for the same window. **`efficient_mode = "adaptive"`** opts into per-turn adaptive resolution (see [Modes](#modes-efficient_mode)). **`[adaptive_eco].enabled`** is the global switch for the policy for normal tiers; choosing **Adaptive** still runs the resolver when the table is off (per-request, via the kernel).
+- **Chat (agent open)** — header **⚡ eco** pill cycles **Off → Balanced → Aggressive → Adaptive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`); labels **`eco` / `eco bal` / `eco agg` / `eco ada`**. The **authoritative per-agent map** is stored in **`~/.armaraos/ui-prefs.json`** under **`agent_eco_modes`** (merged into `localStorage` **`armaraos-eco-modes-v1`** on load) so each agent remembers its own mode across navigation and **desktop reinstalls** that wipe WebView storage. The UI still calls **`POST /api/config/set`** with **`path: "efficient_mode"`** so the running kernel applies the mode for the **currently open** agent’s next message. Global default remains **`efficient_mode`** in **`config.toml`** / **`GET /api/config`** for new installs and for agents without an entry in **`agent_eco_modes`**.
 
 ### AINL CLI (host signal only)
 

@@ -156,6 +156,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-improvement-proposals"
+version = "0.1.0"
+dependencies = [
+ "ainl-contracts",
+ "chrono",
+ "hex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "ainl-memory"
 version = "0.1.9-alpha"
 dependencies = [
@@ -4862,6 +4878,7 @@ dependencies = [
  "ainl-contracts",
  "ainl-graph-extractor",
  "ainl-impact-policy",
+ "ainl-improvement-proposals",
  "ainl-memory",
  "ainl-persona",
  "ainl-repo-intel",

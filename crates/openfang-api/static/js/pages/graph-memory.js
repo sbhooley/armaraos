@@ -74,12 +74,15 @@ function graphMemoryPanel() {
       include_semantic_facts: true,
       include_conflicts: true,
       include_procedural_hints: true,
+      include_suggested_pattern_candidates: true,
     },
     inspectScope: 'agent_private',
     inspectEntries: [],
     rememberFactText: '',
     selectedSnapshotId: '',
     viewMode: 'live',
+    improvementProposals: [],
+    improvementProposalsLoading: false,
     governanceBusy: false,
     snapshotLabel: '',
     runCaptures: { A: null, B: null },
@@ -747,6 +750,42 @@ function graphMemoryPanel() {
       await this.refreshGovernanceData();
     },
 
+    improvementProposalRowStatus(p) {
+      if (p == null) {
+        return '—';
+      }
+      if (p.adopted_at != null) {
+        return 'adopted';
+      }
+      if (p.accepted) {
+        return 'validated';
+      }
+      if (p.validation_error) {
+        return 'rejected';
+      }
+      return 'submitted';
+    },
+
+    async loadImprovementProposals() {
+      var aid = String(this.agentId || '').trim();
+      if (!aid) {
+        this.improvementProposals = [];
+        return;
+      }
+      this.improvementProposalsLoading = true;
+      try {
+        var d = await OpenFangAPI.get(
+          '/api/graph-memory/improvement-proposals?agent_id=' + encodeURIComponent(aid) + '&limit=50'
+        );
+        this.improvementProposals = d && d.ok && Array.isArray(d.proposals) ? d.proposals : [];
+      } catch (e) {
+        console.warn('graph-memory: loadImprovementProposals', e);
+        this.improvementProposals = [];
+      } finally {
+        this.improvementProposalsLoading = false;
+      }
+    },
+
     async refreshGovernanceData() {
       await Promise.all([
         this.loadSnapshots(),
@@ -754,6 +793,7 @@ function graphMemoryPanel() {
         this.loadMemoryControls(),
         this.loadInspectEntries(),
         this.loadMemoryDiagnostics(),
+        this.loadImprovementProposals(),
       ]);
     },
 
@@ -785,6 +825,7 @@ function graphMemoryPanel() {
           include_semantic_facts: c.include_semantic_facts !== false,
           include_conflicts: c.include_conflicts !== false,
           include_procedural_hints: c.include_procedural_hints !== false,
+          include_suggested_pattern_candidates: c.include_suggested_pattern_candidates !== false,
         };
       } catch (e) {
         console.error('graph-memory: load controls failed', e);
@@ -806,6 +847,8 @@ function graphMemoryPanel() {
           include_semantic_facts: !!this.memoryControls.include_semantic_facts,
           include_conflicts: !!this.memoryControls.include_conflicts,
           include_procedural_hints: !!this.memoryControls.include_procedural_hints,
+          include_suggested_pattern_candidates:
+            !!this.memoryControls.include_suggested_pattern_candidates,
         });
         this.notifySuccess('Memory controls saved');
       } catch (e) {

@@ -1199,15 +1199,15 @@
                 </span>
                 <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' queued'"></span>
                 <span x-show="sessionCostUsd > 0" :title="'Session cost: $' + sessionCostUsd.toFixed(6)" style="font-size:11px;font-family:var(--font-mono);opacity:0.55;cursor:default;padding:2px 6px;border-radius:6px;background:var(--surface-raised)" x-text="'$' + sessionCostUsd.toFixed(4)"></span>
-                <!-- Eco mode quick-toggle: cycles Off → Balanced → Aggressive → Off -->
+                <!-- Eco mode quick-toggle: cycles Off → Balanced → Aggressive → Adaptive → Off -->
                 <button
                   @click="cycleEcoMode()"
-                  :title="efficientMode === 'off' ? 'Compressor off — click to enable Balanced (↓40–56%)' : efficientMode === 'balanced' ? 'Compressor: Balanced (↓40–56%) — click for Aggressive' : 'Compressor: Aggressive (↓60–74%) — click to turn off'"
+                  :title="efficientMode === 'off' ? 'Compressor off — click to enable Balanced (↓40–56%)' : efficientMode === 'balanced' ? 'Compressor: Balanced (↓40–56%) — click for Aggressive' : efficientMode === 'aggressive' ? 'Compressor: Aggressive (↓60–74%) — click for Adaptive' : efficientMode === 'adaptive' ? 'Adaptive eco — per-turn policy from catalog + content (click to turn off)' : 'Eco mode'"
                   class="eco-pill"
-                  :class="efficientMode === 'off' ? 'eco-pill-off' : efficientMode === 'balanced' ? 'eco-pill-bal' : 'eco-pill-agg'"
+                  :class="efficientMode === 'off' ? 'eco-pill-off' : efficientMode === 'balanced' ? 'eco-pill-bal' : efficientMode === 'aggressive' ? 'eco-pill-agg' : 'eco-pill-ada'"
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg>
-                  <span x-text="efficientMode === 'off' ? 'eco' : efficientMode === 'balanced' ? 'eco bal' : 'eco agg'"></span>
+                  <span x-text="efficientMode === 'off' ? 'eco' : efficientMode === 'balanced' ? 'eco bal' : efficientMode === 'aggressive' ? 'eco agg' : 'eco ada'"></span>
                 </button>
                 <button
                   class="workspace-pill"
@@ -5895,10 +5895,31 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <option value="off">Off — no compression</option>
                   <option value="balanced">Balanced — ~40–56% savings · recommended</option>
                   <option value="aggressive">Aggressive — ~60–74% savings · may trim nuance on dense text</option>
+                  <option value="adaptive">Adaptive — per-turn policy (catalog + content); baseline starts at balanced</option>
                 </select>
                 <span class="text-xs text-dim" x-show="config.efficient_mode && config.efficient_mode !== 'off'">
                   Active · look for <strong>⚡ eco ↓X%</strong> and the <em>diff</em> button in chat responses
                 </span>
+              </div>
+              <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+                <h5 style="margin:0 0 4px;font-size:0.88rem">Adaptive eco policy</h5>
+                <p class="text-xs text-dim" style="margin:0 0 10px;line-height:1.5">
+                  Runs the per-turn adaptive resolver (circuit breaker, shadow recommendations, optional auto tier changes). Uses your <strong>efficient mode</strong> (global default and chat) as the baseline. Saved to <code class="text-xs">config.toml</code> — no environment variables.
+                </p>
+                <label class="flex items-center gap-2" style="cursor:pointer;margin-bottom:6px;align-items:flex-start">
+                  <input type="checkbox" style="margin-top:2px;flex:0 0 auto"
+                    :checked="config.adaptive_eco && config.adaptive_eco.enabled"
+                    @change="setAdaptiveEcoEnabled($event.target.checked)">
+                  <span class="text-sm">Enable adaptive eco (per-turn policy, telemetry, and <code class="text-xs">adaptive_eco</code> in traces)</span>
+                </label>
+                <label class="flex items-center gap-2" style="cursor:pointer;align-items:flex-start"
+                  :style="'opacity:' + (config.adaptive_eco && config.adaptive_eco.enabled ? 1 : 0.45)">
+                  <input type="checkbox" style="margin-top:2px;flex:0 0 auto"
+                    :disabled="!(config.adaptive_eco && config.adaptive_eco.enabled)"
+                    :checked="config.adaptive_eco && config.adaptive_eco.enforce"
+                    @change="setAdaptiveEcoEnforce($event.target.checked)">
+                  <span class="text-sm">Apply recommended compression tier (enforce) — can override the baseline after repeated matching recommendations. Use with care.</span>
+                </label>
               </div>
               <div class="text-xs text-dim" style="margin-top:10px" x-show="compressionUsage && compressionUsage.window">
                 Durable compression telemetry window: <strong x-text="compressionUsage.window"></strong>

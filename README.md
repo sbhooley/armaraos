@@ -469,11 +469,11 @@ ArmaraOS compresses **user input** in Rust before each LLM call (typical **40–
 In `~/.armaraos/config.toml`:
 
 ```toml
-# "balanced" (default) | "aggressive" | "off"
+# "off" | "balanced" (common default) | "aggressive" | "adaptive"
 efficient_mode = "balanced"
 ```
 
-**Dashboard:** **Settings → Budget** — card **Ultra Cost-Efficient Mode** (dropdown + guidance). **While chatting:** header button **⚡ eco** / **⚡ eco bal** / **⚡ eco agg** cycles modes and persists globally.
+**Dashboard:** **Settings → Budget** — card **Ultra Cost-Efficient Mode** (dropdown + guidance, including **Adaptive**). **While chatting:** header **⚡ eco** pill cycles **Off → Balanced → Aggressive → Adaptive → Off** (`eco` / `eco bal` / `eco agg` / `eco ada`) and persists globally via **`POST /api/config/set`**.
 
 Per-agent override (manifest **metadata** wins over global):
 

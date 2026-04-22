@@ -1,0 +1,25 @@
+[package]
+name = "ainl-improvement-proposals"
+version = "0.1.0"
+description = "Closed-loop AINL improvement proposal ledger (validate -> adopt) for self-learning"
+authors = ["Steven Hooley"]
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["ainl", "agent", "learning", "proposals"]
+categories = ["development-tools"]
+
+[dependencies]
+ainl-contracts = { path = "../ainl-contracts" }
+chrono = { workspace = true }
+hex = "0.4"
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

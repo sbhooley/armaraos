@@ -12,7 +12,14 @@
 //! - `GET /api/trajectories` — replay surface: recent rows from `ainl_trajectories`
 //! - `GET /api/graph-memory/failures/search` — FTS search over typed `failure` graph nodes
 //! - `GET /api/graph-memory/failures/recent` — recent typed `failure` graph rows (newest first)
+//! - `POST /api/graph-memory/improvement-proposals/submit` — ledger submit (opt-in via
+//!   `AINL_IMPROVEMENT_PROPOSALS_ENABLED`)
+//! - `POST /api/graph-memory/improvement-proposals/validate` — run default structural validator
+//!   (opt-in via the same env)
+//! - `POST /api/graph-memory/improvement-proposals/adopt` — materialize a validated proposal into
+//!   `ainl_memory.db` and publish `SystemEvent::GraphMemoryWrite` + `ImprovementProposalAdopted`
 
+use ainl_contracts::ProposalEnvelope;
 use ainl_memory::{AinlMemoryNode, AinlNodeKind, AinlNodeType, GraphMemory};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -25,6 +32,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+use openfang_types::event::GraphMemoryWriteProvenance;
+
+use openfang_runtime::kernel_handle::KernelHandle;
 
 use crate::routes::AppState;
 
@@ -179,6 +190,8 @@ pub struct GraphMemoryControlsPayload {
     #[serde(default = "default_true")]
     pub include_procedural_hints: bool,
     #[serde(default = "default_true")]
+    pub include_suggested_pattern_candidates: bool,
+    #[serde(default = "default_true")]
     pub include_failure_recall: bool,
 }
 
@@ -192,6 +205,7 @@ impl Default for GraphMemoryControlsPayload {
             include_semantic_facts: true,
             include_conflicts: true,
             include_procedural_hints: true,
+            include_suggested_pattern_candidates: true,
             include_failure_recall: true,
         }
     }
@@ -1674,6 +1688,7 @@ pub async fn put_graph_memory_controls(
         include_semantic_facts: req.include_semantic_facts,
         include_conflicts: req.include_conflicts,
         include_procedural_hints: req.include_procedural_hints,
+        include_suggested_pattern_candidates: req.include_suggested_pattern_candidates,
         include_failure_recall: req.include_failure_recall,
     };
     let path = controls_path(&state.kernel.config.home_dir, &agent_id);
@@ -1712,6 +1727,7 @@ pub async fn put_graph_memory_controls(
             "include_semantic_facts": controls.include_semantic_facts,
             "include_conflicts": controls.include_conflicts,
             "include_procedural_hints": controls.include_procedural_hints,
+            "include_suggested_pattern_candidates": controls.include_suggested_pattern_candidates,
             "include_failure_recall": controls.include_failure_recall,
         }),
     );
@@ -1738,6 +1754,8 @@ pub struct GraphMemoryControlsPayloadWithAgent {
     pub include_conflicts: bool,
     #[serde(default = "default_true")]
     pub include_procedural_hints: bool,
+    #[serde(default = "default_true")]
+    pub include_suggested_pattern_candidates: bool,
     #[serde(default = "default_true")]
     pub include_failure_recall: bool,
 }
@@ -1992,6 +2010,313 @@ pub async fn post_graph_memory_clear_scope(
         StatusCode::OK,
         Json(json!({ "ok": true, "deleted": deleted })),
     )
+}
+
+#[derive(Deserialize)]
+pub struct ImprovementProposalSubmitRequest {
+    pub agent_id: String,
+    pub envelope: ProposalEnvelope,
+    pub proposed_ainl_text: String,
+}
+
+#[derive(Deserialize)]
+pub struct ImprovementProposalValidateRequest {
+    pub agent_id: String,
+    /// UUID string returned from submit.
+    pub proposal_id: String,
+    /// `structural` (default) | `strict` | `external` — see `AINL_IMPROVEMENT_PROPOSALS_DEFAULT_VALIDATE_MODE` and
+    /// `AINL_IMPROVEMENT_PROPOSALS_EXTERNAL_VALIDATE` in the runtime.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+/// Query for [`get_improvement_proposals`].
+#[derive(Deserialize)]
+pub struct ImprovementProposalsListQuery {
+    pub agent_id: String,
+    #[serde(default = "default_improvement_proposals_list_limit")]
+    pub limit: usize,
+}
+
+fn default_improvement_proposals_list_limit() -> usize {
+    50
+}
+
+fn is_pattern_promote_envelope(k: &str) -> bool {
+    let t = k.trim();
+    t.eq_ignore_ascii_case("pattern_promote")
+        || t.eq_ignore_ascii_case("pattern-promote")
+        || t.to_ascii_lowercase() == "pattern promote"
+}
+
+/// POST /api/graph-memory/improvement-proposals/submit
+pub async fn post_improvement_proposal_submit(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImprovementProposalSubmitRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            );
+        }
+    };
+    if !openfang_runtime::improvement_proposals_host::env_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+            })),
+        );
+    }
+    let submit_res = openfang_runtime::improvement_proposals_host::submit(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        &req.envelope,
+        &req.proposed_ainl_text,
+    );
+    match submit_res {
+        Ok(id) => {
+            let _ = append_audit(
+                &state.kernel.config.home_dir,
+                &agent_id,
+                "improvement_proposal_submit",
+                json!({ "proposal_id": id.to_string(), "kind": &req.envelope.kind }),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "proposal_id": id.to_string() })),
+            )
+        }
+        Err(e) if e.to_lowercase().contains("hash mismatch") => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+    }
+}
+
+/// POST /api/graph-memory/improvement-proposals/validate
+pub async fn post_improvement_proposal_validate(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImprovementProposalValidateRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            );
+        }
+    };
+    let id = match Uuid::parse_str(req.proposal_id.trim()) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": "proposal_id must be a UUID string" })),
+            );
+        }
+    };
+    if !openfang_runtime::improvement_proposals_host::env_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+            })),
+        );
+    }
+    let mode = req
+        .mode
+        .as_deref()
+        .and_then(openfang_runtime::improvement_proposals_host::parse_mode);
+    let v = openfang_runtime::improvement_proposals_host::validate_proposal(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        id,
+        mode,
+    );
+    match v {
+        Ok(r) => {
+            let _ = append_audit(
+                &state.kernel.config.home_dir,
+                &agent_id,
+                "improvement_proposal_validate",
+                json!({ "proposal_id": r.id.to_string(), "accepted": r.accepted, "error": r.error, "mode": &req.mode }),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "proposal_id": r.id.to_string(),
+                    "accepted": r.accepted,
+                    "error": r.error,
+                    "mode_applied": req.mode
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+    }
+}
+
+/// GET /api/graph-memory/improvement-proposals?agent_id=…&limit=…
+pub async fn get_improvement_proposals(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ImprovementProposalsListQuery>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&q.agent_id) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e, "proposals": [] })),
+            );
+        }
+    };
+    if !openfang_runtime::improvement_proposals_host::env_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on",
+                "proposals": []
+            })),
+        );
+    }
+    match openfang_runtime::improvement_proposals_host::list_proposals(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        q.limit,
+    ) {
+        Ok(rows) => (StatusCode::OK, Json(json!({ "ok": true, "proposals": rows }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e, "proposals": [] })),
+        ),
+    }
+}
+
+/// POST /api/graph-memory/improvement-proposals/adopt
+///
+/// Request body is the same as validate: `agent_id` + `proposal_id` (UUID), optional `mode` ignored.
+pub async fn post_improvement_proposal_adopt(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ImprovementProposalValidateRequest>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&req.agent_id) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            );
+        }
+    };
+    let id = match Uuid::parse_str(req.proposal_id.trim()) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": "proposal_id must be a UUID string" })),
+            );
+        }
+    };
+    if !openfang_runtime::improvement_proposals_host::env_enabled() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "ok": false,
+                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+            })),
+        );
+    }
+    match openfang_runtime::improvement_proposals_host::adopt_validated_proposal(
+        &state.kernel.config.home_dir,
+        &agent_id,
+        id,
+    ) {
+        Ok(r) => {
+            let storage = if is_pattern_promote_envelope(&r.proposal_kind) {
+                "procedural"
+            } else {
+                "semantic"
+            };
+            let prov = GraphMemoryWriteProvenance {
+                node_ids: vec![r.graph_node_id.to_string()],
+                // Envelope `kind` (mirrors kernel `ImprovementProposalAdopted.kind`); see `summary` for storage class.
+                node_kind: Some(r.proposal_kind.clone()),
+                reason: Some("improvement_proposal_adopted".to_string()),
+                summary: Some(format!(
+                    "improvement proposal {id} → {storage} node {} ({}{})",
+                    r.graph_node_id,
+                    r.proposal_kind,
+                    if r.idempotent { ", idempotent" } else { "" }
+                )),
+                trace_id: Some(id.to_string()),
+                tool_name: None,
+            };
+            let n = state
+                .kernel
+                .notify_graph_memory_write(
+                    &agent_id,
+                    "improvement_proposal",
+                    Some(prov),
+                )
+                .await;
+            if let Err(e) = n {
+                tracing::warn!(target: "openfang_api", "improvement proposal kernel notify: {e}");
+            }
+            let _ = append_audit(
+                &state.kernel.config.home_dir,
+                &agent_id,
+                "improvement_proposal_adopt",
+                json!({
+                    "proposal_id": id.to_string(),
+                    "graph_node_id": r.graph_node_id.to_string(),
+                    "kind": r.proposal_kind,
+                    "idempotent": r.idempotent
+                }),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "proposal_id": id.to_string(),
+                    "graph_node_id": r.graph_node_id.to_string(),
+                    "kind": r.proposal_kind,
+                    "idempotent": r.idempotent
+                })),
+            )
+        }
+        Err(e) if e == "proposal already adopted to graph" => (
+            StatusCode::CONFLICT,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+        Err(e) if e.contains("not structurally accepted") => (
+            StatusCode::CONFLICT,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+        Err(e) if e == "proposal not found in ledger" => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+        Err(e) if e.contains("ledger could not be marked") => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e })),
+        ),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+    }
 }
 
 #[cfg(test)]

@@ -129,6 +129,10 @@ mod tests {
             input_price_per_million: None,
             shadow_only: true,
             enforce: false,
+            content_recommendation: None,
+            content_recommendation_confidence: None,
+            compression_profile_id: None,
+            cache_effective_ttl_secs: None,
         };
         let r = build_eco_counterfactual_receipt(
             &msg,

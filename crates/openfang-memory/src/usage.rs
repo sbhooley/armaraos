@@ -61,6 +61,12 @@ pub struct ModelUsage {
     pub call_count: u64,
 }
 
+/// OpenRouter (and similar) `…:free` routes: treat as **$0** marginal in DB repairs and
+/// [UsageStore::backfill_compression_pricing] skips, so we never re-price from catalog.
+fn is_marginal_free_model_id(model: &str) -> bool {
+    model.to_ascii_lowercase().contains(":free")
+}
+
 /// Daily usage breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyBreakdown {
@@ -908,6 +914,9 @@ impl UsageStore {
         for (id, model, provider, saved_i, billed_i, mut price, mut est_saved, mut billed_cost) in
             candidates
         {
+            if is_marginal_free_model_id(&model) {
+                continue;
+            }
             let saved = saved_i.max(0) as u64;
             let billed = billed_i.max(0) as u64;
             let snapshot = match lookup(&model) {
@@ -1059,6 +1068,40 @@ impl UsageStore {
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
 
         Ok(copied)
+    }
+
+    /// One-shot repair: rows whose model id contains a **:free** route (OpenRouter-style) should
+    /// have **$0** cost in analytics, not a legacy $1/M unknown-model fallback. Idempotent: safe
+    /// to re-run; only touches `cost_usd` on `usage_events` and the dollar/price fields on
+    /// `eco_compression_events` for matching models.
+    ///
+    /// Return `(usage_events rows updated, eco_compression_events rows updated)`.
+    pub fn backfill_marginal_free_tier_costs(
+        &self,
+    ) -> OpenFangResult<(u64, u64)> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        let n_usage = conn
+            .execute(
+                "UPDATE usage_events
+                    SET cost_usd = 0.0
+                  WHERE lower(model) LIKE '%:free%'",
+                [],
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+        let n_comp = conn
+            .execute(
+                "UPDATE eco_compression_events
+                    SET input_price_per_million_usd = 0.0,
+                        est_input_cost_saved_usd = 0.0,
+                        billed_input_cost_usd = 0.0
+                  WHERE lower(model) LIKE '%:free%'",
+                [],
+            )
+            .map_err(|e| OpenFangError::Memory(e.to_string()))? as u64;
+        Ok((n_usage, n_comp))
     }
 
     /// Query total cost in the last hour for an agent.
@@ -2337,6 +2380,76 @@ mod tests {
         // Idempotency: a second run touches no compression rows that already have billed values.
         let copied_again = store.backfill_compression_billed_tokens().unwrap();
         assert_eq!(copied_again, 0);
+    }
+
+    #[test]
+    fn test_backfill_marginal_free_tier_costs() {
+        let store = setup();
+        let agent = AgentId::new();
+        store
+            .record(&UsageRecord {
+                agent_id: agent,
+                model: "qwen/qwen3.6-plus:free".to_string(),
+                input_tokens: 1_000_000,
+                output_tokens: 100_000,
+                cost_usd: 19.25,
+                tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            })
+            .unwrap();
+        store
+            .record(&UsageRecord {
+                agent_id: agent,
+                model: "claude-sonnet-4-6".to_string(),
+                input_tokens: 1,
+                output_tokens: 1,
+                cost_usd: 0.10,
+                tool_calls: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            })
+            .unwrap();
+        let conn = store.pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO eco_compression_events (
+                id, agent_id, timestamp, mode, model,
+                original_tokens_est, compressed_tokens_est, savings_pct, semantic_preservation_score,
+                input_tokens_saved, input_price_per_million_usd, est_input_cost_saved_usd,
+                provider, billed_input_tokens, billed_input_cost_usd
+            ) VALUES ('cfree', ?1, datetime('now'), 'efficient', 'nvidia/nemotron:free',
+                      1000, 500, 50, NULL, 500, 1.0, 0.0005, 'openrouter', 1000, 0.001)",
+            rusqlite::params![agent.0.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+
+        let (n_u, n_c) = store.backfill_marginal_free_tier_costs().unwrap();
+        assert_eq!(n_u, 1);
+        assert_eq!(n_c, 1);
+
+        let s = store.query_summary(None).unwrap();
+        assert!((s.total_cost_usd - 0.10).abs() < 1e-6, "free route cost should be zeroed");
+        let conn = store.pool.get().unwrap();
+        let c: f64 = conn
+            .query_row(
+                "SELECT cost_usd FROM usage_events WHERE model LIKE '%:free%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(c, 0.0);
+        let (p, e, b): (f64, f64, f64) = conn
+            .query_row(
+                "SELECT input_price_per_million_usd, est_input_cost_saved_usd, billed_input_cost_usd
+                 FROM eco_compression_events WHERE id = 'cfree'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(p, 0.0);
+        assert_eq!(e, 0.0);
+        assert_eq!(b, 0.0);
     }
 
     #[test]

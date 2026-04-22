@@ -422,11 +422,14 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
 /// Build bounded graph-memory prompt sections in deterministic order.
 ///
 /// The caller is expected to pass pre-ranked/pre-truncated lines per block.
+/// `suggested_pattern_candidates` lists tool sequences not yet past the promotion gate; `suggested_procedure`
+/// lists promoted rows (`prompt_eligible`).
 pub fn build_graph_memory_sections(
     recent_attempts: &[String],
     failure_recall: &[String],
     known_facts: &[String],
     known_conflicts: &[String],
+    suggested_pattern_candidates: &[String],
     suggested_procedure: &[String],
 ) -> String {
     let mut out = String::new();
@@ -457,6 +460,14 @@ pub fn build_graph_memory_sections(
     if !known_conflicts.is_empty() {
         out.push_str("\n## KnownConflicts\n");
         for line in known_conflicts {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !suggested_pattern_candidates.is_empty() {
+        out.push_str("\n## SuggestedPatternCandidates\n");
+        for line in suggested_pattern_candidates {
             out.push_str("- ");
             out.push_str(line);
             out.push('\n');
@@ -1025,7 +1036,7 @@ mod tests {
 
     #[test]
     fn test_graph_memory_sections_empty() {
-        let section = build_graph_memory_sections(&[], &[], &[], &[], &[]);
+        let section = build_graph_memory_sections(&[], &[], &[], &[], &[], &[]);
         assert!(section.is_empty());
     }
 
@@ -1036,6 +1047,7 @@ mod tests {
             &[],
             &[],
             &["fact x conflicts y".to_string()],
+            &[],
             &[],
         );
         assert!(section.contains("## RecentAttempts"));
@@ -1052,17 +1064,22 @@ mod tests {
             &["fr1".to_string()],
             &["f1".to_string()],
             &["c1".to_string()],
+            &["pc1".to_string()],
             &["p1".to_string()],
         );
         let p_attempts = section.find("## RecentAttempts").unwrap_or(usize::MAX);
         let p_failure = section.find("## FailureRecall").unwrap_or(usize::MAX);
         let p_facts = section.find("## KnownFacts").unwrap_or(usize::MAX);
         let p_conflicts = section.find("## KnownConflicts").unwrap_or(usize::MAX);
+        let p_cand = section
+            .find("## SuggestedPatternCandidates")
+            .unwrap_or(usize::MAX);
         let p_procedure = section.find("## SuggestedProcedure").unwrap_or(usize::MAX);
         assert!(p_attempts < p_failure);
         assert!(p_failure < p_facts);
         assert!(p_facts < p_conflicts);
-        assert!(p_conflicts < p_procedure);
+        assert!(p_conflicts < p_cand);
+        assert!(p_cand < p_procedure);
     }
 
     #[test]

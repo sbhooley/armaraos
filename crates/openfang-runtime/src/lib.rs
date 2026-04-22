@@ -41,6 +41,12 @@ pub fn graph_memory_learning_metrics() -> serde_json::Value {
     graph_memory_learning::metrics_snapshot()
 }
 
+/// Counters for improvement-proposal submit/validate (see `improvement_proposals_host`).
+#[must_use]
+pub fn improvement_proposals_metrics() -> serde_json::Value {
+    improvement_proposals_host::metrics_snapshot()
+}
+
 /// Runtime counters for ainl-runtime bridge cache behavior.
 #[must_use]
 pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
@@ -101,6 +107,8 @@ pub mod graph_extractor;
 pub mod graph_memory_context;
 pub mod graph_memory_learning;
 pub mod graph_memory_writer;
+pub mod improvement_proposals_host;
+mod improvement_proposals_validators;
 pub mod hooks;
 pub mod host_ainl_snapshot;
 pub mod host_functions;

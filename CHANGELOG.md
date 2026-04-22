@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries below **[0.7.5]** describe the **0.7.5** release candidate on `main` as of the dated section header.
 
+### Added
+
+- **Ultra Cost-Efficient `efficient_mode: adaptive`:** Chat header **eco** pill cycles **Off → Balanced → Aggressive → Adaptive → Off** (`eco ada`); **Settings → Budget** includes the same value. The kernel runs the adaptive eco pipeline when the user selects **adaptive** even if global `[adaptive_eco].enabled` is false (per-request opt-in); the compressor still sees a **concrete** tier after resolution. `ainl-compression::EfficientMode::parse_config` maps `"adaptive"` to **Balanced** as a safe fallback. Docs: [prompt-compression-efficient-mode.md](docs/prompt-compression-efficient-mode.md), [configuration.md](docs/configuration.md#efficient_mode-top-level-detail), [api-reference.md](docs/api-reference.md#post-apiconfigset).
+
 ### Changed
 
 - **Dashboard — chat unread + notification center:** Per-agent chat unread (sidebar **All Agents** / **Quick open**, **Fleet Status** next to the title, tab title) is mirrored into the **bell** as **`chat-unread-*` rows** with **`notifyCenter.syncChatUnreadRows()`**; kernel **`AgentAssistantReply`** now routes through the same **`bumpAgentChatUnread`** path. **Dismiss** / **Clear all** clear the shared client state. Implementation: `crates/openfang-api/static/js/app.js`, `index_body.html`, `css/components.css`. Docs: [dashboard-testing.md](docs/dashboard-testing.md).
@@ -21,6 +25,7 @@ Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries belo
 
 ### Documentation
 
+- **Efficient mode (`adaptive`):** [docs/dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md), [docs/operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md](docs/operations/ADAPTIVE_ECO_STAGING_AND_ENFORCEMENT.md), [README.md](README.md), [docs/SELF_LEARNING_INTEGRATION_MAP.md](docs/SELF_LEARNING_INTEGRATION_MAP.md) — chat **eco ada** pill cycle, Settings option, user mode vs `[adaptive_eco]`.
 - **Curated cron + Chat + desktop OS notifications:** **[docs/scheduled-ainl.md](docs/scheduled-ainl.md)** (*Session transcript, notifications, and routine monitors*; Tauri filter), **[docs/ootb-ainl.md](docs/ootb-ainl.md)** (health/budget rows + “where output goes”), **[docs/desktop.md](docs/desktop.md)** (*Native OS notifications*), **[docs/dashboard-design-system.md](docs/dashboard-design-system.md)** (*Chat composer*), and **[docs/README.md](docs/README.md)** (Scheduled AINL + OOTB index rows).
 - **Voice (STT / TTS expectations):** Updated **[docs/local-voice.md](docs/local-voice.md)**, **[docs/launch-roadmap.md](docs/launch-roadmap.md)** (§3.1), **[docs/development-testing.md](docs/development-testing.md)**, **[docs/getting-started.md](docs/getting-started.md)**, and **[docs/README.md](docs/README.md)** to state that **user audio is transcribed to text** for the agent, **assistant replies are text in chat by default**, and **optional Piper voice reply** only when configured and requested.
 

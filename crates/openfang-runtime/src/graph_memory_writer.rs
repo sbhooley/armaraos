@@ -17,6 +17,7 @@
 #[cfg(feature = "ainl-extractor")]
 use ainl_graph_extractor::GraphExtractorTask;
 use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
+use ainl_memory::pattern_promotion;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
 use ainl_persona::PersonaAxis;
@@ -671,14 +672,56 @@ impl GraphMemoryWriter {
         let seq_preview = tool_sequence.join(" → ");
         let res = {
             let inner = self.inner.lock().await;
-            let mut node =
-                AinlMemoryNode::new_procedural_tools(name.to_string(), tool_sequence, confidence);
-            node.agent_id = self.agent_id.clone();
-            if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
-                procedural.trace_id = trace_id.clone();
+            let found = match inner.find_procedural_by_tool_sequence(&self.agent_id, &tool_sequence)
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(
+                        agent_id = %self.agent_id,
+                        error = %e,
+                        "find_procedural_by_tool_sequence failed; writing new pattern row"
+                    );
+                    None
+                }
+            };
+            if let Some(mut node) = found {
+                if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+                    procedural.pattern_observation_count =
+                        procedural.pattern_observation_count.saturating_add(1);
+                    let new_ema = pattern_promotion::ema_fitness_update(
+                        procedural.fitness,
+                        confidence,
+                    );
+                    procedural.fitness = Some(new_ema);
+                    procedural.confidence = Some(confidence.clamp(0.0, 1.0));
+                    if !name.is_empty() {
+                        procedural.pattern_name = name.to_string();
+                    }
+                    if pattern_promotion::should_promote(
+                        procedural.pattern_observation_count,
+                        new_ema,
+                    ) {
+                        procedural.prompt_eligible = true;
+                    }
+                    if let Some(t) = trace_id.as_ref() {
+                        procedural.trace_id = Some(t.clone());
+                    }
+                }
+                let id = node.id;
+                inner.write_node(&node).map(|()| id)
+            } else {
+                let mut node = AinlMemoryNode::new_procedural_tools(
+                    name.to_string(),
+                    tool_sequence,
+                    confidence,
+                );
+                node.agent_id = self.agent_id.clone();
+                if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+                    procedural.trace_id = trace_id.clone();
+                }
+                let id = node.id;
+                inner.write_node(&node).map(|()| id)
             }
-            let id = node.id;
-            inner.write_node(&node).map(|()| id)
         };
         match res {
             Ok(id) => {
@@ -1471,6 +1514,48 @@ mod tests {
             .find(|n| n["node_type"]["type"] == "procedural")
             .expect("procedural in export");
         assert_eq!(proc_json["node_type"]["trace_id"], "trace-z99");
+    }
+
+    #[tokio::test]
+    async fn record_pattern_merge_updates_single_row_and_promotes() {
+        let _guard = env_lock().lock().await;
+        let prev_min = std::env::var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS").ok();
+        let prev_floor = std::env::var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR").ok();
+        std::env::set_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS", "3");
+        std::env::set_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR", "0.7");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("record_pat_merge.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "pat-merge-agent".to_string(),
+            on_write: None,
+        };
+        let seq = vec!["tool_a".into(), "tool_b".into()];
+        for _ in 0..3 {
+            writer
+                .record_pattern("demo_pat", seq.clone(), 0.85, None)
+                .await;
+        }
+        let v = writer.export_graph_json().await.expect("export");
+        let nodes = v["nodes"].as_array().expect("nodes");
+        let procedurals: Vec<_> = nodes
+            .iter()
+            .filter(|n| n["node_type"]["type"] == "procedural")
+            .collect();
+        assert_eq!(procedurals.len(), 1, "expected merged single procedural row");
+        assert_eq!(procedurals[0]["node_type"]["prompt_eligible"], true);
+        assert_eq!(procedurals[0]["node_type"]["pattern_observation_count"], 3);
+
+        match prev_min {
+            Some(p) => std::env::set_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS", p),
+            None => std::env::remove_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS"),
+        }
+        match prev_floor {
+            Some(p) => std::env::set_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR", p),
+            None => std::env::remove_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR"),
+        }
     }
 
     #[tokio::test]

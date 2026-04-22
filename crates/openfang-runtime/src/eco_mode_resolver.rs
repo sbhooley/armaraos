@@ -1,6 +1,16 @@
 //! Adaptive eco mode resolution: provider cache capability matrix + model catalog pricing.
 //!
+//! When `AINL_ADAPTIVE_COMPRESSION=1` (truthy), this layer merges
+//! `ainl_compression::recommend_mode_for_content` into the shadow `recommended_mode` (capped with
+//! [`AdaptiveEcoConfig::allow_aggressive_on_structured`]), adds optional
+//! `compression_profile_id` from `ainl_compression::suggest_profile_id_for_project` when
+//! `metadata["project_id"]` is set, and records a cache TTL stretch for operators (see
+//! `ainl_compression::effective_ttl_with_hysteresis`).
+//!
 //! Default Milestone 2 behavior is **shadow-only** — see [`openfang_types::adaptive_eco::AdaptiveEcoConfig::enforce`].
+
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use openfang_types::adaptive_eco::{
     AdaptiveEcoConfig, AdaptiveEcoHysteresisState, AdaptiveEcoTurnSnapshot,
@@ -8,6 +18,25 @@ use openfang_types::adaptive_eco::{
 use openfang_types::agent::AgentManifest;
 
 use crate::model_catalog::ModelCatalog;
+
+static CACHE_STREAK: OnceLock<Mutex<HashMap<String, (String, u32)>>> = OnceLock::new();
+
+fn cache_streak_map() -> &'static Mutex<HashMap<String, (String, u32)>> {
+    CACHE_STREAK.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// When truthy, merge `ainl_compression` adaptive + cache metadata into the eco snapshot.
+#[must_use]
+pub fn env_ainl_adaptive_compression() -> bool {
+    std::env::var("AINL_ADAPTIVE_COMPRESSION")
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
 
 /// Normalize user/config eco strings to `off` | `balanced` | `aggressive`.
 #[must_use]
@@ -109,6 +138,24 @@ fn structured_payload_heavy(message: &str) -> bool {
     code_ticks >= 2 || braces >= 10 || sqlish
 }
 
+/// Bump consecutive-turn streak for `(agent_name, project_key)`; used for cache TTL stretch.
+fn next_cache_streak(agent_name: &str, logical: &str) -> u32 {
+    let m = cache_streak_map();
+    if let Ok(mut g) = m.lock() {
+        let e = g
+            .entry(agent_name.to_string())
+            .or_insert((String::new(), 0u32));
+        if e.0 == logical {
+            e.1 = e.1.saturating_add(1);
+        } else {
+            e.0 = logical.to_string();
+            e.1 = 1;
+        }
+        return e.1;
+    }
+    1
+}
+
 /// Resolve adaptive eco mode for this turn. Callers should set manifest `adaptive_eco` metadata from the result.
 #[must_use]
 pub fn resolve_adaptive_eco_turn(
@@ -117,6 +164,11 @@ pub fn resolve_adaptive_eco_turn(
     user_message: &str,
     catalog: &ModelCatalog,
 ) -> AdaptiveEcoTurnSnapshot {
+    use ainl_compression::{
+        effective_ttl_with_hysteresis, recommend_mode_for_content, suggest_profile_id_for_project,
+        EfficientMode,
+    };
+
     let provider = manifest.model.provider.trim().to_string();
     let model = manifest.model.model.trim().to_string();
     let cache_capability = cache_capability_label(&provider).to_string();
@@ -130,9 +182,19 @@ pub fn resolve_adaptive_eco_turn(
             .and_then(|v| v.as_str())
             .unwrap_or("off"),
     );
+    let base_tier = compression_tier_rank(base);
+
+    let project_id = manifest
+        .metadata
+        .get("project_id")
+        .and_then(|v| v.as_str());
+    let compression_profile_id: Option<String> = project_id.map(|p| {
+        let id = suggest_profile_id_for_project(p);
+        id.to_string()
+    });
 
     let mut reason_codes: Vec<String> = Vec::new();
-    reason_codes.push("adaptive_eco:v1".to_string());
+    reason_codes.push("adaptive_eco:v2_ainl_compression".to_string());
     reason_codes.push(format!("provider_capability:{cache_capability}"));
 
     if let Some(p) = input_price_per_million {
@@ -142,8 +204,60 @@ pub fn resolve_adaptive_eco_turn(
         reason_codes.push("pricing_unresolved_for_model".to_string());
     }
 
-    let mut recommended = base.to_string();
+    if let Some(ref pid) = compression_profile_id {
+        reason_codes.push(format!("ainl_profile_hint:{pid}"));
+    }
 
+    let mut content_recommendation: Option<String> = None;
+    let mut content_recommendation_confidence: Option<f32> = None;
+    let mut cache_effective_ttl_secs: Option<u64> = None;
+
+    let r_content = if env_ainl_adaptive_compression() {
+        Some(recommend_mode_for_content(user_message))
+    } else {
+        None
+    };
+    if let Some(ref r) = r_content {
+        let cr = match r.mode {
+            EfficientMode::Off => "off",
+            EfficientMode::Balanced => "balanced",
+            EfficientMode::Aggressive => "aggressive",
+        }
+        .to_string();
+        content_recommendation = Some(cr);
+        content_recommendation_confidence = Some(r.confidence);
+        for c in &r.reasons {
+            reason_codes.push(format!("ainl_content_reason:{c}"));
+        }
+        let project_key = format!("{}|{}", manifest.name, project_id.unwrap_or(""));
+        let strike = next_cache_streak(manifest.name.as_str(), &project_key);
+        let cttl = effective_ttl_with_hysteresis(cfg.provider_prompt_cache_ttl_secs.max(1), strike);
+        cache_effective_ttl_secs = Some(cttl.effective_ttl_secs);
+        reason_codes.push(format!("ainl_cache_stretch:{}", cttl.effective_ttl_secs));
+    }
+
+    let content_tier = r_content
+        .as_ref()
+        .map(|r| match r.mode {
+            EfficientMode::Off => 0u8,
+            EfficientMode::Balanced => 1u8,
+            EfficientMode::Aggressive => 2u8,
+        });
+    let mut recommended = if let Some(ct) = content_tier {
+        let rec_t = if base_tier == 0 {
+            0u8
+        } else {
+            base_tier.max(ct)
+        }
+        .min(2u8);
+        match rec_t {
+            0 => "off".to_string(),
+            1 => "balanced".to_string(),
+            _ => "aggressive".to_string(),
+        }
+    } else {
+        base.to_string()
+    };
     if structured_payload_heavy(user_message)
         && recommended == "aggressive"
         && !cfg.allow_aggressive_on_structured
@@ -177,6 +291,10 @@ pub fn resolve_adaptive_eco_turn(
         input_price_per_million,
         shadow_only,
         enforce: cfg.enforce,
+        content_recommendation: content_recommendation.clone(),
+        content_recommendation_confidence,
+        compression_profile_id,
+        cache_effective_ttl_secs,
     }
 }
 
@@ -256,6 +374,10 @@ mod tests {
         assert_eq!(snap.effective_mode, "balanced");
         assert!(snap.shadow_only);
         assert!(snap.reason_codes.iter().any(|s| s.contains("shadow_only")));
+        assert!(snap
+            .reason_codes
+            .iter()
+            .any(|s| s.contains("adaptive_eco:")));
     }
 
     #[test]
@@ -293,6 +415,23 @@ mod tests {
         assert_eq!(compression_tier_rank("aggressive"), 2);
         assert!(prompt_cache_capability_label("explicit_prompt_cache"));
         assert!(!prompt_cache_capability_label("none_local"));
+    }
+
+    #[test]
+    fn project_id_sets_compression_profile_id() {
+        let cat = ModelCatalog::new();
+        let cfg = AdaptiveEcoConfig {
+            enabled: true,
+            enforce: false,
+            ..Default::default()
+        };
+        let mut m = manifest_with("balanced", "openrouter", "m");
+        m.metadata.insert(
+            "project_id".to_string(),
+            serde_json::json!("acme-customer-prod"),
+        );
+        let snap = resolve_adaptive_eco_turn(&cfg, &m, "hi", &cat);
+        assert_eq!(snap.compression_profile_id.as_deref(), Some("quality_preserve"));
     }
 
     #[test]

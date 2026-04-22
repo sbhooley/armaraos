@@ -20,6 +20,7 @@ ainl-compression = { path = "../ainl-compression", version = "0.1.0-alpha" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
 ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
 ainl-contracts = { path = "../ainl-contracts" }
+ainl-improvement-proposals = { path = "../ainl-improvement-proposals", version = "0.1.0" }
 ainl-repo-intel = { path = "../ainl-repo-intel" }
 ainl-context-freshness = { path = "../ainl-context-freshness" }
 ainl-context-compiler = { path = "../ainl-context-compiler" }

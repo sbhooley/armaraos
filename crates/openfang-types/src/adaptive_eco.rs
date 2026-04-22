@@ -211,6 +211,18 @@ pub struct AdaptiveEcoTurnSnapshot {
     pub shadow_only: bool,
     /// Copy of [`AdaptiveEcoConfig::enforce`] for consumers that only read metadata.
     pub enforce: bool,
+    /// Raw `ainl_compression::recommend_mode_for_content` label before merge (when `AINL_ADAPTIVE_COMPRESSION=1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_recommendation: Option<String>,
+    /// Confidence from `ainl_compression` adaptive (0.0–1.0) when `content_recommendation` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_recommendation_confidence: Option<f32>,
+    /// `suggest_profile_id_for_project` from `metadata.project_id` (hint only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_profile_id: Option<String>,
+    /// `effective_ttl_with_hysteresis` (base = provider cache TTL) when adaptive compression env is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_effective_ttl_secs: Option<u64>,
 }
 
 /// Per billing-agent hysteresis state for adaptive eco enforcement (in-memory; cleared on restart).

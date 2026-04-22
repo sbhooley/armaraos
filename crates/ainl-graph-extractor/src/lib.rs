@@ -23,6 +23,7 @@ mod recurrence;
 mod runner;
 mod turn_extract;
 
+pub use ainl_memory::pattern_promotion;
 pub use ainl_persona::{AXIS_EVOLUTION_SNAPSHOT, EVOLUTION_TRAIT_NAME};
 pub use ainl_semantic_tagger::{tag_tool_names, SemanticTag, TagNamespace};
 pub use extractor::{ExtractionReport, GraphExtractorTask};

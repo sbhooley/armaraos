@@ -58,14 +58,14 @@ Below the Settings tab bar (visible on **every** Settings tab once load succeeds
 
 - **Where:** **Settings → Budget** — card at the bottom of the Budget tab (after global budget meters / agent ranking).
 - **Markup / logic:** `index_body.html` — `<select>` bound to `config.efficient_mode`, `@change="saveEfficientMode()"`; `static/js/pages/settings.js`.
-- **Options:** Off, Balanced (~40–56 % typical savings, recommended), Aggressive (~60–74 % typical savings; may trim nuance on dense technical text). Copy notes that **gap between modes is smaller** when prompts are full of opcodes and URLs (those lines are protected).
+- **Options:** Off, Balanced (~40–56 % typical savings, recommended), Aggressive (~60–74 % typical savings; may trim nuance on dense technical text), **Adaptive** (per-turn adaptive policy; kernel resolves to a concrete tier each message). Copy notes that **gap between modes is smaller** when prompts are full of opcodes and URLs (those lines are protected). **Adaptive eco policy** (`[adaptive_eco]`) is configured separately in the same card.
 - **Reference:** [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
 
 ### Chat header — eco quick-toggle
 
 - **Where:** Inline **Chat** with an agent open — header row beside session cost / session switcher (`index_body.html` + `chatPage` Alpine data).
-- **Behavior:** Pill button cycles **Off → Balanced → Aggressive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`), persists with **`POST /api/config/set`** (`path: efficient_mode`). Label: `⚡ eco` / `⚡ eco bal` / `⚡ eco agg`.
-- **Per-agent storage:** Each change also updates **`agent_eco_modes`** in **`~/.armaraos/ui-prefs.json`** via **`PUT /api/ui-prefs`** (see [api-reference.md](api-reference.md#ui-preferences-endpoints)) so modes survive **WebView storage clears**; `localStorage` keys **`armaraos-eco-modes-v1`** / **`armaraos-eco-mode`** remain for fast UI and backward compatibility.
+- **Behavior:** Pill button cycles **Off → Balanced → Aggressive → Adaptive → Off** (`cycleEcoMode` in `static/js/pages/chat.js`), persists with **`POST /api/config/set`** (`path: efficient_mode`). Label: `⚡ eco` / `⚡ eco bal` / `⚡ eco agg` / `⚡ eco ada` (teal **adaptive** styling, `.eco-pill-ada` in `components.css`).
+- **Per-agent storage:** Each change also updates **`agent_eco_modes`** in **`~/.armaraos/ui-prefs.json`** via **`PUT /api/ui-prefs`** (see [api-reference.md](api-reference.md#ui-preferences-endpoints)) so modes survive **WebView storage clears**; `localStorage` keys **`armaraos-eco-modes-v1`** / **`armaraos-eco-mode`** remain for fast UI and backward compatibility. Per-agent map values may include **`adaptive`**.
 
 ### Chat header — open workspace
 

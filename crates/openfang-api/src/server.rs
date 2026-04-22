@@ -226,6 +226,22 @@ pub async fn build_router(
             axum::routing::post(crate::graph_memory::post_graph_memory_clear_scope),
         )
         .route(
+            "/api/graph-memory/improvement-proposals",
+            axum::routing::get(crate::graph_memory::get_improvement_proposals),
+        )
+        .route(
+            "/api/graph-memory/improvement-proposals/submit",
+            axum::routing::post(crate::graph_memory::post_improvement_proposal_submit),
+        )
+        .route(
+            "/api/graph-memory/improvement-proposals/validate",
+            axum::routing::post(crate::graph_memory::post_improvement_proposal_validate),
+        )
+        .route(
+            "/api/graph-memory/improvement-proposals/adopt",
+            axum::routing::post(crate::graph_memory::post_improvement_proposal_adopt),
+        )
+        .route(
             "/api/agents",
             axum::routing::get(routes::list_agents).post(routes::spawn_agent),
         )

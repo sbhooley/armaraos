@@ -1271,6 +1271,8 @@ Set a **single** configuration value, write it to **`{home_dir}/config.toml`**, 
 }
 ```
 
+`value` may be `"off"`, `"balanced"`, `"aggressive"`, or `"adaptive"` (per-turn adaptive policy; see [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md#modes-efficient_mode)).
+
 **Example — Adaptive eco (`[adaptive_eco]` table):**
 
 Two-segment paths map to TOML `section.key` (e.g. `adaptive_eco.enabled` → `[adaptive_eco]` / `enabled`). After a successful reload, the running kernel applies the updated **`[adaptive_eco]`** policy for new turns; **`GET /api/status`** includes the current values under **`adaptive_eco`**.
@@ -2774,7 +2776,7 @@ Arbitrary dashboard UI state that must survive **desktop reinstalls** (which can
 | Key | Type | Purpose |
 |-----|------|---------|
 | `pinned_agents` | array of strings (agent IDs) | Order of pinned rows in the sidebar **Quick open** list |
-| `agent_eco_modes` | object (map of agent id → `"off"` \| `"balanced"` \| `"aggressive"`) | Per-agent **Ultra Cost-Efficient Mode** for chat (authoritative across WebView clears); merged with `localStorage` (`armaraos-eco-modes-v1`) on load |
+| `agent_eco_modes` | object (map of agent id → `"off"` \| `"balanced"` \| `"aggressive"` \| `"adaptive"`) | Per-agent **Ultra Cost-Efficient Mode** for chat (authoritative across WebView clears); merged with `localStorage` (`armaraos-eco-modes-v1`) on load |
 
 Writes use the same atomic **`.json.tmp` → rename** pattern as slash templates.
 

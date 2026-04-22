@@ -2488,13 +2488,22 @@ pub async fn run_agent_loop(
                             .await;
                         }
                         if let Some(pattern) = turn_pattern {
-                            gm.record_pattern(
-                                &pattern.name,
-                                pattern.tool_sequence,
-                                pattern.confidence,
-                                pattern_trace_id.clone(),
-                            )
-                            .await;
+                            if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
+                                response.vitals.as_ref().map(|v| v.gate),
+                            ) {
+                                gm.record_pattern(
+                                    &pattern.name,
+                                    pattern.tool_sequence,
+                                    pattern.confidence,
+                                    pattern_trace_id.clone(),
+                                )
+                                .await;
+                            } else {
+                                debug!(
+                                    agent_id = %agent_id_str,
+                                    "skipping record_pattern: vitals gate=fail"
+                                );
+                            }
                         }
                         let project_id = std::env::var("AINL_MEMORY_PROJECT_ID").ok();
                         let detailed = if trajectory_steps_accum.is_empty() {
@@ -4789,6 +4798,7 @@ pub async fn run_agent_loop_streaming(
                         turn_tool_names.len(),
                     );
                     let (sv_gate, sv_phase, sv_trust) = stream_vitals
+                        .as_ref()
                         .map(|v| (Some(v.gate.as_str().to_string()), Some(v.phase.clone()), Some(v.trust)))
                         .unwrap_or((None, None, None));
                     if let Some(episode_id) = gm
@@ -4827,13 +4837,22 @@ pub async fn run_agent_loop_streaming(
                             .await;
                         }
                         if let Some(pattern) = turn_pattern {
-                            gm.record_pattern(
-                                &pattern.name,
-                                pattern.tool_sequence,
-                                pattern.confidence,
-                                pattern_trace_id.clone(),
-                            )
-                            .await;
+                            if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
+                                stream_vitals.as_ref().map(|v| v.gate),
+                            ) {
+                                gm.record_pattern(
+                                    &pattern.name,
+                                    pattern.tool_sequence,
+                                    pattern.confidence,
+                                    pattern_trace_id.clone(),
+                                )
+                                .await;
+                            } else {
+                                debug!(
+                                    agent_id = %agent_id_str,
+                                    "skipping record_pattern: vitals gate=fail (streaming)"
+                                );
+                            }
                         }
                         let project_id = std::env::var("AINL_MEMORY_PROJECT_ID").ok();
                         let detailed = if trajectory_steps_accum.is_empty() {

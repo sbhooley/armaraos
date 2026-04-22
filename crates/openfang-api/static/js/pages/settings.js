@@ -55,6 +55,7 @@ function settingsPage() {
       include_semantic_facts: true,
       include_conflicts: true,
       include_procedural_hints: true,
+      include_suggested_pattern_candidates: true,
     },
     graphMemoryControlsSaving: false,
 
@@ -447,6 +448,7 @@ function settingsPage() {
           include_semantic_facts: c.include_semantic_facts !== false,
           include_conflicts: c.include_conflicts !== false,
           include_procedural_hints: c.include_procedural_hints !== false,
+          include_suggested_pattern_candidates: c.include_suggested_pattern_candidates !== false,
         };
       } catch (e) {
         // keep current values on transient errors
@@ -466,6 +468,8 @@ function settingsPage() {
           include_semantic_facts: !!this.graphMemoryControls.include_semantic_facts,
           include_conflicts: !!this.graphMemoryControls.include_conflicts,
           include_procedural_hints: !!this.graphMemoryControls.include_procedural_hints,
+          include_suggested_pattern_candidates:
+            !!this.graphMemoryControls.include_suggested_pattern_candidates,
         });
         OpenFangToast && OpenFangToast.success('Graph memory controls saved');
       } catch (e) {
@@ -492,7 +496,22 @@ function settingsPage() {
     async loadConfig() {
       try {
         this.config = await OpenFangAPI.get('/api/config');
+        this._normalizeConfigEco();
       } catch(e) { this.config = {}; }
+    },
+
+    _normalizeConfigEco() {
+      var c = this.config;
+      if (!c || typeof c !== 'object') return;
+      if (typeof c.efficient_mode !== 'string' || c.efficient_mode === '') {
+        c.efficient_mode = 'off';
+      }
+      if (!c.adaptive_eco || typeof c.adaptive_eco !== 'object') {
+        c.adaptive_eco = { enabled: false, enforce: false };
+      } else {
+        if (typeof c.adaptive_eco.enabled !== 'boolean') c.adaptive_eco.enabled = !!c.adaptive_eco.enabled;
+        if (typeof c.adaptive_eco.enforce !== 'boolean') c.adaptive_eco.enforce = !!c.adaptive_eco.enforce;
+      }
     },
 
     async saveEfficientMode() {
@@ -503,6 +522,32 @@ function settingsPage() {
         OpenFangToast && OpenFangToast.success('Efficient mode saved — takes effect on next message');
       } catch(e) {
         OpenFangToast && OpenFangToast.error('Failed to save: ' + (e && e.message ? e.message : String(e)));
+      }
+    },
+
+    async setAdaptiveEcoEnabled(checked) {
+      if (!this.config) this.config = {};
+      this._normalizeConfigEco();
+      this.config.adaptive_eco.enabled = !!checked;
+      try {
+        await OpenFangAPI.post('/api/config/set', { path: 'adaptive_eco.enabled', value: !!checked });
+        OpenFangToast && OpenFangToast.success('Adaptive eco updated — takes effect on next message');
+      } catch(e) {
+        OpenFangToast && OpenFangToast.error('Failed to save adaptive eco: ' + (e && e.message ? e.message : String(e)));
+        try { await this.loadConfig(); } catch (e2) { /* ignore */ }
+      }
+    },
+
+    async setAdaptiveEcoEnforce(checked) {
+      if (!this.config) this.config = {};
+      this._normalizeConfigEco();
+      this.config.adaptive_eco.enforce = !!checked;
+      try {
+        await OpenFangAPI.post('/api/config/set', { path: 'adaptive_eco.enforce', value: !!checked });
+        OpenFangToast && OpenFangToast.success('Enforce mode updated — takes effect on next message');
+      } catch(e) {
+        OpenFangToast && OpenFangToast.error('Failed to save: ' + (e && e.message ? e.message : String(e)));
+        try { await this.loadConfig(); } catch (e2) { /* ignore */ }
       }
     },
 

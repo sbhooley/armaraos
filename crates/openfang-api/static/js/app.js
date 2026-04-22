@@ -679,7 +679,7 @@ document.addEventListener('alpine:init', function() {
     _uiPrefsRaw: {},
     _uiPrefsLoaded: false,
     normalizeEcoMode(mode) {
-      return (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
+      return (mode === 'off' || mode === 'balanced' || mode === 'aggressive' || mode === 'adaptive') ? mode : 'off';
     },
     normalizeNotifyChatReplies(mode) {
       var m = mode != null ? String(mode) : '';
@@ -969,7 +969,7 @@ document.addEventListener('alpine:init', function() {
           Object.keys(raw).forEach(function(agentId) {
             var v = raw[agentId];
             if (typeof v === 'string') {
-              var mode = (v === 'off' || v === 'balanced' || v === 'aggressive') ? v : null;
+              var mode = (v === 'off' || v === 'balanced' || v === 'aggressive' || v === 'adaptive') ? v : null;
               if (mode) norm[String(agentId)] = mode;
             }
           });

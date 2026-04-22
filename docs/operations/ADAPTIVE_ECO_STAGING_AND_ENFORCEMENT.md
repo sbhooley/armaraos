@@ -8,6 +8,8 @@ This runbook is for **operators** running ArmaraOS with a real daemon and agents
 - At least one agent with normal chat traffic after enabling adaptive eco (SQLite rows accumulate over time).
 - Optional: `OPENFANG_API_KEY` exported if your API requires Bearer auth (same as dashboard).
 
+**User mode vs global policy:** `efficient_mode = "adaptive"` in **config** or the chat **eco ada** pill runs the adaptive resolver for that install even when `[adaptive_eco].enabled` is `false` (per-request opt-in in the kernel). The **`[adaptive_eco]`** table still controls default behavior for **off / balanced / aggressive** and is what operators enable for fleet-wide shadow telemetry; see [prompt-compression-efficient-mode.md](../prompt-compression-efficient-mode.md#modes-efficient_mode).
+
 ## Phase A — Shadow-only (`enforce = false`)
 
 ### 1. Config (`~/.armaraos/config.toml` or your config path)

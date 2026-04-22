@@ -2827,6 +2827,11 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   color: #f59e0b;
   background: rgba(245,158,11,0.08);
 }
+.eco-pill-ada {
+  border-color: #14b8a6;
+  color: #14b8a6;
+  background: rgba(20,184,166,0.1);
+}
 
 /* Workspace quick-open pill (chat header) */
 .workspace-pill {

@@ -47,7 +47,7 @@ impl EfficientMode {
     /// Parse from a config string; unknown values → `Off`.
     pub fn parse_config(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "balanced" => Self::Balanced,
+            "balanced" | "adaptive" => Self::Balanced,
             "aggressive" => Self::Aggressive,
             _ => Self::Off,
         }
@@ -618,6 +618,10 @@ mod tests {
             EfficientMode::Aggressive
         );
         assert_eq!(EfficientMode::parse_config("off"), EfficientMode::Off);
+        assert_eq!(
+            EfficientMode::parse_config("adaptive"),
+            EfficientMode::Balanced
+        );
         assert_eq!(EfficientMode::parse_config("unknown"), EfficientMode::Off);
     }
 

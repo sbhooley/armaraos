@@ -94,7 +94,7 @@ api_key = ""                         # API Bearer token (empty = unauthenticated
 mode = "default"                     # stable | default | dev
 language = "en"                      # Locale for CLI/messages
 usage_footer = "full"                # off | tokens | cost | full
-# efficient_mode = "off"               # off | balanced | aggressive — input compression before LLM (see docs/prompt-compression-efficient-mode.md)
+# efficient_mode = "off"               # off | balanced | aggressive | adaptive — input compression before LLM (see docs/prompt-compression-efficient-mode.md)
 
 # --- Default LLM Provider ---
 [default_model]
@@ -245,7 +245,7 @@ These fields sit at the root of `config.toml` (not inside any `[section]`).
 | `mode` | string | `"default"` | Kernel operating mode. See below. |
 | `language` | string | `"en"` | Language/locale code for CLI output and system messages. |
 | `usage_footer` | string | `"full"` | Controls usage info appended to responses. See below. |
-| `efficient_mode` | string | `"off"` | Ultra Cost-Efficient Mode — compress user input before each LLM call (`off` \| `balanced` \| `aggressive`). See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md) and [efficient_mode (top-level detail)](#efficient_mode-top-level-detail). |
+| `efficient_mode` | string | `"off"` | Ultra Cost-Efficient Mode — compress user input before each LLM call (`off` \| `balanced` \| `aggressive` \| `adaptive`). **`adaptive`** runs the per-turn adaptive eco policy (kernel resolves to a concrete tier before compression). See [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md) and [efficient_mode (top-level detail)](#efficient_mode-top-level-detail). |
 
 **`mode` values:**
 
@@ -273,10 +273,11 @@ Controls **input** token compression before LLM calls (Rust heuristic; not the A
 | `off` | Disable compression. |
 | `balanced` | Default — ~55 % token retention; soft-preserve rules apply (see doc). |
 | `aggressive` | ~35 % token retention; larger savings on conversational text; smaller gap vs Balanced when prompts are dense with opcodes/URLs. |
+| `adaptive` | **Adaptive eco:** kernel runs the adaptive resolver and applies a **concrete** `off` / `balanced` / `aggressive` on each turn (see [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md#modes-efficient_mode)). |
 
 **Per-agent:** set `efficient_mode` in the agent manifest **metadata** to override the global value for that agent only.
 
-**Dashboard:** **Settings → Budget** (dropdown + description) and **Chat** header **⚡ eco** cycle button (persists via `POST /api/config/set`).
+**Dashboard:** **Settings → Budget** (dropdown + description) and **Chat** header **⚡ eco** cycle button **Off → Balanced → Aggressive → Adaptive → Off** (persists via `POST /api/config/set`).
 
 Full behavior: [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md).
 

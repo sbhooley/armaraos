@@ -235,16 +235,29 @@ impl MeteringEngine {
         input_cost + output_cost
     }
 
+    /// `true` when the model id denotes a **$0 marginal** per-token price for our analytics
+    /// (OpenRouter and similar: `…:free`). Tokens are still recorded; we do not impute $/1M or
+    /// counterfactual “$ saved” for these routes, even if the id is missing from the local catalog
+    /// (which would otherwise fall back to heuristics).
+    pub fn is_marginal_free_model_id(model: &str) -> bool {
+        model.to_ascii_lowercase().contains(":free")
+    }
+
     /// Estimate cost using the model catalog as the pricing source.
     ///
-    /// Falls back to the default rate ($1/$3 per million) if the model is not
-    /// found in the catalog.
+    /// [Self::is_marginal_free_model_id] always yields **$0.0** (tokens still reported separately).
+    ///
+    /// Otherwise falls back to the default rate ($1/$3 per million) if the model is not found in
+    /// the catalog.
     pub fn estimate_cost_with_catalog(
         catalog: &openfang_runtime::model_catalog::ModelCatalog,
         model: &str,
         input_tokens: u64,
         output_tokens: u64,
     ) -> f64 {
+        if Self::is_marginal_free_model_id(model) {
+            return 0.0;
+        }
         let (input_per_m, output_per_m) = catalog.pricing(model).unwrap_or((1.0, 3.0));
         let input_cost = (input_tokens as f64 / 1_000_000.0) * input_per_m;
         let output_cost = (output_tokens as f64 / 1_000_000.0) * output_per_m;
@@ -252,6 +265,9 @@ impl MeteringEngine {
     }
 
     /// Catalog **input** $/1M for `model` (used when persisting compression “would have cost” counterfactuals).
+    ///
+    /// [Self::is_marginal_free_model_id] always returns **$0.0** so we do not add
+    /// `est_input_cost_saved_usd` / `billed_input_cost_usd` for free routes.
     ///
     /// When the model is **not** in the catalog, returns `0.0` (not `$1/M`). Compression rows are
     /// long-lived; defaulting to a non-zero rate would **inflate** `est_input_cost_saved_usd` and
@@ -261,6 +277,9 @@ impl MeteringEngine {
         catalog: &openfang_runtime::model_catalog::ModelCatalog,
         model: &str,
     ) -> f64 {
+        if Self::is_marginal_free_model_id(model) {
+            return 0.0;
+        }
         catalog.pricing(model).map(|(i, _)| i).unwrap_or(0.0)
     }
 
@@ -858,6 +877,28 @@ mod tests {
             1_000_000,
         );
         assert!((cost - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_estimate_cost_with_catalog_marginal_free_id_zero() {
+        let catalog = openfang_runtime::model_catalog::ModelCatalog::new();
+        // Same token volume as the unknown $1/$3 case — must not impute $ for `…:free` routes.
+        let cost = MeteringEngine::estimate_cost_with_catalog(
+            &catalog,
+            "vendor/unknown-weights:free",
+            1_000_000,
+            1_000_000,
+        );
+        assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn test_catalog_input_price_marginal_free_id_zero_even_unlisted() {
+        let catalog = openfang_runtime::model_catalog::ModelCatalog::new();
+        assert_eq!(
+            MeteringEngine::catalog_input_price_per_million(&catalog, "org/model:free"),
+            0.0
+        );
     }
 
     #[test]

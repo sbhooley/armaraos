@@ -986,36 +986,52 @@ impl OpenFangKernel {
                 serde_json::Value::String(self.config.efficient_mode.clone())
             });
 
-        let ae = self.adaptive_eco_live.read().unwrap();
-        if !ae.enabled {
-            return;
-        }
-
         let base_mode = manifest
             .metadata
             .get("efficient_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("off")
             .to_string();
+        let user_wants_adaptive = base_mode.eq_ignore_ascii_case("adaptive");
 
-        let mut mode_after_circuit = base_mode.clone();
+        let global_ae = self.adaptive_eco_live.read().unwrap();
+        if !global_ae.enabled && !user_wants_adaptive {
+            return;
+        }
+        let mut ae_run: openfang_types::adaptive_eco::AdaptiveEcoConfig = global_ae.clone();
+        if user_wants_adaptive {
+            // User picked `efficient_mode=adaptive` in the chat pill / config. Run the adaptive
+            // pipeline even if `[adaptive_eco].enabled` is off globally.
+            ae_run.enabled = true;
+        }
+        drop(global_ae);
+
+        // Circuit breaker and resolver work on a concrete baseline tier. When the user asks for
+        // "adaptive", we start from a balanced default before per-turn policy adjusts.
+        let circuit_base: String = if user_wants_adaptive {
+            "balanced".to_string()
+        } else {
+            base_mode.clone()
+        };
+
+        let mut mode_after_circuit = circuit_base.clone();
         let mut circuit_tripped = false;
         let cap_label = cache_capability_label(manifest.model.provider.trim());
-        let extra_cb_window = if ae.circuit_breaker_extra_window_when_prompt_cache > 0
+        let extra_cb_window = if ae_run.circuit_breaker_extra_window_when_prompt_cache > 0
             && prompt_cache_capability_label(cap_label)
         {
-            ae.circuit_breaker_extra_window_when_prompt_cache as usize
+            ae_run.circuit_breaker_extra_window_when_prompt_cache as usize
         } else {
             0
         };
-        if ae.circuit_breaker_enabled {
-            let w = (ae.circuit_breaker_window.max(1) as usize).saturating_add(extra_cb_window);
+        if ae_run.circuit_breaker_enabled {
+            let w = (ae_run.circuit_breaker_window.max(1) as usize).saturating_add(extra_cb_window);
             let scores = self
                 .memory
                 .usage()
                 .query_recent_semantic_scores(llm_billing_id, w)
                 .unwrap_or_default();
-            let (m, trip) = circuit_breaker_adjust_base(&base_mode, &ae, &scores);
+            let (m, trip) = circuit_breaker_adjust_base(&circuit_base, &ae_run, &scores);
             mode_after_circuit = m;
             circuit_tripped = trip;
         }
@@ -1026,8 +1042,14 @@ impl OpenFangKernel {
         );
 
         let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
-        let mut snap = resolve_adaptive_eco_turn(&ae, manifest, message, &catalog);
+        let mut snap = resolve_adaptive_eco_turn(&ae_run, manifest, message, &catalog);
         drop(catalog);
+
+        if user_wants_adaptive {
+            snap
+                .reason_codes
+                .push("user_mode:efficient_mode_adaptive".to_string());
+        }
 
         snap.base_mode_before_circuit = Some(base_mode.clone());
         snap.circuit_breaker_tripped = circuit_tripped;
@@ -1037,15 +1059,15 @@ impl OpenFangKernel {
         }
 
         let now = std::time::Instant::now();
-        if circuit_tripped && ae.post_circuit_cooldown_secs > 0 {
+        if circuit_tripped && ae_run.post_circuit_cooldown_secs > 0 {
             self.adaptive_eco_last_circuit_trip_at
                 .insert(llm_billing_id, now);
             self.adaptive_eco_circuit_cooldown_floor
                 .insert(llm_billing_id, mode_after_circuit.clone());
         }
 
-        if ae.enforce {
-            let min_n = ae.enforce_min_consecutive_turns;
+        if ae_run.enforce {
+            let min_n = ae_run.enforce_min_consecutive_turns;
             let (mut eff, mut blocked) = hysteresis_resolve_adaptive_effective(
                 &self.adaptive_eco_hysteresis,
                 llm_billing_id,
@@ -1055,7 +1077,7 @@ impl OpenFangKernel {
             );
             let tier_base = compression_tier_rank(&mode_after_circuit);
 
-            let min_gap_secs = ae.min_secs_between_enforced_changes;
+            let min_gap_secs = ae_run.min_secs_between_enforced_changes;
             if min_gap_secs > 0 && eff != mode_after_circuit {
                 if let Some(last) = self
                     .adaptive_eco_last_enforced_switch_at
@@ -1070,11 +1092,11 @@ impl OpenFangKernel {
                 }
             }
 
-            if ae.cache_ttl_dampens_raises
+            if ae_run.cache_ttl_dampens_raises
                 && prompt_cache_capability_label(snap.cache_capability.as_str())
                 && compression_tier_rank(&eff) > tier_base
             {
-                let ttl = Duration::from_secs(ae.provider_prompt_cache_ttl_secs.max(1));
+                let ttl = Duration::from_secs(ae_run.provider_prompt_cache_ttl_secs.max(1));
                 if let Some(last) = self.adaptive_eco_last_raise_at.get(&llm_billing_id) {
                     if now.duration_since(*last) < ttl {
                         eff.clone_from(&mode_after_circuit);
@@ -1086,13 +1108,13 @@ impl OpenFangKernel {
 
             // After a circuit-breaker step-down, block raising compression above the trip floor
             // until `post_circuit_cooldown_secs` elapses (pairs with `AdaptiveEcoConfig::post_circuit_cooldown_secs`).
-            if ae.post_circuit_cooldown_secs > 0 {
+            if ae_run.post_circuit_cooldown_secs > 0 {
                 if let (Some(last_trip), Some(floor_entry)) = (
                     self.adaptive_eco_last_circuit_trip_at.get(&llm_billing_id),
                     self.adaptive_eco_circuit_cooldown_floor
                         .get(&llm_billing_id),
                 ) {
-                    let cd = Duration::from_secs(ae.post_circuit_cooldown_secs);
+                    let cd = Duration::from_secs(ae_run.post_circuit_cooldown_secs);
                     if now.duration_since(*last_trip) < cd {
                         let floor_s = floor_entry.value().as_str();
                         if compression_tier_rank(&eff) > compression_tier_rank(floor_s) {
@@ -1138,9 +1160,6 @@ impl OpenFangKernel {
         adaptive_confidence: Option<f32>,
         counterfactual: Option<openfang_types::adaptive_eco::EcoCounterfactualReceipt>,
     ) {
-        if !self.adaptive_eco_live.read().unwrap().enabled {
-            return;
-        }
         let Some(v) = manifest.metadata.get("adaptive_eco") else {
             return;
         };
@@ -1149,6 +1168,13 @@ impl OpenFangKernel {
         >(v.clone()) else {
             return;
         };
+        let per_request = snap
+            .reason_codes
+            .iter()
+            .any(|c| c == "user_mode:efficient_mode_adaptive");
+        if !self.adaptive_eco_live.read().unwrap().enabled && !per_request {
+            return;
+        }
         let rec = openfang_types::adaptive_eco::AdaptiveEcoUsageRecord {
             agent_id: billing_id,
             effective_mode: snap.effective_mode,
@@ -1444,10 +1470,12 @@ impl OpenFangKernel {
         // "USD NOT SPENT (EST.)" then reads near-zero even after thousands of compressed turns
         // because the rollup multiplies saved tokens by the missing price.
         //
-        // Both helpers are idempotent — they only touch rows where the relevant fields are
-        // genuinely zero / blank — so re-running on every boot is safe but effectively a no-op
-        // after the first successful pass. Catalog price drift over time is preserved: rows
-        // already carrying a non-zero price snapshot are NEVER re-priced.
+        // The first two helpers are idempotent — they only touch rows where the relevant fields
+        // are genuinely zero / blank — so re-running on every boot is safe but effectively a
+        // no-op after the first successful pass. Catalog price drift over time is preserved: rows
+        // already carrying a non-zero price snapshot are NEVER re-priced (except `…:free` routes,
+        // corrected last by the marginal-free backfill). The marginal-free backfill re-writes
+        // matching rows to $0; running it every boot is safe.
         {
             let pricing_lookup = |model: &str| {
                 model_catalog.find_model(model).map(|entry| {
@@ -1470,6 +1498,22 @@ impl OpenFangKernel {
                     "Backfilled billed_input_tokens on {n} historical eco_compression_events row(s) from usage_events"
                 ),
                 Err(e) => warn!("Compression billed-tokens backfill failed: {e}"),
+            }
+            // After catalog-based compression repair: zero $ fields for `…:free` model ids. Older
+            // rows used the unknown-model $1/M fallback; this is idempotent on every boot.
+            match usage_store.backfill_marginal_free_tier_costs() {
+                Ok((0, 0)) => {}
+                Ok((u, c)) => {
+                    if u > 0 {
+                        info!("Backfilled marginal-free: zeroed cost_usd on {u} usage_events row(s)");
+                    }
+                    if c > 0 {
+                        info!(
+                            "Backfilled marginal-free: zeroed pricing USD on {c} eco_compression_events row(s)"
+                        );
+                    }
+                }
+                Err(e) => warn!("Marginal-free tier cost backfill failed: {e}"),
             }
         }
 
@@ -3219,7 +3263,11 @@ impl OpenFangKernel {
                         result.total_usage.output_tokens,
                     );
                     let engine_addon = result.cost_usd.unwrap_or(0.0);
-                    let cost = catalog_cost + engine_addon;
+                    let cost = if MeteringEngine::is_marginal_free_model_id(&billing_model) {
+                        0.0
+                    } else {
+                        catalog_cost + engine_addon
+                    };
                     let _ = kernel_clone
                         .metering
                         .record(&openfang_memory::usage::UsageRecord {
@@ -4147,7 +4195,11 @@ impl OpenFangKernel {
             result.total_usage.output_tokens,
         );
         let engine_addon = result.cost_usd.unwrap_or(0.0);
-        let cost = catalog_cost + engine_addon;
+        let cost = if MeteringEngine::is_marginal_free_model_id(&billing_model) {
+            0.0
+        } else {
+            catalog_cost + engine_addon
+        };
         let _ = self.metering.record(&openfang_memory::usage::UsageRecord {
             agent_id: llm_billing_id,
             model: billing_model.clone(),
@@ -9814,6 +9866,30 @@ impl KernelHandle for OpenFangKernel {
                         }),
                     );
                     let _ = OpenFangKernel::publish_event(self, ev3).await;
+                }
+            }
+        } else if kind == "improvement_proposal" {
+            if let Some(ref p) = provenance {
+                let graph_node_id = p.node_ids.first().cloned().unwrap_or_default();
+                if !graph_node_id.is_empty() {
+                    if let Some(pid) = p
+                        .trace_id
+                        .as_deref()
+                        .and_then(|s| uuid::Uuid::parse_str(s.trim()).ok())
+                    {
+                        let kind_lbl = p.node_kind.as_deref().unwrap_or("").to_string();
+                        let ev4 = Event::new(
+                            aid,
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::ImprovementProposalAdopted {
+                                agent_id: aid,
+                                proposal_id: pid,
+                                graph_node_id,
+                                kind: kind_lbl,
+                            }),
+                        );
+                        let _ = OpenFangKernel::publish_event(self, ev4).await;
+                    }
                 }
             }
         }

@@ -171,6 +171,10 @@ fn default_success_rate() -> f32 {
     0.5
 }
 
+fn default_procedural_prompt_eligible() -> bool {
+    true
+}
+
 fn default_strength_floor() -> f32 {
     0.0
 }
@@ -357,6 +361,14 @@ pub struct ProceduralNode {
     /// Optional orchestration / turn correlation id (same namespace as episodic `trace_event.trace_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    /// How many times this normalized `tool_sequence` was reinforced (extractor / host merge).
+    #[serde(default)]
+    pub pattern_observation_count: u32,
+    /// When true, the pattern may appear in graph-memory “SuggestedProcedure”-style output.
+    /// Omitted in legacy JSON → `true` (behaves like older rows). New extractor candidates start
+    /// `false` until [`crate::pattern_promotion::should_promote`].
+    #[serde(default = "default_procedural_prompt_eligible")]
+    pub prompt_eligible: bool,
 }
 
 impl ProceduralNode {
@@ -625,6 +637,8 @@ impl AinlMemoryNode {
             retired: false,
             label: String::new(),
             trace_id: None,
+            pattern_observation_count: 0,
+            prompt_eligible: true,
         };
         procedural.recompute_success_rate();
         Self::base(
@@ -641,11 +655,14 @@ impl AinlMemoryNode {
         tool_sequence: Vec<String>,
         confidence: f32,
     ) -> Self {
+        use crate::pattern_promotion;
+        let c = confidence.clamp(0.0, 1.0);
+        let ema0 = pattern_promotion::ema_fitness_update(None, c);
         let mut procedural = ProceduralNode {
             pattern_name,
             compiled_graph: Vec::new(),
             tool_sequence,
-            confidence: Some(confidence),
+            confidence: Some(c),
             procedure_type: ProcedureType::ToolSequence,
             trigger_conditions: Vec::new(),
             success_count: 0,
@@ -655,11 +672,13 @@ impl AinlMemoryNode {
             reinforcement_episode_ids: Vec::new(),
             suppression_episode_ids: Vec::new(),
             patch_version: 1,
-            fitness: None,
+            fitness: Some(ema0),
             declared_reads: Vec::new(),
             retired: false,
             label: String::new(),
             trace_id: None,
+            pattern_observation_count: 1,
+            prompt_eligible: false,
         };
         procedural.recompute_success_rate();
         Self::base(

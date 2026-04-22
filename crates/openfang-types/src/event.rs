@@ -385,6 +385,17 @@ pub enum SystemEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provenance: Option<GraphMemoryWriteProvenance>,
     },
+    /// Validated improvement proposal materialized as a `semantic` graph fact (opt-in `AINL_IMPROVEMENT_PROPOSALS_ENABLED` flow).
+    ImprovementProposalAdopted {
+        /// Agent that owns the graph DB and proposal ledger.
+        agent_id: AgentId,
+        /// Proposal ledger row id (UUID from submit, echoed in `GraphMemoryWrite` provenance as `trace_id` when using the host adopt path).
+        proposal_id: Uuid,
+        /// New `semantic` node id in `ainl_memory.db`.
+        graph_node_id: String,
+        /// Echo of [`ainl_contracts::ProposalEnvelope::kind`].
+        kind: String,
+    },
     /// Multi-step workflow run finished (API or scheduler).
     WorkflowRunFinished {
         /// Workflow definition id (UUID string).

@@ -163,10 +163,10 @@ function chatPage() {
     /** Timestamp when the memory indicator was last updated. */
     memoryContextAppliedAtMs: null,
     _memoryInjectedBeforeTurn: null,
-    /** Ultra Cost-Efficient Mode: "off" | "balanced" | "aggressive" (loaded from config on init). */
+    /** Ultra Cost-Efficient Mode: "off" | "balanced" | "aggressive" | "adaptive" (loaded from config on init). */
     efficientMode: (function() {
       var stored = localStorage.getItem('armaraos-eco-mode');
-      return (stored === 'off' || stored === 'balanced' || stored === 'aggressive') ? stored : 'off';
+      return (stored === 'off' || stored === 'balanced' || stored === 'aggressive' || stored === 'adaptive') ? stored : 'off';
     }()),
     /** Global config default used as fallback when an agent has no explicit eco mode yet. */
     globalEfficientMode: 'off',
@@ -474,7 +474,7 @@ function chatPage() {
     },
 
     _syncEcoModeToConfig: async function(mode) {
-      var normalized = (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
+      var normalized = (mode === 'off' || mode === 'balanced' || mode === 'aggressive' || mode === 'adaptive') ? mode : 'off';
       // Skip redundant writes when we already synced this mode.
       if (this._lastSyncedEcoMode === normalized) return;
       this._lastSyncedEcoMode = normalized;
@@ -2635,12 +2635,13 @@ function chatPage() {
       }
     },
 
-    // Cycle eco mode: Off → Balanced → Aggressive → Off.
+    // Cycle eco mode: Off → Balanced → Aggressive → Adaptive → Off.
     // Persists per-agent via ui-prefs and syncs the runtime global config so
     // the active chat always executes with the selected mode.
     cycleEcoMode: async function() {
       var next = this.efficientMode === 'off' ? 'balanced'
                : this.efficientMode === 'balanced' ? 'aggressive'
+               : this.efficientMode === 'aggressive' ? 'adaptive'
                : 'off';
       this.efficientMode = next;
       // Persist instantly to localStorage so the pill survives page reload

@@ -8170,6 +8170,8 @@ pub async fn armaraos_home_write(
 pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Return a redacted view of the kernel config
     let config = &state.kernel.config;
+    let adaptive_eco = serde_json::to_value(&config.adaptive_eco)
+        .unwrap_or_else(|_| serde_json::json!({ "enabled": false, "enforce": false }));
     Json(serde_json::json!({
         "home_dir": config.home_dir.to_string_lossy(),
         "data_dir": config.data_dir.to_string_lossy(),
@@ -8183,6 +8185,8 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "memory": {
             "decay_rate": config.memory.decay_rate,
         },
+        "efficient_mode": config.efficient_mode,
+        "adaptive_eco": adaptive_eco,
     }))
 }
 

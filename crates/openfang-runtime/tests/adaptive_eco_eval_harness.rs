@@ -58,7 +58,7 @@ fn adaptive_eco_eval_trace_matrix_smoke() {
         assert!(
             snap.reason_codes
                 .iter()
-                .any(|s| s.contains("adaptive_eco:v1")),
+                .any(|s| s.contains("adaptive_eco:")),
             "{name}: expected resolver version tag"
         );
         if *name == "structured_json" {
