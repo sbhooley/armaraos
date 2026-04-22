@@ -163,6 +163,12 @@ Do not introduce irregular spacing jumps (for example 3, 5, 7, 11, 13, 15) unles
 - The **Operations snapshot** card uses **`overview-snapshot-card`** plus an **integration** strip (**`overview-snapshot-integrations`**, **`overview-snapshot-int`**, link modifier **`overview-snapshot-int--link`** for hash navigation) and, when observability is available, the existing KPI grid and foot (**`overview-snapshot-kpi*`**, **`overview-snapshot-foot*`**). Keep gold/accent for **focus and interactive** tiles, not full-card fills.
 - Full markup, data bindings, and visibility rules: **[`dashboard-overview-ui.md`](dashboard-overview-ui.md)** (*Operations snapshot card*).
 
+### Chat composer (message input bar)
+- The main chat input is **`#msg-input`** inside **`.input-row`** (`index_body.html`, styles in **`components.css`**). Treat it as **chrome**, not a billboard for **`--accent`**.
+- **Default:** hairline **neutral** border — prefer **`--border-subtle`** (or **`--border`**) over heavy gold strokes; keep **`--shadow-xs`** / **`--shadow-inset`** for depth.
+- **Focus (`:focus-within`):** a **subtle** affordance only — e.g. **`color-mix`** of border with a **small** accent share, plus **`--accent-subtle`** (or a 1px ring), **not** a thick solid **`--accent`** border and **not** a large multi-stop gold glow. Avoid aggressive **`translateY`** on focus; keyboard users should still get clear focus.
+- **States:** **`.is-active`** (user has text or attachments) and **`.is-sending`** (streaming) should stay **quiet**—slightly stronger neutral or a **low** accent mix only.
+
 ## Required Workflow for Design Changes
 
 1. Read this file and related page docs before editing.

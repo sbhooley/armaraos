@@ -3240,14 +3240,34 @@ impl OpenFangKernel {
                         .and_then(|v| v.as_str())
                         .unwrap_or("off")
                         .to_ascii_lowercase();
-                    let original_tokens_est = (message_owned.len() / 4 + 1) as u64;
-                    let compressed_tokens_est = result
-                        .compressed_input
-                        .as_ref()
-                        .map(|s| (s.len() / 4 + 1) as u64)
-                        .unwrap_or(original_tokens_est);
+                    // Prefer whole-prompt telemetry from `ainl_context_compiler` when the
+                    // agent loop recorded it this turn (M1 measurement channel — see
+                    // `openfang_runtime::compose_telemetry`). Falls back to the legacy
+                    // user-message-only estimate when the compiler didn't run (e.g. very
+                    // short turns, error paths, or hosts not yet on the new code path).
+                    //
+                    // This is the change that lifts dashboard "TOKENS USED" / "USD NOT SPENT"
+                    // out of the near-zero range — the user-message-only numbers were a
+                    // tiny fraction (~0.006 %) of actual billed input tokens.
+                    let compose_snapshot =
+                        openfang_runtime::compose_telemetry::take_compose_turn(
+                            &agent_id.to_string(),
+                        );
+                    let (original_tokens_est, compressed_tokens_est) =
+                        if let Some(snap) = compose_snapshot.as_ref() {
+                            (snap.snapshot.original_tokens, snap.snapshot.compressed_tokens)
+                        } else {
+                            let orig = (message_owned.len() / 4 + 1) as u64;
+                            let comp = result
+                                .compressed_input
+                                .as_ref()
+                                .map(|s| (s.len() / 4 + 1) as u64)
+                                .unwrap_or(orig);
+                            (orig, comp)
+                        };
                     let input_tokens_saved = original_tokens_est
                         .saturating_sub(compressed_tokens_est);
+                    let _ = compose_snapshot; // Tier label is captured but not yet persisted in M1; M2 surfaces it on the dashboard.
                     let (input_price, est_input_usd) = {
                         let catalog = kernel_clone
                             .model_catalog
@@ -8353,17 +8373,20 @@ impl OpenFangKernel {
                             );
                         });
 
-                        // Always append scheduler output into the agent session (inbox-style),
-                        // without triggering an LLM turn.
-                        append_cron_output_to_agent_session(
-                            self,
-                            agent_id,
-                            job_id,
-                            job_name,
-                            program_path.as_str(),
-                            *json_output,
-                            combined.trim(),
-                        );
+                        // Append scheduler output into the agent session (inbox-style), without
+                        // triggering an LLM turn. Routine health/budget monitors are skipped on
+                        // success so the chat is not bloated; failures do not hit this path.
+                        if !cron_success_suppresses_session_append(&job_name, program_path.as_str()) {
+                            append_cron_output_to_agent_session(
+                                self,
+                                agent_id,
+                                job_id,
+                                job_name,
+                                program_path.as_str(),
+                                *json_output,
+                                combined.trim(),
+                            );
+                        }
 
                         match cron_deliver_response(self, agent_id, combined.trim(), &delivery)
                             .await
@@ -8475,6 +8498,31 @@ impl OpenFangKernel {
             }
         }
     }
+}
+
+/// Shipped/curated AINL cron "monitors" (health, budget ping, etc.): on **success** we still
+/// audit and emit `CronJobCompleted`, but we do **not** append the JSON/markdown blob to the
+/// agent session — operators rely on toasts / notifications for failures instead.
+fn cron_success_suppresses_session_append(job_name: &str, program_path: &str) -> bool {
+    const BY_NAME: &[&str] = &[
+        "armaraos-agent-health-monitor",
+        "armaraos-system-health-monitor",
+        "armaraos-daily-budget-digest",
+        "armaraos-budget-threshold-alert",
+        "armaraos-ainl-health-weekly",
+    ];
+    if BY_NAME.iter().any(|n| *n == job_name) {
+        return true;
+    }
+    let p = program_path.replace('\\', "/");
+    const PATH_MARKERS: &[&str] = &[
+        "agent_health_monitor",
+        "system_health_monitor",
+        "daily_budget_digest",
+        "budget_threshold_alert",
+        "armaraos_health_ping",
+    ];
+    PATH_MARKERS.iter().any(|m| p.contains(*m))
 }
 
 fn append_cron_output_to_agent_session(

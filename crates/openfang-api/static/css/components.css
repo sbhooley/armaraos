@@ -4051,7 +4051,7 @@ button.tool-card-header {
   width: 100%;
   padding: 8px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xs), var(--shadow-inset);
   transition:
@@ -4062,18 +4062,18 @@ button.tool-card-header {
 }
 
 .input-row:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-sm), var(--shadow-inset);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 72%, var(--accent) 28%);
+  box-shadow: 0 0 0 1px var(--accent-subtle), var(--shadow-sm), var(--shadow-inset);
+  transform: none;
 }
 
 .input-row.is-active {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-color: color-mix(in srgb, var(--border) 82%, var(--accent) 18%);
 }
 
 .input-row.is-sending {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent), var(--shadow-sm), var(--shadow-inset);
+  border-color: color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent), var(--shadow-sm), var(--shadow-inset);
 }
 
 .btn-send {

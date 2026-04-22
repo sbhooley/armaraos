@@ -29,6 +29,19 @@ function isInternalAutomationProbeChatAgentName(name) {
   );
 }
 
+/** Curated AINL cron monitors (health/budget); success is intentionally quiet. See `cron_success_suppresses_session_append` in the kernel. */
+function armaraosRoutineMonitorCronJobName(name) {
+  if (!name) return false;
+  var n = String(name);
+  return (
+    n === 'armaraos-agent-health-monitor' ||
+    n === 'armaraos-system-health-monitor' ||
+    n === 'armaraos-daily-budget-digest' ||
+    n === 'armaraos-budget-threshold-alert' ||
+    n === 'armaraos-ainl-health-weekly'
+  );
+}
+
 // Marked.js configuration
 if (typeof marked !== 'undefined') {
   marked.setOptions({
@@ -1631,6 +1644,9 @@ document.addEventListener('alpine:init', function() {
             return;
           }
           if (d.event === 'CronJobCompleted') {
+            if (armaraosRoutineMonitorCronJobName(d.job_name)) {
+              return;
+            }
             var nmOk = d.job_name || 'Scheduled job';
             var outOk = (d.output_preview || '').slice(0, 220);
             var kindOk = d.action_kind ? String(d.action_kind) : '';
@@ -1702,6 +1718,9 @@ document.addEventListener('alpine:init', function() {
         var detail = (typeof uSecs === 'number') ? (' (~' + uSecs + 's since activity)') : '';
         OpenFangToast.warn('Agent health check failed' + detail, 7000);
       } else if (p.type === 'System' && p.data && p.data.event === 'CronJobCompleted') {
+        if (armaraosRoutineMonitorCronJobName(p.data.job_name)) {
+          return;
+        }
         var name = p.data.job_name || 'Scheduled job';
         var out = (p.data.output_preview || '').slice(0, 180);
         OpenFangToast.info(name + ': ' + out, 7000);

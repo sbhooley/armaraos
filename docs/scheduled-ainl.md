@@ -89,6 +89,16 @@ The AINL subprocess should have **`~/.armaraos/ainl-library`** on **`PYTHONPATH`
 
 **Post-run (Python → bundle):** After **`ainl` exits successfully**, the kernel schedules a **non-blocking** export (`tokio::task::spawn_blocking` → **`openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort`** in `crates/openfang-runtime/src/ainl_bundle_cron.rs`). That spawns **`python3`** with **`AINL_EXPORT_AGENT_ID`**, re-boots the bridge for that agent, merges the live graph with the previous bundle source (or a tiny default **`.ainl`** stub if no bundle existed yet), and **`AINLBundleBuilder.save`** over **`bundle.ainlbundle`**. Failures are logged only; they do not fail the cron job.
 
+## Session transcript, notifications, and routine monitors
+
+On a **successful** scheduled **`ainl run`**, the kernel normally appends a scheduler envelope (**`<<<ARMARAOS_SCHEDULER_V2>>>`** + stdout) to the **target agent’s session** as an assistant line (`append_cron_output_to_agent_session` in `OpenFangKernel`), which appears in the embedded **Chat** as a scheduled bubble. The kernel also publishes **`CronJobCompleted`** (audit, SSE, and desktop notification wiring).
+
+**Quiet success for embedded health / budget monitors:** for the **curated** job names in **[ootb-ainl.md](ootb-ainl.md)** (*agent health, system health when enabled, daily + threshold budget, weekly AINL smoke*) and the same programs when referenced by path, the host **skips** appending that assistant line on success. **Failures** (nonzero exit, delivery errors, time-outs) still follow the error path: **`CronJobFailed`**, dashboard toasts, and notification-center rows; they are **not** “success-suppressed” into the session.
+
+**Dashboard toasts + bell:** the embedded app treats those same **successful** `CronJobCompleted` events as **low-signal** and does not show an info toast or notification-center row for them, so the bell stays meaningful for work you care to react to. Other scheduled jobs keep the previous success toast + row behavior.
+
+Implementation pointers: **`cron_success_suppresses_session_append`** in **`crates/openfang-kernel/src/kernel.rs`**, and **`armaraosRoutineMonitorCronJobName()`** in **`crates/openfang-api/static/js/app.js`** (must stay aligned with the curated job names).
+
 **Related (chat LLM, not the AINL subprocess):** **`openfang-runtime`** opens per-agent SQLite **`~/.armaraos/agents/<id>/ainl_memory.db`** via **`GraphMemoryWriter`** and, in **`run_agent_loop` / `run_agent_loop_streaming`**, appends recent **Persona** nodes (strength ≥ **0.1**, last **90** days) to the **system prompt** as **`[Persona traits active: …]`**. The same loop optionally writes a **per-agent JSON export** for **ainativelang** (shared directory via **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** or default **`ainl_graph_memory_export.json`** — see **[graph-memory.md](graph-memory.md)** *On-disk layout*). That path uses the **`ainl-memory`** crate (Rust), separate from the JSON **`ainl_graph_memory`** file used inside **`ainl run`**. See **[data-directory.md](data-directory.md)**, **[graph-memory.md](graph-memory.md)** (Rust runtime hub), and **`AI_Native_Lang/docs/adapters/AINL_GRAPH_MEMORY.md`**.
 
 ## Editing cron jobs

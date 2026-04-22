@@ -6,7 +6,7 @@
     "timeout_secs": 30,
     "enabled": true,
     "json_output": true,
-    "description": "Every 15 minutes: polls /api/health and /api/agents; JSON output appended to the target agent session."
+    "description": "Every 15 minutes: polls /api/health and /api/agents. On success: not appended to Chat; failures still surface (see docs/scheduled-ainl.md)."
   },
   {
     "name": "armaraos-daily-budget-digest",
@@ -15,7 +15,7 @@
     "timeout_secs": 45,
     "enabled": true,
     "json_output": true,
-    "description": "Daily 08:00: fetches /api/budget summary; JSON appended to the target agent session."
+    "description": "Daily 08:00: fetches /api/budget summary. On success: not appended to Chat; failures still surface (see docs/scheduled-ainl.md)."
   },
   {
     "name": "armaraos-budget-threshold-alert",
@@ -24,7 +24,7 @@
     "timeout_secs": 30,
     "enabled": true,
     "json_output": true,
-    "description": "Hourly: compares spend to 80% of budget limit; JSON alert appended to the target agent session."
+    "description": "Hourly: compares spend to 80% of budget limit. On success: not appended to Chat; failures still surface (see docs/scheduled-ainl.md)."
   },
   {
     "name": "armaraos-new-version-checker",
@@ -51,7 +51,7 @@
     "timeout_secs": 90,
     "enabled": false,
     "json_output": true,
-    "description": "Every 2 hours at :15 (opt-in): local health, agents, version + GitHub/PyPI upstream; JSON appended to the target agent session."
+    "description": "Every 2 hours at :15 (opt-in): local health, agents, version + GitHub/PyPI upstream. On success: not appended to Chat; failures still surface (see docs/scheduled-ainl.md)."
   },
   {
     "name": "armaraos-weekly-usage-report",
@@ -69,7 +69,7 @@
     "timeout_secs": 90,
     "enabled": true,
     "json_output": true,
-    "description": "Minimal AINL runtime smoke test (core.ADD 1 0); confirms the AINL engine is operational."
+    "description": "Minimal AINL runtime smoke test (core.ADD 1 0). On success: not appended to Chat; failures still surface (see docs/scheduled-ainl.md)."
   },
   {
     "name": "armaraos-learning-frame-echo-quarterly",
