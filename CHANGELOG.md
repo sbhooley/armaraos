@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries below **[0.7.5]** describe the **0.7.5** release candidate on `main` as of the dated section header.
 
+### Changed
+
+- **Dashboard — chat unread + notification center:** Per-agent chat unread (sidebar **All Agents** / **Quick open**, **Fleet Status** next to the title, tab title) is mirrored into the **bell** as **`chat-unread-*` rows** with **`notifyCenter.syncChatUnreadRows()`**; kernel **`AgentAssistantReply`** now routes through the same **`bumpAgentChatUnread`** path. **Dismiss** / **Clear all** clear the shared client state. Implementation: `crates/openfang-api/static/js/app.js`, `index_body.html`, `css/components.css`. Docs: [dashboard-testing.md](docs/dashboard-testing.md).
+
 ### Added
 
 - **`GET /api/system/local-voice`:** Exposes **`piper_ready`**, **`whisper_ready`**, and **`[local_voice]`** **`enabled`** / **`auto_download`** so the WebChat can confirm local TTS before enabling **spoken assistant reply**.

@@ -8155,6 +8155,12 @@ button.tool-card-header {
   justify-content: space-between;
   gap: 10px;
 }
+.fleet-status-title-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
 .fleet-status-title {
   font-size: 14px;
   font-weight: 700;
@@ -8170,7 +8176,6 @@ button.tool-card-header {
   line-height: 1.35;
   max-width: 520px;
 }
-.fleet-inbox-pill { font-size: 11px; }
 .fleet-status-right {
   margin-left: auto;
   display: inline-flex;
@@ -8203,7 +8208,7 @@ button.tool-card-header {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs), var(--shadow-inset);
   padding: 6px 10px 8px 10px;
-  min-height: 52px;
+  min-height: 76px;
 }
 .fleet-metric--gold {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
@@ -8243,6 +8248,53 @@ button.tool-card-header {
 .fleet-metric--gold .fleet-metric-kicker { color: var(--text-secondary); }
 .fleet-metric .fleet-metric-top { display: flex; flex-direction: column; }
 .fleet-metric-legend { font-size: 10px; }
+.fleet-mini-bars {
+  margin-top: 5px;
+  height: 22px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+.fleet-mini-bars-caption {
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.fleet-mini-bar {
+  flex: 1 1 0;
+  min-width: 4px;
+  border-radius: 3px 3px 2px 2px;
+  height: 12%;
+  background: color-mix(in srgb, var(--text-dim) 60%, var(--surface2));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface) 40%, transparent);
+  opacity: 0.82;
+  transition: height 0.22s var(--ease-smooth), opacity var(--transition-fast), transform var(--transition-fast), filter var(--transition-fast);
+}
+.fleet-mini-bar.is-current {
+  opacity: 1;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface) 60%, transparent), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.fleet-mini-bars--tasks .fleet-mini-bar {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--success) 86%, var(--surface2)), color-mix(in srgb, var(--success-dim) 64%, var(--surface2)));
+}
+.fleet-mini-bars--nodes .fleet-mini-bar {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--info) 82%, var(--surface2)), color-mix(in srgb, var(--info-dim) 66%, var(--surface2)));
+}
+.fleet-mini-bars--spend .fleet-mini-bar {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--warning) 86%, var(--surface2)), color-mix(in srgb, var(--warning-dim) 66%, var(--surface2)));
+}
+.fleet-mini-bars--saved .fleet-mini-bar {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, var(--surface2)), color-mix(in srgb, var(--success) 66%, var(--surface2)));
+}
+@media (hover: hover) and (pointer: fine) {
+  .fleet-mini-bar:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.06);
+  }
+}
 
 .fleet-metric-spark {
   grid-column: span 1;
@@ -8957,7 +9009,7 @@ button.tool-card-header {
     grid-template-columns: minmax(0, 1.35fr) repeat(4, minmax(0, 1fr)) minmax(0, 1fr);
     gap: 10px 14px;
   }
-  .fleet-metric { min-height: 56px; padding: 8px 12px 10px 12px; }
+  .fleet-metric { min-height: 84px; padding: 8px 12px 10px 12px; }
   .fleet-metric--gold .fleet-metric-primary,
   .fleet-metric--gold .fleet-activity-mono { font-size: 26px; }
   .fleet-metric-value { font-size: 19px; }

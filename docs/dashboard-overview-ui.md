@@ -156,7 +156,7 @@ The **App Store** route is **`#ainl-library`**. Deeper layout: `js/pages/ainl-li
 
 ## Global notification bell (all routes)
 
-The **notification center** is not overview-specific: the bell lives in the root shell so it appears on every hash route. Behavior and QA: [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+The **notification center** is not overview-specific: the bell lives in the root shell so it appears on every hash route. Chat-related rows (**`chat-unread-*`**) are kept in **sync** with the **All Agents** sidebar and **Agents → Fleet Status** unread badge (same `chatUnreadCounts` source). Behavior and QA: [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
 
 ## Manual verification
 

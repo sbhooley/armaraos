@@ -2,7 +2,7 @@
 
 ArmaraOS exposes a REST API, WebSocket endpoints, and SSE streaming when the daemon is running. The default listen address is `http://127.0.0.1:4200`.
 
-The embedded dashboard (Alpine shell) also drives the **notification center**: it reads **`GET /api/events/stream`** (kernel SSE), **`GET /api/approvals`**, and **`GET /api/budget`** for persistent rows and badges. See [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+The embedded dashboard (Alpine shell) also drives the **notification center**: it reads **`GET /api/events/stream`** (kernel SSE), **`GET /api/approvals`**, and **`GET /api/budget`** for persistent rows and badges, and it mirrors **per-agent chat unread** into the same panel (client state **`chatUnreadCounts`**, rows **`chat-unread-*`**) as the **All Agents** / **Quick open** / **Fleet Status** UI. See [dashboard-testing.md](dashboard-testing.md#notification-center-bell) and [Chat unread badges + session digest](dashboard-testing.md#chat-unread-badges--session-digest).
 
 All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS) and are protected by a GCRA cost-aware rate limiter with per-IP token bucket tracking and automatic stale entry cleanup. ArmaraOS implements 16 security systems including Merkle audit trails, taint tracking, WASM dual metering, Ed25519 manifest signing, SSRF protection, subprocess sandboxing, and secret zeroization.
 
@@ -3265,7 +3265,7 @@ SSE tail of the **daemon tracing log file** (same path rules as `GET /api/logs/d
 
 SSE stream of kernel **`Event`** values (JSON per message): live bus traffic plus a short history on connect. Uses the same **loopback / Bearer / `token=`** auth rules as the log streams above.
 
-The dashboard’s **`Alpine.store('kernelEvents')`** and **notification center** (`notifyCenter.ingestKernelEvent`) both consume this stream; dismiss persistence for kernel-derived rows is client-side — [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+The dashboard’s **`Alpine.store('kernelEvents')`** and **notification center** (`notifyCenter.ingestKernelEvent`) both consume this stream; dismiss persistence for kernel-derived rows is client-side — [dashboard-testing.md](dashboard-testing.md#notification-center-bell). **Per-agent chat-unread** rows in the same panel are driven from **`bumpAgentChatUnread`** (WS, digest, inter-agent, **`AgentAssistantReply`**) and **`syncChatUnreadRows`**, not only this SSE stream.
 
 Payload `type` / `data` follows `EventPayload`: includes **`OrchestrationTrace`** with an `OrchestrationTraceEvent` when multi-agent orchestration steps are recorded (aligned with **`GET /api/orchestration/traces`**).
 

@@ -1976,11 +1976,19 @@
             <div class="fleet-status-sticky-inner">
               <div class="fleet-status-head">
                 <div>
-                  <h2 class="fleet-status-title">Fleet Status</h2>
+                  <div class="fleet-status-title-wrap">
+                    <h2 class="fleet-status-title">Fleet Status</h2>
+                    <span
+                      class="nav-unread-badge"
+                      x-show="$store.app.chatUnreadTotal > 0"
+                      x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal"
+                      title="Unread chat activity"
+                      role="status"
+                    ></span>
+                  </div>
                   <p class="fleet-status-sub">Live agent health</p>
                 </div>
                 <div class="fleet-status-right all-agents-page-header-actions">
-                  <span class="badge badge-dim fleet-inbox-pill" x-show="$store.app.chatUnreadTotal > 0" x-text="'Inbox ' + ($store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal)"></span>
                   <button class="btn btn-ghost btn-sm" type="button" @click="openSpawnWizard()">+ New Agent</button>
                   <button class="btn btn-danger btn-sm all-agents-stop-btn" x-show="agents.length > 1" type="button" @click="killAllAgents()">Stop All</button>
                 </div>
@@ -2000,27 +2008,51 @@
                   <div class="fleet-metric-top">
                     <span class="fleet-metric-kicker">Tasks today</span>
                     <span class="fleet-metric-value" x-text="tasksToday || 0"></span>
+                    <div class="fleet-mini-bars fleet-mini-bars--tasks" role="img" aria-label="Tasks by hour (last 8 hours)">
+                      <template x-for="b in fleetMetricBars('tasks')" :key="b.key">
+                        <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                      </template>
+                    </div>
+                    <div class="fleet-mini-bars-caption">Last 8h</div>
                     <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
                   </div>
                 </div>
                 <div class="fleet-metric">
                   <div class="fleet-metric-top">
-                    <span class="fleet-metric-kicker">Graph nodes (sampled agents)</span>
+                    <span class="fleet-metric-kicker">Graph nodes</span>
                     <span class="fleet-metric-value" x-text="fleetGraphNodeTotal || 0"></span>
+                    <div class="fleet-mini-bars fleet-mini-bars--nodes" role="img" aria-label="Graph nodes recorded by hour (last 8 hours)">
+                      <template x-for="b in fleetMetricBars('nodes')" :key="b.key">
+                        <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                      </template>
+                    </div>
+                    <div class="fleet-mini-bars-caption">Last 8h</div>
                     <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
                   </div>
                 </div>
                 <div class="fleet-metric">
                   <div class="fleet-metric-top">
-                    <span class="fleet-metric-kicker">Spend (last hour, est.)</span>
-                    <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSpendHour * 10000) / 10000).toFixed(4)"></span>
+                    <span class="fleet-metric-kicker">Spend (today, est.)</span>
+                    <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSpendToday * 10000) / 10000).toFixed(4)"></span>
+                    <div class="fleet-mini-bars fleet-mini-bars--spend" role="img" aria-label="Spend by hour (last 8 hours)">
+                      <template x-for="b in fleetMetricBars('spend')" :key="b.key">
+                        <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                      </template>
+                    </div>
+                    <div class="fleet-mini-bars-caption">Last 8h</div>
                     <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
                   </div>
                 </div>
                 <div class="fleet-metric">
                   <div class="fleet-metric-top">
-                    <span class="fleet-metric-kicker">Saved (last hour, est.)</span>
-                    <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSavedHour * 10000) / 10000).toFixed(4)"></span>
+                    <span class="fleet-metric-kicker">Saved (today, est.)</span>
+                    <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSavedToday * 10000) / 10000).toFixed(4)"></span>
+                    <div class="fleet-mini-bars fleet-mini-bars--saved" role="img" aria-label="Saved by hour (last 8 hours)">
+                      <template x-for="b in fleetMetricBars('saved')" :key="b.key">
+                        <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                      </template>
+                    </div>
+                    <div class="fleet-mini-bars-caption">Last 8h</div>
                     <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
                   </div>
                 </div>

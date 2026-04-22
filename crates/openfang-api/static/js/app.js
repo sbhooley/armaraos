@@ -714,6 +714,8 @@ document.addEventListener('alpine:init', function() {
     agentsPageChatAgentId: null,
     /** agentId -> count of unread assistant-side updates (replaced immutably for Alpine). */
     chatUnreadCounts: {},
+    /** agentId -> optional detail line for the notification center (e.g. kernel message preview). */
+    chatUnreadPreview: {},
     /** agentId -> last seen assistant_message_count from GET .../session/digest (poll + dedupe). */
     chatAssistantBaseline: {},
 
@@ -725,6 +727,20 @@ document.addEventListener('alpine:init', function() {
       var next = Object.assign({}, prev);
       next[id] = n;
       this.chatAssistantBaseline = next;
+    },
+
+    setChatUnreadPreview(agentId, text) {
+      if (!agentId) return;
+      var id = String(agentId);
+      var t = text != null ? String(text).trim().slice(0, 300) : '';
+      var p = Object.assign({}, this.chatUnreadPreview || {});
+      if (!t) {
+        if (!p[id]) return;
+        delete p[id];
+      } else {
+        p[id] = t;
+      }
+      this.chatUnreadPreview = p;
     },
 
     /** Call when opening a chat so digest polling does not treat history as new. */
@@ -810,23 +826,50 @@ document.addEventListener('alpine:init', function() {
       return this.agentsPageChatAgentId === agentId;
     },
 
-    bumpAgentChatUnread(agentId) {
+    bumpAgentChatUnread(agentId, messagePreview) {
       if (!agentId || this.isChatSurfaceActiveForAgent(agentId)) return;
+      if (messagePreview != null && String(messagePreview).trim()) {
+        this.setChatUnreadPreview(String(agentId), String(messagePreview).trim().slice(0, 300));
+      }
       var prev = this.chatUnreadCounts || {};
       var next = Object.assign({}, prev);
-      next[agentId] = (next[agentId] || 0) + 1;
+      var id0 = String(agentId);
+      next[id0] = (next[id0] || 0) + 1;
       this.chatUnreadCounts = next;
       this.updateTabTitle();
+      try {
+        var nctr = Alpine.store('notifyCenter');
+        nctr.syncChatUnreadRows();
+        if (nctr && !nctr.panelOpen) {
+          nctr._announceIfClosed(armaraosAgentDisplayName(id0) + ' — new message');
+        }
+      } catch (e) { /* ignore */ }
     },
 
     clearAgentChatUnread(agentId) {
       if (!agentId) return;
+      var id0 = String(agentId);
+      var pprev = this.chatUnreadPreview || {};
+      if (pprev[id0] != null) {
+        var pp2 = Object.assign({}, pprev);
+        delete pp2[id0];
+        this.chatUnreadPreview = pp2;
+      }
       var prev = this.chatUnreadCounts || {};
-      if (!prev[agentId]) return;
+      var hadCount = (prev[id0] || 0) > 0;
+      if (!hadCount) {
+        try {
+          Alpine.store('notifyCenter').syncChatUnreadRows();
+        } catch (e) { /* ignore */ }
+        return;
+      }
       var next = Object.assign({}, prev);
-      delete next[agentId];
+      delete next[id0];
       this.chatUnreadCounts = next;
       this.updateTabTitle();
+      try {
+        Alpine.store('notifyCenter').syncChatUnreadRows();
+      } catch (e2) { /* ignore */ }
     },
 
     updateTabTitle() {
@@ -1287,6 +1330,63 @@ document.addEventListener('alpine:init', function() {
     badgeCount() {
       return (this.items || []).length;
     },
+    /**
+     * Drive notification-center rows from the same `chatUnreadCounts` as the sidebar,
+     * Fleet header badge, and All Agents nav badge. Removes legacy per-agent
+     * `agent-reply-*` rows (replaced by unified `chat-unread-*`).
+     */
+    syncChatUnreadRows() {
+      var app;
+      try {
+        app = Alpine.store('app');
+      } catch (e) {
+        return;
+      }
+      if (!app) return;
+      var counts = app.chatUnreadCounts || {};
+      var previews = app.chatUnreadPreview || {};
+      var raw = this.items || [];
+      var base = raw.filter(function(x) {
+        if (!x) return true;
+        if (x.kind === 'chat_unread') return false;
+        if (x.id && String(x.id).indexOf('chat-unread-') === 0) return false;
+        if (x.id && String(x.id).indexOf('agent-reply-') === 0) return false;
+        return true;
+      });
+      var agentIds = [];
+      for (var k in counts) {
+        if (!Object.prototype.hasOwnProperty.call(counts, k)) continue;
+        if ((counts[k] || 0) > 0) agentIds.push(String(k));
+      }
+      agentIds.sort(function(a, b) {
+        return armaraosAgentDisplayName(a)
+          .toLowerCase()
+          .localeCompare(armaraosAgentDisplayName(b).toLowerCase());
+      });
+      var chatRows = [];
+      for (var i = 0; i < agentIds.length; i++) {
+        var ag = agentIds[i];
+        var c = counts[ag] || 0;
+        if (c <= 0) continue;
+        var label = armaraosAgentDisplayName(ag);
+        var title = c > 1 ? label + ' · ' + c + ' new' : label + ' — new message';
+        var det = (previews[ag] && String(previews[ag]).trim())
+          ? String(previews[ag]).trim().slice(0, 300)
+          : 'Open All Agents to read the reply.';
+        chatRows.push({
+          id: 'chat-unread-' + ag,
+          kind: 'chat_unread',
+          title: title,
+          detail: det,
+          href: '#agents',
+          severity: 'info',
+          ts: Date.now()
+        });
+      }
+      var merged = chatRows.concat(base);
+      if (merged.length > 48) merged.length = 48;
+      this.items = merged;
+    },
     _announceIfClosed(title) {
       if (this.panelOpen) return;
       var self = this;
@@ -1299,6 +1399,15 @@ document.addEventListener('alpine:init', function() {
     },
     dismiss(id) {
       if (!id) return;
+      if (String(id).indexOf('chat-unread-') === 0) {
+        var aid0 = id.slice('chat-unread-'.length);
+        if (aid0) {
+          try {
+            Alpine.store('app').clearAgentChatUnread(aid0);
+          } catch (eChat) { /* ignore */ }
+        }
+        return;
+      }
       if (String(id).indexOf('k-') === 0) {
         armaraosNotifyPersistKernelDismiss(id);
       }
@@ -1327,6 +1436,12 @@ document.addEventListener('alpine:init', function() {
       this.approvalDismissSig = '';
       this.budgetSnoozeUntil = 0;
       this._healthNotifyAt = {};
+      try {
+        var a = Alpine.store('app');
+        a.chatUnreadCounts = {};
+        a.chatUnreadPreview = {};
+        a.updateTabTitle();
+      } catch (e) { /* ignore */ }
     },
     _prepend(row) {
       if (row && row.id && String(row.id).indexOf('k-') === 0 && armaraosNotifyIsKernelDismissed(row.id)) {
@@ -1617,30 +1732,25 @@ document.addEventListener('alpine:init', function() {
             return;
           }
           if (d.event === 'AgentAssistantReply') {
-            var aidAr = String(d.agent_id || '');
-            var replyMode = 'all';
+            var aidAr2 = String(d.agent_id || '');
+            var replyMode2 = 'all';
             try {
-              replyMode = Alpine.store('app').normalizeNotifyChatReplies(Alpine.store('app').notifyChatReplies);
-            } catch (eRm) { replyMode = 'all'; }
-            if (replyMode === 'off') {
+              replyMode2 = Alpine.store('app').normalizeNotifyChatReplies(Alpine.store('app').notifyChatReplies);
+            } catch (eRm) { replyMode2 = 'all'; }
+            if (replyMode2 === 'off') {
               return;
             }
-            if (replyMode === 'hidden' && aidAr) {
+            if (replyMode2 === 'hidden' && aidAr2) {
               try {
-                if (Alpine.store('app').isChatSurfaceActiveForAgent(aidAr)) return;
+                if (Alpine.store('app').isChatSurfaceActiveForAgent(aidAr2)) return;
               } catch (eHid) { /* ignore */ }
             }
-            var an = d.agent_name || 'Agent';
-            var pr = (d.message_preview || '').slice(0, 260);
-            this._prepend({
-              id: aidAr ? ('agent-reply-' + aidAr) : kid,
-              kind: 'agent_message',
-              title: an + ' replied',
-              detail: pr,
-              href: '#agents',
-              severity: 'info',
-              ts: Date.now()
-            });
+            if (aidAr2) {
+              var pr2 = (d.message_preview || '').slice(0, 300);
+              try {
+                Alpine.store('app').bumpAgentChatUnread(aidAr2, pr2);
+              } catch (eBump) { /* ignore */ }
+            }
             return;
           }
           if (d.event === 'CronJobCompleted') {
@@ -2008,6 +2118,9 @@ function app() {
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       Alpine.store('app').loadUiPrefs();
+      try {
+        Alpine.store('notifyCenter').syncChatUnreadRows();
+      } catch (eUnr) { /* ignore */ }
       setInterval(function() {
         self.pollStatus();
         Alpine.store('app').refreshApprovals();
