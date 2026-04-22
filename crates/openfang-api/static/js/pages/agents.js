@@ -237,14 +237,43 @@ function agentsPage() {
       return isInternalAutomationProbeChatAgentName(agent && agent.name);
     },
 
+    fleetPinnedAgentIds: function() {
+      try {
+        var app = Alpine.store('app');
+        var ids = app && Array.isArray(app.pinnedAgentIds) ? app.pinnedAgentIds : [];
+        return ids.map(function(x) { return String(x); });
+      } catch (e) { return []; }
+    },
+
+    sortFleetAgents: function(list) {
+      var src = Array.isArray(list) ? list.slice() : [];
+      var pinned = this.fleetPinnedAgentIds();
+      var rank = {};
+      for (var i = 0; i < pinned.length; i++) rank[pinned[i]] = i;
+      return src.sort(function(a, b) {
+        var aid = String((a && a.id) || '');
+        var bid = String((b && b.id) || '');
+        var ap = Object.prototype.hasOwnProperty.call(rank, aid);
+        var bp = Object.prototype.hasOwnProperty.call(rank, bid);
+        if (ap && bp) return rank[aid] - rank[bid];
+        if (ap) return -1;
+        if (bp) return 1;
+        var an = String((a && a.name) || '').toLowerCase();
+        var bn = String((b && b.name) || '').toLowerCase();
+        var nc = an.localeCompare(bn);
+        if (nc !== 0) return nc;
+        return aid.localeCompare(bid);
+      });
+    },
+
     get chatPickerPrimaryAgents() {
       var self = this;
-      return this.agents.filter(function(a) { return !self.isAutomationProbeChatAgent(a); });
+      return this.sortFleetAgents(this.agents.filter(function(a) { return !self.isAutomationProbeChatAgent(a); }));
     },
 
     get chatPickerSystemAgents() {
       var self = this;
-      return this.agents.filter(function(a) { return self.isAutomationProbeChatAgent(a); });
+      return this.sortFleetAgents(this.agents.filter(function(a) { return self.isAutomationProbeChatAgent(a); }));
     },
 
     get filteredAgents() {
@@ -292,7 +321,10 @@ function agentsPage() {
     _tweenRaf: null,
     _fleetInFlight: false,
     _graphGen: 0,
+    _prevTasksToday: null,
     _prevToolByAgent: {},
+    _prevCallByAgent: {},
+    _usageCountersInitialized: false,
     _prevGraphNodeByAgent: {},
     _prevPhaseByAgent: {},
     _activitySeenTsByAgent: {},
@@ -733,12 +765,15 @@ function agentsPage() {
       var status = (this._agentStatusByHour && this._agentStatusByHour[aid]) ? this._agentStatusByHour[aid] : {};
       var tool = (this._agentToolByHour && this._agentToolByHour[aid]) ? this._agentToolByHour[aid] : {};
       var node = (this._agentNodeByHour && this._agentNodeByHour[aid]) ? this._agentNodeByHour[aid] : {};
+      var visBump = this.agentStatusVisualBump(agent);
       var maxv = 1;
       for (var i = 0; i < slots.length; i++) {
         var k = String(slots[i]);
+        var sv0 = Number(status[k]) || 0;
+        if (i === (slots.length - 1)) sv0 += visBump;
         maxv = Math.max(
           maxv,
-          Number(status[k]) || 0,
+          sv0,
           Number(tool[k]) || 0,
           Number(node[k]) || 0
         );
@@ -747,6 +782,7 @@ function agentsPage() {
       return slots.map(function(bucket, idx) {
         var k = String(bucket);
         var sv = Math.max(0, Number(status[k]) || 0);
+        if (idx === slots.length - 1) sv += visBump;
         var tv = Math.max(0, Number(tool[k]) || 0);
         var nv = Math.max(0, Number(node[k]) || 0);
         var toPct = function(v) {
@@ -964,7 +1000,6 @@ function agentsPage() {
         this.agentsFleetTweakSparks(d);
         if (d > 0) {
           this.fleetOnAgentPing('__global__', d);
-          this._fleetTasksByHour = this.fleetRecordHourly(this._fleetTasksByHour, d, Date.now());
         }
       }
       this._fleetLastSummaryCalls = calls;
@@ -1056,13 +1091,6 @@ function agentsPage() {
           var delta = c - prev;
           this.fleetOnAgentPing(aid, delta);
           this.agentTweakSpark(aid);
-          this.recordAgentHourly('node', aid, delta, Date.now());
-          try {
-            var appStore = Alpine.store('app');
-            if (appStore && typeof appStore.setAgentActivityLine === 'function') {
-              appStore.setAgentActivityLine(aid, 'Graph memory + ' + delta + ' nodes');
-            }
-          } catch (e2) { /* ignore */ }
         }
       } catch (e) {
         this.graphVitalsByAgent = Object.assign({}, this.graphVitalsByAgent, (function() { var o = {}; o[aid] = ''; return o; })());
@@ -1100,27 +1128,54 @@ function agentsPage() {
       this._fleetInFlight = true;
       var self = this;
       var prev = this._prevToolByAgent || {};
+      var prevCalls = this._prevCallByAgent || {};
+      var initializingUsageCounters = !this._usageCountersInitialized;
       var usageRows = { agents: [] };
       var summary = null;
       var daily = { days: [] };
+      var prevTasksToday = (this._prevTasksToday != null) ? Number(this._prevTasksToday) || 0 : null;
       try { summary = await OpenFangAPI.get('/api/usage/summary').catch(function() { return null; }); } catch (e1) { /* ignore */ }
       try { daily = await OpenFangAPI.get('/api/usage/daily').catch(function() { return { days: [] }; }); } catch (e2) { daily = { days: [] }; }
       this.tasksToday = this.todayCallsFromDaily(daily);
+      if (prevTasksToday != null && this.tasksToday > prevTasksToday) {
+        this._fleetTasksByHour = this.fleetRecordHourly(
+          this._fleetTasksByHour,
+          this.tasksToday - prevTasksToday,
+          Date.now()
+        );
+      } else if (this.tasksToday > 0) {
+        var curKey = String(this.fleetHourBucket(Date.now()));
+        var curVal = Number((this._fleetTasksByHour || {})[curKey]) || 0;
+        if (curVal <= 0) {
+          this._fleetTasksByHour = this.fleetRecordHourly(this._fleetTasksByHour, 1, Date.now());
+        }
+      }
+      this._prevTasksToday = this.tasksToday;
       if (typeof daily.today_cost_usd === 'number') this.fleetSpendToday = Math.max(0, Number(daily.today_cost_usd) || 0);
       if (summary) this.fleetOnSummary(summary);
       else { this.fleetBuildSpendThisHour(); this.fleetBuildSavedThisHour(); }
       try { usageRows = await OpenFangAPI.get('/api/usage').catch(function() { return { agents: [] }; }); } catch (e3) { usageRows = { agents: [] }; }
       var m = {};
       (usageRows && usageRows.agents ? usageRows.agents : []).forEach(function(r) {
-        m[String(r.agent_id)] = { tool_calls: r.tool_calls || 0, cost_usd: r.cost_usd || 0, total_tokens: r.total_tokens || 0 };
+        m[String(r.agent_id)] = {
+          tool_calls: r.tool_calls || 0,
+          call_count: r.call_count || 0,
+          cost_usd: r.cost_usd || 0,
+          total_tokens: r.total_tokens || 0
+        };
       });
       for (var id in m) {
         if (!Object.prototype.hasOwnProperty.call(m, id)) continue;
         var ptc = (prev[id] != null) ? prev[id] : 0;
-        if (m[id].tool_calls > ptc) {
+        var pcc = (prevCalls[id] != null) ? prevCalls[id] : 0;
+        if (!initializingUsageCounters && m[id].tool_calls > ptc) {
           var tdel = m[id].tool_calls - ptc;
           self.fleetOnAgentPing(id, tdel);
           self.recordAgentHourly('tool', id, tdel, Date.now());
+        }
+        if (!initializingUsageCounters && m[id].call_count > pcc) {
+          var cdel = m[id].call_count - pcc;
+          self.recordAgentHourly('status', id, cdel, Date.now());
         }
         if (m[id].tool_calls !== ptc) {
           self.agentTweakSpark(id);
@@ -1129,8 +1184,10 @@ function agentsPage() {
       for (var id2 in m) {
         if (Object.prototype.hasOwnProperty.call(m, id2)) {
           this._prevToolByAgent[id2] = m[id2].tool_calls;
+          this._prevCallByAgent[id2] = m[id2].call_count;
         }
       }
+      this._usageCountersInitialized = true;
       this.usageByAgent = m;
       this.trackAgentPhaseTransitions();
       this.nudgeDisplayActive();
@@ -1219,12 +1276,13 @@ function agentsPage() {
       if (st === 'Crashed') return 'error';
       if (st !== 'Running') return 'idle';
       var entry = this.getAgentActivityEntry(agent);
-      if (!entry || !entry.text) return 'running';
+      if (!entry || !entry.text) return 'waiting';
       var t = String(entry.text).toLowerCase();
       if (t.indexOf('thinking') >= 0) return 'thinking';
       if (t.indexOf('using tool') >= 0 || t.indexOf('tool') >= 0) return 'tool';
       if (t.indexOf('writing response') >= 0 || t.indexOf('stream') >= 0 || t.indexOf('reply') >= 0) return 'streaming';
       if (t.indexOf('waiting') >= 0) return 'waiting';
+      if (t.indexOf('awaiting input') >= 0 || t.indexOf('idle') >= 0) return 'waiting';
       return 'running';
     },
 
@@ -1273,6 +1331,8 @@ function agentsPage() {
 
     agentCurrentPhaseIntensity: function(agent) {
       var ph = this.agentCurrentPhaseClass(agent);
+      var isIdleLike = (ph === 'idle' || ph === 'waiting');
+      var isActiveLike = (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running');
       var base = 25;
       if (ph === 'thinking') base = 58;
       else if (ph === 'tool') base = 74;
@@ -1290,14 +1350,23 @@ function agentsPage() {
       var freshnessBoost = 0;
       if (ts) {
         var age = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-        if (age <= 5) freshnessBoost = 14;
-        else if (age <= 15) freshnessBoost = 8;
-        else if (age <= 45) freshnessBoost = 3;
-        else if (age >= 180) freshnessBoost = -8;
+        if (isIdleLike) {
+          if (age <= 5) freshnessBoost = 3;
+          else if (age <= 15) freshnessBoost = 1;
+          else if (age <= 45) freshnessBoost = 0;
+          else if (age >= 180) freshnessBoost = -6;
+        } else {
+          if (age <= 5) freshnessBoost = 14;
+          else if (age <= 15) freshnessBoost = 8;
+          else if (age <= 45) freshnessBoost = 3;
+          else if (age >= 180) freshnessBoost = -8;
+        }
       }
-      var pingBoost = (agent && agent.id && this.agentPinging && this.agentPinging[agent.id]) ? 12 : 0;
+      var pingBoost = (agent && agent.id && this.agentPinging && this.agentPinging[agent.id])
+        ? (isActiveLike ? 12 : 2)
+        : 0;
       var idleWave = 0;
-      if (ph === 'idle' || ph === 'waiting') {
+      if (isIdleLike) {
         var sid = String((agent && agent.id) || '');
         var seed = 0;
         for (var i = 0; i < sid.length; i++) seed = (seed + sid.charCodeAt(i)) % 97;
@@ -1309,7 +1378,7 @@ function agentsPage() {
           (Math.sin((t + seed * 0.7) / (4.8 + (seed % 5) * 0.42)) * 2.9);
       }
       var activeWave = 0;
-      if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
+      if (isActiveLike) {
         var sid2 = String((agent && agent.id) || '');
         var seed2 = 0;
         for (var j = 0; j < sid2.length; j++) seed2 = (seed2 + sid2.charCodeAt(j)) % 131;
@@ -1321,6 +1390,7 @@ function agentsPage() {
       }
       var out = Math.round(base + freshnessBoost + pingBoost + idleWave + activeWave);
       if (out < 25) out = 25;
+      if (isIdleLike && out > 34) out = 34;
       if (out > 100) out = 100;
       return out;
     },
@@ -1332,6 +1402,21 @@ function agentsPage() {
       if (n >= 70) return 'warn';
       if (n > 50) return 'elevated';
       return 'normal';
+    },
+
+    // Visual-only bump for the in-progress hour so bars feel alive while work
+    // is ongoing. This is not persisted and does not affect finalized hourly totals.
+    agentStatusVisualBump: function(agent) {
+      if (!agent) return 0;
+      var ph = this.agentCurrentPhaseClass(agent);
+      var n = Number(this.agentCurrentPhaseIntensity(agent)) || 0;
+      if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
+        return Math.max(0, Math.min(0.5, (n - 35) / 120));
+      }
+      if (ph === 'waiting' || ph === 'idle') {
+        return Math.max(0, Math.min(0.12, (n - 20) / 150));
+      }
+      return 0;
     },
 
     tickActivePhaseMicroActivity: function() {
@@ -1349,9 +1434,6 @@ function agentsPage() {
         }
         var ageSec = ts ? Math.max(0, Math.floor((Date.now() - ts) / 1000)) : 9999;
         if (ageSec > 300) return;
-        if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
-          self.recordAgentHourly('status', a.id, 0.08, Date.now());
-        }
         if (ph === 'tool') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.06);
         else if (ph === 'thinking') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.055);
         else if (ph === 'streaming') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.045);
@@ -1387,6 +1469,13 @@ function agentsPage() {
             return 'running';
           })(ent.text)
         };
+        var txt = String(ent.text || '');
+        var mNodes = txt.match(/graph\s+memory\s*\+\s*(\d+)\s*nodes?/i);
+        if (!mNodes) mNodes = txt.match(/(?:wrote|written|added)\s+(\d+)\s+nodes?/i);
+        if (mNodes) {
+          var nAdd = Number(mNodes[1]) || 0;
+          if (nAdd > 0) this.recordAgentHourly('node', aid, nAdd, ts);
+        }
         var arr = (next[aid] || []).slice();
         arr.unshift(row);
         if (arr.length > 5) arr = arr.slice(0, 5);
@@ -1412,6 +1501,23 @@ function agentsPage() {
       }
     },
 
+    isFleetAgentPinned: function(agent) {
+      if (!agent || !agent.id) return false;
+      try {
+        var app = Alpine.store('app');
+        return !!(app && typeof app.isAgentPinned === 'function' && app.isAgentPinned(String(agent.id)));
+      } catch (e) { return false; }
+    },
+
+    toggleFleetAgentPin: function(agent, ev) {
+      this.fleetActionsStop(ev);
+      if (!agent || !agent.id) return;
+      try {
+        var app = Alpine.store('app');
+        if (app && typeof app.togglePinAgent === 'function') app.togglePinAgent(String(agent.id));
+      } catch (e) { /* ignore */ }
+    },
+
     fleetClickCard: function(agent, ev) {
       this.chatWithAgent(agent);
     },
@@ -1419,6 +1525,10 @@ function agentsPage() {
     fleetStartPeriodic: function() {
       this.fleetLastCost = null;
       this._fleetLastSummaryCalls = 0;
+      this._prevTasksToday = null;
+      this._prevToolByAgent = {};
+      this._prevCallByAgent = {};
+      this._usageCountersInitialized = false;
       this._prevPhaseByAgent = {};
       this.displayActiveCount = this.runningCount;
       var self = this;

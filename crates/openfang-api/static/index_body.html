@@ -2079,6 +2079,7 @@
                     :class="{
                       'is-ping': agentPinging[agent.id] === true,
                       'agent-vitals-card--error': String(agent.state) === 'Crashed',
+                      'agent-vitals-card--pinned': isFleetAgentPinned(agent),
                       'is-live': isAgentRunningState(agent) && ($store.app.agentActivityLines[agent.id] || demoMode)
                     }"
                     role="group"
@@ -2088,6 +2089,16 @@
                     @keydown.space.prevent="chatWithAgent(agent)"
                     tabindex="0"
                   >
+                    <button
+                      type="button"
+                      class="agent-vitals-corner-pin"
+                      :class="{ 'is-active': isFleetAgentPinned(agent) }"
+                      @click="toggleFleetAgentPin(agent, $event)"
+                      :title="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                      :aria-label="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1.8 5.2 3.5 3.2H6.3l3.5-3.2z"/><path d="M12 11.5V21"/></svg>
+                    </button>
                     <button type="button" class="agent-vitals-corner-gear" @click="showDetail(agent); fleetActionsStop($event)" title="Agent settings" aria-label="Agent settings">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     </button>
@@ -2190,13 +2201,23 @@
                 <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
                   <div
                     class="agent-vitals-card agent-vitals-card--system"
-                    :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed' }"
+                    :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent) }"
                     @click="fleetClickCard(agent, $event)"
                     @keydown.enter.prevent="chatWithAgent(agent)"
                     @keydown.space.prevent="chatWithAgent(agent)"
                     role="group"
                     tabindex="0"
                   >
+                    <button
+                      type="button"
+                      class="agent-vitals-corner-pin"
+                      :class="{ 'is-active': isFleetAgentPinned(agent) }"
+                      @click="toggleFleetAgentPin(agent, $event)"
+                      :title="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                      :aria-label="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1.8 5.2 3.5 3.2H6.3l3.5-3.2z"/><path d="M12 11.5V21"/></svg>
+                    </button>
                     <button type="button" class="agent-vitals-corner-gear" @click="showDetail(agent); fleetActionsStop($event)" title="Agent settings" aria-label="Agent settings">
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     </button>
@@ -8391,6 +8412,42 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
             </template>
+          </div>
+        </div>
+        <div class="card" style="margin-top:12px;padding:12px 14px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div>
+              <p style="margin:0;font-size:0.86rem;font-weight:600">Improvement proposals (ledger)</p>
+              <p class="text-dim text-xs" style="margin:3px 0 0">Submit → validate → adopt (when enabled on the daemon). <span class="font-mono" style="font-size:0.68rem">AINL_IMPROVEMENT_PROPOSALS_ENABLED</span></p>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" @click="loadImprovementProposals()">Refresh</button>
+          </div>
+          <div x-show="improvementProposalsLoading" class="text-xs text-dim" style="padding:8px 0">Loading…</div>
+          <div x-show="!improvementProposalsLoading && (!improvementProposals || improvementProposals.length === 0)" class="text-xs text-dim" style="padding:8px 0">No rows (feature off, empty ledger, or no agent selected).</div>
+          <div style="margin-top:8px;max-height:220px;overflow:auto" x-show="!improvementProposalsLoading && improvementProposals && improvementProposals.length > 0">
+            <table class="w-full text-xs" style="border-collapse:collapse">
+              <thead>
+                <tr class="text-dim" style="text-align:left;border-bottom:1px solid var(--border)">
+                  <th class="p-1">Kind</th>
+                  <th class="p-1">State</th>
+                  <th class="p-1">Proposal id</th>
+                  <th class="p-1">Graph</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="p in improvementProposals" :key="p.id">
+                  <tr style="border-bottom:1px solid var(--border)">
+                    <td class="p-1" x-text="p.kind"></td>
+                    <td class="p-1" x-text="improvementProposalRowStatus(p)"></td>
+                    <td class="p-1 font-mono" style="word-break:break-all" x-text="p.id"></td>
+                    <td class="p-1">
+                      <button type="button" class="btn btn-ghost btn-sm" x-show="p.adopted_graph_node_id" @click="selectNodeById(p.adopted_graph_node_id)" style="padding:1px 6px;font-size:0.7rem">Focus</button>
+                      <span x-show="!p.adopted_graph_node_id" class="text-dim">—</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
           </div>
         </div>
         <div class="card" style="margin-top:12px;padding:12px 14px">

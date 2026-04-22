@@ -1584,6 +1584,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let memory_selection_debug = openfang_runtime::graph_memory_context::latest_selection_debug(20);
     let memory_contract_metrics = openfang_runtime::ainl_inbox_reader::inbox_contract_metrics();
     let graph_memory_learning_metrics = openfang_runtime::graph_memory_learning_metrics();
+    let improvement_proposals_metrics = openfang_runtime::improvement_proposals_metrics();
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1603,6 +1604,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "graph_memory_selection_debug": memory_selection_debug,
         "graph_memory_contract_metrics": memory_contract_metrics,
         "graph_memory_learning_metrics": graph_memory_learning_metrics,
+        "improvement_proposals": improvement_proposals_metrics,
         "eco_compression": eco_compression,
         "quota_enforcement": quota_enforcement,
         "adaptive_eco": {
@@ -8199,18 +8201,19 @@ pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
             // Prefer persistent SQLite-backed usage totals so values survive daemon
             // restarts and desktop upgrades/reinstalls. Fall back to in-memory
             // scheduler counters only if usage summary lookup fails.
-            let (input_tokens, output_tokens, tool_calls, cost_usd, source) =
+            let (input_tokens, output_tokens, call_count, tool_calls, cost_usd, source) =
                 match state.kernel.metering.get_summary(Some(e.id)) {
                     Ok(s) => (
                         s.total_input_tokens,
                         s.total_output_tokens,
+                        s.call_count,
                         s.total_tool_calls,
                         s.total_cost_usd,
                         "persistent",
                     ),
                     Err(_) => {
                         let (tokens, tc) = state.kernel.scheduler.get_usage(e.id).unwrap_or((0, 0));
-                        (tokens, 0, tc, 0.0, "scheduler_fallback")
+                        (tokens, 0, 0, tc, 0.0, "scheduler_fallback")
                     }
                 };
             let total_tokens = input_tokens + output_tokens;
@@ -8220,6 +8223,7 @@ pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "total_tokens": total_tokens,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "call_count": call_count,
                 "tool_calls": tool_calls,
                 "cost_usd": cost_usd,
                 "source": source,
