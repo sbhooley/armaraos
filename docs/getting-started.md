@@ -360,7 +360,7 @@ openfang trigger delete <id>           # Delete a trigger
 
 openfang skill install <source>        # Install a skill
 openfang skill list                    # List installed skills
-openfang skill search <query>          # Search FangHub
+openfang skill search <query>          # Search the ArmaraOS Appstore
 openfang skill create                  # Scaffold a new skill
 
 openfang channel list                  # List channel status

@@ -98,6 +98,7 @@ pub mod auth_cooldown;
 pub mod browser;
 pub mod command_lane;
 pub mod compactor;
+mod assistant_output_compress;
 mod context_compiler_summarizer;
 pub mod compression_project_ema;
 pub mod context_budget;

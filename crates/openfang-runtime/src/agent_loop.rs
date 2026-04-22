@@ -1386,11 +1386,16 @@ pub async fn run_agent_loop(
     // to system prompt so the agent's learned traits affect every LLM call.
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
+            let context_freshness = crate::graph_memory_context::workspace_context_freshness_for_prompt(
+                mcp_connections,
+            )
+            .await;
             let prompt_ctx = crate::graph_memory_context::build_prompt_memory_context(
                 gm,
                 &memory_policy,
                 Some(user_message),
                 learning.policy().failures,
+                context_freshness,
             )
             .await;
             if !prompt_ctx.is_empty() {
@@ -2458,6 +2463,7 @@ pub async fn run_agent_loop(
                     last_tools_called.clear();
                     text
                 };
+                let text = crate::assistant_output_compress::apply_if_env(text);
 
                 final_response = text.clone();
                 session.messages.push(Message::assistant(text));
@@ -4094,11 +4100,16 @@ pub async fn run_agent_loop_streaming(
 
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
+            let context_freshness = crate::graph_memory_context::workspace_context_freshness_for_prompt(
+                mcp_connections,
+            )
+            .await;
             let prompt_ctx = crate::graph_memory_context::build_prompt_memory_context(
                 gm,
                 &memory_policy,
                 Some(user_message),
                 learning.policy().failures,
+                context_freshness,
             )
             .await;
             if !prompt_ctx.is_empty() {
@@ -4839,6 +4850,7 @@ pub async fn run_agent_loop_streaming(
                     last_tools_called.clear();
                     text
                 };
+                let text = crate::assistant_output_compress::apply_if_env(text);
                 final_response = text.clone();
                 session.messages.push(Message::assistant(text));
 

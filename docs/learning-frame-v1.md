@@ -54,6 +54,18 @@ Messages to **`POST /api/agents/:id/message`** whose body starts with the ASCII 
 | `created_at` | RFC3339 UTC |
 | `extra` | arbitrary JSON — extensions |
 
+## Cognitive vitals and learners
+
+Hosts may attach **structured vitals** (`ainl_contracts::CognitiveVitals`: phase, trust, gate) and **context freshness** (`ContextFreshness`) to turns, trajectories, and improvement proposals. The learning frame does not duplicate that schema; long-running jobs pass traces via `refs` and the graph records episodes in `ainl-memory`.
+
+| Signal | Typical source | Consumer (high level) |
+|--------|----------------|------------------------|
+| `CognitiveVitals` | Logprob / host classifier on LLM output | `pattern_promotion` (skip on `gate=fail`), trajectory tags, operator dashboards. |
+| `ContextFreshness` | Repo / workspace indexers (`ainl-context-freshness`) | `ainl-failure-learning::should_emit_failure_suggestion` (blocks auto-suggestion when `Stale`); `ProposalEnvelope::freshness_at_proposal` for improvement proposals. |
+| Compression EMA / adaptive metadata | `ainl-compression` + `eco_mode_resolver` | `compression_project_ema` JSON, `/api/compression/project-profiles`. |
+
+See **[SELF_LEARNING_INTEGRATION_MAP.md](SELF_LEARNING_INTEGRATION_MAP.md) §15** for the full cross-crate contract.
+
 ## Size guidance
 
 - **`episode`:** truncate to ~32 KiB before send; full traces live behind `refs`.

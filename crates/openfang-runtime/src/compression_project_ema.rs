@@ -161,6 +161,61 @@ pub fn record_turn(
     write_file_atomic(&path, &file)
 }
 
+/// Operator / CLI override: merge or create a per-`project_id` row and persist (does not require
+/// `AINL_COMPRESSION_PROJECT_EMA=1` — used for hand-tuned baselines and scripting).
+pub fn operator_merge_project_entry(
+    agent_id: &str,
+    project_id: &str,
+    savings_ema: Option<f64>,
+    semantic_ema: Option<f64>,
+    last_applied_mode: Option<&str>,
+) -> Result<()> {
+    let pid = project_id.trim();
+    if pid.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "project_id must be non-empty",
+        ));
+    }
+    let path = profiles_path_for_agent(agent_id);
+    let mut file = load_file(agent_id)?;
+    if file.version == 0 {
+        file.version = 1;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    file.projects
+        .entry(pid.to_string())
+        .and_modify(|e| {
+            if let Some(s) = savings_ema {
+                e.savings_ema = s.clamp(0.0, 1.0);
+            }
+            if let Some(s) = semantic_ema {
+                e.semantic_ema = s.clamp(0.0, 1.0);
+            }
+            if let Some(m) = last_applied_mode {
+                e.last_applied_mode = m.trim().to_string();
+            }
+            e.observations = e.observations.saturating_add(1);
+            e.updated_at_unix = now;
+        })
+        .or_insert_with(|| {
+            let savings = savings_ema.unwrap_or(0.0).clamp(0.0, 1.0);
+            let sem = semantic_ema.unwrap_or(0.0).clamp(0.0, 1.0);
+            ProjectEmaEntry {
+                savings_ema: savings,
+                semantic_ema: sem,
+                observations: 1,
+                last_applied_mode: last_applied_mode.unwrap_or("").trim().to_string(),
+                updated_at_unix: now,
+                cache: None,
+            }
+        });
+    write_file_atomic(&path, &file)
+}
+
 /// If manifest has `project_id` and mode is not off, update EMA (best-effort, logs nothing on err).
 pub fn maybe_record_from_turn(
     agent_id: &str,

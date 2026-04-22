@@ -84,6 +84,8 @@ const AFTER_HELP: &str = "\
   openfang memory graph-inspect <agent> --scope agent_private
   openfang compression test --mode aggressive --file prompt.txt
   openfang compression profiles map-project my-repo-ci --json
+  openfang compression project-profiles show <agent_id>
+  openfang compression project-profiles set <agent_id> --project <pid> --savings-ema 0.4
   openfang uninstall            Completely remove OpenFang from your system
 
 \x1b[1;36mQuick Start:\x1b[0m
@@ -263,7 +265,7 @@ enum Commands {
     /// Export execution trajectories from graph memory (`ainl_trajectories` → JSONL) [*].
     #[command(subcommand)]
     Trajectory(TrajectoryCommands),
-    /// AINL eco-mode prompt compression (`ainl-compression`) — test/score/detect + profiles/adaptive/cache [*].
+    /// AINL eco-mode prompt compression (`ainl-compression`) — test/score/detect + profiles/adaptive/cache/project-profiles [*].
     #[command(subcommand)]
     Compression(CompressionCommands),
     /// Device pairing and token management [*].
@@ -364,7 +366,7 @@ enum MigrateSourceArg {
 
 #[derive(Subcommand)]
 enum SkillCommands {
-    /// Install a skill from FangHub or a local directory.
+    /// Install a skill from the ArmaraOS Appstore or a local directory.
     Install {
         /// Skill name, local path, or git URL.
         source: String,
@@ -376,7 +378,7 @@ enum SkillCommands {
         /// Skill name.
         name: String,
     },
-    /// Search FangHub for skills.
+    /// Search the ArmaraOS Appstore for skills.
     Search {
         /// Search query.
         query: String,
@@ -988,6 +990,20 @@ enum TrajectoryCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Delete `ainl_trajectories` detail rows with `recorded_at` before a cutoff (same DB as graph memory). Does not remove graph `Trajectory` nodes.
+    Prune {
+        /// Agent id (directory name under the OpenFang home `agents/` tree, same as graph memory).
+        agent: String,
+        /// Delete rows with `recorded_at` **strictly before** this Unix timestamp (seconds). Mutually exclusive with `--older-than-days`.
+        #[arg(long, conflicts_with = "older_than_days")]
+        before_recorded_at: Option<i64>,
+        /// Delete rows **strictly before** *now* minus this many full 24h days (UTC). Mutually exclusive with `--before-recorded-at`.
+        #[arg(long, conflicts_with = "before_recorded_at")]
+        older_than_days: Option<u32>,
+        /// Count how many rows would be deleted; do not write to the database.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
@@ -1050,6 +1066,9 @@ enum CompressionCommands {
     /// Cache TTL hysteresis helpers (`ainl_compression::cache`).
     #[command(subcommand)]
     Cache(CompressionCacheCommands),
+    /// On-disk per-project compression EMA / cache rows (`~/.armaraos/agents/<id>/compression_project_profiles.json`).
+    #[command(subcommand)]
+    ProjectProfiles(CompressionProjectProfilesCommands),
 }
 
 #[derive(Subcommand)]
@@ -1071,6 +1090,29 @@ enum CompressionProfilesCommands {
         project_id: String,
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CompressionProjectProfilesCommands {
+    /// Print `compression_project_profiles.json` for an agent (pretty JSON unless `--json` one-line).
+    Show {
+        /// ArmaraOS agent id (under `~/.armaraos/agents/<id>/`).
+        agent_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Merge operator values for one `project_id` key (creates the row if missing).
+    Set {
+        agent_id: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        savings_ema: Option<f64>,
+        #[arg(long)]
+        semantic_ema: Option<f64>,
+        #[arg(long)]
+        last_applied_mode: Option<String>,
     },
 }
 
@@ -1568,6 +1610,17 @@ fn main() {
                 since_recorded_at,
                 json,
             } => cmd_trajectory_analyze(&agent, scan_limit, since_recorded_at, json),
+            TrajectoryCommands::Prune {
+                agent,
+                before_recorded_at,
+                older_than_days,
+                dry_run,
+            } => cmd_trajectory_prune(
+                &agent,
+                before_recorded_at,
+                older_than_days,
+                dry_run,
+            ),
         },
         Some(Commands::Compression(sub)) => match sub {
             CompressionCommands::Test {
@@ -1600,6 +1653,24 @@ fn main() {
                     json,
                 } => cmd_compression_cache_ttl(base_ttl_secs, hits, json),
                 CompressionCacheCommands::Policy { json } => cmd_compression_cache_policy(json),
+            },
+            CompressionCommands::ProjectProfiles(p) => match p {
+                CompressionProjectProfilesCommands::Show { agent_id, json } => {
+                    cmd_compression_project_profiles_show(&agent_id, json)
+                }
+                CompressionProjectProfilesCommands::Set {
+                    agent_id,
+                    project,
+                    savings_ema,
+                    semantic_ema,
+                    last_applied_mode,
+                } => cmd_compression_project_profiles_set(
+                    &agent_id,
+                    &project,
+                    savings_ema,
+                    semantic_ema,
+                    last_applied_mode.as_deref(),
+                ),
             },
         },
         Some(Commands::Devices(sub)) => match sub {
@@ -4685,8 +4756,8 @@ fn cmd_skill_install(source: &str) {
         );
         notify_daemon_skill_reload();
     } else {
-        // Remote install from FangHub
-        println!("Installing {source} from FangHub...");
+        // Remote install from the ArmaraOS Appstore
+        println!("Installing {source} from the ArmaraOS Appstore...");
         let rt = tokio::runtime::Runtime::new().unwrap();
         let client = openfang_skills::marketplace::MarketplaceClient::new(
             openfang_skills::marketplace::MarketplaceConfig::default(),
@@ -7583,6 +7654,72 @@ fn load_trajectory_detail_rows(
         .map_err(|e| format!("Failed to list trajectories: {e}"))
 }
 
+fn cmd_trajectory_prune(
+    agent: &str,
+    before_recorded_at: Option<i64>,
+    older_than_days: Option<u32>,
+    dry_run: bool,
+) {
+    if before_recorded_at.is_none() && older_than_days.is_none() {
+        eprintln!("Error: pass --before-recorded-at (Unix seconds) and/or --older-than-days (full 24h days, UTC).");
+        std::process::exit(1);
+    }
+    let before = if let Some(b) = before_recorded_at {
+        b
+    } else {
+        let d = older_than_days.expect("checked above");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|x| x.as_secs() as i64)
+            .unwrap_or(0);
+        now - (i64::from(d) * 86_400)
+    };
+    let db_path = match openfang_runtime::graph_memory_writer::GraphMemoryWriter::sqlite_database_path_for_agent(agent) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let gm = match ainl_memory::GraphMemory::new(&db_path) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!(
+                "Failed to open graph memory DB {}: {e}",
+                db_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+    if dry_run {
+        match gm.count_trajectory_details_before(agent, before) {
+            Ok(n) => {
+                println!(
+                    "Would delete {n} trajectory detail row(s) (recorded_at < {before}, agent {agent:?}, DB {}.)",
+                    db_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    match gm.prune_trajectory_details_before(agent, before) {
+        Ok(n) => {
+            println!(
+                "Deleted {n} trajectory detail row(s) (recorded_at < {before}, agent {agent:?}, DB {}).",
+                db_path.display()
+            );
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn ellip_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();
@@ -8215,6 +8352,47 @@ fn cmd_compression_profiles_map_project(project_id: &str, json: bool) {
     }
     println!("project_id={project_id} → profile={} ({})", id, p.display_name);
     println!("  default_mode: {}", efficient_mode_slug(p.default_mode));
+}
+
+fn cmd_compression_project_profiles_show(agent_id: &str, json: bool) {
+    let f = match openfang_runtime::compression_project_ema::load_file(agent_id) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("compression project-profiles show: {e}");
+            std::process::exit(1);
+        }
+    };
+    if json {
+        println!("{}", serde_json::to_string(&f).unwrap_or_default());
+    } else {
+        println!("{}", serde_json::to_string_pretty(&f).unwrap_or_default());
+    }
+}
+
+fn cmd_compression_project_profiles_set(
+    agent_id: &str,
+    project: &str,
+    savings_ema: Option<f64>,
+    semantic_ema: Option<f64>,
+    last_applied_mode: Option<&str>,
+) {
+    if savings_ema.is_none() && semantic_ema.is_none() && last_applied_mode.is_none() {
+        eprintln!(
+            "compression project-profiles set: pass at least one of --savings-ema, --semantic-ema, --last-applied-mode"
+        );
+        std::process::exit(1);
+    }
+    if let Err(e) = openfang_runtime::compression_project_ema::operator_merge_project_entry(
+        agent_id,
+        project,
+        savings_ema,
+        semantic_ema,
+        last_applied_mode,
+    ) {
+        eprintln!("compression project-profiles set: {e}");
+        std::process::exit(1);
+    }
+    println!("OK: merged {project} under agent {agent_id}");
 }
 
 fn cmd_compression_adaptive_suggest(text: Option<&str>, file: Option<&Path>, json: bool) {

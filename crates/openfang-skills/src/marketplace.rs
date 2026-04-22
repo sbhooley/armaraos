@@ -1,4 +1,4 @@
-//! FangHub marketplace client — install skills from the registry.
+//! ArmaraOS Appstore client — install skills from the registry.
 //!
 //! For Phase 1, uses GitHub releases as the registry backend.
 //! Each skill is a GitHub repo with releases containing the skill bundle.
@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use tracing::{info, warn};
 
-/// FangHub registry configuration.
+/// ArmaraOS Appstore registry configuration.
 #[derive(Debug, Clone)]
 pub struct MarketplaceConfig {
     /// Base URL for the registry API.
@@ -28,7 +28,7 @@ impl Default for MarketplaceConfig {
     }
 }
 
-/// Client for the FangHub marketplace.
+/// Client for the ArmaraOS Appstore.
 pub struct MarketplaceClient {
     config: MarketplaceConfig,
     http: reqwest::Client,
@@ -171,7 +171,7 @@ impl MarketplaceClient {
             hasher.update(&bytes);
             hex::encode(hasher.finalize())
         };
-        info!(skill_name, sha256 = %sha256, version = %version, "Downloaded FangHub skill");
+        info!(skill_name, sha256 = %sha256, version = %version, "Downloaded ArmaraOS Appstore skill");
 
         // Step 3: Extract if zip, otherwise save raw.
         let content_str = String::from_utf8_lossy(&bytes);
@@ -234,7 +234,7 @@ impl MarketplaceClient {
                             .collect();
                         let _ = std::fs::remove_dir_all(&skill_dir);
                         return Err(SkillError::SecurityBlocked(format!(
-                            "FangHub skill '{skill_name}' blocked — prompt injection detected: {}",
+                            "ArmaraOS Appstore skill '{skill_name}' blocked — prompt injection detected: {}",
                             critical_msgs.join("; ")
                         )));
                     }
@@ -268,7 +268,7 @@ impl MarketplaceClient {
                             .collect();
                         let _ = std::fs::remove_dir_all(&skill_dir);
                         return Err(SkillError::SecurityBlocked(format!(
-                            "FangHub skill '{skill_name}' manifest blocked: {}",
+                            "ArmaraOS Appstore skill '{skill_name}' manifest blocked: {}",
                             critical_msgs.join("; ")
                         )));
                     }
@@ -298,7 +298,7 @@ impl MarketplaceClient {
             serde_json::to_string_pretty(&meta).unwrap_or_default(),
         )?;
 
-        info!("Installed FangHub skill: {skill_name} {version}");
+        info!("Installed ArmaraOS Appstore skill: {skill_name} {version}");
         Ok(version)
     }
 }

@@ -56,7 +56,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [Channel Adapters](channel-adapters.md) | 40 messaging channels -- setup, configuration, custom adapters |
 | [LLM Providers](providers.md) | 20 providers, 51 models, 23 aliases -- setup and model routing |
 | [OpenRouter defaults & fallbacks](openrouter.md) | Product default `:free` model, rate-limit fallback chain, chat error banner behavior |
-| [Skills](skill-development.md) | 60 bundled skills, custom skill development, FangHub marketplace |
+| [Skills](skill-development.md) | 60 bundled skills, custom skill development, ArmaraOS Appstore |
 | [MCP & A2A](mcp-a2a.md) | Model Context Protocol and Agent-to-Agent protocol integration |
 
 ## Reference
@@ -82,6 +82,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [Releasing (semver)](RELEASING.md) | Routine bump → `CHANGELOG` → `cargo fmt` / test / clippy → tag → GitHub Release; **ainativelangweb** `latestArmaraosReleaseTag`; audit/API notes |
 | [Docker](docker.md) | Image layout, `OPENSSL_NO_VENDOR`, cargo-chef caching, build args, multi-arch |
 | [Production Checklist](production-checklist.md) | First-ship gate before tagging v0.1.0 — signing keys, secrets, verification |
+| [SOC2-style control mapping (TSC)](operations/SOC2_CONTROL_MAPPING.md) | Shared responsibility: **CC6** (logical access) and **CC7** (ops/monitoring) vs product features vs operator — **not** legal/audit advice. **AINL** (language/runtime) mapping: [ainativelang `AINL_SOC2_CONTROL_MAPPING.md`](https://github.com/sbhooley/ainativelang/blob/main/docs/operations/AINL_SOC2_CONTROL_MAPPING.md) |
 | [Desktop code signing](desktop-code-signing.md) | Gatekeeper, SmartScreen, `TAURI_SIGNING_PRIVATE_KEY` vs Authenticode / notarization, GitHub Actions secrets, Azure Artifact Signing, SignPath OSS |
 | [Desktop release smoke](release-desktop.md) | Tauri build, updater, optional PostHog (`ARMARAOS_POSTHOG_KEY` / `AINL_POSTHOG_KEY`), AINL tab, SSE badge, API tests; **ainativelang.com** homepage/`/download` installer block (see “Marketing site installers” in that doc) |
 | [Desktop AINL bootstrap smoke](DESKTOP_AINL_SMOKE.md) | Venv, wheel, PyPI, first-launch AINL checks |

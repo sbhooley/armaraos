@@ -22,6 +22,7 @@ Default on-disk paths use **`~/.armaraos/`** as the data home (see [`data-direct
 - [Wire Protocol (OFP)](#wire-protocol-ofp)
 - [Desktop Application](#desktop-application)
 - [Subsystem Diagram](#subsystem-diagram)
+- [AINL learner dependency graph](#ainl-learner-dependency-graph)
 
 ---
 
@@ -52,7 +53,7 @@ openfang-kernel         Kernel: assembles all subsystems, workflow engine, RBAC,
     +-- openfang-channels   40 channel adapters, bridge, formatter, rate limiter
     +-- openfang-wire       OFP peer-to-peer networking with HMAC-SHA256 auth
     +-- openfang-migrate    Migration engine (OpenClaw YAML->TOML)
-    +-- openfang-skills     60 bundled skills, FangHub marketplace, ClawHub client
+    +-- openfang-skills     60 bundled skills, ArmaraOS Appstore, ClawHub client
     |
 openfang-memory         SQLite memory substrate, sessions, semantic search, usage tracking
     |
@@ -61,6 +62,58 @@ ainl-runtime            Graph turn orchestration over ainl-memory; optional open
     |
 openfang-types          Shared types: Agent, Capability, Event, Memory, Message, Tool, Config,
                         Taint, ManifestSigning, ModelCatalog, MCP/A2A config, Web config
+```
+
+### AINL learner dependency graph
+
+Self-learning crates (`ainl-trajectory`, `ainl-failure-learning`, `ainl-improvement-proposals`, `ainl-context-compiler`, …) are intentionally **openfang-free**; the host (`openfang-runtime`) wires telemetry and storage. The diagram below matches **[SELF_LEARNING_INTEGRATION_MAP.md](SELF_LEARNING_INTEGRATION_MAP.md) §15.6** (authoritative for edge cases).
+
+```
+                        ainl-contracts
+                  (vitals, freshness, impact, telemetry consts,
+                   TrajectoryStep, FailureKind, ProposalEnvelope)
+                              ▲ ▲ ▲ ▲ ▲ ▲
+        ┌─────────────┬───────┘ │ │ │ │ └────────┬─────────────┐
+        │             │         │ │ │ │          │             │
+ainl-context-     ainl-impact-  │ │ │ │     ainl-semantic-   ainl-repo-
+freshness         policy        │ │ │ │     tagger           intel
+        ▲             ▲         │ │ │ │          ▲
+        │             │         │ │ │ │          │
+        └──────┬──────┘         │ │ │ │          │
+               │                │ │ │ │          │
+               ▼                │ │ │ │          │
+       ┌───────────────┐        │ │ │ │   ┌──────┴──────┐
+       │ ainl-memory   │◄───────┘ │ │ │   │             │
+       │ + Failure     │          │ │ │   │             │
+       │ + Trajectory  │          │ │ │   │             │
+       │ + project_id  │          │ │ │   │             │
+       └───────▲───────┘          │ │ │   │             │
+               │                  │ │ │   │             │
+        ┌──────┴──────┐ ┌─────────┴─┴─┴───┴─┐ ┌─────────┴──────┐
+        │             │ │                   │ │                │
+ainl-trajectory   ainl-failure-      ainl-improvement-   ainl-graph-
+    (NEW)          learning (NEW)    proposals (NEW)     extractor
+        ▲             ▲                   ▲                   ▲
+        │             │                   │                   │
+        └─────────┬───┴────────────┬──────┴───────────────────┘
+                  │                │
+                  ▼                ▼
+            ainl-context-compiler (NEW) ──reads──► ainl-persona
+                  │                                        ▲
+                  ▼                                        │
+            ainl-compression                               │
+            (+ profiles, adaptive, cache)                  │
+                  │                                        │
+                  └────── consumes vitals via ainl-contracts ┘
+
+                    ─── ALL crates above are openfang-free ───
+                                       │
+                                       ▼
+                         ┌─────────────────────────────┐
+                         │       openfang-runtime      │
+                         │  (telemetry sinks,         │
+                         │   GraphMemoryWriter wiring)  │
+                         └─────────────────────────────┘
 ```
 
 ### Crate Responsibilities
@@ -77,7 +130,7 @@ openfang-types          Shared types: Agent, Capability, Event, Memory, Message,
 | **openfang-cli** | Clap-based CLI. Supports all commands: `init`, `start`, `status`, `doctor`, `agent spawn/list/chat/kill`, `workflow list/create/run`, **`orchestration list/trace/cost/tree/live/quota/export/watch`** (daemon HTTP), `trigger list/create/delete`, `migrate`, `skill install/list/remove/search/create`, `channel list/setup/test/enable/disable`, `config show/edit`, `chat`, `mcp`, `gateway`, etc. Daemon auto-detect: checks `~/.armaraos/daemon.json` and health pings; uses HTTP when a daemon is running, boots an in-process kernel as fallback. **`openfang start`** (and **`gateway start`**) mirror `tracing` to **stderr** and **`~/.armaraos/logs/daemon.log`** for dashboard/API tailing; TUI/chat uses **`tui.log`** instead. Built-in MCP server mode. |
 | **openfang-desktop** | Tauri 2.0 native desktop application. Boots the kernel in-process, runs the axum server on a background thread, and points a WebView at `http://127.0.0.1:{random_port}`. Features: system tray (Show/Browser/Status/Quit), single-instance enforcement, desktop notifications, hide-to-tray on close. IPC commands: `get_port`, `get_status`. Mobile-ready with `#[cfg(desktop)]` guards. |
 | **openfang-migrate** | Migration engine. Supports OpenClaw (`~/.openclaw/`). Converts YAML configs to TOML, maps tool names, maps provider names, imports agent manifests, copies memory files, converts channel configs. Produces a `MigrationReport` with imported items, skipped items, and warnings. |
-| **openfang-skills** | Skill system for pluggable tool bundles. 60 bundled skills compiled via `include_str!()`. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. `FangHubClient` connects to FangHub marketplace. `ClawHubClient` connects to clawhub.ai for cross-ecosystem skill discovery. `SKILL.md` parser for OpenClaw compatibility (YAML frontmatter + Markdown body). `SkillVerifier` with SHA256 verification. Prompt injection scanner (`scan_prompt_content()`) detects override attempts, data exfiltration, and shell references. |
+| **openfang-skills** | Skill system for pluggable tool bundles. 60 bundled skills compiled via `include_str!()`. Skills are `skill.toml` + Python/WASM/Node.js/PromptOnly code. `SkillManifest` defines metadata, runtime config, provided tools, and requirements. `SkillRegistry` manages installed and bundled skills. `MarketplaceClient` connects to ArmaraOS Appstore. `ClawHubClient` connects to clawhub.ai for cross-ecosystem skill discovery. `SKILL.md` parser for OpenClaw compatibility (YAML frontmatter + Markdown body). `SkillVerifier` with SHA256 verification. Prompt injection scanner (`scan_prompt_content()`) detects override attempts, data exfiltration, and shell references. |
 | **ainl-memory** | Standalone **graph-memory** crate (SQLite). Typed nodes (episodes, facts, procedural patterns, persona). Used from **`openfang-runtime`** via **`GraphMemoryWriter`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** (see **[data-directory.md](data-directory.md)**). **`GraphMemory::recall_by_type`** / **`write_persona`** support the agent-loop persona prompt hook. Published separately on crates.io. |
 | **ainl-runtime** | Standalone **AINL graph orchestration** crate (depends on **`ainl-memory`**, **`ainl-persona`**, **`ainl-graph-extractor`**, **`ainl-semantic-tagger`**). Turn pipeline (**`run_turn`** / optional **`run_turn_async`**): internal **delegation depth** cap (**`RuntimeConfig::max_delegation_depth`**, hard **`AinlRuntimeError::DelegationDepthExceeded`**). Optional **`async`** feature: **`run_turn_async`** + **`spawn_blocking`** for SQLite; graph under **`Arc<std::sync::Mutex<_>>`** (not **`tokio::sync::Mutex`**) so **`new` / `sqlite_store`** work on any thread—see **[ainl-runtime.md](ainl-runtime.md)** (*Orientation FAQ*) and **`crates/ainl-runtime/README.md`**. Workspace Cargo consumer: **`openfang-runtime`** feature **`ainl-runtime-engine`** (enabled in default builds; per-agent flag still controls activation). |
 | **xtask** | Build automation tasks (cargo-xtask pattern). |
@@ -345,6 +398,8 @@ Concurrent access uses **`r2d2` + `r2d2_sqlite`** (`MemorySqlitePool`): multiple
 ### Graph memory (`ainl-memory`)
 
 Separate from **`data/openfang.db`**, the **`ainl-memory`** crate backs **`GraphMemory`** instances opened by **`openfang-runtime`** at **`~/.armaraos/agents/<agent_id>/ainl_memory.db`** (created on first use per agent). The **agent loop** records **delegation-related episodes** (and related graph nodes); **orchestration** observability remains in the kernel ring + HTTP API + dashboard **`#orchestration-traces`**. **Persona** nodes stored here (via the same graph pipeline) are summarized into the chat **system prompt** (traits with strength ≥ **0.1**, last **90** days) so long-lived agent behavior stays consistent across turns. After each EndTurn, a **spawned** pass runs **`GraphMemoryWriter::run_persona_evolution_pass`** (**`ainl-graph-extractor`** — on by default when the **`ainl-extractor`** feature is compiled in) and may refresh the per-agent graph JSON export for Python tooling; a second step (**`PersonaEvolutionHook::evolve_from_turn`**) also runs by default so axis evolution sees tool signals even when episode traces omit **`outcome: success`** — see **[persona-evolution.md](persona-evolution.md)**. Both steps are opt-out: set **`AINL_EXTRACTOR_ENABLED=0`** to fall back to heuristics, **`AINL_PERSONA_EVOLUTION=0`** to skip the hook. **`AINL_TAGGER_ENABLED=1`** (explicit opt-in) enables the semantic tagger bridge (**`crates/openfang-runtime/README.md`**). Operators should **back up** per-agent **`agents/<id>/`** folders if they care about retained graph state. Crate README: **`crates/ainl-memory/README.md`**. Scheduled **`ainl run`** additionally uses **`.ainlbundle`** files for the Python **`ainl_graph_memory`** JSON store; see **[scheduled-ainl.md](scheduled-ainl.md)**. Layering and roadmap: repo-root **`ARCHITECTURE.md`**. **Operator / wiring reference:** **[graph-memory.md](graph-memory.md)**.
+
+**Self-learning operator surfaces (AINL graph memory + trajectories):** the dashboard ships dedicated routes **`#trajectories`**, **`#graph-failures`**, and **`#graph-proposals`**, backed by `GET /api/trajectories`, `GET /api/graph-memory/failures/*`, `GET /api/graph-memory/improvement-proposals`, and kernel SSE on `armaraos-kernel-event` (see `docs/SELF_LEARNING_INTEGRATION_MAP.md` §8 + `openfang-kernel` `SystemEvent`).
 
 **`[memory]` options** (see `MemoryConfig` in `openfang-types`; defaults keep existing behavior):
 
@@ -711,7 +766,7 @@ All skills pass through a security pipeline before activation:
 
 ### Ecosystem Bridges
 
-- **FangHub**: Native ArmaraOS marketplace (`FangHubClient`).
+- **ArmaraOS Appstore**: Native ArmaraOS marketplace (`MarketplaceClient`).
 - **ClawHub**: Cross-ecosystem compatibility (`ClawHubClient` connects to clawhub.ai).
 - **SKILL.md Parser**: Auto-converts OpenClaw SKILL.md format (YAML frontmatter + Markdown body) to `skill.toml`.
 - **Tool Compat**: 21 OpenClaw-to-ArmaraOS tool name mappings in `tool_compat.rs`.
@@ -926,7 +981,7 @@ The desktop app (`openfang-desktop`) wraps the full ArmaraOS stack in a native T
 | | +SessRepair|   |  | | Adapters ||  | |OFP | |  | |Skills | |
 | +------------+   |  | +----------+|  | |HMAC| |  | +-------+ |
 | +------------+   |  | +----------+|  | +----+ |  | +-------+ |
-| | 3 LLM Drv |   |  | |Formatter ||  | +----+ |  | |FangHub| |
+| | 3 LLM Drv |   |  | |Formatter ||  | +----+ |  | |Appstore| |
 | | (20 provs) |   |  | |Rate Lim ||  | |Peer| |  | |ClawHub| |
 | +------------+   |  | |DM/Group ||  | |Reg | |  | +-------+ |
 | +------------+   |  | +----------+|  | +----+ |  | +-------+ |

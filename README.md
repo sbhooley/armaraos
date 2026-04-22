@@ -6,7 +6,7 @@
 <h3 align="center">The Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 137K LOC. 15 library crates + <code>xtask</code> (16 workspace members). 2,793+ tests. Zero clippy warnings.<br/>
+  Open-source Agent OS built in Rust. <strong>29 workspace members</strong> — 13 <code>openfang-*</code> crates, 15 <code>ainl-*</code> graph / learning crates, and <code>xtask</code> — 2,996 tests, zero clippy warnings.<br/>
   <strong>One binary. Battle-tested. Agents that actually work for you.</strong>
 </p>
 
@@ -17,21 +17,24 @@
   <a href="docs/docker.md">Docker</a> &bull;
   <a href="ARCHITECTURE.md">Architecture</a> &bull;
   <a href="docs/graph-memory.md">Graph memory (runtime)</a> &bull;
+  <a href="docs/SELF_LEARNING_INTEGRATION_MAP.md">Self-learning map</a> &bull;
+  <a href="docs/persona-evolution.md">Persona evolution</a> &bull;
+  <a href="docs/local-voice.md">Voice (STT / TTS)</a> &bull;
   <a href="PRIOR_ART.md">Prior art (graph memory)</a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-0.7.5-green?style=flat-square" alt="v0.7.5" />
-  <img src="https://img.shields.io/badge/tests-2%2C793%2B%20passing-brightgreen?style=flat-square" 
+  <img src="https://img.shields.io/badge/tests-2%2C996%20passing-brightgreen?style=flat-square" 
 </p>
 
 ---
 
-> **ArmaraOS (March 2026)**
+> **ArmaraOS (April 2026)**
 >
-> ArmaraOS is a fork/rebrand of the upstream OpenFang project. Upstream license/attribution remains in place where applicable. You may encounter rough edges or breaking changes between minor versions. Pin to a specific commit for production use until v1.0.
+> ArmaraOS is a fork/rebrand of the upstream OpenFang project. Upstream license/attribution remains in place where applicable. You may encounter rough edges or breaking changes between minor versions. Pin to a specific commit for production use until v1.0. Recent work centers on a **graph-native** substrate, **unified execution** (Rust agent loop + optional AINL engine), **self-learning** (trajectories, failures, improvement proposals), and **adaptive / telemetry-aware compression** — see **Recent platform updates (2026)** below.
 
 ---
 
@@ -41,7 +44,7 @@ ArmaraOS is an **open-source Agent Operating System** — not a chatbot framewor
 
 Traditional agent frameworks wait for you to type something. ArmaraOS runs **autonomous agents that work for you** — on schedules, 24/7, building knowledge graphs, monitoring targets, generating leads, managing your social media, and reporting results to your dashboard.
 
-The entire system compiles to a **single ~32MB binary**. One install, one command, your agents are live.
+The entire system compiles to a **single release binary** (typically **~30-40 MB** depending on target/features). One install, one command, your agents are live.
 
 **Implementation language (programs & apps):** [**AI Native Language (AINL)**](docs/ainl-first-language.md) is the **default, first-class** language for new automation, workflows, extensions, and apps in this ecosystem. Use another modern language (Rust, Python, TypeScript, …) only when **explicitly** requested or when constraints require it; the kernel and core services remain Rust. See the linked doc for the full policy.
 
@@ -53,6 +56,37 @@ ArmaraOS tracks the unified graph execution engine direction where one typed gra
 - **GraphPatch + patch registry contract:** Python `memory.patch` behavior and Rust `PatchAdapter`/`GraphPatchAdapter` dispatch are designed to converge on a shared cross-runtime patch model.
 - **Compile-once, run-many + memory evolution:** procedural patterns can be promoted as reusable graph behavior while persona/extractor/tagger passes keep memory state evolving in-place.
 - **Lineage references:** [`PRIOR_ART.md`](PRIOR_ART.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/graph-memory.md`](docs/graph-memory.md), and AINL’s design articulation in [`sbhooley/ainativelang/LATE_NIGHT_CONVO_WITH_AI.md`](https://github.com/sbhooley/ainativelang/blob/main/LATE_NIGHT_CONVO_WITH_AI.md).
+
+### Recent platform updates (2026)
+
+High-level surface of what landed across recent development cycles; deep wiring lives in [`ARCHITECTURE.md`](ARCHITECTURE.md) and the linked guides.
+
+| Area | What shipped (summary) |
+|------|-------------------------|
+| **Graph-native memory** | [Graph memory](docs/graph-memory.md) is a first-class path: episodic, semantic, procedural, persona, **failure**, and **trajectory** node kinds, FTS-backed search, optional **project** scoping, live **SSE** (`GraphMemoryWrite`, `TrajectoryRecorded`, `FailureLearned`, …) and dashboard pages under Graph Memory (trajectories, **improvement proposals**, orchestration traces). |
+| **`ainl-*` crate family** | **Core graph:** `ainl-memory` (store + migrations), `ainl-runtime` (turn pipeline, GraphPatch, optional `run_turn_async`, delegation depth). **Learning & context:** `ainl-trajectory`, `ainl-failure-learning`, `ainl-improvement-proposals`, `ainl-context-compiler` (M1+ compose + telemetry; Phase 6: block segments, summarizer, embedder rerank paths), `ainl-context-freshness`, `ainl-impact-policy`, `ainl-contracts` (shared vitals / vocabulary). **Persona & extraction:** `ainl-persona` ([evolution](docs/persona-evolution.md)), `ainl-graph-extractor`, `ainl-semantic-tagger`. **Compression & intel:** `ainl-compression`, `ainl-repo-intel`, `ainl-agent-snapshot` (bounded snapshots for planner protocol). Longer index: [ainl-crates-overview.md](docs/ainl-crates-overview.md). |
+| **Unified graph execution (host)** | The daemon’s **current** engine is `openfang-runtime` (agent loop, tool runner, graph-memory wiring, optional **AINL runtime engine** feature for `AinlRuntime::run_turn`). `ainl-runtime` as a separately published stack converges on the same **GraphPatch** / **patch registry** model — see [`docs/ainl-runtime-integration.md`](docs/ainl-runtime-integration.md) and the **Layer 3** section of [`ARCHITECTURE.md`](ARCHITECTURE.md). |
+| **Persona & evolution** | [Persona evolution](docs/persona-evolution.md) (`PersonaEvolutionHook`, `AINL_PERSONA_EVOLUTION`) updates five axes with conservative EMA; post-turn **GraphExtractor** tasks tie persona signals to graph writes. |
+| **Self-learning** | [Self-learning map](docs/SELF_LEARNING_INTEGRATION_MAP.md): trajectory capture, **failure** recall blocks, **improvement proposals** (opt-in ledger + validate → adopt), **pattern promotion** for procedural memory, and dashboard/SSE integration — Hermes-style closed-loop learning without a separate silo. |
+| **Planner & native infer** | Deterministic planner pipeline, **orchestration traces** API and UI, **planner_model_tier** from catalog, and **native infer** e2e paths (see recent `openfang-kernel` / `openfang-runtime` / dashboard orchestration work). |
+| **Token savings & compression** | **Balanced / Aggressive / Off / [Adaptive](docs/SELF_LEARNING_INTEGRATION_MAP.md)** `efficient_mode` — kernel **`adaptive_eco`** and **`AINL_ADAPTIVE_COMPRESSION`** merge content signals; **on-disk EMA** project profiles (`compression_project_ema`, **`GET /api/compression/project-profiles`**, `openfang compression project-profiles`); **whole-prompt** compression **telemetry** and **context-compiler** `compose_telemetry` (see [prompt compression](docs/prompt-compression-efficient-mode.md)). |
+| **Telemetry** | [Cognitive vitals](docs/learning-frame-v1.md) on streaming paths; compression sinks mirroring `CompressionTelemetrySink`; orchestration traces; dashboard **PostHog** (navigation / product usage, consented) and **desktop** first-open ping; kernel **SSE** for lifecycle and learning events. |
+
+### Why teams switch to ArmaraOS
+
+If you're deciding between **OpenClaw-style chat-first stacks**, **Hermes-style learning loops**, and the **upstream OpenFang baseline**, this is what ArmaraOS gives you in one system:
+
+| What teams want | ArmaraOS reality (shipped) |
+|------|-------------------------|
+| **Swarm / sub-agent orchestration that is inspectable** | In-process delegation (`agent_delegate`), outbound **A2A**, workflows, scheduler, and **orchestration traces** with API + dashboard views so multi-agent runs are debuggable, not opaque. |
+| **Agents that learn from real runs** | **Trajectory** capture per turn, **failure-learning** surfaces, **improvement proposals** (validate -> adopt), and procedural pattern promotion in graph memory. |
+| **AINL as first-class, not a sidecar** | AINL is default for new programs/extensions/apps, scheduled `ainl run` is first-party, desktop can bootstrap AINL, and runtime can route through the optional AINL execution engine. |
+| **Graph memory with explainability** | Typed graph nodes (episode/semantic/procedural/persona/failure/trajectory), live SSE updates, dashboard graph views, and explainability/provenance fields for why memory was written. |
+| **Ops features for real deployments** | Home folder browser, support diagnostics bundle, redacted export/download flows, consistent JSON error envelopes, and API request IDs for log correlation. |
+| **Better cost + quality signals** | Balanced/Aggressive/Adaptive compression, per-project EMA profiles, cognitive vitals, usage analytics, and live kernel events. |
+| **An app ecosystem with monetization controls** | Built-in Hands and marketplace flow (`HAND.toml`/`SKILL.md`, ArmaraOS Appstore), plus premium package gating/admin unlock controls in current releases. |
+
+ArmaraOS is still pre-1.0, but the architecture is no longer "just a chat agent shell" — it is an execution OS with memory, learning, orchestration, and deployment ergonomics integrated end-to-end.
 
 ```bash
 # From GitHub directly (recommended until you host a vanity domain):
@@ -112,6 +146,8 @@ See also: [`docs/ainl-first-language.md`](docs/ainl-first-language.md), [`docs/o
 
 The web dashboard opens **`GET /api/events/stream`** (Server-Sent Events) for the kernel event bus. Each message updates `Alpine.store('kernelEvents').last` and dispatches a window event **`armaraos-kernel-event`**. The **Get started** page (sidebar label; internal route/hash **`#overview`**) listens for lifecycle/system events and **debounces** a silent data refresh (~400ms) so stats stay current after spawns, crashes, quota events, etc., without a full reload.
 
+For operator visibility beyond events, the API also exposes **`GET /api/logs/stream`** for live daemon log tails, plus orchestration trace endpoints for cross-agent execution debugging.
+
 **Auth:** If `api_key` is set in config, clients on **loopback** (127.0.0.1 / ::1) may connect to the stream without a token (embedded UI). **Non-loopback** clients must use the same authentication as the rest of the API (`Authorization: Bearer` with the configured key, or a `token` query parameter). See [`docs/dashboard-testing.md`](docs/dashboard-testing.md) for manual checks; [`docs/release-desktop.md`](docs/release-desktop.md) for desktop smoke (Tauri + SSE badge).
 
 ### Dashboard: notification center (bell)
@@ -148,6 +184,33 @@ Example — **`POST /api/agents`** with an empty body / missing manifest:
   "hint": "Paste a manifest TOML or set template to a folder name under ~/.armaraos/agents/."
 }
 ```
+
+---
+
+## Voice, STT, and TTS
+
+ArmaraOS ships a **first-class voice path** in the dashboard and runtime: you can run **local** speech without sending audio to a cloud STT/TTS vendor, with **optional** cloud or tool-based fallbacks when configured.
+
+| Area | What you get today |
+|------|-------------------|
+| **Local STT (custom path)** | **[`[local_voice]`](docs/local-voice.md)** wires **whisper.cpp** (`whisper-cli`) for speech-to-text. On first boot, **auto-download** can pull a default GGML model, Piper, and (on Windows) whisper.cpp binaries into **`~/.armaraos/voice/`**; you can also point at your own `whisper_cli` / `whisper_model`. |
+| **Local TTS (custom path)** | The same block configures **Piper** (`piper` + voice ONNX) for on-device **text-to-speech**—used when the client asks for a **spoken** assistant reply. |
+| **STT selection (media engine)** | Unless **`[media] audio_provider`** overrides, the runtime generally prefers **local Whisper** when ready, then optional **Parakeet/MLX**-style env paths, then **cloud** when keys like **`GROQ_API_KEY`** or **`OPENAI_API_KEY`** are set. See **[`configuration.md`](docs/configuration.md)** and **`openfang-runtime`** `media_understanding`. |
+| **Web dashboard (WebChat)** | **Mic:** record → upload → **STT** → the agent sees **the same text** as a typed message (graph memory / persona / tagger stay consistent). **Replies are text by default.** **Speaker** toggle: when on and Piper is ready, the client can send **`voice_reply: true`**; the API may return a **short-lived audio URL** (check **`GET /api/system/local-voice`**). |
+| **Tools & cloud TTS** | **`media_transcribe`** and **`text_to_speech`** in the tool surface; a separate optional **`[tts]`** path can use **OpenAI** or **ElevenLabs** when keys are present, for agent/workspace output—not only the local Piper path. |
+
+**Full operator reference:** [`docs/local-voice.md`](docs/local-voice.md).
+
+### Roadmap — full 2-way voice (conversation, not one-off)
+
+Today the product is **“voice in, (optional) audio out, still grounded in a text turn”** for most chat. Finishing a **true continuous 2-way voice loop** (natural turn-taking, interruption, and uniform UX across surfaces) is an active direction:
+
+- **Client UX:** lower-latency playback, optional **streaming TTS** in the browser, clearer mic/speaker state, and robust behavior when local assets or codecs are missing (Opus / WebM paths, **ffmpeg** / platform helpers where applicable).
+- **Session model:** **push-to-talk and/or voice activity detection (VAD)**, barge-in (user interrupts the assistant), and well-defined “who holds the floor” so tools and the LLM do not desync.
+- **APIs:** first-class **voice turn metadata** (format, sample rate, transcript provenance) and **consistent** handling across HTTP, WebSocket, and future real-time channels.
+- **Parity:** bring the same guarantees to **desktop** and **messaging/calling-style** surfaces where it makes sense, without breaking the current text-first agent model.
+
+This roadmap is product tracking—pin your deployment to a **tag or commit** if you rely on a specific behavior while we iterate.
 
 ---
 
@@ -194,7 +257,7 @@ armaraos hand pause lead
 armaraos hand list
 ```
 
-**Build your own.** Define a `HAND.toml` with tools, settings, and a system prompt. Publish to FangHub.
+**Build your own.** Define a `HAND.toml` with tools, settings, and a system prompt. Publish to the ArmaraOS Appstore.
 
 ---
 
@@ -234,7 +297,7 @@ OpenClaw   ███████████████████████
 
 ```
 ZeroClaw   █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  8.8 MB
-ArmaraOS   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   32 MB    ★
+ArmaraOS   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   30-40 MB ★
 CrewAI     ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  100 MB
 LangGraph  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  150 MB
 AutoGen    ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░  200 MB
@@ -288,8 +351,8 @@ AutoGen    ███████████░░░░░░░░░░░░
 | **Desktop App** | **Tauri 2.0** | None | None | None | Studio | None |
 | **Audit Trail** | **Merkle hash-chain** | Logs | Logs | Tracing | Logs | Checkpoints |
 | **Cold Start** | **<200ms** | ~6s | ~10ms | ~3s | ~4s | ~2.5s |
-| **Install Size** | **~32 MB** | ~500 MB | ~8.8 MB | ~100 MB | ~200 MB | ~150 MB |
-| **License** | MIT | MIT | MIT | MIT | Apache 2.0 | MIT |
+| **Install Size** | **~30-40 MB** | ~500 MB | ~8.8 MB | ~100 MB | ~200 MB | ~150 MB |
+| **License** | Apache 2.0 | MIT | MIT | MIT | Apache 2.0 | MIT |
 
 ---
 
@@ -320,23 +383,31 @@ ArmaraOS doesn't bolt security on after the fact. Every layer is independently t
 
 ## Architecture
 
-14 Rust crates. 137,728 lines of code. Modular kernel design.
+**29 workspace members** (modular kernel + AINL graph / learning stack). For the three-layer model (OpenFang base → ArmaraOS → AINL graph memory), see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+**`openfang-*` (13)** — user-facing OS:
 
 ```
-openfang-kernel      Orchestration, workflows, metering, RBAC, scheduler, budget tracking
-openfang-runtime     Agent loop, 3 LLM drivers, 53 tools, WASM sandbox, MCP, A2A
-openfang-api         140+ REST/WS/SSE endpoints, OpenAI-compatible API, dashboard
+openfang-kernel      Orchestration, workflows, metering, RBAC, scheduler, budget, adaptive eco
+openfang-runtime     Agent loop, LLM drivers, tools, WASM sandbox, MCP, A2A, graph-memory context
+openfang-api         140+ REST/WS/SSE endpoints, OpenAI-compatible API, dashboard, graph / learning UIs
 openfang-channels    40 messaging adapters with rate limiting, DM/group policies
-openfang-memory      SQLite persistence, vector embeddings, canonical sessions, compaction
-openfang-types       Core types, taint tracking, Ed25519 manifest signing, model catalog
-openfang-skills      60 bundled skills, SKILL.md parser, FangHub marketplace
-openfang-hands       7 autonomous Hands, HAND.toml parser, lifecycle management
-openfang-extensions  25 MCP templates, AES-256-GCM credential vault, OAuth2 PKCE
+openfang-memory      SQLite persistence, vector embeddings, canonical sessions, compaction, orchestration traces
+openfang-types       Core types, taint, manifests, model catalog, planner / vitals / trace types
+openfang-skills      Bundled skills, SKILL.md parser, ArmaraOS Appstore
+openfang-hands       7 autonomous Hands, HAND.toml parser, lifecycle, persisted instance settings
+openfang-extensions  MCP templates, credential vault, OAuth2 PKCE
 openfang-wire        OFP P2P protocol with HMAC-SHA256 mutual authentication
-openfang-cli         CLI with daemon management, TUI dashboard, MCP server mode
-openfang-desktop     Tauri 2.0 native app (system tray, notifications, global shortcuts)
+openfang-cli         Daemon, TUI, MCP server mode, compression / memory / trajectory helpers
+openfang-desktop     Tauri 2.0 native app (tray, notifications, AINL bootstrap, consented analytics)
 openfang-migrate     OpenClaw, LangChain, AutoGPT migration engine
-xtask                Build automation
+```
+
+**`ainl-*` (15)** — graph memory, AINL execution bridge, and learning (deps-light; reusable outside ArmaraOS):  
+`ainl-memory`, `ainl-runtime`, `ainl-compression`, `ainl-persona`, `ainl-graph-extractor`, `ainl-semantic-tagger`, `ainl-agent-snapshot`, `ainl-contracts`, `ainl-repo-intel`, `ainl-context-freshness`, `ainl-context-compiler`, `ainl-impact-policy`, `ainl-trajectory`, `ainl-failure-learning`, `ainl-improvement-proposals`.
+
+```
+xtask                Build automation, bundling, release tasks
 ```
 
 ### Desktop app and AINL
@@ -460,7 +531,7 @@ For production workloads, use the [WhatsApp Cloud API](https://developers.facebo
 
 ## Ultra Cost-Efficient Mode
 
-ArmaraOS compresses **user input** in Rust before each LLM call (typical **40–56 %** input savings on conversational text in **Balanced** mode; **Aggressive** targets higher savings with a wider gap on prose than on dense opcode-heavy prompts). End-to-end latency target: **under 30 ms**.
+ArmaraOS compresses **user input** in Rust before each LLM call (typical **40–56 %** input savings on conversational text in **Balanced** mode; **Aggressive** targets higher savings with a wider gap on prose than on dense opcode-heavy prompts). End-to-end latency target: **under 30 ms**. **Adaptive** mode combines heuristics with **`ainl-compression`** profiles and optional **per-project EMA** learned profiles (see **Recent platform updates** and [SELF_LEARNING_INTEGRATION_MAP](docs/SELF_LEARNING_INTEGRATION_MAP.md)); whole-prompt paths also emit **compression telemetry** for the context compiler and dashboard.
 
 **Full reference:** [docs/prompt-compression-efficient-mode.md](docs/prompt-compression-efficient-mode.md) (preserve rules, API fields, Eco Diff, tests).
 
@@ -613,7 +684,7 @@ armaraos start
 # Build the workspace
 cargo build --workspace --lib
 
-# Run all tests (2,793+)
+# Run all tests (2,996 listed tests via `cargo test --workspace -- --list`)
 cargo test --workspace
 
 # Lint (must be 0 warnings)
@@ -648,7 +719,7 @@ To report a security vulnerability, email **ainativelang@gmail.com**. We take al
 
 ## License
 
-Licensed under **MIT or Apache 2.0** (your choice). See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+ArmaraOS is licensed under **Apache 2.0**. See [`LICENSE-APACHE`](LICENSE-APACHE).
 
 ArmaraOS is based on [OpenFang](https://github.com/RightNow-AI/openfang) (MIT/Apache-2.0, Copyright © 2024 OpenFang Contributors). See [`NOTICE`](NOTICE) for full upstream attribution.
 

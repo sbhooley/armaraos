@@ -54,6 +54,8 @@ pub mod summarizer;
 pub mod embedder;
 #[cfg(feature = "sources-failure-warnings")]
 pub mod failure_recall;
+#[cfg(feature = "sources-trajectory-recap")]
+pub mod trajectory_recap;
 
 pub use budget::BudgetPolicy;
 pub use capability::{CapabilityProbe, Tier};
@@ -65,6 +67,8 @@ pub use embedder::{cosine, Embedder, EmbedderError, PlaceholderEmbedder};
 pub use summarizer::{AnchoredSummary, AnchoredSummarySection, Summarizer, SummarizerError};
 #[cfg(feature = "sources-failure-warnings")]
 pub use failure_recall::memory_block_for_user_query;
+#[cfg(feature = "sources-trajectory-recap")]
+pub use trajectory_recap::format_trajectory_recap_lines;
 
 use std::sync::Arc;
 

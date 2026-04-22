@@ -311,7 +311,7 @@ OpenClaw's tool profiles map to explicit tool lists:
 | **API server** | Basic REST | REST + WebSocket + SSE streaming |
 | **WebChat UI** | Separate | Embedded in daemon |
 | **Channel adapters** | Telegram, Discord | Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email |
-| **Skills/Plugins** | npm packages | TOML + Python/WASM/Node.js, FangHub marketplace |
+| **Skills/Plugins** | npm packages | TOML + Python/WASM/Node.js, ArmaraOS Appstore |
 | **CLI** | Basic | Full CLI with daemon auto-detect, MCP server |
 | **MCP support** | No | Built-in MCP server (stdio) |
 | **Process supervisor** | None | Health monitoring, panic/restart tracking |

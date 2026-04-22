@@ -201,7 +201,7 @@ ArmaraOS is organized as a Cargo workspace with **15** library crates under `cra
 | `openfang-wire` | OFP (OpenFang Protocol): TCP P2P networking with HMAC-SHA256 mutual authentication |
 | `openfang-cli` | Clap CLI with daemon auto-detect (HTTP mode vs. in-process fallback), MCP server |
 | `openfang-migrate` | Migration engine for importing from OpenClaw (and future frameworks) |
-| `openfang-skills` | Skill system: 60 bundled skills, FangHub marketplace, OpenClaw compatibility, prompt injection scanning |
+| `openfang-skills` | Skill system: 60 bundled skills, ArmaraOS Appstore, OpenClaw compatibility, prompt injection scanning |
 | `openfang-desktop` | Tauri 2.0 native desktop app (WebView + system tray + single-instance + notifications) |
 | `xtask` | Build automation tasks |
 

@@ -1,29 +1,22 @@
-# Publishing `ainl-*` crates to crates.io
+# AINL crates — publish matrix (ArmaraOS workspace)
 
-Workspace crates under **`crates/ainl-memory`**, **`crates/ainl-persona`**, **`crates/ainl-graph-extractor`**, **`crates/ainl-semantic-tagger`**, and **`crates/ainl-runtime`** are published as **separate** packages (not the ArmaraOS application binary). Use this order so each publish’s **`cargo publish`** verification step can **`cargo build`** against **already-indexed** dependencies.
+Crates under `crates/ainl-*` that participate in the self-learning stack are intended to ship **without** `openfang-*` dependencies so they can be reused from `ainl-inference-server`, scheduled `ainl run`, and other hosts. This file is a **release checklist** / ordering guide, not a hard CI gate.
 
-## Order
+| Crate | crates.io | `openfang` in deps? | Notes |
+|-------|------------|----------------------|--------|
+| `ainl-contracts` | yes (workspace version) | **no** | Shared `CognitiveVitals`, `ContextFreshness`, `TrajectoryStep`, `ProposalEnvelope`, telemetry keys. |
+| `ainl-memory` | yes | **no** | Graph store; depends on `ainl-contracts` for shared vocabulary where applicable. |
+| `ainl-compression` | yes | **no** | Eco-mode compression + profiles / adaptive / cache. |
+| `ainl-trajectory` | workspace / future publish | **no** | JSONL replay helpers; optional `in-memory` feature for slim hosts. |
+| `ainl-failure-learning` | workspace / future publish | **no** | FTS + `should_emit_failure_suggestion` gate + prevention string helpers. |
+| `ainl-improvement-proposals` | workspace / future publish | **no** | SQLite ledger; validation calls into `ainl-runtime` where used. |
+| `ainl-context-compiler` | workspace / future publish | **no** | Segment + budget scoring; default features documented in `Cargo.toml` and `scripts/verify-ainl-context-compiler-feature-matrix.sh`. |
+| `ainl-runtime` | yes | **no** | Graph execution; not an “openfang” crate. |
 
-1. **`ainl-memory`** — substrate; no in-repo Rust deps on other `ainl-*` crates.
-2. **`ainl-semantic-tagger`** — independent of memory; can be published in parallel with step 1 after a version bump, but keeping a linear playbook avoids mistakes.
-3. **`ainl-persona`** — depends on **`ainl-memory`** (version pin in `Cargo.toml` must match what is on crates.io).
-4. **`ainl-graph-extractor`** — depends on **`ainl-memory`**, **`ainl-persona`**, **`ainl-semantic-tagger`**.
-5. **`ainl-runtime`** — depends on all of the above; bump its **`[dependencies]`** version strings before publishing so the published tarball resolves.
+**Slim consumer build** (from [SELF_LEARNING_INTEGRATION_MAP.md](SELF_LEARNING_INTEGRATION_MAP.md) §15, `ainl-inference-server` docs):
 
-**Also update** any workspace crate that pins these versions (e.g. **`openfang-runtime`**, **`openfang-api`**) so **`cargo check --workspace`** stays consistent.
+```bash
+cargo build -p ainl-trajectory --no-default-features --features in-memory,vitals,graph-export
+```
 
-## Dry-run vs live
-
-- **`cargo publish -p ainl-memory --dry-run`** — always safe; validates packaging + compile of that crate alone.
-- **Dependents** (`ainl-persona`, …): **`cargo publish -p … --dry-run`** resolves dependencies from the **registry**. If the new **`ainl-memory`** (or other) version is **not** on crates.io yet, dry-run fails with *“failed to select a version for the requirement …”*. That is expected.
-- **Workflow:** dry-run **foundation** crates first → **`cargo publish -p ainl-memory`** (live) → wait until `cargo search ainl-memory` shows the new version → dry-run/publish the next crate.
-
-## After publishing
-
-- Bump **workspace path `version = "…"`** strings in downstream `Cargo.toml` files to the new releases.
-- Run **`cargo check -p openfang-runtime`** (or full workspace) and commit **`Cargo.lock`** if it changes.
-- Refresh **registry alignment** tables in **`docs/ainl-runtime-graph-patch.md`** and **`crates/ainl-runtime/README.md`** when **`ainl-runtime`**’s own version or its dependency floor moves.
-
-## Credentials
-
-Publishing requires **`cargo login`** (or **`CARGO_REGISTRY_TOKEN`**) for the **`sbhooley`** crates.io account that owns these crate names.
+Bump versions and `CHANGELOG` per crate when publishing; `ainl-contracts` semver is the main compatibility anchor for host embedders.

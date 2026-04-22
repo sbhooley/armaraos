@@ -85,6 +85,11 @@ function graphProposalsPanel() {
             (p.data.kind || '')
         );
         this.loadProposals();
+      } else if (sub === 'GraphMemoryWrite' && p.data.kind === 'improvement_proposal') {
+        this.pushFeed(
+          '[' + ts + '] GraphMemoryWrite improvement_proposal — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
+        );
+        this.loadProposals();
       }
     },
 

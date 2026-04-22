@@ -36,7 +36,7 @@ When the variable is absent (the normal case) or set to any other value, `Person
 
 ## How axis scores move (grow / decay)
 
-- **Growth:** Each matching `RawSignal` nudges an axis score with a **weighted EMA** (see `ainl_persona::AxisState::update_weighted` and `EMA_ALPHA` in the `ainl-persona` crate). Repeated similar tools (e.g. `shell_exec` → instrumentality hints) push the score toward the signal's `reward`, bounded in `[0, 1]`.
+- **Growth:** Each matching `RawSignal` nudges an axis score with a **weighted EMA** (see `ainl_persona::AxisState::update_weighted` and `EMA_ALPHA` in the `ainl-persona` crate). **Cross-reference:** some external AINL tooling (e.g. the Python graph-memory reference plugin) used **`α = 0.3`**, while ArmaraOS standardizes on **`EMA_ALPHA = 0.2`** in-crate to reduce over-fitting on short 5–10 turn sessions. Repeated similar tools (e.g. `shell_exec` → instrumentality hints) push the score toward the signal's `reward`, bounded in `[0, 1]`.
 - **Decay / neutral pull:** When `run_persona_evolution_pass` sees **no merged signals** for a pass but the agent already had at least one persona row, it applies `EvolutionEngine::correction_tick` on every axis toward `0.5` and persists — a slow re-centering when the graph goes quiet.
 
 Trait-level `strength` on non-evolution persona rows is not rewritten by this hook; only the axis snapshot row is updated via `write_persona_node`.

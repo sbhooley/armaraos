@@ -16,6 +16,8 @@ function trajectoriesPanel() {
     agents: [],
     agentId: '',
     trajectories: [],
+    /** Compact headlines from `GET /api/graph-memory/failures/recent` (cross-surface, Phase 8). */
+    failureHeadlines: [],
     liveFeed: [],
     loading: false,
     filterText: '',
@@ -174,6 +176,29 @@ function trajectoriesPanel() {
           '[' + ts + '] GraphMemoryWrite trajectory — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
         );
         this.loadTrajectories();
+      } else if (sub === 'FailureLearned') {
+        this.pushFeed(
+          '[' +
+            ts +
+            '] FailureLearned id=' +
+            String(p.data.failure_node_id || '').slice(0, 8) +
+            '… — ' +
+            (p.data.message_preview || '')
+        );
+        this.loadFailureHeadlines();
+      } else if (sub === 'GraphMemoryWrite' && p.data.kind === 'failure') {
+        this.pushFeed(
+          '[' + ts + '] GraphMemoryWrite failure — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
+        );
+        this.loadFailureHeadlines();
+      } else if (sub === 'ImprovementProposalAdopted') {
+        this.pushFeed(
+          '[' +
+            ts +
+            '] ImprovementProposalAdopted proposal=' +
+            String(p.data.proposal_id || '') +
+            ' (see Proposals page)'
+        );
       }
     },
 
@@ -217,6 +242,39 @@ function trajectoriesPanel() {
       }
     },
 
+    async loadFailureHeadlines() {
+      if (!this.agentId) {
+        this.failureHeadlines = [];
+        return;
+      }
+      try {
+        var url =
+          '/api/graph-memory/failures/recent?agent_id=' +
+          encodeURIComponent(this.agentId) +
+          '&limit=5';
+        var data = await OpenFangAPI.get(url);
+        var rows = (data && data.failures) || [];
+        this.failureHeadlines = rows.slice(0, 5);
+      } catch (e) {
+        console.warn('trajectories: failure headlines load failed', e);
+        this.failureHeadlines = [];
+      }
+    },
+
+    failureHeadlineText(row) {
+      try {
+        if (!row || !row.node_type || row.node_type.type !== 'failure') {
+          return '';
+        }
+        var f = row.node_type.failure || {};
+        return String(f.message || '')
+          .trim()
+          .slice(0, 200);
+      } catch (e) {
+        return '';
+      }
+    },
+
     async loadTrajectories() {
       if (!this.agentId) {
         this.trajectories = [];
@@ -247,7 +305,7 @@ function trajectoriesPanel() {
     },
 
     async refreshPanels() {
-      await this.loadTrajectories();
+      await Promise.all([this.loadTrajectories(), this.loadFailureHeadlines()]);
     },
 
     async init() {

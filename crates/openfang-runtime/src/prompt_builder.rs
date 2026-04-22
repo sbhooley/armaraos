@@ -456,10 +456,12 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
 pub fn build_graph_memory_sections(
     recent_attempts: &[String],
     failure_recall: &[String],
+    trajectory_recap: &[String],
     known_facts: &[String],
     known_conflicts: &[String],
     suggested_pattern_candidates: &[String],
     suggested_procedure: &[String],
+    suggested_next: &[String],
 ) -> String {
     let mut out = String::new();
     if !recent_attempts.is_empty() {
@@ -473,6 +475,14 @@ pub fn build_graph_memory_sections(
     if !failure_recall.is_empty() {
         out.push_str("\n## FailureRecall\n");
         for line in failure_recall {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !trajectory_recap.is_empty() {
+        out.push_str("\n## TrajectoryRecap\n");
+        for line in trajectory_recap {
             out.push_str("- ");
             out.push_str(line);
             out.push('\n');
@@ -505,6 +515,14 @@ pub fn build_graph_memory_sections(
     if !suggested_procedure.is_empty() {
         out.push_str("\n## SuggestedProcedure\n");
         for line in suggested_procedure {
+            out.push_str("- ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !suggested_next.is_empty() {
+        out.push_str("\n## SuggestedNext\n");
+        for line in suggested_next {
             out.push_str("- ");
             out.push_str(line);
             out.push('\n');
@@ -1082,7 +1100,7 @@ mod tests {
 
     #[test]
     fn test_graph_memory_sections_empty() {
-        let section = build_graph_memory_sections(&[], &[], &[], &[], &[], &[]);
+        let section = build_graph_memory_sections(&[], &[], &[], &[], &[], &[], &[], &[]);
         assert!(section.is_empty());
     }
 
@@ -1092,7 +1110,9 @@ mod tests {
             &["attempt one".to_string()],
             &[],
             &[],
+            &[],
             &["fact x conflicts y".to_string()],
+            &[],
             &[],
             &[],
         );
@@ -1108,24 +1128,30 @@ mod tests {
         let section = build_graph_memory_sections(
             &["a1".to_string(), "a2".to_string()],
             &["fr1".to_string()],
+            &["tr1".to_string()],
             &["f1".to_string()],
             &["c1".to_string()],
             &["pc1".to_string()],
             &["p1".to_string()],
+            &["sn1".to_string()],
         );
         let p_attempts = section.find("## RecentAttempts").unwrap_or(usize::MAX);
         let p_failure = section.find("## FailureRecall").unwrap_or(usize::MAX);
+        let p_traj = section.find("## TrajectoryRecap").unwrap_or(usize::MAX);
         let p_facts = section.find("## KnownFacts").unwrap_or(usize::MAX);
         let p_conflicts = section.find("## KnownConflicts").unwrap_or(usize::MAX);
         let p_cand = section
             .find("## SuggestedPatternCandidates")
             .unwrap_or(usize::MAX);
         let p_procedure = section.find("## SuggestedProcedure").unwrap_or(usize::MAX);
+        let p_suggested_next = section.find("## SuggestedNext").unwrap_or(usize::MAX);
         assert!(p_attempts < p_failure);
-        assert!(p_failure < p_facts);
+        assert!(p_failure < p_traj);
+        assert!(p_traj < p_facts);
         assert!(p_facts < p_conflicts);
         assert!(p_conflicts < p_cand);
         assert!(p_cand < p_procedure);
+        assert!(p_procedure < p_suggested_next);
     }
 
     #[test]

@@ -4972,7 +4972,7 @@ pub async fn list_skills(State(state): State<Arc<AppState>>) -> impl IntoRespons
     Json(serde_json::json!({ "skills": skills, "total": skills.len() }))
 }
 
-/// POST /api/skills/install — Install a skill from FangHub (GitHub).
+/// POST /api/skills/install — Install a skill from the ArmaraOS Appstore (GitHub).
 pub async fn install_skill(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
@@ -5052,7 +5052,7 @@ pub async fn reload_skills(State(state): State<Arc<AppState>>) -> impl IntoRespo
     Json(serde_json::json!({"status": "reloaded"}))
 }
 
-/// GET /api/marketplace/search — Search the FangHub marketplace.
+/// GET /api/marketplace/search — Search the ArmaraOS Appstore.
 pub async fn marketplace_search(
     ext: Option<Extension<RequestId>>,
     Query(params): Query<HashMap<String, String>>,

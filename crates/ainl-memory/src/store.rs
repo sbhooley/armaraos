@@ -1170,6 +1170,49 @@ impl SqliteGraphStore {
         Ok(out)
     }
 
+    /// Count `ainl_trajectories` rows for `agent_id` with `recorded_at` **strictly before** `before_unix` (seconds).
+    pub fn count_trajectory_details_before(
+        &self,
+        agent_id: &str,
+        before_unix: i64,
+    ) -> Result<usize, String> {
+        if agent_id.trim().is_empty() {
+            return Err("agent_id is empty".into());
+        }
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ainl_trajectories WHERE agent_id = ?1 AND recorded_at < ?2",
+                rusqlite::params![agent_id, before_unix],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n as usize)
+    }
+
+    /// Delete `ainl_trajectories` detail rows for `agent_id` with `recorded_at` **strictly before**
+    /// `before_unix` (seconds). Returns the number of rows removed.
+    ///
+    /// This does **not** delete `Trajectory` nodes from `ainl_graph_nodes` or any edges; use graph
+    /// export / repair paths if you need a fully consistent graph after bulk pruning.
+    pub fn delete_trajectory_details_before(
+        &self,
+        agent_id: &str,
+        before_unix: i64,
+    ) -> Result<usize, String> {
+        if agent_id.trim().is_empty() {
+            return Err("agent_id is empty".into());
+        }
+        let n = self
+            .conn
+            .execute(
+                "DELETE FROM ainl_trajectories WHERE agent_id = ?1 AND recorded_at < ?2",
+                rusqlite::params![agent_id, before_unix],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n)
+    }
+
     /// Full-text search over persisted failure nodes for one agent (`node_type = failure`).
     ///
     /// Returns matching [`AinlMemoryNode`] rows (newest first). Invalid FTS syntax yields an empty list.

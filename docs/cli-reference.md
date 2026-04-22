@@ -690,7 +690,7 @@ Loads skills from `~/.armaraos/skills/` plus bundled skills compiled into the bi
 
 ### openfang skill install
 
-Install a skill from a local directory, git URL, or FangHub marketplace.
+Install a skill from a local directory, git URL, or the ArmaraOS Appstore.
 
 ```
 openfang skill install <SOURCE>
@@ -700,12 +700,12 @@ openfang skill install <SOURCE>
 
 | Argument | Description |
 |---|---|
-| `<SOURCE>` | Skill name (FangHub), local directory path, or git URL. |
+| `<SOURCE>` | Skill name (ArmaraOS Appstore), local directory path, or git URL. |
 
 **Behavior:**
 
 - **Local directory:** Looks for `skill.toml` in the directory. If not found, checks for OpenClaw-format skills (SKILL.md with YAML frontmatter) and auto-converts them.
-- **Remote (FangHub):** Fetches and installs from the FangHub marketplace. Skills pass through SHA256 verification and prompt injection scanning.
+- **Remote (ArmaraOS Appstore):** Fetches and installs from the ArmaraOS Appstore. Skills pass through SHA256 verification and prompt injection scanning.
 
 **Example:**
 
@@ -713,7 +713,7 @@ openfang skill install <SOURCE>
 # Install from local directory
 openfang skill install ./my-skill/
 
-# Install from FangHub
+# Install from the ArmaraOS Appstore
 openfang skill install web-search
 
 # Install an OpenClaw-format skill
@@ -746,7 +746,7 @@ openfang skill remove web-search
 
 ### openfang skill search
 
-Search the FangHub marketplace for skills.
+Search the ArmaraOS Appstore for skills.
 
 ```
 openfang skill search <QUERY>
@@ -1338,7 +1338,7 @@ openfang trigger delete <TRIGGER_ID>
 ### Skill management
 
 ```bash
-# Search FangHub
+# Search the ArmaraOS Appstore
 openfang skill search "code review"
 
 # Install a skill

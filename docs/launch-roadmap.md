@@ -156,7 +156,7 @@ These close the gaps that would make users pick OpenClaw over ArmaraOS.
 1. Verify `/api/skills/search` endpoint works
 2. Verify `/api/skills/install` endpoint works
 3. Polish UI: skill cards with descriptions, install buttons, installed badge
-4. Add FangHub registry URL if not configured
+4. Add ArmaraOS Appstore registry URL if not configured
 
 **Files:** `crates/openfang-api/static/js/pages/skills.js`, `crates/openfang-api/src/routes.rs`
 

@@ -18,6 +18,7 @@ ainl-semantic-tagger = { path = "../ainl-semantic-tagger", optional = true }
 ainl-memory = { path = "../ainl-memory", optional = true }
 ainl-trajectory = { path = "../ainl-trajectory", optional = true }
 ainl-failure-learning = { path = "../ainl-failure-learning", optional = true }
+uuid = { workspace = true }
 
 [features]
 # Sources whose data already exists in M1.
@@ -30,6 +31,7 @@ default = [
     "sources-bulk",
     "sources-graph-memory",
     "sources-failure-warnings",
+    "sources-trajectory-recap",
     "freshness",
     "tagger",
     "vitals",
@@ -39,7 +41,7 @@ sources-bulk = []
 sources-graph-memory = ["dep:ainl-memory"]
 sources-failure-warnings = ["dep:ainl-failure-learning", "dep:ainl-memory"]
 sources-suggested-patterns = []                          # off until ainl-improvement-proposals crate lands
-sources-trajectory-recap = ["dep:ainl-trajectory"]       # opt-in (crate exists but signal source not wired in M1)
+sources-trajectory-recap = ["dep:ainl-memory"]           # `trajectory_recap` — host opt-in via env
 
 freshness = ["dep:ainl-context-freshness"]
 tagger = ["dep:ainl-semantic-tagger"]

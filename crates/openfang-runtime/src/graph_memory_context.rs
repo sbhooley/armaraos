@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
+use ainl_contracts::ContextFreshness;
+use ainl_failure_learning::should_emit_failure_suggestion;
 use ainl_memory::{recall_task_scoped_episodes, AinlMemoryNode, AinlNodeKind, AinlNodeType};
 use openfang_types::agent::AgentManifest;
 use tracing::debug;
@@ -15,6 +17,8 @@ static INJECTED_CONFLICT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_PROCEDURAL_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_PATTERN_CANDIDATE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static INJECTED_FAILURE_RECALL_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INJECTED_TRAJECTORY_RECAP_TOTAL: AtomicU64 = AtomicU64::new(0);
+static INJECTED_SUGGESTED_NEXT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TRUNCATION_HITS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SKIPPED_LOW_QUALITY_TOTAL: AtomicU64 = AtomicU64::new(0);
 static TEMP_MODE_SUPPRESSED_READS_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +127,10 @@ pub struct PromptMemoryContext {
     pub conflict_lines: Vec<String>,
     pub procedural_lines: Vec<String>,
     pub failure_recall_lines: Vec<String>,
+    /// Recent `ainl_trajectories` rows (opt-in: `AINL_MEMORY_INCLUDE_TRAJECTORY_RECAP`).
+    pub trajectory_recap_lines: Vec<String>,
+    /// Single-line “do this next” hints (opt-in: `AINL_MEMORY_INCLUDE_SUGGESTED_NEXT`).
+    pub suggested_next_lines: Vec<String>,
     /// Not-yet-promoted tool-sequence patterns (Phase 3 candidate pool).
     pub pattern_candidate_lines: Vec<String>,
     pub skipped_low_quality: usize,
@@ -139,16 +147,20 @@ impl PromptMemoryContext {
             && self.procedural_lines.is_empty()
             && self.pattern_candidate_lines.is_empty()
             && self.failure_recall_lines.is_empty()
+            && self.trajectory_recap_lines.is_empty()
+            && self.suggested_next_lines.is_empty()
     }
 
     pub fn to_prompt_block(&self) -> String {
         crate::prompt_builder::build_graph_memory_sections(
             &self.episodic_lines,
             &self.failure_recall_lines,
+            &self.trajectory_recap_lines,
             &self.semantic_lines,
             &self.conflict_lines,
             &self.pattern_candidate_lines,
             &self.procedural_lines,
+            &self.suggested_next_lines,
         )
     }
 
@@ -168,6 +180,12 @@ impl PromptMemoryContext {
             out.push(Segment::memory_block(
                 "graph_failure_recall",
                 memory_section_str("## FailureRecall", &self.failure_recall_lines),
+            ));
+        }
+        if !self.trajectory_recap_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_trajectory_recap",
+                memory_section_str("## TrajectoryRecap", &self.trajectory_recap_lines),
             ));
         }
         if !self.semantic_lines.is_empty() {
@@ -194,6 +212,12 @@ impl PromptMemoryContext {
                 memory_section_str("## SuggestedProcedure", &self.procedural_lines),
             ));
         }
+        if !self.suggested_next_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_suggested_next",
+                memory_section_str("## SuggestedNext", &self.suggested_next_lines),
+            ));
+        }
         out
     }
 }
@@ -208,6 +232,26 @@ fn memory_section_str(heading: &str, lines: &[String]) -> String {
         s.push('\n');
     }
     s
+}
+
+fn memory_include_trajectory_recap_env() -> bool {
+    match std::env::var("AINL_MEMORY_INCLUDE_TRAJECTORY_RECAP") {
+        Ok(s) => {
+            let t = s.trim().to_ascii_lowercase();
+            !matches!(t.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        Err(_) => false,
+    }
+}
+
+fn memory_include_suggested_next_env() -> bool {
+    match std::env::var("AINL_MEMORY_INCLUDE_SUGGESTED_NEXT") {
+        Ok(s) => {
+            let t = s.trim().to_ascii_lowercase();
+            !matches!(t.as_str(), "" | "0" | "false" | "no" | "off")
+        }
+        Err(_) => false,
+    }
 }
 
 pub fn memory_context_metrics() -> serde_json::Value {
@@ -255,6 +299,9 @@ pub fn memory_context_metrics() -> serde_json::Value {
         "injected_pattern_candidate_total": INJECTED_PATTERN_CANDIDATE_TOTAL
             .load(AtomicOrdering::Relaxed),
         "injected_failure_recall_total": INJECTED_FAILURE_RECALL_TOTAL.load(AtomicOrdering::Relaxed),
+        "injected_trajectory_recap_total": INJECTED_TRAJECTORY_RECAP_TOTAL
+            .load(AtomicOrdering::Relaxed),
+        "injected_suggested_next_total": INJECTED_SUGGESTED_NEXT_TOTAL.load(AtomicOrdering::Relaxed),
         "truncation_hits_total": TRUNCATION_HITS_TOTAL.load(AtomicOrdering::Relaxed),
         "skipped_low_quality_total": SKIPPED_LOW_QUALITY_TOTAL.load(AtomicOrdering::Relaxed),
         "temp_mode_suppressed_reads_total": TEMP_MODE_SUPPRESSED_READS_TOTAL.load(AtomicOrdering::Relaxed),
@@ -471,11 +518,25 @@ pub fn record_temp_mode_write_suppressed() {
     TEMP_MODE_SUPPRESSED_WRITES_TOTAL.fetch_add(1, AtomicOrdering::Relaxed);
 }
 
+/// Workspace [`ContextFreshness`] from MCP tool inventory (same source as
+/// [`crate::ainl_policy::workspace_policy_view`]) for gating **prompt-time** graph-memory
+/// features that should not run when the host considers repo context **stale**.
+pub async fn workspace_context_freshness_for_prompt(
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<crate::mcp::McpConnection>>>,
+) -> Option<ContextFreshness> {
+    let m = mcp_connections?;
+    let guard = m.lock().await;
+    Some(crate::ainl_policy::workspace_policy_view(guard.as_slice()).context_freshness)
+}
+
 pub async fn build_prompt_memory_context(
     gm: &GraphMemoryWriter,
     policy: &MemoryContextPolicy,
     user_message: Option<&str>,
     failure_recall_enabled: bool,
+    // When `Some(Stale)` from the workspace policy view, `## FailureRecall` is skipped
+    // (see `ainl_failure_learning::should_emit_failure_suggestion`).
+    context_freshness: Option<ContextFreshness>,
 ) -> PromptMemoryContext {
     let mut ctx = PromptMemoryContext::default();
     if !policy.allow_reads() {
@@ -855,7 +916,10 @@ pub async fn build_prompt_memory_context(
         }
     }
 
-    if failure_recall_enabled && policy.include_failure_recall {
+    if failure_recall_enabled
+        && policy.include_failure_recall
+        && should_emit_failure_suggestion(context_freshness)
+    {
         if let Some(msg) = user_message.filter(|m| !m.trim().is_empty()) {
             if let Some(fts_q) = crate::graph_memory_learning::failure_recall_fts_query(msg) {
                 let fetch_cap = policy
@@ -913,6 +977,55 @@ pub async fn build_prompt_memory_context(
         }
     }
 
+    if memory_include_trajectory_recap_env() {
+        let max_rows = std::env::var("AINL_MEMORY_TRAJECTORY_RECAP_MAX")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(5)
+            .min(20);
+        let max_ops = std::env::var("AINL_MEMORY_TRAJECTORY_RECAP_MAX_OPS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4)
+            .min(12);
+        let records = {
+            let inner = gm.inner.lock().await;
+            inner.list_trajectories_for_agent(gm.agent_id(), max_rows, None)
+        };
+        if let Ok(records) = records {
+            if !records.is_empty() {
+                let lines =
+                    ainl_context_compiler::format_trajectory_recap_lines(&records, max_rows, max_ops);
+                if !lines.is_empty() {
+                    for line in &lines {
+                        ctx.selection_debug.push(serde_json::json!({
+                            "block": "TrajectoryRecap",
+                            "selected_line": line,
+                        }));
+                    }
+                    ctx.trajectory_recap_lines = lines;
+                }
+            }
+        }
+    }
+
+    if memory_include_suggested_next_env() {
+        if let Some(line) = ctx.procedural_lines.first() {
+            ctx
+                .suggested_next_lines
+                .push(format!("Try the promoted tool flow: {line}"));
+        } else if let Some(line) = ctx.pattern_candidate_lines.first() {
+            ctx.suggested_next_lines
+                .push(format!("Next: practice or promote this tool sequence: {line}"));
+        } else if let Some(line) = ctx.semantic_lines.first() {
+            ctx.suggested_next_lines
+                .push(format!("Anchor on a high-confidence fact: {line}"));
+        }
+        if ctx.suggested_next_lines.len() > 2 {
+            ctx.suggested_next_lines.truncate(2);
+        }
+    }
+
     if !semantic_to_touch.is_empty() {
         let now_u = now_ts.max(0) as u64;
         let inner = gm.inner.lock().await;
@@ -931,7 +1044,9 @@ pub async fn build_prompt_memory_context(
         + ctx.conflict_lines.len()
         + ctx.procedural_lines.len()
         + ctx.pattern_candidate_lines.len()
-        + ctx.failure_recall_lines.len()) as u64;
+        + ctx.failure_recall_lines.len()
+        + ctx.trajectory_recap_lines.len()
+        + ctx.suggested_next_lines.len()) as u64;
     INJECTED_EPISODIC_TOTAL.fetch_add(ctx.episodic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_SEMANTIC_TOTAL.fetch_add(ctx.semantic_lines.len() as u64, AtomicOrdering::Relaxed);
     INJECTED_CONFLICT_TOTAL.fetch_add(ctx.conflict_lines.len() as u64, AtomicOrdering::Relaxed);
@@ -942,6 +1057,14 @@ pub async fn build_prompt_memory_context(
     );
     INJECTED_FAILURE_RECALL_TOTAL.fetch_add(
         ctx.failure_recall_lines.len() as u64,
+        AtomicOrdering::Relaxed,
+    );
+    INJECTED_TRAJECTORY_RECAP_TOTAL.fetch_add(
+        ctx.trajectory_recap_lines.len() as u64,
+        AtomicOrdering::Relaxed,
+    );
+    INJECTED_SUGGESTED_NEXT_TOTAL.fetch_add(
+        ctx.suggested_next_lines.len() as u64,
         AtomicOrdering::Relaxed,
     );
     TRUNCATION_HITS_TOTAL.fetch_add(ctx.truncation_hits as u64, AtomicOrdering::Relaxed);
@@ -958,6 +1081,7 @@ pub async fn build_prompt_memory_context(
         procedural = ctx.procedural_lines.len(),
         pattern_candidates = ctx.pattern_candidate_lines.len(),
         failure_recall = ctx.failure_recall_lines.len(),
+        suggested_next = ctx.suggested_next_lines.len(),
         skipped_low_quality = ctx.skipped_low_quality,
         truncation_hits = ctx.truncation_hits,
         provenance_lines = ctx.provenance_lines,
@@ -1058,6 +1182,8 @@ fn count_provenance_lines(ctx: &PromptMemoryContext) -> usize {
         .chain(ctx.procedural_lines.iter())
         .chain(ctx.pattern_candidate_lines.iter())
         .chain(ctx.failure_recall_lines.iter())
+        .chain(ctx.trajectory_recap_lines.iter())
+        .chain(ctx.suggested_next_lines.iter())
     {
         if line.contains('[') && line.contains(']') {
             total += 1;
@@ -1069,6 +1195,7 @@ fn count_provenance_lines(ctx: &PromptMemoryContext) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ainl_contracts::ContextFreshness;
     use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
     use uuid::Uuid;
 
@@ -1175,6 +1302,7 @@ mod tests {
             &MemoryContextPolicy::default(),
             Some("quantumretirement shell_exec tool_runner"),
             true,
+            None,
         )
         .await;
         assert!(
@@ -1199,9 +1327,34 @@ mod tests {
             &MemoryContextPolicy::default(),
             Some("quantumretirement shell_exec tool_runner"),
             false,
+            None,
         )
         .await;
         assert!(ctx.failure_recall_lines.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failure_recall_skipped_when_context_freshness_stale() {
+        let writer = test_writer("ctx-failure-stale");
+        write_tool_failure(
+            &writer,
+            "shell_exec",
+            "ENOENT opening quantumretirement config",
+        )
+        .await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            Some("quantumretirement shell_exec tool_runner"),
+            true,
+            Some(ContextFreshness::Stale),
+        )
+        .await;
+        assert!(
+            ctx.failure_recall_lines.is_empty(),
+            "stale context must suppress failure recall, got {:?}",
+            ctx.failure_recall_lines
+        );
     }
 
     #[tokio::test]
@@ -1215,7 +1368,7 @@ mod tests {
             max_semantic_lines: 2,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false, None).await;
         assert_eq!(ctx.semantic_lines.len(), 2);
         assert!(
             ctx.semantic_lines[0]
@@ -1252,7 +1405,7 @@ mod tests {
             contradiction_confidence_floor: 0.70,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false, None).await;
         assert_eq!(ctx.conflict_lines.len(), 1);
         assert!(ctx.conflict_lines[0].contains("high confidence conflict"));
     }
@@ -1264,7 +1417,7 @@ mod tests {
         write_procedure(&writer, "retired_proc", 0.99, Some(0.99), true).await;
 
         let ctx =
-            build_prompt_memory_context(&writer, &MemoryContextPolicy::default(), None, false)
+            build_prompt_memory_context(&writer, &MemoryContextPolicy::default(), None, false, None)
                 .await;
         assert!(ctx
             .procedural_lines
@@ -1289,6 +1442,7 @@ mod tests {
             },
             None,
             false,
+            None,
         )
         .await;
         let block = ctx.to_prompt_block();
@@ -1316,7 +1470,7 @@ mod tests {
             include_procedural_hints: true,
             ..Default::default()
         };
-        let ctx = build_prompt_memory_context(&writer, &policy, None, false).await;
+        let ctx = build_prompt_memory_context(&writer, &policy, None, false, None).await;
         assert!(ctx.episodic_lines.is_empty());
         assert!(ctx.semantic_lines.is_empty());
         assert!(ctx.conflict_lines.is_empty());
@@ -1379,6 +1533,7 @@ mod tests {
             .get("graph_memory_kernel_notify_err_total")
             .is_some());
         assert!(metrics.get("injected_failure_recall_total").is_some());
+        assert!(metrics.get("injected_trajectory_recap_total").is_some());
     }
 
     #[test]
@@ -1388,17 +1543,19 @@ mod tests {
         let mut ctx = PromptMemoryContext::default();
         ctx.episodic_lines = vec!["e1".to_string()];
         ctx.failure_recall_lines = vec!["f1".to_string()];
+        ctx.trajectory_recap_lines = vec!["t1".to_string()];
         ctx.semantic_lines = vec!["s1".to_string()];
 
         let segs = ctx.to_memory_block_segments();
-        assert_eq!(segs.len(), 3);
+        assert_eq!(segs.len(), 4);
         assert!(segs.iter().all(|s| s.kind == SegmentKind::MemoryBlock));
         assert_eq!(
             segs[0].tool_name.as_deref(),
             Some("graph_recent_attempts")
         );
         assert_eq!(segs[1].tool_name.as_deref(), Some("graph_failure_recall"));
-        assert_eq!(segs[2].tool_name.as_deref(), Some("graph_known_facts"));
+        assert_eq!(segs[2].tool_name.as_deref(), Some("graph_trajectory_recap"));
+        assert_eq!(segs[3].tool_name.as_deref(), Some("graph_known_facts"));
 
         let block = ctx.to_prompt_block();
         for s in &segs {

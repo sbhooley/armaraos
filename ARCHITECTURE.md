@@ -7,7 +7,7 @@ This document describes the architectural layering of ArmaraOS, from upstream Op
 ## Layer 1: OpenFang (Upstream Foundation)
 
 **Source**: OpenFang open-source agent operating system  
-**License**: Apache-2.0 OR MIT  
+**License**: Apache-2.0  
 **Repository**: https://github.com/sbhooley/armaraos (forked from OpenFang)
 
 ### Core Components
@@ -43,7 +43,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 ## Layer 2: ArmaraOS (Enhancements)
 
 **Project**: ArmaraOS - Agent Operating System  
-**License**: Apache-2.0 OR MIT  
+**License**: Apache-2.0  
 **Maintainer**: Steven Hooley
 
 ### Enhancements Over OpenFang
@@ -66,6 +66,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
    - Pinned agents with UI-prefs persistence
    - Setup wizard for first-run onboarding
    - Home folder browser with preview/download
+   - **AINL learning panels:** `/#trajectories`, `/#graph-failures`, `/#graph-proposals` (HTTP + `armaraos-kernel-event` SSE for `TrajectoryRecorded` / `FailureLearned` / `GraphMemoryWrite` / `ImprovementProposalAdopted`) — see `docs/SELF_LEARNING_INTEGRATION_MAP.md` §8
 
 4. **Scheduled AINL**
    - Schedule syntax: `@daily run research.ainl`

@@ -5,7 +5,7 @@
 //! - TOML + Python scripts
 //! - TOML + WASM modules
 //! - TOML + Node.js modules (OpenClaw compatibility)
-//! - Remote skills from FangHub registry
+//! - Remote skills from the ArmaraOS Appstore registry
 
 pub mod bundled;
 pub mod clawhub;

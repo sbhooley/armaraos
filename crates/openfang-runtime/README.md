@@ -59,6 +59,13 @@ When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_
 
 **Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
 
+| Env | Behavior |
+|-----|----------|
+| **`AINL_MEMORY_INCLUDE_TRAJECTORY_RECAP`** | When **truthy** (`1` / `true` / `yes` / `on`), `graph_memory_context::build_prompt_memory_context` pulls recent `ainl_trajectories` rows and appends a **`## TrajectoryRecap`** block (and `graph_trajectory_recap` `MemoryBlock` in `to_memory_block_segments`) using `ainl_context_compiler::format_trajectory_recap_lines`. **Default: off** (extra prompt bytes). |
+| **`AINL_MEMORY_TRAJECTORY_RECAP_MAX`** | Optional `usize` cap (default `5`, max `20`) for how many **rows** to format. |
+| **`AINL_MEMORY_TRAJECTORY_RECAP_MAX_OPS`** | Optional `usize` cap (default `4`, max `12`) of tool/adapter **operation** names to print per row. |
+| **`AINL_COMPRESSION_PROJECT_EMA`** | **Truthify** to enable per-project compression EMA persistence / merge (`compression_project_ema`); also powers **`GET /api/compression/project-profiles`** in the operator UI. **Default: off** until explicitly enabled. |
+
 ## Phase 6: context compiler (`ainl_context_compiler`) and compose telemetry
 
 The agent loop feeds the assembled system prompt, history, and current user message through **`ainl_context_compiler::ContextCompiler::compose`** for whole-prompt token estimates. Results are published via the **`compose_telemetry` side channel** (same hand-off pattern as `eco_telemetry`): the kernel’s compression recorder can consume `take_compose_turn(agent_id)` after each turn. Authoritative behavior is in [`src/compose_telemetry.rs`](src/compose_telemetry.rs).

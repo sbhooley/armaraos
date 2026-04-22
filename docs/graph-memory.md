@@ -81,7 +81,7 @@ Slim builds: **`cargo build -p openfang-runtime --no-default-features --features
 |-----------|---------|----------|
 | **Orchestration traces** | Kernel / **`openfang-memory`** ring + APIs | Dashboard **`#orchestration-traces`**, **`GET /api/orchestration/traces`**, SSE |
 | **AINL graph** | Per-agent **`ainl_memory.db`** | Dashboard **Graph Memory** (`#graph-memory`): **`GET /api/graph-memory`** returns nodes with **`explain`** (what / why / evidence / typed edges) **`SystemEvent::GraphMemoryWrite`** SSE events include optional **`provenance`** (summary, node ids, reason). See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)**. |
-| **Trajectories** (detail table) | Same DB: table **`ainl_trajectories`** (see *What gets written*) | **`GET /api/trajectories?agent_id=`**; offline CLI **`openfang trajectory list`**, **`search`**, **`analyze`**, **`export`** (same `ainl_memory.db`; list/search/analyze support `--json`; export emits JSONL replay lines). |
+| **Trajectories** (detail table) | Same DB: table **`ainl_trajectories`** (see *What gets written*) | **`GET /api/trajectories?agent_id=`**; operator dashboard **`#trajectories`** + SSE (**`TrajectoryRecorded`**, **`GraphMemoryWrite` trajectory**, cross-feed **`FailureLearned` / failure `GraphMemoryWrite`**, and headline `GET /api/graph-memory/failures/recent`); offline CLI **`openfang trajectory list`**, **`search`**, **`analyze`**, **`export`** (same `ainl_memory.db`; list/search/analyze support `--json`; export emits JSONL replay lines). **Learning failures** tab: **`#graph-failures`**. **Improvement proposals** tab: **`#graph-proposals`**. |
 
 They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentional for cross-debugging.
 

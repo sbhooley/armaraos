@@ -378,6 +378,30 @@ impl GraphMemory {
             .list_trajectories_for_agent(agent_id, limit, since_timestamp)
     }
 
+    /// How many `ainl_trajectories` detail rows would be removed by
+    /// [`Self::prune_trajectory_details_before`] (same `before_recorded_at` semantics).
+    pub fn count_trajectory_details_before(
+        &self,
+        agent_id: &str,
+        before_recorded_at: i64,
+    ) -> Result<usize, String> {
+        self.store
+            .count_trajectory_details_before(agent_id, before_recorded_at)
+    }
+
+    /// Remove persisted trajectory **detail** rows with `recorded_at` **strictly before** `before_recorded_at` (seconds).
+    ///
+    /// This targets the `ainl_trajectories` table only. Graph `Trajectory` nodes and cross-links are not
+    /// deleted here; use exports / graph tooling if you need a full-store consistency pass after pruning.
+    pub fn prune_trajectory_details_before(
+        &self,
+        agent_id: &str,
+        before_recorded_at: i64,
+    ) -> Result<usize, String> {
+        self.store
+            .delete_trajectory_details_before(agent_id, before_recorded_at)
+    }
+
     /// Search persisted [`FailureNode`] rows for an agent (FTS5 over `ainl_failures_fts`).
     pub fn search_failures_for_agent(
         &self,
@@ -615,5 +639,81 @@ mod tests {
             .search_failures_for_agent(agent_id, "dangling", 10)
             .expect("search message body");
         assert_eq!(hits2.len(), 1);
+    }
+
+    #[test]
+    fn trajectory_detail_prune_before_drops_only_old_rows() {
+        use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_traj_prune.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent = "agent-traj-prune";
+        let ep_old = memory
+            .write_episode(vec![], None, None)
+            .expect("episode for old traj");
+        let ep_new = memory
+            .write_episode(vec![], None, None)
+            .expect("episode for new traj");
+        let mk_step = |sid: &str| TrajectoryStep {
+            step_id: sid.to_string(),
+            timestamp_ms: 0,
+            adapter: "a".into(),
+            operation: "o".into(),
+            inputs_preview: None,
+            outputs_preview: None,
+            duration_ms: 1,
+            success: true,
+            error: None,
+            vitals: None,
+            freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
+        };
+        let r_old = TrajectoryDetailRecord {
+            id: Uuid::new_v4(),
+            episode_id: ep_old,
+            graph_trajectory_node_id: None,
+            agent_id: agent.to_string(),
+            session_id: "s-old".into(),
+            project_id: None,
+            recorded_at: 100,
+            outcome: TrajectoryOutcome::Success,
+            ainl_source_hash: None,
+            duration_ms: 1,
+            steps: vec![mk_step("1")],
+            frame_vars: None,
+            fitness_delta: None,
+        };
+        let r_new = TrajectoryDetailRecord {
+            id: Uuid::new_v4(),
+            episode_id: ep_new,
+            graph_trajectory_node_id: None,
+            agent_id: agent.to_string(),
+            session_id: "s-new".into(),
+            project_id: None,
+            recorded_at: 200,
+            outcome: TrajectoryOutcome::Success,
+            ainl_source_hash: None,
+            duration_ms: 1,
+            steps: vec![mk_step("2")],
+            frame_vars: None,
+            fitness_delta: None,
+        };
+        memory.insert_trajectory_detail(&r_old).expect("insert old");
+        memory.insert_trajectory_detail(&r_new).expect("insert new");
+        let before = memory
+            .list_trajectories_for_agent(agent, 10, None)
+            .expect("list");
+        assert_eq!(before.len(), 2);
+        let removed = memory
+            .prune_trajectory_details_before(agent, 200)
+            .expect("prune");
+        assert_eq!(removed, 1);
+        let after = memory
+            .list_trajectories_for_agent(agent, 10, None)
+            .expect("list after");
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].recorded_at, 200);
     }
 }

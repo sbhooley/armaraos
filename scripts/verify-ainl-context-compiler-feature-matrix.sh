@@ -8,8 +8,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # Must match the `[features] default = [ ... ]` list in
-# `crates/ainl-context-compiler/Cargo.toml` (order not significant).
-read -r -a DEFAULT_FEATS <<<"sources-bulk sources-graph-memory sources-failure-warnings freshness tagger vitals"
+# `crates/ainl-context-compiler/Cargo.toml` **exactly** (set equality; order not significant).
+# After changing that `default` array, update this line and re-run the script.
+read -r -a DEFAULT_FEATS <<<"sources-bulk sources-graph-memory sources-failure-warnings sources-trajectory-recap freshness tagger vitals"
 
 echo "==> ainl-context-compiler: full default set"
 cargo test -q -p ainl-context-compiler
