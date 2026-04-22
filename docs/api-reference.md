@@ -963,6 +963,34 @@ Also: redacted `secrets.env`, `audit.json`, SQLite + WAL/SHM, recent logs.
 
 Streams the zip with `Content-Disposition: attachment`. Use `bundle_filename` from the POST response.
 
+### Google Workspace MCP (host tooling)
+
+These routes support the bundled **`google-workspace-mcp`** integration (stdio via **`uvx`**) and saving OAuth app credentials. **`GET /api/system/mcp-host-readiness`** is on the [middleware allowlist for loopback](#public-endpoints-no-auth-required) when `api_key` is set (same pattern as other dashboard `GET` diagnostics); see `crates/openfang-api/src/middleware.rs`.
+
+#### GET /api/system/mcp-host-readiness
+
+**Response** `200 OK` (illustrative):
+
+```json
+{
+  "uvx_available": true,
+  "npx_on_path": true,
+  "google_oauth_client_id_set": false,
+  "auto_install_uv_configured": false,
+  "uv_install_sh": "curl -LsSf https://astral.sh/uv/install.sh | sh"
+}
+```
+
+Used by **Settings** to show whether the host can run `uvx`-based MCP servers and whether **`GOOGLE_OAUTH_CLIENT_ID`** is already set.
+
+#### POST /api/system/bootstrap-uv
+
+Runs the official **uv** install script on **Unix** (`sh -c "curl -LsSf … | sh"`). On **Windows** returns an error with manual install instructions. **Response:** `ok`, human-readable `message` or `error`, and a nested **`readiness`** object (same fields as the GET above). The daemon’s **PATH** may not pick up `~/.local/bin` until you restart the service or your shell.
+
+#### POST /api/integrations/google-workspace/oauth
+
+**Body:** JSON with non-empty **`GOOGLE_OAUTH_CLIENT_ID`** (or **`client_id`**) and optional **`GOOGLE_OAUTH_CLIENT_SECRET`** (or **`client_secret`**) for confidential OAuth clients. Values are written to **`secrets.env`** in the ArmaraOS home (same pattern as other provider keys); the implementation reconnects applicable MCP stdio children.
+
 ---
 
 ### ArmaraOS Home Browser Endpoints
@@ -3478,7 +3506,7 @@ The `Retry-After` header indicates the window duration in seconds.
 
 ## Endpoint Summary
 
-**83+ endpoints total** across 15 groups (approximate; generated list may lag new routes).
+**90+ endpoints total** across 15+ groups (approximate; generated list may lag new routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -3490,6 +3518,9 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/version` | Version info |
 | GET | `/api/version/github-latest` | Latest GitHub release (server-side fetch for dashboard) |
 | POST | `/api/shutdown` | Graceful shutdown (loopback may omit Bearer; see route doc) |
+| GET | `/api/system/mcp-host-readiness` | `uvx` / `npx` / Google OAuth id / auto-install-uv flags (loopback may omit Bearer when `api_key` set) |
+| POST | `/api/system/bootstrap-uv` | Run official uv installer (Unix) |
+| POST | `/api/integrations/google-workspace/oauth` | Save `GOOGLE_OAUTH_CLIENT_ID` / optional `GOOGLE_OAUTH_CLIENT_SECRET` to `secrets.env` |
 | GET | `/api/profiles` | List agent profiles |
 | GET | `/api/tools` | List available tools |
 | GET | `/api/config` | Configuration (secrets redacted) |
