@@ -766,35 +766,43 @@ function agentsPage() {
       var tool = (this._agentToolByHour && this._agentToolByHour[aid]) ? this._agentToolByHour[aid] : {};
       var node = (this._agentNodeByHour && this._agentNodeByHour[aid]) ? this._agentNodeByHour[aid] : {};
       var visBump = this.agentStatusVisualBump(agent);
-      var maxv = 1;
+      var statusVals = [];
+      var toolVals = [];
+      var nodeVals = [];
+      var maxStatus = 0;
+      var maxTool = 0;
+      var maxNode = 0;
       for (var i = 0; i < slots.length; i++) {
-        var k = String(slots[i]);
-        var sv0 = Number(status[k]) || 0;
+        var k0 = String(slots[i]);
+        var sv0 = Math.max(0, Number(status[k0]) || 0);
         if (i === (slots.length - 1)) sv0 += visBump;
-        maxv = Math.max(
-          maxv,
-          sv0,
-          Number(tool[k]) || 0,
-          Number(node[k]) || 0
-        );
+        var tv0 = Math.max(0, Number(tool[k0]) || 0);
+        var nv0 = Math.max(0, Number(node[k0]) || 0);
+        statusVals.push(sv0);
+        toolVals.push(tv0);
+        nodeVals.push(nv0);
+        if (sv0 > maxStatus) maxStatus = sv0;
+        if (tv0 > maxTool) maxTool = tv0;
+        if (nv0 > maxNode) maxNode = nv0;
       }
+      if (maxStatus <= 0) maxStatus = 1;
+      if (maxTool <= 0) maxTool = 1;
+      if (maxNode <= 0) maxNode = 1;
       var self = this;
       return slots.map(function(bucket, idx) {
-        var k = String(bucket);
-        var sv = Math.max(0, Number(status[k]) || 0);
-        if (idx === slots.length - 1) sv += visBump;
-        var tv = Math.max(0, Number(tool[k]) || 0);
-        var nv = Math.max(0, Number(node[k]) || 0);
-        var toPct = function(v) {
+        var sv = statusVals[idx];
+        var tv = toolVals[idx];
+        var nv = nodeVals[idx];
+        var toPct = function(v, maxv) {
           if (v <= 0) return 0;
-          return Math.max(12, Math.round((v / maxv) * 100));
+          return Math.max(6, Math.round((v / maxv) * 100));
         };
         return {
-          key: aid + ':' + k,
+          key: aid + ':' + String(bucket),
           isCurrent: idx === slots.length - 1,
-          statusPct: toPct(sv),
-          toolPct: toPct(tv),
-          nodePct: toPct(nv),
+          statusPct: toPct(sv, maxStatus),
+          toolPct: toPct(tv, maxTool),
+          nodePct: toPct(nv, maxNode),
           title: self.fleetHourLabel(bucket) + ' · status ' + Math.round(sv) + ' · tools ' + Math.round(tv) + ' · nodes ' + Math.round(nv)
         };
       });
@@ -1434,6 +1442,14 @@ function agentsPage() {
         }
         var ageSec = ts ? Math.max(0, Math.floor((Date.now() - ts) / 1000)) : 9999;
         if (ageSec > 300) return;
+        if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
+          // Keep subtle in-hour motion reflected in green bars in addition to
+          // task-complete and explicit phase-transition increments.
+          self.recordAgentHourly('status', a.id, 0.03, Date.now());
+        } else if (ph === 'waiting' || ph === 'idle') {
+          // Minimal ambient motion for idle/awaiting to avoid a completely flat look.
+          self.recordAgentHourly('status', a.id, 0.008, Date.now());
+        }
         if (ph === 'tool') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.06);
         else if (ph === 'thinking') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.055);
         else if (ph === 'streaming') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.045);
