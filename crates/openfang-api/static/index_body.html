@@ -6184,7 +6184,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="analyticsPage">
         <div class="page-header dashboard-page-header-polish">
           <h2>Analytics</h2>
-          <p class="dashboard-page-header-sub">Token usage, estimated cost, API and tool calls — by model, agent, and time range.</p>
+          <p class="dashboard-page-header-sub">Token volume (all tiers), estimated spend from the model catalog, and API or tool call counts — by model, agent, and time range. Free and $0-priced models still appear in token totals; spend and “USD saved (est.)” stay at $0 for those (see below).</p>
         </div>
         <div class="page-body dashboard-page-body-polish" x-init="loadUsage()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading usage data...</span></div>
@@ -6195,19 +6195,37 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </div>
           <div x-show="!loading && !loadError">
           <div class="dashboard-stats-grid">
-            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))"></div><div class="stat-label">Total Tokens</div></div>
-            <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="formatCost(summary.total_cost_usd)"></div><div class="stat-label">Estimated Cost</div></div>
+            <div class="card stat-card dashboard-stat-card" title="All completed LLM calls: provider-reported input+output tokens, including free-tier and $0-priced models.">
+              <div class="stat-value" x-text="formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))"></div>
+              <div class="stat-label">Total Tokens</div>
+            </div>
+            <div class="card stat-card dashboard-stat-card" title="Sum of catalog-priced cost_usd on usage events. Models at $0/1M in the catalog contribute $0; token counts are still in Total Tokens.">
+              <div class="stat-value" x-text="formatCost(summary.total_cost_usd)"></div>
+              <div class="stat-label">Estimated Cost</div>
+            </div>
             <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="summary.call_count || 0"></div><div class="stat-label">API Calls</div></div>
             <div class="card stat-card dashboard-stat-card"><div class="stat-value" x-text="summary.total_tool_calls || 0"></div><div class="stat-label">Tool Calls</div></div>
             <div class="card stat-card dashboard-stat-card" title="Turns stopped by hourly LLM token limits or per-agent / global cost budgets before an LLM call (lifetime, SQLite).">
               <div class="stat-value" x-text="quotaBlockCount()"></div>
               <div class="stat-label">Quota blocks</div>
             </div>
-            <div class="card stat-card dashboard-stat-card" title="Catalog-priced estimate of input+output for blocked turns; not billed API usage.">
+            <div class="card stat-card dashboard-stat-card" title="Counterfactual catalog $ for input+output you did not run because a block fired; if the would-have model is $0/1M, this is $0.">
               <div class="stat-value" x-text="formatCost(quotaCostAvoidedUsd())"></div>
               <div class="stat-label">Spend avoided (est.)</div>
               <div class="text-xs text-dim mt-1" style="line-height:1.35" x-show="quotaInputTokensAvoided() > 0"><span x-text="formatTokens(quotaInputTokensAvoided())"></span> in tok. (est.)</div>
             </div>
+          </div>
+          <div
+            class="mt-3 mb-2 text-xs"
+            style="line-height:1.55; max-width: 58rem; border-left: 3px solid var(--border); padding: 8px 0 8px 12px; color: var(--text-muted)"
+            role="note"
+          >
+            <span style="font-weight: 600; color: var(--text)">Free tier and $0 catalog pricing.</span>
+            <strong>Tokens</strong> (input and output) always include free routes and $0-priced models, so you see real usage volume.
+            <strong>Estimated cost</strong> here, <strong>compression “USD not spent (est.)”</strong> on Get started, and the Budget compression rollups all use the model catalog: if the effective price is
+            <strong>$0 per million</strong> tokens, that traffic adds
+            <strong>$0</strong> to spend and
+            <strong>$0</strong> to counterfactual dollars saved. We do not impute a paid rate when the catalog says the marginal price is zero.
           </div>
           <div class="tabs dashboard-toolbar-tabs mt-4">
             <div class="tab" :class="{ active: tab === 'summary' }" @click="tab = 'summary'">Summary</div>
@@ -6298,6 +6316,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div class="detail-row"><span class="detail-label">Total Cost</span><span class="detail-value" x-text="formatCost(summary.total_cost_usd)"></span></div>
                 <div class="detail-row"><span class="detail-label">API Calls</span><span class="detail-value" x-text="summary.call_count || 0"></span></div>
                 <div class="detail-row"><span class="detail-label">Tool Calls</span><span class="detail-value" x-text="summary.total_tool_calls || 0"></span></div>
+                <p class="text-xs text-dim" style="margin-top: 10px; line-height: 1.45" x-show="(summary.total_input_tokens || 0) + (summary.total_output_tokens || 0) > 0">
+                  <strong>Cost at $0 pricing</strong> — If you only use free or $0/1M models, this total can be <strong>$0.00</strong> while token counts above are still non-zero. That is expected: we track volume for all tiers, but do not add imaginary dollars.
+                </p>
               </div>
             </div>
           </div>
@@ -6370,6 +6391,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
           <!-- Costs Tab -->
           <div x-show="tab === 'costs'">
+
+            <p class="text-xs text-dim mb-3" style="line-height:1.5; max-width: 48rem" role="note">
+              <strong class="text-dim" style="color: var(--text)">Spend vs tokens.</strong>
+              Charts and tables below use the same catalog-priced <code>total_cost_usd</code> as the summary. Free and $0/1M models show <strong>$0.00</strong> cost while their <strong>tokens</strong> still count in the By model tab and in daily token stats where shown. Projected monthly assumes past spend patterns; it stays <strong>$0</strong> when all usage is $0-priced.
+            </p>
 
             <!-- Cost Summary Cards -->
             <div class="stats-row mt-4">
@@ -6523,6 +6549,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </table>
               </div>
               <div x-show="!costByModelSorted().length" class="text-sm text-dim" style="padding:20px;text-align:center">No model cost data yet.</div>
+              <p class="text-xs text-dim px-1" style="margin-top: 10px; line-height: 1.45" x-show="costByModelSorted().length">
+                <strong>Rows at $0.00</strong> — Models with <strong>$0/1M</strong> in the catalog (e.g. OpenRouter <code>:free</code>, or local) show <strong>$0.00</strong> here; token columns still reflect usage. Sorting is by cost, so $0 models may appear at the bottom.
+              </p>
             </div>
 
           </div>

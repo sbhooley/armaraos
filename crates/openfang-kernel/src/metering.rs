@@ -252,11 +252,16 @@ impl MeteringEngine {
     }
 
     /// Catalog **input** $/1M for `model` (used when persisting compression “would have cost” counterfactuals).
+    ///
+    /// When the model is **not** in the catalog, returns `0.0` (not `$1/M`). Compression rows are
+    /// long-lived; defaulting to a non-zero rate would **inflate** `est_input_cost_saved_usd` and
+    /// `billed_input_cost_usd` for unknown, local, and free-tier routes where the true marginal price
+    /// is often $0. Dashboard “USD not spent (est.)” is conservative: unknown ⇒ no implied dollars.
     pub fn catalog_input_price_per_million(
         catalog: &openfang_runtime::model_catalog::ModelCatalog,
         model: &str,
     ) -> f64 {
-        catalog.pricing(model).map(|(i, _)| i).unwrap_or(1.0)
+        catalog.pricing(model).map(|(i, _)| i).unwrap_or(0.0)
     }
 
     /// Catalog-priced USD for **input** tokens that were not sent because of compression (counterfactual).
@@ -853,6 +858,33 @@ mod tests {
             1_000_000,
         );
         assert!((cost - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_catalog_input_price_unknown_is_zero_for_compression() {
+        let catalog = openfang_runtime::model_catalog::ModelCatalog::new();
+        assert_eq!(
+            MeteringEngine::catalog_input_price_per_million(&catalog, "totally-unknown-model"),
+            0.0
+        );
+        assert_eq!(
+            MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
+                &catalog,
+                "totally-unknown-model",
+                1_000_000,
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_catalog_input_price_openrouter_free_is_zero() {
+        let catalog = openfang_runtime::model_catalog::ModelCatalog::new();
+        let p = MeteringEngine::catalog_input_price_per_million(
+            &catalog,
+            "openrouter/meta-llama/llama-3.1-8b-instruct:free",
+        );
+        assert_eq!(p, 0.0);
     }
 
     #[test]

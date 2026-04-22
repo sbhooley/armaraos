@@ -780,13 +780,12 @@ impl UsageStore {
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
         let input_saved = record.input_tokens_saturated();
-        let price = if record.input_price_per_million_usd > 0.0 {
-            record.input_price_per_million_usd
-        } else if !record.model.is_empty() {
-            estimate_input_per_million(&record.model)
-        } else {
-            0.0
-        };
+        // Use the kernel snapshot as-is. `0.0` is valid (OpenRouter `:free`, local $0, catalog
+        // explicit zeros). We must *not* overlay `estimate_input_per_million` here: that
+        // heuristic defaults to $1/M for unknown ids and would inflate "USD not spent" and
+        // `billed_input_cost_usd` for free tier — especially with whole-prompt `input_tokens_saved`
+        // (M1). Pre-v15 rows with missing price are repaired by `backfill_compression_pricing`.
+        let price = record.input_price_per_million_usd;
         let mut usd = record.est_input_cost_saved_usd;
         if usd == 0.0 && input_saved > 0 && price > 0.0 {
             usd = (input_saved as f64 / 1_000_000.0) * price;
@@ -1684,6 +1683,10 @@ impl UsageStore {
 
 fn estimate_input_per_million(model: &str) -> f64 {
     let m = model.to_ascii_lowercase();
+    // OpenRouter and similar free-tier route suffix — never impute a positive $/1M.
+    if m.contains(":free") {
+        return 0.0;
+    }
     if m.contains("haiku") {
         0.25
     } else if m.contains("opus-4-6") || m.contains("claude-opus-4-6") {
@@ -2183,13 +2186,10 @@ mod tests {
         assert_eq!(or.original_input_tokens, 200);
         assert_eq!(or.billed_input_tokens, 130);
         assert_eq!(or.input_tokens_saved, 70);
-        // `record_compression` falls back to `estimate_input_per_million(model)` when the caller
-        // passes `0.0`. For a model id not matched by any heuristic ("stepfun/...:free"), the
-        // estimator returns the conservative default of 1.0/M. The contract being asserted here
-        // is that the rollup carries the **persisted** price for the actually-used model — not
-        // the manifest's, which would have been Anthropic's $3/M.
-        assert!((or.input_price_per_million_usd - 1.0).abs() < 1e-9);
-        assert!(or.billed_input_cost_usd > 0.0);
+        // Caller passed $0/M (true marginal price for OpenRouter `:free`). The row must not be
+        // "upgraded" to a positive heuristic — that would inflate est. $ not spent for free tier.
+        assert!((or.input_price_per_million_usd - 0.0).abs() < 1e-9);
+        assert!(or.billed_input_cost_usd <= 0.0 + 1e-9);
     }
 
     /// Verifies the v15+ historical-data repair contract.
