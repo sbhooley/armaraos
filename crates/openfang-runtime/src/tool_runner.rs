@@ -1864,7 +1864,7 @@ async fn tool_file_read(
 
     let bytes = tokio::fs::read(&resolved)
         .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
+        .map_err(|e| format!("Failed to read file {}: {e}", resolved.display()))?;
 
     const MAX_READ_BYTES: usize = 2_000_000;
     if bytes.len() > MAX_READ_BYTES {
@@ -1928,7 +1928,7 @@ async fn tool_file_list(
     let resolved = resolve_file_path_read(raw_path, workspace_root, ainl_library_root)?;
     let mut entries = tokio::fs::read_dir(&resolved)
         .await
-        .map_err(|e| format!("Failed to list directory: {e}"))?;
+        .map_err(|e| format!("Failed to list directory {}: {e}", resolved.display()))?;
     let mut files = Vec::new();
     while let Some(entry) = entries
         .next_entry()
