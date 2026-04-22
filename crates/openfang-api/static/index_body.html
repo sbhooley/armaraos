@@ -2123,7 +2123,7 @@
                     </div>
                     <div class="agent-vitals-telemetry" :class="'phase-' + agentCurrentPhaseClass(agent)">
                       <div class="agent-vitals-telemetry-head">
-                        <span class="agent-vitals-phase-pill" :class="'is-' + agentCurrentPhaseClass(agent)" x-text="agentCurrentPhaseLabel(agent)"></span>
+                        <span class="agent-vitals-phase-kicker">Activity monitor</span>
                         <span class="agent-vitals-phase-time" x-text="agentCurrentPhaseFreshness(agent)"></span>
                       </div>
                       <div class="agent-vitals-feed" x-show="agentActivityFeed(agent).length > 0">
@@ -2134,7 +2134,6 @@
                           </div>
                         </template>
                       </div>
-                      <div class="agent-vitals-log" x-text="agentCurrentPhaseDetail(agent)"></div>
                       <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
                         <span class="agent-vitals-logline-fill" :class="'is-' + agentCurrentPhaseClass(agent)" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
                       </div>
@@ -2206,7 +2205,7 @@
                     </div>
                     <div class="agent-vitals-telemetry" :class="'phase-' + agentCurrentPhaseClass(agent)">
                       <div class="agent-vitals-telemetry-head">
-                        <span class="agent-vitals-phase-pill" :class="'is-' + agentCurrentPhaseClass(agent)" x-text="agentCurrentPhaseLabel(agent)"></span>
+                        <span class="agent-vitals-phase-kicker">Activity monitor</span>
                         <span class="agent-vitals-phase-time" x-text="agentCurrentPhaseFreshness(agent)"></span>
                       </div>
                       <div class="agent-vitals-feed" x-show="agentActivityFeed(agent).length > 0">
@@ -2217,7 +2216,6 @@
                           </div>
                         </template>
                       </div>
-                      <div class="agent-vitals-log" x-text="agentCurrentPhaseDetail(agent)"></div>
                       <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
                         <span class="agent-vitals-logline-fill" :class="'is-' + agentCurrentPhaseClass(agent)" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
                       </div>

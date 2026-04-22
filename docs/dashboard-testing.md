@@ -225,6 +225,15 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 3. While **in** inline chat, confirm the modal’s primary **Chat** action is **hidden** (you are already chatting). From the picker-only flow, **Chat** should still be visible and navigate into chat.
 4. Optional: `curl -s http://127.0.0.1:4200/api/ui-prefs` after pinning — expect `pinned_agents` in JSON (see [api-reference.md](api-reference.md#ui-preferences-endpoints)). After toggling **⚡ eco** in chat, the same file may include **`agent_eco_modes`** (map of agent id → mode string).
 
+## Agents page → Fleet Status card grid
+
+- **Header actions conformance:** Fleet header action buttons use the shared top-header button style used on other pages. The old inline demo controls are intentionally hidden from this header.
+- **Demo URL hint removed:** The subtitle no longer shows `?demo=1` / `?demo=cinema` helper text. Demo URL/query behavior still exists for internal/demo workflows, but is not shown as top-header controls.
+- **Fleet metrics:** The sticky header includes **Active**, **Tasks today**, **Graph nodes (sampled agents)**, **Spend (last hour, est.)**, and **Saved (last hour, est.)**.
+- **Sampled agents meaning:** `Graph nodes (sampled agents)` is an aggregate computed from a capped subset of agents for performance. Per-agent card knowledge counts are shown independently on each card.
+- **Per-agent activity monitor:** The top-right live status near the agent name is the primary phase/status signal. The lower telemetry strip remains as an activity monitor (recent activity feed + intensity bar), without duplicating `Live/Awaiting input` text.
+- **Node-growth activity coupling:** If an agent’s graph node count increases (including background growth not directly prompted in chat), the card should update node count, pulse activity, and append a live feed entry (e.g. `Graph memory +N nodes`).
+
 ## Agents page → Config tab (identity, prompt, tool filters)
 
 **API contract:** `GET /api/agents` and `GET /api/agents/{id}` return **`system_prompt`**, full **`identity`** (`archetype`, `vibe`, …), **`manifest_toml`** (detail route — canonical TOML for the full manifest editor), planner/runtime toggles (**`ainl_runtime_engine`**, **`native_planner_enabled`**), and (on the detail route) **`tool_allowlist`** / **`tool_blocklist`**. The dashboard loads detail after open and reapplies the form so edits are not blank. **`PATCH /api/agents/{id}/config`** ignores empty `system_prompt` / `description` and merges identity so stray `""` values do not wipe stored data.
