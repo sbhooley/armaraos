@@ -1083,6 +1083,15 @@ Full health check with all dependency status. Requires authentication. Unlike th
 
 Detailed kernel status including all agents. Includes `config_schema_version` (effective after load / migration) and `config_schema_version_binary` (the `CONFIG_SCHEMA_VERSION` constant compiled into this daemon). Also returns `version` (daemon package version), `api_listen`, `home_dir`, `log_level`, `network_enabled`, `default_provider`, `default_model`, `uptime_seconds`, and **`openfang_runtime_ainl`**: compile flags plus runtime env state for AINL integration (`ainl_extractor`, `ainl_tagger`, `ainl_persona_evolution`, `ainl_runtime_engine`, `ainl_runtime_engine_forced_by_env`, `ainl_runtime_engine_env_disabled`). Use this for cross-version tooling and operator diagnostics.
 
+**Additional top-level fields** (not all shown in the minimal example below):
+
+| Field | Purpose |
+|-------|---------|
+| **`eco_compression`** | Durable **7-day** roll-up of prompt-compression and prompt-cache economics (modes, per-agent stats, `estimated_total_input_tokens_saved`, `estimated_total_cost_saved_usd`, etc.). Values are **estimates** from heuristics and catalog pricing, not a second bill from the provider. |
+| **`quota_enforcement`** | **7-day** aggregates for **quota / budget blocks** (turns stopped *before* an LLM call): `block_count`, `total_est_input_tokens_avoided`, `total_est_output_tokens_avoided`, `total_est_cost_avoided_usd`, `by_reason` (per-reason counts and estimates). Blocked turns have no metered API tokens; figures are **catalog-priced heuristics** (session + incoming turn estimate, fixed assumed output band). |
+| **`graph_memory_context_metrics`**, **`graph_memory_selection_debug`**, **`graph_memory_contract_metrics`**, **`graph_memory_learning_metrics`** | Graph-memory health and contract telemetry for dashboards. |
+| **`adaptive_eco`** | Live **`[adaptive_eco]`** config snapshot (enabled, enforce, circuit breaker, etc.) — not the same object as `eco_compression` adaptive bundles. |
+
 **Response** `200 OK`:
 
 ```json
@@ -2234,7 +2243,23 @@ For each agent, the handler **prefers** SQLite-backed metering totals. Each row 
 
 ### GET /api/usage/summary
 
-High-level totals across all agents (input/output tokens, estimated USD, call count, tool calls). Used by the **Get started** hero stats and the **Analytics** summary tab.
+High-level totals across all agents (input/output tokens, estimated USD, call count, tool calls). Also returns **`quota_enforcement`**: durable aggregates from the **`quota_block_events`** table for **turns blocked** by the hourly token scheduler cap, per-agent cost quotas, and global budget checks (same events the kernel records with estimated tokens/cost before the LLM runs).
+
+- **Usage figures** (`total_*`, `call_count`, `total_tool_calls`) reflect **completed** metered calls in SQLite — **measured** usage.
+- **`compression_savings`**: all-time (or unbounded) roll-up from the same `eco_compression_events` + `usage_events` (cache) aggregation as `GET /api/usage/compression?window=all`. **Per-turn** “cost not spent” for compression is stored in SQLite with **model catalog** input $/1M at insert time, then summed. Includes prompt-cache “saved” from provider cache read tokens. Used by the **Get started** hero for **cumulative** savings; falls back in older UIs to **`GET /api/status` → `eco_compression` (7d only)**.
+  - **Historical-data backfill (v15+):** rows persisted on pre-v15 daemons that lacked a price snapshot (`provider = ''`, `input_price_per_million_usd = 0`, `est_input_cost_saved_usd = 0`, `billed_input_tokens = 0`) are **repaired idempotently on every kernel boot** immediately after the model catalog loads. The repair re-prices each row against the catalog for that row's `model`, derives `est_input_cost_saved_usd` from saved tokens × catalog price, and recovers `billed_input_tokens` for compression turns by joining to the closest `usage_events` row for the same agent within ±60 s of the compression event. This is what lifts `estimated_compression_cost_saved_usd` and `billed_input_cost_usd_total` out of the near-zero range you'll see on first upgrade. Full mechanics in [prompt-compression-efficient-mode.md](prompt-compression-efficient-mode.md#fallback-model-attribution-v15).
+- **`quota_enforcement`** fields are **estimates** for policy-blocked turns (not literal provider tokens). Shape:
+
+| Key | Meaning |
+|-----|---------|
+| `window` | Aggregation window label (`"all"` when querying all stored rows) |
+| `block_count` | Number of block events in the window |
+| `total_est_input_tokens_avoided` | Sum of estimated input tokens for those blocks |
+| `total_est_output_tokens_avoided` | Sum of estimated output tokens (heuristic) |
+| `total_est_cost_avoided_usd` | Catalog-priced sum for those estimates |
+| `by_reason` | Map of reason id → `{ count, est_input_tokens, est_output_tokens, est_cost_usd }` (e.g. `hourly_llm_tokens`, `hourly_cost_usd`, `global_daily_usd`, …) |
+
+Used by the **Get started** economics row, **Analytics** (extra tiles), and any client that needs lifetime quota statistics alongside global usage.
 
 **Response** `200 OK`:
 
@@ -2244,9 +2269,63 @@ High-level totals across all agents (input/output tokens, estimated USD, call co
   "total_output_tokens": 87000,
   "total_cost_usd": 0.42,
   "call_count": 156,
-  "total_tool_calls": 42
+  "total_tool_calls": 42,
+  "quota_enforcement": {
+    "window": "all",
+    "block_count": 3,
+    "total_est_input_tokens_avoided": 12000,
+    "total_est_output_tokens_avoided": 1536,
+    "total_est_cost_avoided_usd": 0.08,
+    "by_reason": {
+      "hourly_llm_tokens": {
+        "count": 2,
+        "est_input_tokens": 8000,
+        "est_output_tokens": 1024,
+        "est_cost_usd": 0.05
+      }
+    }
+  },
+  "compression_savings": {
+    "window": "all",
+    "estimated_total_input_tokens_saved": 5000000,
+    "estimated_total_cost_saved_usd": 1.5,
+    "estimated_compression_tokens_saved": 2000000,
+    "estimated_compression_cost_saved_usd": 0.5,
+    "cache_read_input_tokens": 3000000,
+    "estimated_cache_cost_saved_usd": 1.0,
+    "original_input_tokens_total": 7000000,
+    "billed_input_tokens_total": 5000000,
+    "billed_input_cost_usd_total": 7.5,
+    "by_provider_model": [
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "turns": 312,
+        "original_input_tokens": 4200000,
+        "compressed_input_tokens": 2100000,
+        "billed_input_tokens": 2100000,
+        "input_tokens_saved": 2100000,
+        "input_price_per_million_usd": 3.0,
+        "est_input_cost_saved_usd": 6.30,
+        "billed_input_cost_usd": 6.30
+      }
+    ]
+  }
 }
 ```
+
+| `compression_savings` key | Meaning |
+|---------------------------|---------|
+| `window` | `"all"` when the roll-up is unbounded (same as `?window=all` on the compression API) |
+| `estimated_total_input_tokens_saved` | Compression token delta + cache-read “saved” input tokens (see `UsageStore::query_compression_summary`) |
+| `estimated_total_cost_saved_usd` | Per-event catalog-priced compression counterfactual USD (summed) + cache discount estimate (same store) |
+| `estimated_compression_tokens_saved` | `original - compressed` token sum from `eco_compression_events` |
+| `estimated_compression_cost_saved_usd` | Sum of per-row `est_input_cost_saved_usd` (catalog at insert) when present; else legacy backfill for older DB rows |
+| `cache_read_input_tokens` / `estimated_cache_cost_saved_usd` | From `usage_events` cache token columns in the same window |
+| `original_input_tokens_total` | **v15:** sum of pre-compression input tokens across persisted compression turns (audit baseline). |
+| `billed_input_tokens_total` | **v15:** sum of provider-reported input tokens after compression — what was actually billed. `0` for rows persisted before v15. |
+| `billed_input_cost_usd_total` | **v15:** catalog-priced cost of `billed_input_tokens_total` in USD. |
+| `by_provider_model[]` | **v15:** per-(provider, model) rollup with `turns`, `original_input_tokens`, `compressed_input_tokens`, `billed_input_tokens`, `input_tokens_saved`, weighted `input_price_per_million_usd`, `est_input_cost_saved_usd`, and `billed_input_cost_usd`. Sorted by `est_input_cost_saved_usd` desc. **Fallback attribution (v15+):** when a turn is serviced by a fallback model (primary 429 / overloaded / `ModelNotFound`, OpenRouter free-tier), the row reflects the model that **actually** billed the call (e.g. `openrouter / stepfun/step-3.5-flash:free`) — not the manifest's requested model. The runtime exposes the actually-used identity via `AgentLoopResult.actual_provider` / `actual_model` and the kernel snapshots pricing against it. |
 
 ### GET /api/usage/compression
 
@@ -3486,7 +3565,7 @@ The `Retry-After` header indicates the window duration in seconds.
 | GET | `/api/events/stream` | SSE: kernel event bus |
 | **Usage & Analytics** | | |
 | GET | `/api/usage` | Per-agent usage totals (persistent metering + `source`) |
-| GET | `/api/usage/summary` | Global usage totals (SQLite-backed) |
+| GET | `/api/usage/summary` | Global usage totals (SQLite-backed) + `quota_enforcement` (estimated blocked-turn stats) |
 | GET | `/api/usage/compression` | Compression analytics by window/mode/agent (includes savings + semantic p50/p95) |
 | GET | `/api/usage/adaptive-eco` | Adaptive eco telemetry (shadow mismatches, breaker trips, hysteresis blocks) |
 | GET | `/api/usage/by-model` | Usage by model breakdown |

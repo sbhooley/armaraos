@@ -99,6 +99,31 @@ The AINL repo’s `ainl run --efficient-mode …` sets **`AINL_EFFICIENT_MODE`**
 
 ## API and telemetry
 
+### Dashboard “savings” vs measured usage
+
+**Ultra Cost-Efficient Mode** and **`GET /api/usage/compression`** report **aggregated estimates** (original vs compressed token heuristics, cache-read economics, semantic rollups). Those are **not** a duplicate meter from the cloud API proving “exact tokens you would have paid without compression.”
+
+**Measured** token and dollar usage for **completed** calls live in the persistent **`usage_events`** data surfaced by **`GET /api/usage/summary`**.
+
+**Quota- and budget-blocked turns** (turn never started) are tracked separately — see **`quota_enforcement`** on **`GET /api/usage/summary`**. **`compression_savings`** on the same endpoint rolls up all-time (unbounded) compression and cache “saved” metrics, with **model catalog** input $/1M **persisted on each** `eco_compression_events` row so cumulative USD tracks pricing at the time of each turn. As of **schema v15**, every compression event also persists **`provider`**, **`billed_input_tokens`** (provider-reported input after compression), and **`billed_input_cost_usd`** (catalog-priced billable USD). The summary therefore exposes:
+
+- `original_input_tokens_total` — sum of pre-compression input tokens across persisted compression turns (audit baseline).
+- `billed_input_tokens_total` / `billed_input_cost_usd_total` — sum of provider-reported input tokens and catalog-priced cost actually billed for those rows.
+- `by_provider_model[]` — per-(provider, model) rollup with `original_input_tokens`, `compressed_input_tokens`, `billed_input_tokens`, `input_tokens_saved`, weighted `input_price_per_million_usd`, and `est_input_cost_saved_usd` / `billed_input_cost_usd`.
+
+**Fallback-model attribution (v15+):** `provider` and `model` always reflect the model that **actually** serviced the turn — not the manifest's requested model. When a primary model returns `RateLimited` / `Overloaded` / `ModelNotFound`, `openfang-runtime` retries on a manifest fallback or an OpenRouter free-tier model and exposes the actually-used identity via `AgentLoopResult.actual_provider` / `actual_model`. The kernel then snapshots catalog pricing against that model when persisting both `usage_events` and `eco_compression_events`, so cost rollups and `by_provider_model[]` show the correct entity (e.g. `openrouter / stepfun/step-3.5-flash:free`) instead of misattributing the spend to the requested provider.
+
+This lets dashboards show **true** pre-compression vs billed input per provider/model — not only the pre-LLM heuristic — and survives daemon restarts. **`GET /api/status` → `eco_compression`** remains a 7d slice for other diagnostics. See [api-reference.md](api-reference.md#get-apiusagesummary). Blocked-turn lines are still **heuristic** counterfactuals, not provider-invoiced.
+
+**Historical-data backfill (v15+ kernels, runs once at boot):** Compression rows persisted before pricing was snapshotted on each row landed in `eco_compression_events` with `provider = ''`, `input_price_per_million_usd = 0`, `est_input_cost_saved_usd = 0`, and `billed_input_tokens = 0`. The dashboard's "USD NOT SPENT (EST.)" therefore underreported by orders of magnitude on installs that pre-date v15. On every kernel boot, immediately after the model catalog loads, the runtime calls two idempotent repair passes against `usage_events` + `eco_compression_events`:
+
+- **`UsageStore::backfill_compression_pricing`** — for every row missing pricing, looks up the row's `model` in the current catalog and writes back `input_price_per_million_usd`, `est_input_cost_saved_usd = (input_tokens_saved / 1e6) * price`, `billed_input_cost_usd = (billed_input_tokens / 1e6) * price`, and the catalog's `provider`. Rows that already carry a non-zero price snapshot are **never re-priced** (catalog drift over time is preserved).
+- **`UsageStore::backfill_compression_billed_tokens`** — for every row whose `billed_input_tokens` is still zero, joins to the closest `usage_events` row for the same `agent_id` within ±60 s of the compression event (the kernel writes both within the same turn handler, so the join is exact) and copies `input_tokens` into `billed_input_tokens`, then recomputes `billed_input_cost_usd`.
+
+Both passes are **idempotent** — their `WHERE` clauses are the marker — so subsequent boots are no-ops once the corpus is repaired. Boot logs report the repair count: `Backfilled compression pricing on N historical eco_compression_events row(s)`. The next `GET /api/usage/summary` will reflect the recovered totals on `compression_savings.{estimated_compression_cost_saved_usd, billed_input_tokens_total, billed_input_cost_usd_total, by_provider_model[]}`.
+
+For product copy on the Get started page layout and measured vs estimated columns, see [dashboard-overview-ui.md](dashboard-overview-ui.md#measured-vs-estimated-savings).
+
 ### REST
 
 **`POST /api/agents/{id}/message`** response may include:

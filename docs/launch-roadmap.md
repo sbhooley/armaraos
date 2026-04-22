@@ -200,22 +200,22 @@ These are features where ArmaraOS can leapfrog OpenClaw.
 
 ### 3.1 Voice Input/Output in Web UI -- DONE
 
-**Status: COMPLETE** — Mic button with hold-to-record, MediaRecorder with webm/opus codec, auto-upload and transcription, TTS audio player in tool cards, recording timer display, CSP updated for media-src blob:.
+**Status: COMPLETE** — Mic button with hold-to-record, MediaRecorder with webm/opus (or ogg/Opus) where supported, auto-upload and **STT** (server-side transcript feeding the agent), recording timer, CSP updated for `media-src` `blob:`. **Clarification (current product behavior):** user audio is **transcribed to text** for the agent; **assistant replies are text in the chat** by default. **Optional** Piper **voice reply** is available when **`[local_voice]`** is configured and the client sets **`voice_reply: true`** on the message (not the default for every turn). **Tool TTS** / audio URLs in tool results can still render with inline players where the UI supports it.
 
 **Problem (was):** `media_transcribe` and `text_to_speech` tools exist but there's no mic button or audio playback in the UI.
 
 **What to do:**
 1. Add mic button next to attach button in input area
 2. Use Web Audio API / MediaRecorder for recording
-3. Upload audio as attachment, auto-invoke `media_transcribe`
-4. For TTS responses: detect audio URLs in tool results, add `<audio>` player
-5. Add audio playback controls (play/pause, seek)
+3. Upload audio as attachment, run STT and send transcribed (or tool-assisted) text to the agent
+4. For TTS: optional voice reply (Piper) and/or tool-result audio — inline `<audio>` where applicable
+5. Add audio playback controls (play/pause, seek) for tool / voice-reply audio
 
 **Files:** `index_body.html`, `chat.js`, `components.css`
 
 **Done when:**
-- Users can hold mic button to record voice → transcribed to text → sent as message
-- TTS responses play inline with audio controls
+- Users can hold the mic to record → audio is transcribed → the agent receives user intent as text (plus temp-upload hints if STT is incomplete)
+- **Default** assistant output remains **text**; optional voice reply / tool audio plays where implemented
 
 ---
 

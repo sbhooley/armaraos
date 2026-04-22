@@ -49,6 +49,12 @@ piper_voice = "/absolute/path/to/en_US-lessac-medium.onnx"
 
 The media engine selects STT in this general order unless **`[media] audio_provider`** overrides it: local Whisper when ready, then optional Parakeet/MLX env, then cloud keys (**`GROQ_API_KEY`**, **`OPENAI_API_KEY`**). See **`openfang-runtime`** `media_understanding.rs` and **[configuration.md](configuration.md)** for **`[media]`**.
 
+## WebChat: voice in, text out (by default)
+
+- **User → agent (STT):** The dashboard **mic** records audio, uploads it, and the API runs **speech-to-text** (upload-time and/or on the message path). The transcribed text is what the agent and **ainl-runtime** prelude see—same as a typed user message, so memory / persona / tagger paths stay consistent when STT succeeds.
+- **Agent → user (replies):** The assistant’s answer is shown as **text in the chat** by default. The model does **not** speak back automatically in the browser.
+- **Optional spoken reply (Piper):** In the **WebChat** input row, the **speaker** button (next to the mic) toggles **“spoken assistant reply”** on or off. When you turn it **on**, the dashboard first asks **`GET /api/system/local-voice`**; if **Piper is not ready**, the toggle stays off and a **toast** explains the usual fix (go online for first-time auto-download, check **`[local_voice]`**, or see this doc). When **on** and ready, the client sends **`voice_reply: true`** on the next message (typed or with voice) so the API may synthesize the reply with **Piper** and return a short-lived audio URL. The preference is stored in the browser as **`localStorage` `armaraos-voice-reply`**. When the toggle is **off** (default), answers stay **text-only** even if you use the mic.
+
 ## Related docs
 
 - **[data-directory.md](data-directory.md)** — `voice/` under the ArmaraOS home directory.

@@ -47,6 +47,7 @@ When **`ARMARAOS_AGENT_ID`** is set, **ainativelang** can append **`MemoryNode`*
 | **`run_agent_loop` / streaming** — EndTurn success | **Episode** via **`record_turn`** | Canonical tool names for the turn; optional trace JSON when wired (e.g. orchestration). Episode **`tags`** include tagger strings when **`ainl-tagger`** is compiled in **and** **`AINL_TAGGER_ENABLED`** is exactly **`1`** (trimmed). |
 | Same — after **`record_turn`** | **Semantic** via **`record_fact_with_tags`** | **`graph_memory_turn_extraction`** picks structured **`ainl_graph_extractor_bridge`** vs legacy **`graph_extractor`** based on **`AINL_EXTRACTOR_ENABLED`** (requires **`ainl-extractor`**). Fact tag lists merge orchestration correlation strings + optional **`SemanticTaggerBridge::tag_fact`**. **`source_turn_id`** is the **episode** UUID returned from **`record_turn`**. |
 | Same — after facts | **Procedural** via **`record_pattern`** (optional) | When a workflow or repeated-tool pattern is detected; may carry orchestration **`trace_id`**. |
+| Same — after patterns (same `record_turn` success path) | **Trajectory** via **`record_trajectory_for_episode`** | One **`Trajectory`** row per turn with coarse **`TrajectoryStep`** entries derived from canonical tool names; edge **`trajectory_of`** → episode node id. Gated by **`AINL_TRAJECTORY_ENABLED`** (**opt-out**, same falsy set as **`AINL_EXTRACTOR_ENABLED`**). Optional **`AINL_MEMORY_PROJECT_ID`** supplies `project_id` on the node when set. |
 | **`tool_agent_delegate`** | **Episode** via **`GraphMemoryWriter::record_turn`** | Includes serialized **`OrchestrationTraceEvent`** when JSON serialization succeeds. |
 | **`tool_a2a_send`** (after **`A2aClient::send_task`** OK) | **Episode** via **`record_delegation`** | Implemented in **`tool_runner.rs`** (not **`a2a.rs`**) so **`caller_agent_id`** is available. |
 | Persona recall (each LLM call setup) | **`GraphMemoryWriter::recall_persona`** → **`[Persona traits active: …]`** on **system prompt** | After manifest prompt, **openfang-memory** recall, and optional **orchestration** appendix, **`run_agent_loop` / `run_agent_loop_streaming`** query **Persona** nodes in the last **90** days with strength ≥ **0.1**, format **`trait (strength=0.xx)`**, append before Ultra Cost-Efficient Mode compression. |
@@ -67,6 +68,8 @@ These control **extra** graph richness on top of the always-on **episode** row. 
 | **`AINL_EXTRACTOR_ENABLED`** | **`ainl-extractor`** (default) | **Opt-out.** When the feature is compiled in, the crate path (`ainl_graph_extractor_bridge`) is **on by default**. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**, case-insensitive) to fall back to legacy `graph_extractor` heuristics. `run_persona_evolution_pass` does **not** read this env var. |
 | **`AINL_TAGGER_ENABLED`** | **`ainl-tagger`** (default in ArmaraOS) | **Opt-in.** Must be **exactly** **`1`** after trim to enable `SemanticTaggerBridge` tag strings on episode and fact nodes. (`true` / `yes` / `on` do **not** enable the tagger — deliberate strictness to avoid accidental activation.) |
 | **`AINL_PERSONA_EVOLUTION`** | **`ainl-persona-evolution`** (default) | **Opt-out.** When the feature is compiled in, `PersonaEvolutionHook::evolve_from_turn` runs after each turn by default. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**) to disable (see **[persona-evolution.md](persona-evolution.md)**). |
+| **`AINL_TRAJECTORY_ENABLED`** | n/a (always compiled) | **Opt-out** for **`Trajectory`** nodes after **`record_turn`**. Unset ⇒ on; falsy (**`0`**, **`false`**, **`no`**, **`off`**) ⇒ off. See **`crates/openfang-runtime/README.md`**. |
+| **`AINL_MEMORY_PROJECT_ID`** | n/a | Optional string stored on **`Trajectory`** payloads when trajectory writes run; helps future multi-project scoping. |
 
 Slim builds: **`cargo build -p openfang-runtime --no-default-features --features ainl-persona-evolution`** (see crate README).
 
@@ -78,6 +81,7 @@ Slim builds: **`cargo build -p openfang-runtime --no-default-features --features
 |-----------|---------|----------|
 | **Orchestration traces** | Kernel / **`openfang-memory`** ring + APIs | Dashboard **`#orchestration-traces`**, **`GET /api/orchestration/traces`**, SSE |
 | **AINL graph** | Per-agent **`ainl_memory.db`** | Dashboard **Graph Memory** (`#graph-memory`): **`GET /api/graph-memory`** returns nodes with **`explain`** (what / why / evidence / typed edges) **`SystemEvent::GraphMemoryWrite`** SSE events include optional **`provenance`** (summary, node ids, reason). See **[GRAPH_MEMORY_EXPLAINABILITY.md](GRAPH_MEMORY_EXPLAINABILITY.md)**. |
+| **Trajectories** (detail table) | Same DB: table **`ainl_trajectories`** (see *What gets written*) | **`GET /api/trajectories?agent_id=`**; offline CLI **`openfang trajectory list`**, **`search`**, **`analyze`**, **`export`** (same `ainl_memory.db`; list/search/analyze support `--json`; export emits JSONL replay lines). |
 
 They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentional for cross-debugging.
 
@@ -87,7 +91,9 @@ They are **different** stores; correlating IDs (e.g. **`trace_id`**) is intentio
 
 | Area | File / symbol |
 |------|----------------|
-| Wrapper | **`openfang_runtime::graph_memory_writer::GraphMemoryWriter`** — **`open`**, **`drain_python_graph_memory_inbox`**, **`record_turn`**, **`record_fact`** / **`record_fact_with_tags`**, **`record_delegation`**, **`recall_recent`**, **`recall_persona`**, **`recall_persona_for_agent`**, **`run_persona_evolution_pass`** → **`ainl_graph_extractor::ExtractionReport`**, **`export_graph_json`**, **`emit_write_observed`** (live-event bridge for secondary writers), plus free function **`armaraos_graph_memory_export_json_path`** (per-agent JSON path for **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** / default **`ainl_graph_memory_export.json`**) |
+| Wrapper | **`openfang_runtime::graph_memory_writer::GraphMemoryWriter`** — **`open`**, **`drain_python_graph_memory_inbox`**, **`record_turn`**, **`record_fact`** / **`record_fact_with_tags`**, **`record_pattern`**, **`record_trajectory_for_episode`**, **`record_delegation`**, **`recall_recent`**, **`recall_persona`**, **`recall_persona_for_agent`**, **`run_persona_evolution_pass`** → **`ainl_graph_extractor::ExtractionReport`**, **`export_graph_json`**, **`emit_write_observed`** (live-event bridge for secondary writers), plus free function **`armaraos_graph_memory_export_json_path`** (per-agent JSON path for **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** / default **`ainl_graph_memory_export.json`**) |
+| Trajectory + graph CLI (operator) | **`openfang-cli`** — trajectories: `openfang trajectory list|search|analyze|export …` (same `ainl_memory.db`). Graph memory: `openfang memory graph-export|graph-search|graph-persona|graph-validate|graph-audit|graph-inspect|graph-remember|graph-forget …` (`graph-export` / `graph-validate` offline on `ainl_memory.db`; other graph subcommands use the daemon’s `/api/graph-memory*`). KV: `openfang memory list|get|set|delete` (daemon `/api/memory/...`). |
+| Prompt compression CLI (operator) | **`openfang-cli`** — `openfang compression test|score|detect` plus **`profiles`** (`list`, `show`, `map-project`), **`adaptive suggest`**, **`cache ttl|policy`** — all call **`ainl-compression`** (`profiles` / `adaptive` / `cache` modules + core compressor). No daemon. |
 | Optional turn orchestration | **`ainl_runtime::AinlRuntime`** — **`run_turn`**, **`run_turn_async`** (feature **`async`**); may persist **`runtime_state`** in the same DB when embedded — not the default daemon loop — **`crates/ainl-runtime/README.md`**, **[ainl-runtime-integration.md](ainl-runtime-integration.md)**. When this path records episodes, **`tools_invoked`** are **canonicalized** at write time (**`ainl-semantic-tagger`**); episode **ids** in turn results are **graph node ids** (see **[ainl-runtime.md](ainl-runtime.md)** *Episodic tools* / *Episode identity*). The host emits an observed **`GraphMemoryWrite`** signal after successful runtime-engine prelude turns so the dashboard live timeline reflects secondary-writer mutations promptly. |
 | Graph extractor bridge | **`openfang_runtime::ainl_graph_extractor_bridge`** — turn payload formatting, **`graph_memory_turn_extraction`**, **`ainl_extractor_runtime_enabled`** |
 | Semantic tagger bridge | **`openfang_runtime::ainl_semantic_tagger_bridge::SemanticTaggerBridge`** — **`tag_episode`**, **`tag_fact`**, gated by **`AINL_TAGGER_ENABLED`** |
@@ -147,7 +153,7 @@ highest-confidence row. The pass is rate-limited per agent.
 
 ### GA provenance gate metrics
 
-`GET /api/status` includes `graph_memory_context_metrics` with:
+`GET /api/status` includes (among other top-level fields documented in [api-reference.md](api-reference.md)) `graph_memory_context_metrics` with:
 - `provenance_coverage_ratio`
 - `provenance_coverage_floor`
 - `provenance_coverage_min_lines`
@@ -167,6 +173,7 @@ Contradiction ratio default max is `0.75` once semantic sample size reaches `20`
 
 ## See also
 
+- [dashboard-overview-ui.md](dashboard-overview-ui.md#measured-vs-estimated-savings) — same **`GET /api/status`** response also includes **`eco_compression`** and **`quota_enforcement`** (7d) for Get started **est.** savings; orthogonal to graph-memory KPIs
 - [graph-memory-sync.md](graph-memory-sync.md) — Python **`AinlMemorySyncWriter`** → **`ainl_graph_memory_inbox.json`** (when **`ARMARAOS_AGENT_ID`**), envelope + CI
 - [ainl-runtime.md](ainl-runtime.md) — doc hub (links crate README, GraphPatch, OpenFang integration, verification)
 - **`crates/ainl-runtime/README.md`** — crate hub (`run_turn` / **`run_turn_async`**, session **`runtime_state`**, **`async`** feature, `cargo test -p ainl-runtime`)

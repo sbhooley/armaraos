@@ -313,6 +313,7 @@ The embedded WebChat UI allows you to:
 - If the agent WebSocket is unavailable, the UI falls back to **`POST /api/agents/{id}/message`**; the JSON may include **`tools`** so tool runs still show as expandable cards (see [API Reference](api-reference.md), section **POST /api/agents/{id}/message**).
 - See streaming responses as they are generated
 - View token usage per message
+- **Voice (mic):** Record a message with the mic; the server **transcribes** it to text for the agent. Replies are **text in the chat** unless you turn on the **speaker** button next to the mic (asks the daemon for a **Piper** audio reply when `[local_voice]` is set up). See [local-voice.md](local-voice.md#webchat-voice-in-text-out-by-default).
 
 The default landing route in the SPA is still `#overview`; bookmarks and links using that hash continue to work.
 
@@ -334,7 +335,7 @@ Now that you have ArmaraOS running:
 - **Migrate from OpenClaw**: Run `openfang migrate --from openclaw`. See [MIGRATION.md](../MIGRATION.md).
 - **Desktop app**: Run `cargo tauri dev` for a native desktop experience with system tray.
 - **Run diagnostics**: `armaraos doctor` checks your entire setup.
-- **Local voice (optional)**: On first daemon start, `[local_voice]` can download Whisper + Piper into `~/.armaraos/voice/` (see [local-voice.md](local-voice.md)). On macOS/Linux you may still need **`whisper-cli`** (e.g. `brew install whisper-cpp`).
+- **Local voice (optional)**: On first daemon start, `[local_voice]` can download Whisper + Piper into `~/.armaraos/voice/` (see [local-voice.md](local-voice.md)). On macOS/Linux you may still need **`whisper-cli`** (e.g. `brew install whisper-cpp`). Voice **input** uses STT; assistant **output** is normally **text** unless you opt into a voice reply as documented in [local-voice.md](local-voice.md#webchat-voice-in-text-out-by-default).
 
 ### Useful Commands Reference
 

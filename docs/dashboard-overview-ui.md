@@ -1,6 +1,6 @@
 # Dashboard: Get started (Overview) page
 
-The **Get started** route is the default landing view in the embedded dashboard (`#overview`). It aggregates health, usage, setup checklist, provider badges, and activity. This document describes layout, **Quick actions**, and where to change them.
+The **Get started** route is the default landing view in the embedded dashboard (`#overview`). It aggregates health, usage, setup checklist, token economics, estimated savings, operations snapshot, panel cards, provider badges, and activity. This document describes layout, **Quick actions**, data sources, and where to change them.
 
 > Design policy: all visual changes in this page must follow the canonical rules in [`dashboard-design-system.md`](dashboard-design-system.md).
 
@@ -22,15 +22,28 @@ Order matters for scanability and for the loading skeleton matching the real lay
 1. **Page header** — Title *Get started*; **Setup Wizard** / **Run setup again** (see [Setup Wizard visibility](#setup-wizard-visibility)); health pill; manual refresh. Wrapper row: `overview-page-header-row` / `overview-page-header-actions`.
 2. **Live strip** (conditional) — Last kernel SSE line + **Timeline** when `kernelEvents.last` is set.
 3. **Quick actions** — See below; hidden on load error; replaced by a skeleton while `loading` is true (grid includes **seven** skeleton cells matching seven actions).
-4. **Loading skeleton** — Shown only while `loading`; includes a Quick actions-shaped skeleton, hero stat placeholders, then panel grid placeholders.
+4. **Loading skeleton** — Shown only while `loading`; includes a Quick actions-shaped skeleton, a **four-cell** token/cost row placeholder (`overview-economics-stats--single-row`), a tall placeholder for the **Operations snapshot** card, then panel grid placeholders.
 5. **Error state** — Connection failure, retry, debug copy (no Quick actions).
 6. **Setup checklist** — When `showSetupChecklist` (see `overview.js`); dismiss uses `localStorage` key `of-checklist-dismissed`.
 7. **Onboarding banner** — When onboarding store says so and checklist was dismissed.
-8. **Main content** (after successful load) — Hero stats, compact stats, observability snapshot, provider badges, panel grid (System health, Security, Channels, **MCP Servers**, **MCP readiness** chips from `GET /api/mcp/servers` → `readiness.checks`), Recent activity, empty states.
+8. **Main content** (after successful load) — In order:
+   - **Token Economics** (conditional) — `x-show` when `budget` has a limit and/or spend (`GET /api/budget`); **View Usage** / **Configure Budget** actions.
+   - **Token / cost row** (four equal columns) — `overview-economics-stats--single-row`: **Tokens used**, **Total cost** (from `loadUsage()` → `GET /api/usage/summary` — **measured** completed calls in SQLite), **Tokens saved (est.)**, **Cost saved (est.)** — see [Measured vs estimated](#measured-vs-estimated-savings).
+   - **Operations snapshot** — single card: integration row + optional kernel/observability block — see [Operations snapshot card](#operations-snapshot-card).
+   - **Panel grid** — System health, Security, Channels, MCP servers, MCP readiness, Graph memory (as applicable).
+   - **LLM Providers** — Badge row (`overview-provider-card`); **below** the panel grid, **above** recent activity.
+   - **Recent activity** / empty state, then bottom **Quick** link cards (if present in the build).
 
-The **Skills/MCP** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** (`POST /api/integrations/custom/*`) and a collapsible **preset examples** section (`POST /api/integrations/*`) for curated templates — both install without editing TOML; that flow complements the overview **MCP Servers** / readiness chips.
+The **Skills/MCP** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** and preset examples — that flow complements the overview **MCP** / readiness chips.
 
-The duplicate **Quick actions** block that previously appeared after the panel grid was removed; actions exist only in the top region.
+## Measured vs estimated savings
+
+- **Tokens used** and **Total cost** on Get started are **actual rollups** from the persistent usage store (`GET /api/usage/summary`: `total_input_tokens`, `total_output_tokens`, `total_cost_usd` for **completed** LLM-metered calls).
+- **Tokens saved (est.)** and **Cost saved (est.)** are **not** second meter readings from the provider. They combine:
+  - **Compression + prompt-cache economics** from **`GET /api/status` → `eco_compression`** (7-day window in the status payload) — heuristics (e.g. estimated original vs compressed input, cache reads, model-catalog pricing) aggregated in SQLite.
+  - **Quota / budget blocks** from **`status.quota_enforcement`** (7-day) and/or fallbacks from **`summary.quota_enforcement`** on the usage summary (all time in that API) — **estimated** input/output for **turns that were blocked** before the LLM ran (no literal completion tokens exist for those events).
+
+Do not treat the “saved” columns as invoice-grade counterfactuals; they are **engineering estimates** for trends and policy impact. Tooltips on the cards in `index_body.html` spell this out for end users.
 
 ## Quick actions
 
@@ -68,7 +81,37 @@ Classes live in `components.css`:
 - **`overview-quick-actions--skeleton`** — Loading placeholder; `pointer-events: none`.
 - **`overview-quick-action-skel`** — Skeleton cell height inside the grid.
 
-Older class **`overview-inline-actions`** was removed with the bottom quick-actions card; do not reintroduce it unless a second strip is needed elsewhere.
+**Economics row:** `overview-economics-stats`, `overview-economics-stats--single-row` (CSS grid, four columns on wide viewports, wraps on small screens). Icons: `overview-stat-icon--blue`, `--green`, `--amber`, `--teal`.
+
+## Operations snapshot card
+
+Single card: **`overview-snapshot-card`** (`role="region"`, `aria-label="Operations snapshot"`). Shown when **`!loading && !loadError`**.
+
+**Header** — `overview-snapshot-top`: eyebrow *Live*, title *Operations snapshot*, lede (integration + kernel copy).
+
+**Integration summary** — `overview-snapshot-integrations` (`aria-label="Integration summary"`). Five compact tiles:
+
+| Tile | Source (Alpine) | Notes |
+|------|-----------------|--------|
+| Channels | `channels.length` | **Button** — `location.hash='channels'` |
+| Skills | `skillCount` | **Button** — `location.hash='skills'` |
+| MCP servers | `connectedMcp.length` | Non-link |
+| Tool calls | `formatNumber(usageSummary.total_tools)` | From usage summary |
+| Providers | `configuredProviders.length` | Success tint when &gt; 0 |
+
+**Kernel / observability block** — Shown when **`observability && observability.agent_count !== undefined`** (**`GET /api/observability/snapshot`**). Four **KPI** cells (`overview-snapshot-kpi*`: agents running/total, daemon uptime, pending approvals, cron jobs) and **foot** rows (channels ready/configured, last scheduler tick). Agent counts and uptime here supersedes a duplicate hero row (there is no separate *Agents* / *Daemon uptime* stat card above the snapshot).
+
+**Compression billing breakdown** — Second `overview-snapshot-foot` block, shown only when **`overviewBilledInputTokensTotal > 0`** (i.e. at least one `eco_compression_events` row was persisted on schema **v15+**, which captures provider-reported `billed_input_tokens` per turn). Three rows:
+
+| Row | Source | Tooltip / meaning |
+|-----|--------|------------------|
+| Pre-compression input (cum.) | `overviewOriginalInputTokensTotal` | Sum of pre-compression input tokens across all persisted compression turns (audit baseline). |
+| Provider-billed input (cum.) | `overviewBilledInputTokensTotal` + `formatCost(overviewBilledInputCostUsdTotal)` | Sum of provider-reported input tokens after compression — what was actually billed — with catalog-priced USD. |
+| Saved by compression | `overviewOriginalInputTokensTotal − overviewBilledInputTokensTotal` + `formatCost(overviewCostSavedUsd)` | Counterfactual: input tokens not billed × catalog input $/1M at time of each compression. |
+
+These getters all read **`usageSummary.compression_savings`** (from **`GET /api/usage/summary`**). The same response also exposes **`compression_savings.by_provider_model[]`** for per-(provider, model) breakdowns (`overviewCompressionByProviderModel` in `overview.js`); future iterations may render that as a sub-table inside this block.
+
+**CSS** (in `components.css`): `overview-snapshot-kpis`, `overview-snapshot-kpi*`, `overview-snapshot-foot*`, optional skeleton helpers. Use **theme tokens** per the [design system](dashboard-design-system.md).
 
 ## Setup Wizard visibility
 
@@ -84,7 +127,7 @@ After the guided **Setup Wizard** completes, the dashboard sets `localStorage` *
 
 **Alpine state** (`overview.js`): `onboarded` (from `localStorage`), `overviewWizardCtaVisible` (initialized to `!onboarded`). **Run setup again** calls `revealSetupWizardCta()`. **`refreshOnboardingFlags()`** runs after successful `loadOverview` and `silentRefresh` so completing the wizard in-session collapses the CTA again.
 
-**Sidebar:** The **Get started** nav item calls **`navigateOverview()`** instead of `navigate('overview')`. If the user is **already** on Get started and clicks **Get started** again, the app dispatches a window event **`openfang-overview-nav-same-page`**; the overview root listens with `@openfang-overview-nav-same-page.window="onOverviewNavSamePage()"`, which reveals the wizard CTA for onboarded users (same effect as **Run setup again**).
+**Sidebar:** The **Get started** nav item calls **`navigateOverview()`** instead of `navigate('overview')`. If the user is **already** on Get started and clicks **Get started** again, the app dispatches **`openfang-overview-nav-same-page`**; the overview root listens with `@openfang-overview-nav-same-page.window="onOverviewNavSamePage()"`, which reveals the wizard CTA for onboarded users (same effect as **Run setup again**).
 
 **Init order:** `x-init="initOverviewWizardCta(); loadOverview().then(() => startAutoRefresh())"`.
 
@@ -99,8 +142,9 @@ After the guided **Setup Wizard** completes, the dashboard sets `localStorage` *
 
 - **Auto-refresh:** `silentRefresh()` on a 30s interval; debounced refresh on `armaraos-kernel-event` for lifecycle/system events (`overviewShouldRefreshOnKernelEvent` in `overview.js`).
 - **Teardown:** `@page-leave.window="stopAutoRefresh()"` clears the interval and kernel listener.
-- **Usage + cost hero:** `loadUsage()` in `overview.js` reads **`GET /api/usage/summary`** (SQLite-backed totals) so headline token and USD figures stay meaningful across **daemon restarts** and desktop upgrades when the ArmaraOS data directory is intact.
-- **Implementation** of titles, progress, and `showSetupChecklist` is in `overview.js` getters; keep **`docs/dashboard-testing.md`** (*Get started page — setup checklist*) in sync when that logic changes. Manual QA steps (hashes, `localStorage`, removed onboarding keys) live there. First-run **Setup Wizard** contract: [dashboard-setup-wizard.md](dashboard-setup-wizard.md).
+- **Usage + cost:** `loadUsage()` reads **`GET /api/usage/summary`** (SQLite-backed **actual** usage for completed calls). It also stores **`quota_enforcement`** from that response (aggregate quota-block estimates).
+- **Status for savings columns:** `loadStatus()` provides **`eco_compression`**, **`quota_enforcement`**, and related fields on **`GET /api/status`**. The getters **`overviewTokensSaved`** / **`overviewCostSavedUsd`** merge compression (7d) + quota avoidance (7d from status when available).
+- **Implementation** of titles, progress, and `showSetupChecklist` is in `overview.js` getters; keep **`docs/dashboard-testing.md`** (*Get started page* sections) in sync when that logic changes.
 
 ## Sidebar navigation
 
@@ -108,12 +152,12 @@ The dashboard sidebar exposes **Get started** as its **own section above Chat**.
 
 ## App Store page (related)
 
-The **App Store** route is **`#ainl-library`**. In the library UI, the collapsible section that lists synced programs on disk is titled **AI Native Lang Programs Available** (user-facing copy; implementation in `index_body.html` near `app-store-section-toggle-title`). Deeper layout for that page lives in `js/pages/ainl-library.js` and `components.css` (`app-store-*` classes). OOTB disk layout: [ootb-ainl.md](ootb-ainl.md).
+The **App Store** route is **`#ainl-library`**. Deeper layout: `js/pages/ainl-library.js` and `components.css` (`app-store-*` classes). OOTB disk layout: [ootb-ainl.md](ootb-ainl.md).
 
 ## Global notification bell (all routes)
 
-The **notification center** is not overview-specific: the bell lives in the root shell (`index_body.html` / `app.js` / `layout.css`) so it appears on every hash route. **`--notify-bell-reserve`** + **`.main-content`** right padding keep page chrome from sliding under the fixed bell; focus mode hides the bell and clears that padding. Behavior, API wiring, and QA checklist: [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
+The **notification center** is not overview-specific: the bell lives in the root shell so it appears on every hash route. Behavior and QA: [dashboard-testing.md](dashboard-testing.md#notification-center-bell).
 
 ## Manual verification
 
-See **docs/dashboard-testing.md** (manual browser checklist): confirm Quick actions appear after load (**seven** tiles), navigate to the correct tabs (including **Daemon & runtime** → `#runtime`), and that the loading state shows the skeleton then swaps to buttons without large layout shift.
+See **docs/dashboard-testing.md**: Quick actions (seven tiles), **Operations snapshot** (five integration tiles + optional kernel KPIs), the **four-tile** economics row, **LLM Providers** position (below panel grid, above activity), and loading skeleton behavior.

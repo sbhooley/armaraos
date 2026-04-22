@@ -14,6 +14,7 @@ This document is the **formal deliverable** for the “strict recovery pass” b
 | **API: compression + adaptive (Milestone 2 extension)** | Same endpoint may embed `adaptive_eco: { summary, replay }` for the same `window` | **Present** | Bundled in `CompressionSummary.adaptive_eco` when queries succeed; see `CompressionAdaptiveEcoBundle`. |
 | **Dashboard: Budget → Ultra Cost-Efficient** | Mode dropdown, compression table, window selector, semantic/savings trends | **Present** | `static/index_body.html` Budget tab |
 | **Semantic p50 / p95 in API** | Exposed under each mode in `modes` map | **Present** | `CompressionModeSummary` |
+| **Quota block events (7d on dashboard)** | `quota_block_events` table; `GET /api/status` + `GET /api/usage/summary` include `quota_enforcement` roll-ups for Get started / Analytics “saved / avoided” est. | **Present** (post–M1) | `openfang-memory` migration; kernel records on scheduler/daily budget blocks; not part of original M1 spec but required for **measured** vs **estimated** savings split in UI |
 | **Receipts / diff payload (chat)** | Savings %, optional compressed text for Eco Diff | **Present** | Chat + WS/API fields (see `prompt-compression-efficient-mode.md`) |
 
 ## Drift-prone files (audit)
@@ -30,6 +31,7 @@ This document is the **formal deliverable** for the “strict recovery pass” b
 
 - **Single source of truth:** Adaptive aggregates appear on **`GET /api/usage/adaptive-eco`**, **`GET /api/usage/adaptive-eco/replay`**, and (when enabled) inside **`GET /api/usage/compression`** under `adaptive_eco`. Clients may use either dedicated endpoints or the bundled object; numbers should match for the same `window` parameter.
 - **Pre-flight vs live DB:** Empty databases return zeros and empty mode maps; this is **consistent**, not missing.
+- **Compression vs quota “savings”:** `eco_*` roll-ups are **compression/eco** estimates; `quota_enforcement` counts **blocked** LLM turns from scheduler/budget rules. Together they power **est.** hero tiles; **measured** usage remains **`/api/usage/summary` → `totals`**. See [dashboard-overview-ui.md](dashboard-overview-ui.md#measured-vs-estimated-savings).
 
 ## Sign-off criteria
 

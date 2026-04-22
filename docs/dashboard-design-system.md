@@ -159,6 +159,10 @@ Do not introduce irregular spacing jumps (for example 3, 5, 7, 11, 13, 15) unles
 - At `<=768px` and `<=480px`, preserve rhythm by reducing density, not removing hierarchy.
 - Keep bell/header safe-area behavior intact (`--notify-bell-reserve` interactions).
 
+### Get started (Overview) — Operations snapshot
+- The **Operations snapshot** card uses **`overview-snapshot-card`** plus an **integration** strip (**`overview-snapshot-integrations`**, **`overview-snapshot-int`**, link modifier **`overview-snapshot-int--link`** for hash navigation) and, when observability is available, the existing KPI grid and foot (**`overview-snapshot-kpi*`**, **`overview-snapshot-foot*`**). Keep gold/accent for **focus and interactive** tiles, not full-card fills.
+- Full markup, data bindings, and visibility rules: **[`dashboard-overview-ui.md`](dashboard-overview-ui.md)** (*Operations snapshot card*).
+
 ## Required Workflow for Design Changes
 
 1. Read this file and related page docs before editing.
