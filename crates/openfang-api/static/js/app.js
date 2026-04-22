@@ -719,6 +719,8 @@ document.addEventListener('alpine:init', function() {
     chatUnreadCounts: {},
     /** agentId -> optional detail line for the notification center (e.g. kernel message preview). */
     chatUnreadPreview: {},
+    /** agentId -> last unread bump timestamp (ms epoch), used for auto-decay. */
+    chatUnreadLastTs: {},
     /** agentId -> last seen assistant_message_count from GET .../session/digest (poll + dedupe). */
     chatAssistantBaseline: {},
 
@@ -839,6 +841,9 @@ document.addEventListener('alpine:init', function() {
       var id0 = String(agentId);
       next[id0] = (next[id0] || 0) + 1;
       this.chatUnreadCounts = next;
+      var tsm = Object.assign({}, this.chatUnreadLastTs || {});
+      tsm[id0] = Date.now();
+      this.chatUnreadLastTs = tsm;
       this.updateTabTitle();
       try {
         var nctr = Alpine.store('notifyCenter');
@@ -869,10 +874,76 @@ document.addEventListener('alpine:init', function() {
       var next = Object.assign({}, prev);
       delete next[id0];
       this.chatUnreadCounts = next;
+      var ts2 = Object.assign({}, this.chatUnreadLastTs || {});
+      delete ts2[id0];
+      this.chatUnreadLastTs = ts2;
       this.updateTabTitle();
       try {
         Alpine.store('notifyCenter').syncChatUnreadRows();
       } catch (e2) { /* ignore */ }
+    },
+
+    clearAllChatUnread() {
+      this.chatUnreadCounts = {};
+      this.chatUnreadPreview = {};
+      this.chatUnreadLastTs = {};
+      this.updateTabTitle();
+      try {
+        Alpine.store('notifyCenter').syncChatUnreadRows();
+      } catch (e) { /* ignore */ }
+    },
+
+    clearFleetStatusUnread() {
+      this.clearAllChatUnread();
+    },
+
+    decayChatUnreadBadges() {
+      var counts = this.chatUnreadCounts || {};
+      var keys = Object.keys(counts);
+      if (!keys.length) return;
+
+      // If no user-facing agents are currently running, stale fleet/title unread badges
+      // should clear automatically.
+      var agents = this.primaryAgentsForSidebar();
+      var running = 0;
+      for (var i = 0; i < agents.length; i++) {
+        if (String((agents[i] && agents[i].state) || '') === 'Running') running += 1;
+      }
+      if (running === 0) {
+        this.clearAllChatUnread();
+        return;
+      }
+
+      var now = Date.now();
+      var maxAgeMs = 120000;
+      var last = this.chatUnreadLastTs || {};
+      var nextCounts = Object.assign({}, counts);
+      var nextPrev = Object.assign({}, this.chatUnreadPreview || {});
+      var nextTs = Object.assign({}, last);
+      var changed = false;
+      for (var j = 0; j < keys.length; j++) {
+        var aid = keys[j];
+        var ts = Number(last[aid]) || 0;
+        if (ts <= 0) {
+          nextTs[aid] = now;
+          changed = true;
+          continue;
+        }
+        if ((now - ts) >= maxAgeMs && !this.isChatSurfaceActiveForAgent(aid)) {
+          delete nextCounts[aid];
+          delete nextPrev[aid];
+          delete nextTs[aid];
+          changed = true;
+        }
+      }
+      if (!changed) return;
+      this.chatUnreadCounts = nextCounts;
+      this.chatUnreadPreview = nextPrev;
+      this.chatUnreadLastTs = nextTs;
+      this.updateTabTitle();
+      try {
+        Alpine.store('notifyCenter').syncChatUnreadRows();
+      } catch (e3) { /* ignore */ }
     },
 
     updateTabTitle() {
@@ -2176,6 +2247,7 @@ function app() {
       } catch (eUnr) { /* ignore */ }
       setInterval(function() {
         self.pollStatus();
+        try { Alpine.store('app').decayChatUnreadBadges(); } catch (eDecay) { /* ignore */ }
         Alpine.store('app').refreshApprovals();
         OpenFangAPI.get('/api/budget')
           .then(function(b) {

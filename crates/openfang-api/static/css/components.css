@@ -9050,6 +9050,7 @@ button.tool-card-header {
 .agent-vitals-badge-stabilize { margin-left: 6px; }
 .agent-vitals-badge-demo { margin-left: 4px; }
 .agent-vitals-system-offset { margin-top: 22px; }
+.fleet-unread-badge-clickable { cursor: pointer; }
 
 /* 4K recording tuning: preserve readability and breathing room */
 @media (min-width: 2560px) {

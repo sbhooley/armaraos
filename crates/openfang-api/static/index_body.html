@@ -1979,11 +1979,12 @@
                   <div class="fleet-status-title-wrap">
                     <h2 class="fleet-status-title">Fleet Status</h2>
                     <span
-                      class="nav-unread-badge"
                       x-show="$store.app.chatUnreadTotal > 0"
                       x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal"
                       title="Unread chat activity"
                       role="status"
+                      class="nav-unread-badge fleet-unread-badge-clickable"
+                      @click="$store.app.clearFleetStatusUnread()"
                     ></span>
                   </div>
                   <p class="fleet-status-sub all-agents-page-header-sub">Live agent health</p>
