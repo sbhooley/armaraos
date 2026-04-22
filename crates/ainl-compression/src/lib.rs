@@ -234,6 +234,18 @@ impl Compressed {
     }
 }
 
+/// Heuristic token estimate (~4 chars per token, +1 minimum).
+///
+/// Public alias of the internal `tok` helper so other AINL crates
+/// (notably [`ainl-context-compiler`](https://docs.rs/ainl-context-compiler)) can avoid
+/// duplicating the heuristic. Embedding-free and dependency-light by design — for a real
+/// tokenizer count, use a tiktoken/bpe crate at the host layer.
+#[inline]
+#[must_use]
+pub fn tokenize_estimate(s: &str) -> usize {
+    tok(s)
+}
+
 fn tok(s: &str) -> usize {
     s.len() / 4 + 1
 }

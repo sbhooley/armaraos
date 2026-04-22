@@ -57,12 +57,15 @@
 //! - **Failure** (`FailureNode`): typed failures (e.g. loop guard) with optional FTS search
 //!   ([`GraphMemory::search_failures_for_agent`]).
 
+pub mod anchored_summary;
 pub mod node;
 pub mod query;
 pub mod snapshot;
 pub mod store;
 pub mod trajectory_table;
 mod trajectory_persist;
+
+pub use anchored_summary::{anchored_summary_id, ANCHORED_SUMMARY_TAG};
 
 pub use trajectory_persist::{
     persist_trajectory_coarse_tools, persist_trajectory_for_episode, trajectory_env_enabled,

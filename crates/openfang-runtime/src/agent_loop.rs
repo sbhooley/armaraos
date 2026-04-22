@@ -808,6 +808,12 @@ pub struct AgentLoopResult {
     pub ainl_runtime_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry>,
 }
 
+// Note: whole-prompt compression telemetry from `ainl-context-compiler` is intentionally
+// surfaced through the side-channel module [`crate::compose_telemetry`] rather than
+// extending `AgentLoopResult`. This keeps the public result type stable across the M1
+// rollout (Phase 6 of `SELF_LEARNING_INTEGRATION_MAP.md`) — see that module for the
+// `record_compose_turn` / `take_compose_turn` API the kernel reads.
+
 /// Check whether a tool call is missing any required parameters.
 ///
 /// Reads the JSON Schema `required` array from the tool definition and returns
@@ -1588,6 +1594,23 @@ pub async fn run_agent_loop(
         // to return empty responses (input_tokens=0).
         messages = crate::session_repair::validate_and_repair(&messages);
     }
+
+    // Whole-prompt compression telemetry (M1 — Phase 6 of `SELF_LEARNING_INTEGRATION_MAP.md`).
+    //
+    // Runs in *measurement mode*: feed the assembled system prompt + history + current user
+    // message through `ainl_context_compiler` to compute accurate whole-prompt
+    // original/compressed token estimates, then stash them in the `compose_telemetry`
+    // side-channel for the kernel to consume after this loop returns. We deliberately do
+    // *not* swap the LLM-bound `messages` for the composed output yet — that's the M2 step.
+    //
+    // Failure here is silent (logged at debug) and the kernel falls back to the prior
+    // user-message-only estimation path, so this can never break a turn.
+    crate::compose_telemetry::measure_and_record(
+        agent_id_str.as_str(),
+        &system_prompt,
+        &messages,
+        user_message,
+    );
 
     // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
     let max_iterations = manifest
@@ -4237,6 +4260,16 @@ pub async fn run_agent_loop_streaming(
         // to return empty responses (input_tokens=0).
         messages = crate::session_repair::validate_and_repair(&messages);
     }
+
+    // Whole-prompt compression telemetry (M1 — Phase 6 of `SELF_LEARNING_INTEGRATION_MAP.md`).
+    // See the matching block in `run_agent_loop` for full context. Same measurement-only
+    // semantics — the streaming loop never has its `messages` mutated by the compiler in M1.
+    crate::compose_telemetry::measure_and_record(
+        agent_id_str.as_str(),
+        &system_prompt,
+        &messages,
+        user_message,
+    );
 
     // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
     let max_iterations = manifest

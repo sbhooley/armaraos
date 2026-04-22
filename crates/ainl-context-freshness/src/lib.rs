@@ -1,4 +1,9 @@
 //! Pure functions for [`ContextFreshness`](ainl_contracts::ContextFreshness) and execution gating.
+//!
+//! See also: [`ainl-context-compiler`](https://docs.rs/ainl-context-compiler) for LLM
+//! context-window assembly (different lifecycle phase — this crate gates *tool execution* based
+//! on repo-knowledge currency; the compiler crate assembles *prompt bytes* sent to the LLM).
+//! Both crates can be used independently or together.
 
 use ainl_contracts::{ContextFreshness, ImpactDecision};
 

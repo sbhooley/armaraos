@@ -30,6 +30,43 @@ pub mod telemetry {
     pub const COMPRESSION_CACHE_HIT: &str = "compression_cache_hit";
     pub const PERSONA_AXIS_DELTA: &str = "persona_axis_delta";
     pub const VITALS_GATE_AT_TURN: &str = "vitals_gate_at_turn";
+    /// Context-compiler suite (`ainl-context-compiler`, Phase 6 of SELF_LEARNING_INTEGRATION_MAP).
+    /// Histogram/counter: a single `compose()` call summary.
+    pub const CONTEXT_COMPILER_COMPOSE: &str = "context_compiler_compose";
+    /// Counter: tier upgraded mid-session (e.g. heuristic → heuristic_summarization).
+    pub const CONTEXT_COMPILER_TIER_UPGRADED: &str = "context_compiler_tier_upgraded";
+    /// Counter: summarizer call failed and the orchestrator auto-degraded for that turn.
+    pub const CONTEXT_COMPILER_SUMMARIZER_FAILED: &str = "context_compiler_summarizer_failed";
+    /// Counter: budget exceeded after best-effort compaction (safety-net truncation applied).
+    pub const CONTEXT_COMPILER_BUDGET_EXCEEDED: &str = "context_compiler_budget_exceeded";
+    /// Counter: a single segment was emitted into the composed prompt.
+    pub const CONTEXT_COMPILER_BLOCK_EMITTED: &str = "context_compiler_block_emitted";
+}
+
+/// Context-compiler shared vocabulary (Phase 6 of SELF_LEARNING_INTEGRATION_MAP §15.1).
+///
+/// Lets other AINL hosts read context-compiler telemetry without taking a hard dependency on the
+/// `ainl-context-compiler` crate itself. The strings here intentionally mirror the variant names
+/// in `ainl_context_compiler::{SegmentKind, Tier}`.
+pub mod context_compiler {
+    /// Stable lowercase labels for `SegmentKind` (mirrors the crate enum).
+    pub mod segment_kind {
+        pub const SYSTEM_PROMPT: &str = "system_prompt";
+        pub const OLDER_TURN: &str = "older_turn";
+        pub const RECENT_TURN: &str = "recent_turn";
+        pub const TOOL_DEFINITIONS: &str = "tool_definitions";
+        pub const TOOL_RESULT: &str = "tool_result";
+        pub const USER_PROMPT: &str = "user_prompt";
+        pub const ANCHORED_SUMMARY_RECALL: &str = "anchored_summary_recall";
+        pub const MEMORY_BLOCK: &str = "memory_block";
+    }
+
+    /// Stable lowercase labels for `Tier`.
+    pub mod tier {
+        pub const HEURISTIC: &str = "heuristic";
+        pub const HEURISTIC_SUMMARIZATION: &str = "heuristic_summarization";
+        pub const HEURISTIC_SUMMARIZATION_EMBEDDING: &str = "heuristic_summarization_embedding";
+    }
 }
 
 /// Version for JSON serialization of policy contract payloads (bump on breaking enum changes).

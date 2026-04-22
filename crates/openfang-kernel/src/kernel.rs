@@ -4164,13 +4164,25 @@ impl OpenFangKernel {
             .and_then(|v| v.as_str())
             .unwrap_or("off")
             .to_ascii_lowercase();
-        let original_tokens_est = (message_with_links.len() / 4 + 1) as u64;
-        let compressed_tokens_est = result
-            .compressed_input
-            .as_ref()
-            .map(|s| (s.len() / 4 + 1) as u64)
-            .unwrap_or(original_tokens_est);
+        // Same whole-prompt preference as the async `spawn` turn handler — see
+        // `openfang_runtime::compose_telemetry` + `run_agent_loop` (M1 measurement).
+        let compose_snapshot =
+            openfang_runtime::compose_telemetry::take_compose_turn(&agent_id.to_string());
+        let (original_tokens_est, compressed_tokens_est) = if let Some(snap) =
+            compose_snapshot.as_ref()
+        {
+            (snap.snapshot.original_tokens, snap.snapshot.compressed_tokens)
+        } else {
+            let orig = (message_with_links.len() / 4 + 1) as u64;
+            let comp = result
+                .compressed_input
+                .as_ref()
+                .map(|s| (s.len() / 4 + 1) as u64)
+                .unwrap_or(orig);
+            (orig, comp)
+        };
         let input_tokens_saved = original_tokens_est.saturating_sub(compressed_tokens_est);
+        let _ = compose_snapshot;
         let (input_price, est_input_usd) = {
             let catalog = self
                 .model_catalog

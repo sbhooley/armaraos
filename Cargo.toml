@@ -24,6 +24,7 @@ members = [
     "crates/ainl-contracts",
     "crates/ainl-repo-intel",
     "crates/ainl-context-freshness",
+    "crates/ainl-context-compiler",
     "crates/ainl-impact-policy",
     "crates/ainl-trajectory",
     "xtask",

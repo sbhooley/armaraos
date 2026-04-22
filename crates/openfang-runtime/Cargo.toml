@@ -22,6 +22,7 @@ ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
 ainl-contracts = { path = "../ainl-contracts" }
 ainl-repo-intel = { path = "../ainl-repo-intel" }
 ainl-context-freshness = { path = "../ainl-context-freshness" }
+ainl-context-compiler = { path = "../ainl-context-compiler" }
 ainl-impact-policy = { path = "../ainl-impact-policy" }
 armara-provider-api = { path = "../../../ainl-inference-server/crates/armara-provider-api" }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }

@@ -106,6 +106,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainl-context-compiler"
+version = "0.1.0"
+dependencies = [
+ "ainl-compression",
+ "ainl-context-freshness",
+ "ainl-contracts",
+ "ainl-memory",
+ "ainl-semantic-tagger",
+ "ainl-trajectory",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ainl-context-freshness"
 version = "0.1.0"
 dependencies = [
@@ -4842,6 +4857,7 @@ version = "0.7.5"
 dependencies = [
  "ainl-agent-snapshot",
  "ainl-compression",
+ "ainl-context-compiler",
  "ainl-context-freshness",
  "ainl-contracts",
  "ainl-graph-extractor",

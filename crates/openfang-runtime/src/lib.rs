@@ -93,6 +93,7 @@ pub mod document_tools;
 pub mod drivers;
 pub mod eco_counterfactual;
 pub mod eco_mode_resolver;
+pub mod compose_telemetry;
 pub(crate) mod eco_telemetry;
 pub mod embedding;
 pub mod graceful_shutdown;

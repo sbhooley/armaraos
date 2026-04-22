@@ -279,18 +279,22 @@ function agentsPage() {
     _fleetInt: null,
     _fleetDemoInt: null,
     _activitySyncInt: null,
+    _idlePulseInt: null,
+    _activePulseInt: null,
     _demoKey: null,
     _tweenRaf: null,
     _fleetInFlight: false,
     _graphGen: 0,
     _prevToolByAgent: {},
     _prevGraphNodeByAgent: {},
+    _prevPhaseByAgent: {},
     _activitySeenTsByAgent: {},
     usageByAgent: {},
     graphVitalsByAgent: {},
     graphNodeCountByAgent: {},
     agentPinging: {},
     activityFeedByAgent: {},
+    _idlePulseTick: 0,
 
     /** Usage series for small sparkline / activity (0–1 normalized). */
     fleetActivityNorm: 0.35,
@@ -502,6 +506,54 @@ function agentsPage() {
       var ps = Object.assign({}, this.perAgentSparks);
       ps[id] = ar;
       this.perAgentSparks = ps;
+    },
+
+    agentTweakSparkToward(agentId, target, jitter) {
+      var id = String(agentId);
+      var m = (this.perAgentActivityNorm && this.perAgentActivityNorm[id]) != null
+        ? this.perAgentActivityNorm[id]
+        : 0.25;
+      var t = Math.max(0.02, Math.min(1, Number(target) || 0.25));
+      var j = Math.max(0, Math.min(0.2, Number(jitter) || 0));
+      var n = (Math.random() * 2 - 1) * j;
+      var next = 0.68 * m + 0.32 * Math.max(0.02, Math.min(1, t + n));
+      var nextM = Object.assign({}, this.perAgentActivityNorm || {});
+      nextM[id] = next;
+      this.perAgentActivityNorm = nextM;
+      var ar = (this.perAgentSparks && this.perAgentSparks[id]) ? this.perAgentSparks[id].concat() : [];
+      ar.push(next);
+      if (ar.length > 20) ar = ar.slice(-20, ar.length);
+      var ps = Object.assign({}, this.perAgentSparks);
+      ps[id] = ar;
+      this.perAgentSparks = ps;
+    },
+
+    phaseSparkTarget: function(phase) {
+      if (phase === 'tool') return 0.84;
+      if (phase === 'thinking') return 0.72;
+      if (phase === 'streaming') return 0.9;
+      if (phase === 'running') return 0.6;
+      if (phase === 'waiting') return 0.34;
+      if (phase === 'error') return 0.8;
+      return 0.28;
+    },
+
+    trackAgentPhaseTransitions: function() {
+      var prev = Object.assign({}, this._prevPhaseByAgent || {});
+      var next = Object.assign({}, prev);
+      var self = this;
+      (this.agents || []).forEach(function(a) {
+        if (!a || !a.id) return;
+        var aid = String(a.id);
+        var cur = self.agentCurrentPhaseClass(a);
+        var was = prev[aid];
+        next[aid] = cur;
+        if (was != null && was !== cur) {
+          self.fleetOnAgentPing(aid, 1);
+          self.agentTweakSparkToward(aid, self.phaseSparkTarget(cur), 0.06);
+        }
+      });
+      this._prevPhaseByAgent = next;
     },
 
     nudgeDisplayActive: function() {
@@ -716,6 +768,7 @@ function agentsPage() {
         }
       }
       this.usageByAgent = m;
+      this.trackAgentPhaseTransitions();
       this.nudgeDisplayActive();
       this._graphGen = (this._graphGen + 1) % 3;
       if (this._graphGen === 0) {
@@ -878,10 +931,57 @@ function agentsPage() {
         else if (age >= 180) freshnessBoost = -8;
       }
       var pingBoost = (agent && agent.id && this.agentPinging && this.agentPinging[agent.id]) ? 12 : 0;
-      var out = Math.round(base + freshnessBoost + pingBoost);
+      var idleWave = 0;
+      if (ph === 'idle' || ph === 'waiting') {
+        var sid = String((agent && agent.id) || '');
+        var seed = 0;
+        for (var i = 0; i < sid.length; i++) seed = (seed + sid.charCodeAt(i)) % 97;
+        var t = Number(this._idlePulseTick || 0);
+        // Two low-amplitude waves with agent-specific phase offsets keep idle bars moving
+        // at varied intervals instead of sitting at a fixed midpoint.
+        idleWave =
+          (Math.sin((t + seed) / (2.6 + (seed % 4) * 0.35)) * 4.6) +
+          (Math.sin((t + seed * 0.7) / (4.8 + (seed % 5) * 0.42)) * 2.9);
+      }
+      var activeWave = 0;
+      if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
+        var sid2 = String((agent && agent.id) || '');
+        var seed2 = 0;
+        for (var j = 0; j < sid2.length; j++) seed2 = (seed2 + sid2.charCodeAt(j)) % 131;
+        var t2 = Number(this._idlePulseTick || 0);
+        // Subtle motion while actively working keeps the monitor alive during long calls.
+        activeWave =
+          (Math.sin((t2 + seed2) / (2.1 + (seed2 % 3) * 0.25)) * 4.2) +
+          (Math.sin((t2 + seed2 * 0.55) / (5.4 + (seed2 % 4) * 0.35)) * 2.2);
+      }
+      var out = Math.round(base + freshnessBoost + pingBoost + idleWave + activeWave);
       if (out < 16) out = 16;
       if (out > 100) out = 100;
       return out;
+    },
+
+    tickActivePhaseMicroActivity: function() {
+      var self = this;
+      var list = (this.agents || []).filter(function(a) {
+        return a && a.id && String(a.state || '') === 'Running';
+      });
+      list.forEach(function(a) {
+        var ph = self.agentCurrentPhaseClass(a);
+        var ts = null;
+        var entry = self.getAgentActivityEntry(a);
+        if (entry && entry.ts) ts = Number(entry.ts) || null;
+        if (!ts && a.last_active) {
+          try { ts = new Date(a.last_active).getTime(); } catch (e) { ts = null; }
+        }
+        var ageSec = ts ? Math.max(0, Math.floor((Date.now() - ts) / 1000)) : 9999;
+        if (ageSec > 300) return;
+        if (ph === 'tool') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.06);
+        else if (ph === 'thinking') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.055);
+        else if (ph === 'streaming') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.045);
+        else if (ph === 'running') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.04);
+        else if (ph === 'waiting' || ph === 'idle') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.025);
+      });
+      this.trackAgentPhaseTransitions();
     },
 
     syncAgentActivityFeeds: function() {
@@ -942,6 +1042,7 @@ function agentsPage() {
     fleetStartPeriodic: function() {
       this.fleetLastCost = null;
       this._fleetLastSummaryCalls = 0;
+      this._prevPhaseByAgent = {};
       this.displayActiveCount = this.runningCount;
       var self = this;
       this.refreshFleetVitals();
@@ -954,6 +1055,8 @@ function agentsPage() {
       if (this._fleetInt) { try { clearInterval(this._fleetInt); } catch (e) { /* ignore */ } this._fleetInt = null; }
       if (this._fleetDemoInt) { try { clearInterval(this._fleetDemoInt); } catch (e) { /* ignore */ } this._fleetDemoInt = null; }
       if (this._activitySyncInt) { try { clearInterval(this._activitySyncInt); } catch (e0) { /* ignore */ } this._activitySyncInt = null; }
+      if (this._idlePulseInt) { try { clearInterval(this._idlePulseInt); } catch (e00) { /* ignore */ } this._idlePulseInt = null; }
+      if (this._activePulseInt) { try { clearInterval(this._activePulseInt); } catch (e000) { /* ignore */ } this._activePulseInt = null; }
       if (this._tweenRaf) { try { cancelAnimationFrame(this._tweenRaf); } catch (e) { /* ignore */ } this._tweenRaf = null; }
       if (this._demoKey) { try { document.removeEventListener('keydown', this._demoKey, true); } catch (e) { /* ignore */ } this._demoKey = null; }
     },
@@ -1056,6 +1159,14 @@ function agentsPage() {
         self.fleetStartPeriodic();
         if (self._activitySyncInt) { try { clearInterval(self._activitySyncInt); } catch (eA) { /* ignore */ } self._activitySyncInt = null; }
         self._activitySyncInt = setInterval(function() { self.syncAgentActivityFeeds(); }, 650);
+        if (self._idlePulseInt) { try { clearInterval(self._idlePulseInt); } catch (eB) { /* ignore */ } self._idlePulseInt = null; }
+        self._idlePulseInt = setInterval(function() {
+          self._idlePulseTick = (self._idlePulseTick + 1) % 10000;
+        }, 1200);
+        if (self._activePulseInt) { try { clearInterval(self._activePulseInt); } catch (eC) { /* ignore */ } self._activePulseInt = null; }
+        self._activePulseInt = setInterval(function() {
+          self.tickActivePhaseMicroActivity();
+        }, 1100);
         if (self.demoMode) self.fleetStartDemo();
       });
       this.$watch('activeChatAgent', function(v) {

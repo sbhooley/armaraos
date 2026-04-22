@@ -1,0 +1,49 @@
+[package]
+name = "ainl-context-compiler"
+description = "LLM context-window assembly: multi-segment, role-aware, question-aware prompt orchestration for AINL hosts. Phase 6 of SELF_LEARNING_INTEGRATION_MAP. Distinct from `ainl-context-freshness` which gates tool execution based on repo-knowledge currency."
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ainl-contracts = { path = "../ainl-contracts" }
+ainl-compression = { path = "../ainl-compression" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+ainl-context-freshness = { path = "../ainl-context-freshness", optional = true }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", optional = true }
+ainl-memory = { path = "../ainl-memory", optional = true }
+ainl-trajectory = { path = "../ainl-trajectory", optional = true }
+
+[features]
+# Sources whose data already exists in M1.
+# `sources-bulk` covers the prompt bulk: System / User / RecentTurn / OlderTurn / ToolDefinitions / ToolResult.
+# `sources-graph-memory` covers the existing prompt blocks hoisted from openfang-runtime
+# (recent_attempts / known_facts / known_conflicts / suggested_procedure / active_persona).
+# Sources requiring crates not yet built stay off by default and light up automatically when those
+# crates land (per SELF_LEARNING_INTEGRATION_MAP §15.5 cargo-feature pattern).
+default = [
+    "sources-bulk",
+    "sources-graph-memory",
+    "freshness",
+    "tagger",
+    "vitals",
+]
+
+sources-bulk = []
+sources-graph-memory = ["dep:ainl-memory"]
+sources-failure-warnings = []                            # off until ainl-failure-learning crate lands
+sources-suggested-patterns = []                          # off until ainl-improvement-proposals crate lands
+sources-trajectory-recap = ["dep:ainl-trajectory"]       # opt-in (crate exists but signal source not wired in M1)
+
+freshness = ["dep:ainl-context-freshness"]
+tagger = ["dep:ainl-semantic-tagger"]
+vitals = []                                               # always available via ainl-contracts
+
+# Reserved for M2 / M3 — the trait surfaces ship in M1 (so callers can pass a sink); their
+# implementations land later.
+summarizer = []
+embedder = []
