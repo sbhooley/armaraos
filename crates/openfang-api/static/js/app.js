@@ -675,6 +675,9 @@ document.addEventListener('alpine:init', function() {
       } catch (e) { /* ignore */ }
       return 'all';
     })(),
+    /** Last full ui-prefs payload loaded from disk (preserves unknown keys on save). */
+    _uiPrefsRaw: {},
+    _uiPrefsLoaded: false,
     normalizeEcoMode(mode) {
       return (mode === 'off' || mode === 'balanced' || mode === 'aggressive') ? mode : 'off';
     },
@@ -883,6 +886,8 @@ document.addEventListener('alpine:init', function() {
     async loadUiPrefs() {
       try {
         var prefs = await OpenFangAPI.get('/api/ui-prefs');
+        this._uiPrefsRaw = (prefs && typeof prefs === 'object' && !Array.isArray(prefs)) ? Object.assign({}, prefs) : {};
+        this._uiPrefsLoaded = true;
         if (Array.isArray(prefs.pinned_agents)) {
           this.pinnedAgentIds = prefs.pinned_agents;
           try { localStorage.setItem('armaraos-pinned-agents', JSON.stringify(prefs.pinned_agents)); } catch(e) { /* ignore */ }
@@ -906,17 +911,65 @@ document.addEventListener('alpine:init', function() {
           try { localStorage.setItem('armaraos-notify-chat-replies', ncr); } catch (e4) { /* ignore */ }
         }
         try { window.dispatchEvent(new CustomEvent('armaraos-ui-prefs-loaded')); } catch(e3) { /* ignore */ }
-      } catch(e) { /* keep localStorage-seeded values on failure */ }
+      } catch(e) {
+        this._uiPrefsLoaded = false;
+        /* keep localStorage-seeded values on failure */
+      }
     },
 
     /** Persist current UI prefs to the server (fire-and-forget). */
     _saveUiPrefs() {
-      var prefs = {
+      var base = (this._uiPrefsRaw && typeof this._uiPrefsRaw === 'object' && !Array.isArray(this._uiPrefsRaw))
+        ? Object.assign({}, this._uiPrefsRaw)
+        : {};
+      var prefs = Object.assign(base, {
         pinned_agents: this.pinnedAgentIds || [],
         agent_eco_modes: this.ecoModesByAgent || {},
         notify_chat_replies: this.normalizeNotifyChatReplies(this.notifyChatReplies)
-      };
+      });
+      this._uiPrefsRaw = Object.assign({}, prefs);
+      var self = this;
+      if (!this._uiPrefsLoaded) {
+        OpenFangAPI.get('/api/ui-prefs')
+          .then(function(remote) {
+            var rb = (remote && typeof remote === 'object' && !Array.isArray(remote)) ? remote : {};
+            var merged = Object.assign({}, rb, prefs);
+            self._uiPrefsRaw = Object.assign({}, merged);
+            self._uiPrefsLoaded = true;
+            return OpenFangAPI.put('/api/ui-prefs', merged);
+          })
+          .catch(function() {
+            return OpenFangAPI.put('/api/ui-prefs', prefs).catch(function() { /* ignore */ });
+          });
+        return;
+      }
       OpenFangAPI.put('/api/ui-prefs', prefs).catch(function() { /* ignore */ });
+    },
+
+    /** Merge a partial object into ui-prefs and persist, preserving all unrelated keys. */
+    saveUiPrefsPatch(patch) {
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return;
+      var base = (this._uiPrefsRaw && typeof this._uiPrefsRaw === 'object' && !Array.isArray(this._uiPrefsRaw))
+        ? Object.assign({}, this._uiPrefsRaw)
+        : {};
+      var next = Object.assign(base, patch);
+      this._uiPrefsRaw = Object.assign({}, next);
+      var self = this;
+      if (!this._uiPrefsLoaded) {
+        OpenFangAPI.get('/api/ui-prefs')
+          .then(function(remote) {
+            var rb = (remote && typeof remote === 'object' && !Array.isArray(remote)) ? remote : {};
+            var merged = Object.assign({}, rb, patch);
+            self._uiPrefsRaw = Object.assign({}, merged);
+            self._uiPrefsLoaded = true;
+            return OpenFangAPI.put('/api/ui-prefs', merged);
+          })
+          .catch(function() {
+            return OpenFangAPI.put('/api/ui-prefs', next).catch(function() { /* ignore */ });
+          });
+        return;
+      }
+      OpenFangAPI.put('/api/ui-prefs', next).catch(function() { /* ignore */ });
     },
 
     /** Pin or unpin an agent in the Quick Open sidebar list. */

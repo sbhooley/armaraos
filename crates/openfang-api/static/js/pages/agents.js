@@ -300,6 +300,7 @@ function agentsPage() {
     _agentToolByHour: {},
     _agentNodeByHour: {},
     _agentHourlyPersistTimer: null,
+    _hourlyUiPrefsPersistTimer: null,
     usageByAgent: {},
     graphVitalsByAgent: {},
     graphNodeCountByAgent: {},
@@ -569,6 +570,16 @@ function agentsPage() {
             saved_at: Date.now()
           }));
         } catch (e) { /* ignore */ }
+        try {
+          localStorage.setItem('armaraos-fleet-hourly-v1', JSON.stringify({
+            tasks: self._fleetTasksByHour || {},
+            nodes: self._fleetNodesByHour || {},
+            spend: self._fleetSpendByHour || {},
+            saved: self._fleetSavedByHour || {},
+            saved_at: Date.now()
+          }));
+        } catch (e2) { /* ignore */ }
+        self.schedulePersistHourlyUiPrefs();
       }, 300);
     },
 
@@ -585,6 +596,91 @@ function agentsPage() {
         this._agentToolByHour = {};
         this._agentNodeByHour = {};
       }
+      try {
+        var rawFleet = localStorage.getItem('armaraos-fleet-hourly-v1');
+        if (rawFleet) {
+          var f = JSON.parse(rawFleet);
+          this._fleetTasksByHour = f && f.tasks ? f.tasks : {};
+          this._fleetNodesByHour = f && f.nodes ? f.nodes : {};
+          this._fleetSpendByHour = f && f.spend ? f.spend : {};
+          this._fleetSavedByHour = f && f.saved ? f.saved : {};
+        }
+      } catch (e3) {
+        this._fleetTasksByHour = this._fleetTasksByHour || {};
+        this._fleetNodesByHour = this._fleetNodesByHour || {};
+        this._fleetSpendByHour = this._fleetSpendByHour || {};
+        this._fleetSavedByHour = this._fleetSavedByHour || {};
+      }
+    },
+
+    schedulePersistHourlyUiPrefs: function() {
+      var self = this;
+      if (this._hourlyUiPrefsPersistTimer) return;
+      this._hourlyUiPrefsPersistTimer = setTimeout(function() {
+        self._hourlyUiPrefsPersistTimer = null;
+        self.persistHourlyUiPrefs();
+      }, 2200);
+    },
+
+    persistHourlyUiPrefs: function() {
+      var payload = {
+        fleet_hourly_metrics_v1: {
+          tasks: this._fleetTasksByHour || {},
+          nodes: this._fleetNodesByHour || {},
+          spend: this._fleetSpendByHour || {},
+          saved: this._fleetSavedByHour || {},
+          saved_at: Date.now()
+        },
+        agent_hourly_activity_v1: {
+          status: this._agentStatusByHour || {},
+          tool: this._agentToolByHour || {},
+          node: this._agentNodeByHour || {},
+          saved_at: Date.now()
+        }
+      };
+      try {
+        var appStore = Alpine.store('app');
+        if (appStore && typeof appStore.saveUiPrefsPatch === 'function') {
+          appStore.saveUiPrefsPatch(payload);
+          return;
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        OpenFangAPI.get('/api/ui-prefs')
+          .then(function(prefs) {
+            var base = (prefs && typeof prefs === 'object' && !Array.isArray(prefs)) ? prefs : {};
+            var next = Object.assign({}, base, payload);
+            return OpenFangAPI.put('/api/ui-prefs', next);
+          })
+          .catch(function() { return null; });
+      } catch (e2) { /* ignore */ }
+    },
+
+    loadPersistedHourlyUiPrefs: async function() {
+      try {
+        var prefs = await OpenFangAPI.get('/api/ui-prefs').catch(function() { return null; });
+        if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) return;
+        var fleet = prefs.fleet_hourly_metrics_v1;
+        if (fleet && typeof fleet === 'object' && !Array.isArray(fleet)) {
+          this._fleetTasksByHour = fleet.tasks ? this.fleetPruneHourlySeries(fleet.tasks) : this._fleetTasksByHour;
+          this._fleetNodesByHour = fleet.nodes ? this.fleetPruneHourlySeries(fleet.nodes) : this._fleetNodesByHour;
+          this._fleetSpendByHour = fleet.spend ? this.fleetPruneHourlySeries(fleet.spend) : this._fleetSpendByHour;
+          this._fleetSavedByHour = fleet.saved ? this.fleetPruneHourlySeries(fleet.saved) : this._fleetSavedByHour;
+        }
+        var agent = prefs.agent_hourly_activity_v1;
+        if (agent && typeof agent === 'object' && !Array.isArray(agent)) {
+          this._agentStatusByHour = agent.status ? agent.status : this._agentStatusByHour;
+          this._agentToolByHour = agent.tool ? agent.tool : this._agentToolByHour;
+          this._agentNodeByHour = agent.node ? agent.node : this._agentNodeByHour;
+        }
+        this.pruneAgentHourlyMaps();
+        this._fleetTasksByHour = this.fleetPruneHourlySeries(this._fleetTasksByHour);
+        this._fleetNodesByHour = this.fleetPruneHourlySeries(this._fleetNodesByHour);
+        this._fleetSpendByHour = this.fleetPruneHourlySeries(this._fleetSpendByHour);
+        this._fleetSavedByHour = this.fleetPruneHourlySeries(this._fleetSavedByHour);
+        this.fleetSpendToday = this.fleetSeriesTodayTotal(this._fleetSpendByHour);
+        this.fleetSavedToday = this.fleetSeriesTodayTotal(this._fleetSavedByHour);
+      } catch (e3) { /* ignore */ }
     },
 
     pruneAgentHourlyMaps: function() {
@@ -730,7 +826,7 @@ function agentsPage() {
 
     agentsFleetTweakSparks(fromCallsDelta) {
       var v = Math.max(0, Number(fromCallsDelta) || 0);
-      var s = 0.1 * Math.log1p(v) + 0.01;
+      var s = 0.22 * Math.log1p(v) + 0.08;
       s = Math.min(1, s);
       this.fleetActivityNorm = 0.65 * this.fleetActivityNorm + 0.35 * s;
       this.fleetSparks = this._pushSeries(this.fleetSparks, this.fleetActivityNorm, 32);
@@ -903,6 +999,10 @@ function agentsPage() {
     fleetOnAgentPing: function(aid, steps) {
       if (this.isReducedMotion()) return;
       if (steps == null || (typeof steps === 'number' && steps <= 0)) return;
+      var v = Math.max(0, Number(steps) || 0);
+      var spike = Math.min(1, 0.2 + (0.28 * Math.log1p(v)));
+      this.fleetActivityNorm = 0.56 * (Number(this.fleetActivityNorm) || 0.08) + 0.44 * spike;
+      this.fleetSparks = this._pushSeries(this.fleetSparks || [], this.fleetActivityNorm, 32);
       var o = Object.assign({}, this.agentPinging);
       o[aid] = true;
       this.agentPinging = o;
@@ -1044,6 +1144,7 @@ function agentsPage() {
       await Promise.all(toScan.map((function(id) {
         return this.loadGraphVitalsForAgent(String(id)).catch(function() { /* ignore */ });
       }).bind(this)));
+      this.schedulePersistAgentHourly();
       this._fleetInFlight = false;
     },
 
@@ -1172,12 +1273,12 @@ function agentsPage() {
 
     agentCurrentPhaseIntensity: function(agent) {
       var ph = this.agentCurrentPhaseClass(agent);
-      var base = 12;
+      var base = 25;
       if (ph === 'thinking') base = 58;
       else if (ph === 'tool') base = 74;
       else if (ph === 'streaming') base = 90;
       else if (ph === 'running') base = 46;
-      else if (ph === 'waiting') base = 24;
+      else if (ph === 'waiting') base = 28;
       else if (ph === 'error') base = 100;
 
       var ts = null;
@@ -1219,7 +1320,7 @@ function agentsPage() {
           (Math.sin((t2 + seed2 * 0.55) / (5.4 + (seed2 % 4) * 0.35)) * 2.2);
       }
       var out = Math.round(base + freshnessBoost + pingBoost + idleWave + activeWave);
-      if (out < 8) out = 8;
+      if (out < 25) out = 25;
       if (out > 100) out = 100;
       return out;
     },
@@ -1325,6 +1426,7 @@ function agentsPage() {
       if (this._idlePulseInt) { try { clearInterval(this._idlePulseInt); } catch (e00) { /* ignore */ } this._idlePulseInt = null; }
       if (this._activePulseInt) { try { clearInterval(this._activePulseInt); } catch (e000) { /* ignore */ } this._activePulseInt = null; }
       if (this._agentHourlyPersistTimer) { try { clearTimeout(this._agentHourlyPersistTimer); } catch (e0000) { /* ignore */ } this._agentHourlyPersistTimer = null; }
+      if (this._hourlyUiPrefsPersistTimer) { try { clearTimeout(this._hourlyUiPrefsPersistTimer); } catch (e0001) { /* ignore */ } this._hourlyUiPrefsPersistTimer = null; }
       if (this._tweenRaf) { try { cancelAnimationFrame(this._tweenRaf); } catch (e) { /* ignore */ } this._tweenRaf = null; }
       if (this._demoKey) { try { document.removeEventListener('keydown', this._demoKey, true); } catch (e) { /* ignore */ } this._demoKey = null; }
     },
@@ -1413,7 +1515,7 @@ function agentsPage() {
       this.applyDemoThemeIfNeeded();
       this.loadPersistedAgentHourly();
       this.pruneAgentHourlyMaps();
-      this.schedulePersistAgentHourly();
+      this.loadPersistedHourlyUiPrefs();
       this._demoKey = function(e) {
         if (e.ctrlKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
           e.preventDefault();

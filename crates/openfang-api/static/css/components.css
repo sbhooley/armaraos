@@ -8590,6 +8590,7 @@ button.tool-card-header {
   gap: 1px;
 }
 .agent-vitals-hourly-bar {
+  display: inline-block;
   width: 2px;
   min-height: 0;
   height: 0%;
