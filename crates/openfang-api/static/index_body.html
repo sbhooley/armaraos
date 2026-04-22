@@ -286,9 +286,17 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/><line x1="7" y1="19" x2="17" y2="19"/></svg></span>
               <span class="nav-label">Graph Memory</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'trajectories' }" @click="navigate('trajectories')" :aria-current="page === 'trajectories' ? 'page' : false" href="#trajectories" title="Trajectories &amp; learning events">
+            <a class="nav-item" :class="{ active: page === 'trajectories' }" @click="navigate('trajectories')" :aria-current="page === 'trajectories' ? 'page' : false" href="#trajectories" title="AINL trajectories (recorded runs)">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 17V9"/><path d="M12 17V5"/><path d="M17 17v-6"/></svg></span>
               <span class="nav-label">Trajectories</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'graph-failures' }" @click="navigate('graph-failures')" :aria-current="page === 'graph-failures' ? 'page' : false" href="#graph-failures" title="Typed failure nodes &amp; SSE">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg></span>
+              <span class="nav-label">Failures</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'graph-proposals' }" @click="navigate('graph-proposals')" :aria-current="page === 'graph-proposals' ? 'page' : false" href="#graph-proposals" title="Improvement proposals &amp; adoptions">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></span>
+              <span class="nav-label">Proposals</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'orchestration-traces' }" @click="navigate('orchestration-traces')" :aria-current="page === 'orchestration-traces' ? 'page' : false" href="#orchestration-traces" title="Orchestration traces">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="9"/></svg></span>
@@ -3848,15 +3856,16 @@
 
           <!-- TAB: MCP Servers -->
           <div x-show="tab === 'mcp'">
-            <div class="info-card mb-3" x-show="mcpHostReadiness != null" x-cloak>
+            <div class="info-card mb-3">
               <h4>Host tools for <code>google-workspace-mcp</code></h4>
               <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 8px">
-                This preset runs <code>uvx workspace-mcp</code> (PyPI <code>workspace-mcp</code>). You also need a Google Cloud OAuth <strong>client</strong> — enter ID (and usually secret) in the form fields when you install the preset below, or in <a href="#settings" @click.prevent="$store.app.navigate &amp;&amp; $store.app.navigate('settings'); sessionStorage.setItem('armaraos-settings-tab','tools');" class="text-accent" style="color:var(--accent)">Settings → Tools</a> for a dedicated panel.
+                This preset runs <code>uvx workspace-mcp</code> (PyPI <code>workspace-mcp</code>). You also need a Google Cloud OAuth <strong>client</strong> — enter Client ID and (if applicable) secret in the <strong>Preset examples</strong> form below, or in <a href="#settings" @click.prevent="goToSettingsTools()" class="text-accent" style="color:var(--accent)">Settings → Tools</a> for a dedicated panel that saves to the vault.
               </p>
-              <p class="text-xs mb-2" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available" style="color:var(--warn, #c9a227)">
+              <p class="text-xs text-dim mb-2" x-show="!mcpHostReadiness" x-cloak>Host status is still loading or could not be read; you can still configure OAuth and <code>uv</code> using the tools below.</p>
+              <p class="text-xs mb-2" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available" x-cloak style="color:var(--warn, #c9a227)">
                 <code>uvx</code> not on PATH. Install the <a href="https://docs.astral.sh/uv/" @click.prevent="armaraosOpenExternalUrl($event, 'https://docs.astral.sh/uv/')" class="text-accent" style="color:var(--accent)">uv</a> tool (adds <code>~/.local/bin/uvx</code>) or set <code>ARMARAOS_WORKSPACE_MCP_COMMAND</code> to a custom <code>workspace-mcp</code> launch. Optional: <code>ARMARAOS_AUTO_INSTALL_UV=1</code> on the daemon runs the installer at startup before MCP connects.
               </p>
-              <div class="flex flex-wrap gap-2 items-center" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available">
+              <div class="flex flex-wrap gap-2 items-center" x-show="!mcpHostReadiness || !mcpHostReadiness.uvx_available" x-cloak>
                 <button type="button" class="btn btn-primary btn-sm" @click="mcpBootstrapUv()" :disabled="mcpUvBootstrapBusy">
                   <span x-show="!mcpUvBootstrapBusy">Run uv installer (macOS / Linux)</span>
                   <span x-show="mcpUvBootstrapBusy" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
@@ -8728,7 +8737,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Trajectories</h2>
-            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Recent rows from <code class="text-xs">ainl_trajectories</code>, recent typed <code class="text-xs">failure</code> graph nodes (<code class="text-xs">GET /api/graph-memory/failures/recent</code>), plus a live feed of <strong>TrajectoryRecorded</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">trajectory</code> / <code class="text-xs">failure</code>), and <strong>FailureLearned</strong> on the kernel SSE bus.</p>
+            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Rows from <code class="text-xs">ainl_trajectories</code> via <code class="text-xs">GET /api/trajectories</code>, detail JSON on select, and a feed of <strong>TrajectoryRecorded</strong> / <strong>GraphMemoryWrite</strong> (<code class="text-xs">trajectory</code>) from the dashboard SSE bus (<code class="text-xs">armaraos-kernel-event</code>). Typed failures: <a class="text-xs" style="color:var(--accent)" href="#graph-failures">Failures</a>. Proposals: <a class="text-xs" style="color:var(--accent)" href="#graph-proposals">Proposals</a>.</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="refreshPanels()" aria-label="Agent for trajectories">
@@ -8736,68 +8745,218 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <option :value="a.id" x-text="(a.name || a.id) + ' · ' + a.id"></option>
               </template>
             </select>
-            <button type="button" class="btn btn-primary btn-sm" @click="refreshPanels()" :disabled="loading || failuresLoading">Refresh</button>
+            <button type="button" class="btn btn-primary btn-sm" @click="refreshPanels()" :disabled="loading">Refresh</button>
           </div>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:stretch">
-          <div class="card" style="padding:12px 14px;flex:1 1 320px;min-width:min(100%,320px)">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <h3 class="text-sm" style="margin:0;font-weight:600">Recorded trajectories</h3>
-              <span class="text-xs text-dim" x-text="trajectories.length + ' rows'"></span>
+        <details class="card" style="padding:10px 14px;margin:0 0 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)" @toggle="if ($event.target.open) { loadCompressionProfiles() }">
+          <summary class="text-xs" style="cursor:pointer;font-weight:600;list-style-position:outside">Per-project compression EMA (optional, <code class="text-xs">AINL_COMPRESSION_PROJECT_EMA</code>) — <code class="text-xs">GET /api/compression/project-profiles</code></summary>
+          <p class="text-dim text-xs" style="margin:8px 0 0;line-height:1.45">On-disk profiles under the agent data dir; open to fetch. Empty or error if feature off or no samples yet.</p>
+          <div class="text-xs" style="margin-top:8px" x-show="compressionLoading">Loading…</div>
+          <p class="text-xs" style="margin-top:8px;color:var(--error)" x-show="compressionError" x-text="compressionError"></p>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap" x-show="compressionJson && !compressionLoading">
+            <button type="button" class="btn btn-ghost btn-sm" @click="copyText('Copied JSON', JSON.stringify(compressionJson, null, 2))">Copy JSON</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="loadCompressionProfiles()">Reload</button>
+          </div>
+          <pre class="text-xs" style="margin:10px 0 0;padding:10px;border-radius:8px;background:var(--surface2);max-height:240px;overflow:auto;white-space:pre-wrap;word-break:break-word" x-show="compressionJson && !compressionLoading" x-text="compressionJson ? JSON.stringify(compressionJson, null, 2) : ''"></pre>
+        </details>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch">
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+              <h3 class="text-sm" style="margin:0;font-weight:600">Recorded</h3>
+              <span class="text-xs text-dim" x-text="(filteredTrajectories() || []).length + ' / ' + (trajectories || []).length"></span>
             </div>
+            <input type="search" class="form-input text-xs" style="width:100%;margin-bottom:8px;box-sizing:border-box" placeholder="Filter (id, episode, session, outcome, steps)…" x-model="filterText" autocomplete="off" aria-label="Filter trajectories" />
             <template x-if="loading">
               <p class="text-xs text-dim" style="margin:0">Loading…</p>
             </template>
-            <template x-if="!loading && trajectories.length === 0">
+            <template x-if="!loading && (trajectories || []).length === 0">
               <p class="text-xs text-dim" style="margin:0">No trajectory rows yet for this agent.</p>
             </template>
-            <div style="max-height:min(560px,calc(100vh - 220px));overflow:auto;display:flex;flex-direction:column;gap:6px">
-              <template x-for="row in trajectories" :key="row.id">
-                <div class="text-xs" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">
+            <div style="max-height:min(560px,calc(100vh - 320px));overflow:auto;display:flex;flex-direction:column;gap:6px">
+              <template x-for="row in filteredTrajectories()" :key="row.id">
+                <button type="button" class="text-left text-xs" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer" :style="selected && selected.id === row.id ? 'border-color:var(--accent);box-shadow:0 0 0 1px rgba(124,58,237,0.25)' : ''" @click="selectRow(row)">
                   <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
                     <span style="font-family:monospace;opacity:0.85" x-text="String(row.id || '').slice(0,8) + '…'"></span>
                     <span class="text-dim" x-text="row.recorded_at ? new Date(row.recorded_at * 1000).toLocaleString() : ''"></span>
                   </div>
-                  <div style="margin-top:4px" x-text="'Episode ' + String(row.episode_id || '').slice(0,8) + '… · ' + (Array.isArray(row.steps) ? row.steps.length : 0) + ' steps · ' + (row.outcome != null ? String(row.outcome) : '')"></div>
+                  <div style="margin-top:4px" x-text="rowSummary(row)"></div>
                   <div class="text-dim" style="margin-top:2px;word-break:break-word" x-text="row.session_id ? ('session ' + row.session_id) : ''"></div>
-                </div>
+                </button>
               </template>
             </div>
           </div>
-          <div class="card" style="padding:12px 14px;flex:1 1 300px;min-width:min(100%,300px)">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <h3 class="text-sm" style="margin:0;font-weight:600">Typed failures</h3>
-              <span class="text-xs text-dim" x-text="failures.length + ' rows'"></span>
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap">
+              <h3 class="text-sm" style="margin:0;font-weight:600">Selection detail</h3>
+              <button type="button" class="btn btn-ghost btn-sm" x-show="selected" @click="copyText('Copied', JSON.stringify(selected, null, 2))">Copy JSON</button>
             </div>
-            <template x-if="failuresLoading">
+            <template x-if="!selected">
+              <p class="text-xs text-dim" style="margin:0">Select a row to inspect full payload (including <code class="text-xs">steps</code>).</p>
+            </template>
+            <template x-if="selected">
+              <p class="text-xs" style="margin:0 0 8px;word-break:break-all"><span class="text-dim">id</span> <code x-text="selected.id"></code></p>
+            </template>
+            <pre class="text-xs" style="flex:1;min-height:200px;max-height:min(560px,calc(100vh - 320px));margin:0;padding:10px;border-radius:8px;background:var(--surface2);overflow:auto;white-space:pre-wrap;word-break:break-word" x-show="selected" x-text="selected ? JSON.stringify(selected, null, 2) : ''"></pre>
+          </div>
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <h3 class="text-sm" style="margin:0;font-weight:600">Live feed (SSE)</h3>
+              <button type="button" class="btn btn-ghost btn-sm" @click="liveFeed = []">Clear</button>
+            </div>
+            <p class="text-xs text-dim" style="margin:0 0 8px">Kernel events: <strong>TrajectoryRecorded</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">trajectory</code>).</p>
+            <div style="max-height:min(560px,calc(100vh - 320px));overflow:auto;display:flex;flex-direction:column;gap:6px">
+              <template x-if="!liveFeed.length">
+                <p class="text-xs text-dim" style="margin:0">Waiting for events…</p>
+              </template>
+              <template x-for="(line, idx) in liveFeed" :key="'tf-' + idx">
+                <div class="text-xs" style="padding:6px 8px;border-radius:6px;background:var(--surface2);white-space:pre-wrap;word-break:break-word" x-text="line"></div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="page === 'graph-failures'">
+      <div x-data="graphFailuresPanel()" x-init="init()" @page-leave.window="cleanup()" class="graph-failures-page-root page-body" style="padding:16px 20px 28px">
+        <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Learning failures</h2>
+            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Typed <code class="text-xs">failure</code> nodes: <code class="text-xs">GET /api/graph-memory/failures/recent</code> / <code class="text-xs">search</code>. Live: <strong>FailureLearned</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">failure</code>) on <code class="text-xs">armaraos-kernel-event</code>. Trajectories: <a class="text-xs" style="color:var(--accent)" href="#trajectories">Trajectories</a>.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="refreshAll(); selected = null" aria-label="Agent for failures">
+              <template x-for="a in agents" :key="a.id">
+                <option :value="a.id" x-text="(a.name || a.id) + ' · ' + a.id"></option>
+              </template>
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" @click="refreshAll()" :disabled="loading">Refresh</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch">
+          <div class="card" style="padding:12px 14px;min-width:0">
+            <h3 class="text-sm" style="margin:0 0 8px;font-weight:600">Recent failures</h3>
+            <template x-if="loading">
               <p class="text-xs text-dim" style="margin:0">Loading…</p>
             </template>
-            <template x-if="!failuresLoading && failures.length === 0">
-              <p class="text-xs text-dim" style="margin:0">No failure nodes yet for this agent.</p>
+            <template x-if="!loading && (failures || []).length === 0">
+              <p class="text-xs text-dim" style="margin:0">No failure nodes yet.</p>
             </template>
-            <div style="max-height:min(560px,calc(100vh - 220px));overflow:auto;display:flex;flex-direction:column;gap:6px">
+            <div style="max-height:min(520px,calc(100vh - 280px));overflow:auto;display:flex;flex-direction:column;gap:6px">
               <template x-for="row in failures" :key="row.id">
-                <div class="text-xs" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">
+                <button type="button" class="text-left text-xs" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer" :style="selected && selected.id === row.id ? 'border-color:var(--accent);box-shadow:0 0 0 1px rgba(124,58,237,0.25)' : ''" @click="selectRow(row)">
                   <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
                     <span style="font-family:monospace;opacity:0.85" x-text="String(row.id || '').slice(0,8) + '…'"></span>
                     <span class="text-dim" x-text="row.node_type && row.node_type.failure && row.node_type.failure.recorded_at ? new Date(row.node_type.failure.recorded_at * 1000).toLocaleString() : ''"></span>
                   </div>
                   <div class="text-dim" style="margin-top:4px;word-break:break-word" x-text="failRowLine(row)"></div>
-                </div>
+                </button>
               </template>
             </div>
           </div>
-          <div class="card" style="padding:12px 14px;flex:1 1 280px;min-width:min(100%,280px)">
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
+            <h3 class="text-sm" style="margin:0 0 8px;font-weight:600">Search (FTS)</h3>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+              <input type="search" class="form-input text-xs" style="flex:1;min-width:12rem" placeholder="Search query…" x-model="searchQ" @keydown.enter="runSearch()" autocomplete="off" />
+              <button type="button" class="btn btn-ghost btn-sm" @click="runSearch()" :disabled="searchLoading">Search</button>
+            </div>
+            <template x-if="searchLoading">
+              <p class="text-xs text-dim" style="margin:0">Searching…</p>
+            </template>
+            <div style="max-height:min(240px,calc(100vh - 400px));overflow:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+              <template x-for="row in searchRows" :key="row.id + '-s'">
+                <button type="button" class="text-left text-xs" style="padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);cursor:pointer" @click="selectRow(row)">
+                  <span class="font-mono" x-text="String(row.id || '').slice(0,8) + '…'"></span>
+                  <span class="text-dim" style="margin-left:6px" x-text="failRowLine(row)"></span>
+                </button>
+              </template>
+            </div>
+            <h3 class="text-sm" style="margin:0 0 8px;font-weight:600">Node JSON</h3>
+            <button type="button" class="btn btn-ghost btn-sm" style="align-self:flex-start;margin-bottom:8px" x-show="selected" @click="copyText('Copied', JSON.stringify(selected, null, 2))">Copy</button>
+            <pre class="text-xs" style="flex:1;min-height:200px;max-height:min(400px,calc(100vh - 380px));margin:0;padding:10px;border-radius:8px;background:var(--surface2);overflow:auto;white-space:pre-wrap;word-break:break-word" x-text="selected ? JSON.stringify(selected, null, 2) : 'Select a row…'"></pre>
+          </div>
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <h3 class="text-sm" style="margin:0;font-weight:600">Live feed (SSE)</h3>
               <button type="button" class="btn btn-ghost btn-sm" @click="liveFeed = []">Clear</button>
             </div>
-            <p class="text-xs text-dim" style="margin:0 0 8px">Subscribes to <code class="text-xs">armaraos-kernel-event</code> (same bus as the rest of the dashboard).</p>
-            <div style="max-height:min(560px,calc(100vh - 220px));overflow:auto;display:flex;flex-direction:column;gap:6px">
+            <p class="text-xs text-dim" style="margin:0 0 8px"><strong>FailureLearned</strong> · <strong>GraphMemoryWrite</strong> <code class="text-xs">failure</code></p>
+            <div style="max-height:min(520px,calc(100vh - 280px));overflow:auto;display:flex;flex-direction:column;gap:6px">
               <template x-if="!liveFeed.length">
-                <p class="text-xs text-dim" style="margin:0">Waiting for events… run an agent turn with trajectories enabled.</p>
+                <p class="text-xs text-dim" style="margin:0">Waiting for events…</p>
               </template>
-              <template x-for="(line, idx) in liveFeed" :key="'tf-' + idx">
+              <template x-for="(line, idx) in liveFeed" :key="'ff-' + idx">
+                <div class="text-xs" style="padding:6px 8px;border-radius:6px;background:var(--surface2);white-space:pre-wrap;word-break:break-word" x-text="line"></div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template x-if="page === 'graph-proposals'">
+      <div x-data="graphProposalsPanel()" x-init="init()" @page-leave.window="cleanup()" class="graph-proposals-page-root page-body" style="padding:16px 20px 28px">
+        <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
+          <div>
+            <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Improvement proposals</h2>
+            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (requires <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="loadProposals(); selected = null" aria-label="Agent for proposals">
+              <template x-for="a in agents" :key="a.id">
+                <option :value="a.id" x-text="(a.name || a.id) + ' · ' + a.id"></option>
+              </template>
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" @click="loadProposals()" :disabled="loading">Refresh</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(280px,0.9fr);gap:16px;align-items:stretch">
+          <div class="card" style="padding:12px 14px;min-width:0">
+            <p class="text-xs" style="margin:0 0 8px;color:var(--error)" x-show="disabledMessage" x-text="disabledMessage"></p>
+            <template x-if="loading">
+              <p class="text-xs text-dim" style="margin:0">Loading…</p>
+            </template>
+            <template x-if="!loading && (proposals || []).length === 0">
+              <p class="text-xs text-dim" style="margin:0">No rows (feature off, empty ledger, or no agent).</p>
+            </template>
+            <div style="max-height:min(560px,calc(100vh - 260px));overflow:auto" x-show="!loading && proposals && proposals.length">
+              <table class="w-full text-xs" style="border-collapse:collapse">
+                <thead>
+                  <tr class="text-dim" style="text-align:left;border-bottom:1px solid var(--border)">
+                    <th class="p-1">Kind</th>
+                    <th class="p-1">State</th>
+                    <th class="p-1">Id</th>
+                    <th class="p-1">Graph</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="p in proposals" :key="p.id">
+                    <tr
+                      style="border-bottom:1px solid var(--border);cursor:pointer"
+                      :style="selected && selected.id === p.id ? 'background:rgba(124,58,237,0.08)' : ''"
+                      @click="selectRow(p)">
+                      <td class="p-1" x-text="p.kind"></td>
+                      <td class="p-1" x-text="rowStatus(p)"></td>
+                      <td class="p-1 font-mono" style="word-break:break-all" x-text="p.id"></td>
+                      <td class="p-1 font-mono" x-text="p.adopted_graph_node_id || '—'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card" style="padding:12px 14px;min-width:0;display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+              <h3 class="text-sm" style="margin:0;font-weight:600">Live feed (SSE) · Detail</h3>
+              <button type="button" class="btn btn-ghost btn-sm" @click="liveFeed = []">Clear</button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" style="align-self:flex-start;margin-bottom:8px" x-show="selected" @click="copyText('Copied', JSON.stringify(selected, null, 2))">Copy row JSON</button>
+            <pre class="text-xs" style="flex:1;min-height:120px;max-height:min(200px,40vh);margin:0 0 10px;padding:10px;border-radius:8px;background:var(--surface2);overflow:auto;white-space:pre-wrap;word-break:break-word" x-text="selected ? JSON.stringify(selected, null, 2) : 'Select a table row…'"></pre>
+            <div style="max-height:min(300px,35vh);overflow:auto;display:flex;flex-direction:column;gap:6px">
+              <template x-if="!liveFeed.length">
+                <p class="text-xs text-dim" style="margin:0">Waiting for <strong>ImprovementProposalAdopted</strong>…</p>
+              </template>
+              <template x-for="(line, idx) in liveFeed" :key="'gp-' + idx">
                 <div class="text-xs" style="padding:6px 8px;border-radius:6px;background:var(--surface2);white-space:pre-wrap;word-break:break-word" x-text="line"></div>
               </template>
             </div>

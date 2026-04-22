@@ -1,4 +1,4 @@
-// Trajectories operator view — GET /api/trajectories + kernel SSE (TrajectoryRecorded / FailureLearned).
+// Trajectories operator view — GET /api/trajectories + kernel SSE (TrajectoryRecorded, GraphMemoryWrite trajectory).
 'use strict';
 
 function trajectoriesNormalizeAgentsPayload(raw) {
@@ -16,10 +16,13 @@ function trajectoriesPanel() {
     agents: [],
     agentId: '',
     trajectories: [],
-    failures: [],
     liveFeed: [],
     loading: false,
-    failuresLoading: false,
+    filterText: '',
+    selected: null,
+    compressionLoading: false,
+    compressionJson: null,
+    compressionError: null,
     _kernelHandler: null,
 
     eventAgentId(data) {
@@ -36,6 +39,31 @@ function trajectoriesPanel() {
       return String(a);
     },
 
+    filteredTrajectories() {
+      var rows = this.trajectories || [];
+      var q = (this.filterText || '').trim().toLowerCase();
+      if (!q) {
+        return rows;
+      }
+      return rows.filter(function (row) {
+        try {
+          var id = String(row && row.id != null ? row.id : '');
+          var ep = String(row && row.episode_id != null ? row.episode_id : '');
+          var sess = String(row && row.session_id != null ? row.session_id : '');
+          var oc = String(row && row.outcome != null ? row.outcome : '');
+          var sum = JSON.stringify(row && row.steps != null ? row.steps : '');
+          var blob = (id + ' ' + ep + ' ' + sess + ' ' + oc + ' ' + sum).toLowerCase();
+          return blob.indexOf(q) >= 0;
+        } catch (e) {
+          return true;
+        }
+      });
+    },
+
+    selectRow(row) {
+      this.selected = row;
+    },
+
     formatOutcome(o) {
       if (o == null) {
         return '';
@@ -48,6 +76,64 @@ function trajectoriesPanel() {
       } catch (e) {
         return String(o);
       }
+    },
+
+    rowSummary(row) {
+      if (!row) {
+        return '';
+      }
+      var n = Array.isArray(row.steps) ? row.steps.length : 0;
+      return (
+        'Episode ' +
+        String(row.episode_id || '').slice(0, 8) +
+        '… · ' +
+        n +
+        ' steps · ' +
+        (row.outcome != null ? String(row.outcome) : '')
+      );
+    },
+
+    async copyText(label, text) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(String(text));
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = String(text);
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.success(label || 'Copied');
+        }
+      } catch (e) {
+        console.warn('trajectories: copy', e);
+      }
+    },
+
+    async loadCompressionProfiles() {
+      if (!this.agentId) {
+        this.compressionJson = null;
+        this.compressionError = null;
+        return;
+      }
+      this.compressionLoading = true;
+      this.compressionError = null;
+      try {
+        var url =
+          '/api/compression/project-profiles?agent_id=' + encodeURIComponent(this.agentId);
+        var d = await OpenFangAPI.get(url);
+        this.compressionJson = d;
+        if (d && d.ok === false && d.error) {
+          this.compressionError = String(d.error);
+        }
+      } catch (e) {
+        this.compressionJson = null;
+        this.compressionError = e && e.message ? String(e.message) : 'Request failed';
+      }
+      this.compressionLoading = false;
     },
 
     pushFeed(line) {
@@ -83,44 +169,11 @@ function trajectoriesPanel() {
             (p.data.summary || '')
         );
         this.loadTrajectories();
-      } else if (sub === 'FailureLearned') {
-        this.pushFeed(
-          '[' +
-            ts +
-            '] FailureLearned id=' +
-            String(p.data.failure_node_id || '').slice(0, 8) +
-            '… tool=' +
-            (p.data.tool_name || '') +
-            ' — ' +
-            (p.data.message_preview || '')
-        );
-        this.loadFailures();
       } else if (sub === 'GraphMemoryWrite' && p.data.kind === 'trajectory') {
         this.pushFeed(
           '[' + ts + '] GraphMemoryWrite trajectory — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
         );
         this.loadTrajectories();
-      } else if (sub === 'GraphMemoryWrite' && p.data.kind === 'failure') {
-        this.pushFeed(
-          '[' + ts + '] GraphMemoryWrite failure — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
-        );
-        this.loadFailures();
-      }
-    },
-
-    failRowLine(row) {
-      try {
-        var nt = row && row.node_type;
-        if (!nt || nt.type !== 'failure') {
-          return '';
-        }
-        var f = nt.failure || {};
-        var src = f.source || '';
-        var tool = f.tool_name ? ' · ' + f.tool_name : '';
-        var msg = String(f.message || '').slice(0, 200);
-        return src + tool + ' — ' + msg;
-      } catch (e) {
-        return '';
       }
     },
 
@@ -177,6 +230,15 @@ function trajectoriesPanel() {
           '&limit=80';
         var data = await OpenFangAPI.get(url);
         this.trajectories = (data && data.trajectories) || [];
+        if (this.selected) {
+          var selId = this.selected && this.selected.id;
+          if (selId) {
+            var found = this.trajectories.find(function (r) {
+              return r && r.id === selId;
+            });
+            this.selected = found || this.selected;
+          }
+        }
       } catch (e) {
         console.warn('trajectories: load failed', e);
         this.trajectories = [];
@@ -184,29 +246,8 @@ function trajectoriesPanel() {
       this.loading = false;
     },
 
-    async loadFailures() {
-      if (!this.agentId) {
-        this.failures = [];
-        return;
-      }
-      this.failuresLoading = true;
-      try {
-        var url =
-          '/api/graph-memory/failures/recent?agent_id=' +
-          encodeURIComponent(this.agentId) +
-          '&limit=60';
-        var data = await OpenFangAPI.get(url);
-        this.failures = (data && data.failures) || [];
-      } catch (e) {
-        console.warn('trajectories: failures load failed', e);
-        this.failures = [];
-      }
-      this.failuresLoading = false;
-    },
-
     async refreshPanels() {
       await this.loadTrajectories();
-      await this.loadFailures();
     },
 
     async init() {

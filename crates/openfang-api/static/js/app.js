@@ -2062,7 +2062,7 @@ function app() {
       });
 
       // Hash routing
-      var validPages = ['overview','agents','bookmarks','sessions','graph-memory','trajectories','approvals','comms','network','workflows','scheduler','channels','skills','hands','ainl-library','home-files','analytics','logs','timeline','runtime','orchestration-traces','settings','wizard'];
+      var validPages = ['overview','agents','bookmarks','sessions','graph-memory','trajectories','graph-failures','graph-proposals','approvals','comms','network','workflows','scheduler','channels','skills','hands','ainl-library','home-files','analytics','logs','timeline','runtime','orchestration-traces','settings','wizard'];
       var pageRedirects = {
         'chat': 'agents',
         'templates': 'agents',

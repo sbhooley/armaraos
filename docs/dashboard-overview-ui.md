@@ -34,7 +34,7 @@ Order matters for scanability and for the loading skeleton matching the real lay
    - **LLM Providers** — Badge row (`overview-provider-card`); **below** the panel grid, **above** recent activity.
    - **Recent activity** / empty state, then bottom **Quick** link cards (if present in the build).
 
-The **Skills/MCP** page (`#skills` → **MCP Servers**) leads with **Add custom MCP server** and preset examples — that flow complements the overview **MCP** / readiness chips.
+The **Skills/MCP** page (`#skills` → **MCP Servers**) includes a **Host tools for google-workspace-mcp** explainer ( **`uv` / `uvx`**, link to **Settings → Tools** for OAuth), then **Add custom MCP server** and **Preset examples** — that flow complements the overview **MCP** / readiness chips.
 
 ## Measured vs estimated savings
 

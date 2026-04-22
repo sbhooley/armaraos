@@ -655,6 +655,17 @@ function skillsPage() {
       } catch (e) { /* ignore */ }
     },
 
+    goToSettingsTools: function() {
+      try {
+        sessionStorage.setItem('armaraos-settings-tab', 'tools');
+      } catch (e) { /* ignore */ }
+      if (this.$root && typeof this.$root.navigate === 'function') {
+        this.$root.navigate('settings');
+      } else {
+        window.location.hash = 'settings';
+      }
+    },
+
     async registerMcpIntegrationLegacy(integrationId) {
       try {
         await OpenFangAPI.post('/api/integrations/add', { id: integrationId });

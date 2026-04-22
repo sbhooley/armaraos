@@ -10,6 +10,7 @@
 //! - `POST /api/graph-memory/reset`
 //! - `POST /api/graph-memory/delete-node`
 //! - `GET /api/trajectories` — replay surface: recent rows from `ainl_trajectories`
+//! - `GET /api/compression/project-profiles` — on-disk EMA map (`compression_project_profiles.json`) when enabled
 //! - `GET /api/graph-memory/failures/search` — FTS search over typed `failure` graph nodes
 //! - `GET /api/graph-memory/failures/recent` — recent typed `failure` graph rows (newest first)
 //! - `POST /api/graph-memory/improvement-proposals/submit` — ledger submit (opt-in via
@@ -80,6 +81,12 @@ pub struct GraphMemoryAuditQuery {
     pub agent_id: String,
     #[serde(default = "default_audit_limit")]
     pub limit: usize,
+}
+
+/// Query for [`get_compression_project_profiles`].
+#[derive(Debug, serde::Deserialize)]
+pub struct CompressionProjectProfilesQuery {
+    pub agent_id: String,
 }
 
 /// Query for [`get_trajectories`] (`GET /api/trajectories`).
@@ -1154,6 +1161,26 @@ pub async fn get_trajectories(
     match gm.list_trajectories_for_agent(&agent_id, q.limit, q.since_recorded_at) {
         Ok(rows) => Json(json!({ "trajectories": rows })),
         Err(_) => Json(json!({ "trajectories": [] })),
+    }
+}
+
+/// GET /api/compression/project-profiles?agent_id=…
+///
+/// Returns [`openfang_runtime::compression_project_ema::CompressionProjectProfilesFile`] JSON
+/// (or empty `projects` when the file is absent). Updates when `AINL_COMPRESSION_PROJECT_EMA=1`
+/// and the agent manifest includes `metadata.project_id` on compressed turns.
+pub async fn get_compression_project_profiles(
+    Query(q): Query<CompressionProjectProfilesQuery>,
+) -> Json<Value> {
+    let Ok(agent_id) = sanitize_agent_id(&q.agent_id) else {
+        return Json(
+            json!({ "ok": false, "error": "agent_id is required", "path": null, "profiles": { "version": 1, "projects": {} } }),
+        );
+    };
+    let path = openfang_runtime::compression_project_ema::profiles_path_for_agent(&agent_id);
+    match openfang_runtime::compression_project_ema::load_file(&agent_id) {
+        Ok(f) => Json(json!({ "ok": true, "path": path, "profiles": f })),
+        Err(e) => Json(json!({ "ok": false, "error": e.to_string(), "path": path, "profiles": null })),
     }
 }
 

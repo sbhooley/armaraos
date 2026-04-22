@@ -981,7 +981,9 @@ These routes support the bundled **`google-workspace-mcp`** integration (stdio v
 }
 ```
 
-Used by **Settings** to show whether the host can run `uvx`-based MCP servers and whether **`GOOGLE_OAUTH_CLIENT_ID`** is already set.
+Used by the dashboard **Settings → Tools** tab and **Skills → MCP** to show whether the host can run `uvx`-based MCP servers, whether automatic **`uv`** install at boot is configured, and whether **`GOOGLE_OAUTH_CLIENT_ID`** is already set. The same page surfaces **Run uv installer** and **Copy install** actions mapped to **`POST /api/system/bootstrap-uv`**.
+
+**Operator environment (process / `~/.armaraos/.env`):** optional **`ARMARAOS_AUTO_INSTALL_UV=1`** runs the official **uv** installer once at daemon startup on Unix when **`uvx`** is not yet available (before MCP connects). Override the default launch with **`ARMARAOS_WORKSPACE_MCP_COMMAND`** (full command line for **workspace-mcp**). Set **`ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP=1`** to skip the kernel’s automatic **`google-workspace-mcp`** entry when credentials are present.
 
 #### POST /api/system/bootstrap-uv
 
@@ -990,6 +992,8 @@ Runs the official **uv** install script on **Unix** (`sh -c "curl -LsSf … | sh
 #### POST /api/integrations/google-workspace/oauth
 
 **Body:** JSON with non-empty **`GOOGLE_OAUTH_CLIENT_ID`** (or **`client_id`**) and optional **`GOOGLE_OAUTH_CLIENT_SECRET`** (or **`client_secret`**) for confidential OAuth clients. Values are written to **`secrets.env`** in the ArmaraOS home (same pattern as other provider keys); the implementation reconnects applicable MCP stdio children.
+
+**Dashboard:** The same credentials can be entered on **Settings → Tools** (Google Workspace / host tools) or in **Skills → MCP** when installing the **google-workspace-mcp** preset (form fields driven by the integration template’s **`required_env`** — **`GOOGLE_OAUTH_CLIENT_ID`** / **`GOOGLE_OAUTH_CLIENT_SECRET`**).
 
 ---
 

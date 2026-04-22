@@ -1501,6 +1501,13 @@ pub async fn run_agent_loop(
         None
     };
     let compression_semantic_score = compression_metrics.semantic_preservation_score;
+    crate::compression_project_ema::maybe_record_from_turn(
+        &session.agent_id.0.to_string(),
+        manifest,
+        mode,
+        &r,
+        compression_semantic_score,
+    );
     let adaptive_snap: Option<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot> = manifest
         .metadata
         .get("adaptive_eco")
@@ -4164,6 +4171,13 @@ pub async fn run_agent_loop_streaming(
         None
     };
     let compression_semantic_score = compression_metrics.semantic_preservation_score;
+    crate::compression_project_ema::maybe_record_from_turn(
+        &session.agent_id.0.to_string(),
+        manifest,
+        mode,
+        &r,
+        compression_semantic_score,
+    );
     let adaptive_snap_s: Option<openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot> = manifest
         .metadata
         .get("adaptive_eco")

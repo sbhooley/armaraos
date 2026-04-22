@@ -165,6 +165,10 @@ pub async fn build_router(
             axum::routing::get(crate::graph_memory::get_trajectories),
         )
         .route(
+            "/api/compression/project-profiles",
+            axum::routing::get(crate::graph_memory::get_compression_project_profiles),
+        )
+        .route(
             "/api/graph-memory/failures/search",
             axum::routing::get(crate::graph_memory::get_graph_memory_failures_search),
         )
