@@ -9021,6 +9021,27 @@ button.tool-card-header {
 .agent-vitals-logline-fill.is-waiting {
   background: linear-gradient(90deg, color-mix(in srgb, var(--text-muted) 88%, #0000), color-mix(in srgb, var(--text-dim) 48%, #0000));
 }
+.agent-vitals-logline-fill.is-workload-elevated {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--success) 82%, transparent) 0%,
+    color-mix(in srgb, var(--success) 58%, var(--warning) 24%) 52%,
+    color-mix(in srgb, var(--warning) 72%, transparent) 100%
+  ) !important;
+}
+.agent-vitals-logline-fill.is-workload-warn {
+  background: color-mix(in srgb, var(--warning) 88%, var(--surface2)) !important;
+}
+.agent-vitals-logline-fill.is-workload-hot {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--warning) 88%, var(--surface2)) 0%,
+    color-mix(in srgb, var(--error) 58%, var(--warning)) 100%
+  ) !important;
+}
+.agent-vitals-logline-fill.is-workload-crit {
+  background: color-mix(in srgb, var(--error) 92%, var(--surface2)) !important;
+}
 @media (min-width: 1000px) { .agent-vitals-log { font-size: 10px; } }
 .agent-vitals-card--system .agent-metric-mono { font-size: 11px; }
 

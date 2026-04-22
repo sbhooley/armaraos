@@ -1325,6 +1325,15 @@ function agentsPage() {
       return out;
     },
 
+    agentWorkloadBand: function(agent) {
+      var n = Number(this.agentCurrentPhaseIntensity(agent)) || 0;
+      if (n >= 90) return 'crit';
+      if (n >= 80) return 'hot';
+      if (n >= 70) return 'warn';
+      if (n > 50) return 'elevated';
+      return 'normal';
+    },
+
     tickActivePhaseMicroActivity: function() {
       var self = this;
       var list = (this.agents || []).filter(function(a) {

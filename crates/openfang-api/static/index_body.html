@@ -2170,7 +2170,7 @@
                         </template>
                       </div>
                       <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
-                        <span class="agent-vitals-logline-fill" :class="'is-' + agentCurrentPhaseClass(agent)" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
+                        <span class="agent-vitals-logline-fill" :class="['is-' + agentCurrentPhaseClass(agent), 'is-workload-' + agentWorkloadBand(agent)]" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
                       </div>
                     </div>
                   </div>
@@ -2256,7 +2256,7 @@
                         </template>
                       </div>
                       <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
-                        <span class="agent-vitals-logline-fill" :class="'is-' + agentCurrentPhaseClass(agent)" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
+                        <span class="agent-vitals-logline-fill" :class="['is-' + agentCurrentPhaseClass(agent), 'is-workload-' + agentWorkloadBand(agent)]" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
                       </div>
                     </div>
                   </div>
