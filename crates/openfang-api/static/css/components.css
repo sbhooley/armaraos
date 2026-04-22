@@ -8151,9 +8151,16 @@ button.tool-card-header {
 .fleet-status-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+.fleet-status-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 .fleet-status-title-wrap {
   display: flex;
@@ -8191,7 +8198,7 @@ button.tool-card-header {
 
 .fleet-metric-deck {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px 12px;
   align-items: stretch;
 }
@@ -8248,6 +8255,17 @@ button.tool-card-header {
 .fleet-metric--gold .fleet-metric-kicker { color: var(--text-secondary); }
 .fleet-metric .fleet-metric-top { display: flex; flex-direction: column; }
 .fleet-metric-legend { font-size: 10px; }
+.fleet-metric-active-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.fleet-metric-sparkline--inline {
+  flex: 1 1 88px;
+  width: auto;
+  height: 28px;
+}
 .fleet-mini-bars {
   margin-top: 5px;
   height: 22px;
@@ -8296,14 +8314,6 @@ button.tool-card-header {
   }
 }
 
-.fleet-metric-spark {
-  grid-column: span 1;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface2);
-  padding: 6px 8px 8px 8px;
-  min-height: 44px;
-}
 .fleet-metric-sparkline {
   width: 100%;
   height: 32px;
@@ -8563,17 +8573,43 @@ button.tool-card-header {
   50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--success) 0%, transparent); }
 }
 
-.agent-vitals-spark {
-  flex: 0 0 100px;
-  min-width: 100px;
-  max-width: 100px;
-  height: 20px;
-  align-self: center;
+.agent-vitals-hourly-bars {
+  margin-top: 5px;
+  width: 100%;
+  height: 24px;
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 2px;
+  align-items: end;
 }
-@media (min-width: 500px) {
-  .agent-vitals-spark { order: 6; }
+.agent-vitals-hourly-hour {
+  min-width: 0;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 1px;
 }
-.agent-vitals-sparkline { width: 100%; height: 100%; }
+.agent-vitals-hourly-bar {
+  width: 2px;
+  min-height: 0;
+  height: 0%;
+  border-radius: 2px 2px 1px 1px;
+  opacity: 0.78;
+  transition: height 0.22s var(--ease-smooth), opacity var(--transition-fast), filter var(--transition-fast);
+}
+.agent-vitals-hourly-bar.is-current {
+  opacity: 1;
+  filter: brightness(1.08);
+}
+.agent-vitals-hourly-bar.is-status {
+  background: color-mix(in srgb, var(--success) 86%, var(--surface2));
+}
+.agent-vitals-hourly-bar.is-tool {
+  background: color-mix(in srgb, var(--warning) 86%, var(--surface2));
+}
+.agent-vitals-hourly-bar.is-node {
+  background: color-mix(in srgb, #8b5cf6 86%, var(--surface2));
+}
 
 .agent-vitals-midrow {
   padding: 8px 10px 0 10px;
@@ -9006,7 +9042,7 @@ button.tool-card-header {
   .fleet-status-title { font-size: 14px; }
   .fleet-status-sub { font-size: 12px; max-width: 680px; }
   .fleet-metric-deck {
-    grid-template-columns: minmax(0, 1.35fr) repeat(4, minmax(0, 1fr)) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.35fr) repeat(4, minmax(0, 1fr));
     gap: 10px 14px;
   }
   .fleet-metric { min-height: 84px; padding: 8px 12px 10px 12px; }
@@ -9022,7 +9058,7 @@ button.tool-card-header {
     gap: 16px;
   }
   .armaraos-fleet-wrapper--cinema .fleet-metric-deck {
-    grid-template-columns: minmax(0, 1.45fr) repeat(4, minmax(0, 1fr)) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1.45fr) repeat(4, minmax(0, 1fr));
   }
   .armaraos-fleet-wrapper--cinema .armaraos-fleet-body {
     max-width: 2320px;

@@ -230,11 +230,12 @@ The **Info / Files / Config** modal is owned by the **`agentsPage`** Alpine scop
 ## Agents page → Fleet Status card grid
 
 - **Unread badge:** A red **count** pill appears **immediately to the right of the “Fleet Status”** heading when the total unread count is positive (same source as the **All Agents** nav badge; replaces the old **Inbox n** text beside **+ New Agent**).
-- **Header actions conformance:** Fleet header action buttons use the shared top-header button style used on other pages. The old inline demo controls are intentionally hidden from this header.
+- **Header actions conformance:** Fleet title row now uses the same shared header row/text/action classes as other top-level pages, so `+ New Agent` / `Stop All` align on the same vertical baseline as the rest of the dashboard. Inline demo controls remain intentionally hidden.
 - **Demo URL hint removed:** The subtitle no longer shows `?demo=1` / `?demo=cinema` helper text. Demo URL/query behavior still exists for internal/demo workflows, but is not shown as top-header controls.
-- **Fleet metrics:** The sticky header includes **Active**, **Tasks today**, **Graph nodes (sampled agents)**, **Spend (last hour, est.)**, and **Saved (last hour, est.)**.
-- **Sampled agents meaning:** `Graph nodes (sampled agents)` is an aggregate computed from a capped subset of agents for performance. Per-agent card knowledge counts are shown independently on each card.
-- **Per-agent activity monitor:** The top-right live status near the agent name is the primary phase/status signal. The lower telemetry strip remains as an activity monitor (recent activity feed + intensity bar), without duplicating `Live/Awaiting input` text.
+- **Fleet metrics:** The sticky header includes **Active** (with inline fleet activity sparkline in the same card), **Tasks today**, **Graph nodes**, **Spend (today, est.)**, and **Saved (today, est.)**. Tasks/nodes/spend/saved cards each include an interactive **Last 8h** mini bar chart.
+- **Per-agent activity monitor:** Card top rows now render a **24h tri-color bar graph** across the card width (`status` green, `tool calls` orange, `graph nodes` purple). This replaces the old per-card sparkline.
+- **Workload intensity strip:** The lower telemetry strip is titled **Workload intensity** and keeps dynamic movement: idle/awaiting agents sit lower, then rise/fall by phase intensity (including micro-activity during long-running phases).
+- **Per-agent 24h persistence:** The per-agent 24h bar graph history is restored from local UI storage so it survives daemon restarts and normal app reloads/upgrades.
 - **Node-growth activity coupling:** If an agent’s graph node count increases (including background growth not directly prompted in chat), the card should update node count, pulse activity, and append a live feed entry (e.g. `Graph memory +N nodes`).
 
 ## Agents page → Config tab (identity, prompt, tool filters)

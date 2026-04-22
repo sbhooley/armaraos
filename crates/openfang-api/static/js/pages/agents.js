@@ -268,14 +268,21 @@ function agentsPage() {
     tasksToday: 0,
     fleetGraphNodeTotal: 0,
     fleetSpendHour: 0,
+    fleetSpendToday: 0,
     fleetSavedHour: 0,
+    fleetSavedToday: 0,
     fleetLastCost: null,
     fleetLastSaved: null,
+    fleetLastGraphNodeTotal: null,
     _fleetLastSummaryCalls: 0,
     _fleetSpendsMs: [],
     _fleetSpendsAmt: [],
     _fleetSavedsMs: [],
     _fleetSavedsAmt: [],
+    _fleetTasksByHour: {},
+    _fleetNodesByHour: {},
+    _fleetSpendByHour: {},
+    _fleetSavedByHour: {},
     _fleetInt: null,
     _fleetDemoInt: null,
     _activitySyncInt: null,
@@ -289,6 +296,10 @@ function agentsPage() {
     _prevGraphNodeByAgent: {},
     _prevPhaseByAgent: {},
     _activitySeenTsByAgent: {},
+    _agentStatusByHour: {},
+    _agentToolByHour: {},
+    _agentNodeByHour: {},
+    _agentHourlyPersistTimer: null,
     usageByAgent: {},
     graphVitalsByAgent: {},
     graphNodeCountByAgent: {},
@@ -297,7 +308,7 @@ function agentsPage() {
     _idlePulseTick: 0,
 
     /** Usage series for small sparkline / activity (0–1 normalized). */
-    fleetActivityNorm: 0.35,
+    fleetActivityNorm: 0.08,
     perAgentActivityNorm: {},
 
     normalizeDemoProfile(raw) {
@@ -428,6 +439,235 @@ function agentsPage() {
       return d.getFullYear() + '-' + this._pad2(d.getMonth() + 1) + '-' + this._pad2(d.getDate());
     },
 
+    fleetHourBucket: function(ts) {
+      return Math.floor((ts || Date.now()) / 3600000);
+    },
+
+    fleetHourSlots: function() {
+      var cur = this.fleetHourBucket(Date.now());
+      var out = [];
+      for (var i = 7; i >= 0; i--) out.push(cur - i);
+      return out;
+    },
+
+    hourSlots: function(hours) {
+      var h = Math.max(1, Math.floor(Number(hours) || 1));
+      var cur = this.fleetHourBucket(Date.now());
+      var out = [];
+      for (var i = h - 1; i >= 0; i--) out.push(cur - i);
+      return out;
+    },
+
+    fleetHourLabel: function(bucket) {
+      var d = new Date(Number(bucket) * 3600000);
+      return this._pad2(d.getHours()) + ':00';
+    },
+
+    fleetPruneHourlySeries: function(m) {
+      var src = m || {};
+      var cur = this.fleetHourBucket(Date.now());
+      var min = cur - 23;
+      var out = {};
+      for (var k in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+        var n = Number(k);
+        if (!isFinite(n)) continue;
+        if (n >= min && n <= cur) out[String(n)] = Number(src[k]) || 0;
+      }
+      return out;
+    },
+
+    pruneHourlySeries: function(m, keepHours) {
+      var src = m || {};
+      var cur = this.fleetHourBucket(Date.now());
+      var min = cur - Math.max(1, Math.floor(Number(keepHours) || 24)) + 1;
+      var out = {};
+      for (var k in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+        var n = Number(k);
+        if (!isFinite(n)) continue;
+        if (n >= min && n <= cur) out[String(n)] = Number(src[k]) || 0;
+      }
+      return out;
+    },
+
+    fleetRecordHourly: function(m, amount, ts) {
+      var out = this.fleetPruneHourlySeries(m);
+      var key = String(this.fleetHourBucket(ts));
+      out[key] = (Number(out[key]) || 0) + (Number(amount) || 0);
+      return out;
+    },
+
+    recordHourly: function(m, amount, ts, keepHours) {
+      var out = this.pruneHourlySeries(m, keepHours);
+      var key = String(this.fleetHourBucket(ts));
+      out[key] = (Number(out[key]) || 0) + (Number(amount) || 0);
+      return out;
+    },
+
+    fleetSeriesTodayTotal: function(m) {
+      var src = m || {};
+      var d = new Date();
+      d.setHours(0, 0, 0, 0);
+      var start = Math.floor(d.getTime() / 3600000);
+      var sum = 0;
+      for (var k in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, k)) continue;
+        var n = Number(k);
+        if (!isFinite(n) || n < start) continue;
+        sum += Number(src[k]) || 0;
+      }
+      return Math.max(0, sum);
+    },
+
+    fleetMetricHourMap: function(kind) {
+      if (kind === 'tasks') return this._fleetTasksByHour || {};
+      if (kind === 'nodes') return this._fleetNodesByHour || {};
+      if (kind === 'spend') return this._fleetSpendByHour || {};
+      if (kind === 'saved') return this._fleetSavedByHour || {};
+      return {};
+    },
+
+    fleetMetricHourValueText: function(kind, v) {
+      var n = Number(v) || 0;
+      if (kind === 'spend' || kind === 'saved') return '$' + (Math.round(n * 10000) / 10000).toFixed(4);
+      return String(Math.round(n));
+    },
+
+    fleetMetricBars: function(kind) {
+      var map = this.fleetMetricHourMap(kind);
+      var slots = this.fleetHourSlots();
+      var vals = slots.map(function(b) { return Math.max(0, Number(map[String(b)]) || 0); });
+      var maxv = 0;
+      for (var i = 0; i < vals.length; i++) maxv = Math.max(maxv, vals[i]);
+      if (maxv <= 0) maxv = 1;
+      var self = this;
+      return slots.map(function(bucket, idx) {
+        var v = vals[idx];
+        var pct = (v <= 0) ? 10 : Math.max(16, Math.round((v / maxv) * 100));
+        return {
+          key: String(kind) + ':' + String(bucket),
+          bucket: bucket,
+          value: v,
+          pct: pct,
+          isCurrent: idx === slots.length - 1,
+          title: self.fleetHourLabel(bucket) + ' · ' + self.fleetMetricHourValueText(kind, v)
+        };
+      });
+    },
+
+    schedulePersistAgentHourly: function() {
+      var self = this;
+      if (this._agentHourlyPersistTimer) return;
+      this._agentHourlyPersistTimer = setTimeout(function() {
+        self._agentHourlyPersistTimer = null;
+        try {
+          localStorage.setItem('armaraos-agent-hourly-v1', JSON.stringify({
+            status: self._agentStatusByHour || {},
+            tool: self._agentToolByHour || {},
+            node: self._agentNodeByHour || {},
+            saved_at: Date.now()
+          }));
+        } catch (e) { /* ignore */ }
+      }, 300);
+    },
+
+    loadPersistedAgentHourly: function() {
+      try {
+        var raw = localStorage.getItem('armaraos-agent-hourly-v1');
+        if (!raw) return;
+        var obj = JSON.parse(raw);
+        this._agentStatusByHour = obj && obj.status ? obj.status : {};
+        this._agentToolByHour = obj && obj.tool ? obj.tool : {};
+        this._agentNodeByHour = obj && obj.node ? obj.node : {};
+      } catch (e) {
+        this._agentStatusByHour = {};
+        this._agentToolByHour = {};
+        this._agentNodeByHour = {};
+      }
+    },
+
+    pruneAgentHourlyMaps: function() {
+      var cap = 36;
+      var outStatus = {};
+      var outTool = {};
+      var outNode = {};
+      var srcS = this._agentStatusByHour || {};
+      var srcT = this._agentToolByHour || {};
+      var srcN = this._agentNodeByHour || {};
+      for (var aid in srcS) {
+        if (Object.prototype.hasOwnProperty.call(srcS, aid)) outStatus[aid] = this.pruneHourlySeries(srcS[aid], cap);
+      }
+      for (var aid2 in srcT) {
+        if (Object.prototype.hasOwnProperty.call(srcT, aid2)) outTool[aid2] = this.pruneHourlySeries(srcT[aid2], cap);
+      }
+      for (var aid3 in srcN) {
+        if (Object.prototype.hasOwnProperty.call(srcN, aid3)) outNode[aid3] = this.pruneHourlySeries(srcN[aid3], cap);
+      }
+      this._agentStatusByHour = outStatus;
+      this._agentToolByHour = outTool;
+      this._agentNodeByHour = outNode;
+    },
+
+    recordAgentHourly: function(kind, aid, amount, ts) {
+      if (!aid) return;
+      var key = String(aid);
+      var amt = Number(amount) || 0;
+      if (amt <= 0) return;
+      if (kind === 'status') {
+        var ms = this._agentStatusByHour || {};
+        ms[key] = this.recordHourly(ms[key], amt, ts, 36);
+        this._agentStatusByHour = Object.assign({}, ms);
+      } else if (kind === 'tool') {
+        var mt = this._agentToolByHour || {};
+        mt[key] = this.recordHourly(mt[key], amt, ts, 36);
+        this._agentToolByHour = Object.assign({}, mt);
+      } else if (kind === 'node') {
+        var mn = this._agentNodeByHour || {};
+        mn[key] = this.recordHourly(mn[key], amt, ts, 36);
+        this._agentNodeByHour = Object.assign({}, mn);
+      }
+      this.schedulePersistAgentHourly();
+    },
+
+    agentHourlyBars: function(agent) {
+      if (!agent || !agent.id) return [];
+      var aid = String(agent.id);
+      var slots = this.hourSlots(24);
+      var status = (this._agentStatusByHour && this._agentStatusByHour[aid]) ? this._agentStatusByHour[aid] : {};
+      var tool = (this._agentToolByHour && this._agentToolByHour[aid]) ? this._agentToolByHour[aid] : {};
+      var node = (this._agentNodeByHour && this._agentNodeByHour[aid]) ? this._agentNodeByHour[aid] : {};
+      var maxv = 1;
+      for (var i = 0; i < slots.length; i++) {
+        var k = String(slots[i]);
+        maxv = Math.max(
+          maxv,
+          Number(status[k]) || 0,
+          Number(tool[k]) || 0,
+          Number(node[k]) || 0
+        );
+      }
+      var self = this;
+      return slots.map(function(bucket, idx) {
+        var k = String(bucket);
+        var sv = Math.max(0, Number(status[k]) || 0);
+        var tv = Math.max(0, Number(tool[k]) || 0);
+        var nv = Math.max(0, Number(node[k]) || 0);
+        var toPct = function(v) {
+          if (v <= 0) return 0;
+          return Math.max(12, Math.round((v / maxv) * 100));
+        };
+        return {
+          key: aid + ':' + k,
+          isCurrent: idx === slots.length - 1,
+          statusPct: toPct(sv),
+          toolPct: toPct(tv),
+          nodePct: toPct(nv),
+          title: self.fleetHourLabel(bucket) + ' · status ' + Math.round(sv) + ' · tools ' + Math.round(tv) + ' · nodes ' + Math.round(nv)
+        };
+      });
+    },
+
     todayCallsFromDaily(daysPayload) {
       if (!daysPayload) return 0;
       var days = daysPayload.days;
@@ -458,15 +698,20 @@ function agentsPage() {
 
     _seriesPolyline(ser, w, h) {
       if (!ser || !ser.length) {
-        return String(w * 0.1) + ',' + (h * 0.5) + ' ' + w + ',' + (h * 0.5);
+        var y0 = h - 2;
+        return '2,' + y0 + ' ' + w + ',' + y0;
       }
-      var maxv = 0.0001;
-      for (var i = 0; i < ser.length; i++) maxv = Math.max(maxv, ser[i]);
       var out = [];
       for (var j = 0; j < ser.length; j++) {
         var t = (ser.length <= 1) ? 0 : (j / (ser.length - 1));
         var x = 2 + t * (w - 4);
-        var y = 2 + (1 - (ser[j] / maxv)) * (h - 4);
+        // Values are already normalized activity in [0..1]. Use a fixed vertical
+        // scale so idle starts near the bottom and activity rises upward.
+        var v = Number(ser[j]);
+        if (!isFinite(v)) v = 0;
+        if (v < 0) v = 0;
+        if (v > 1) v = 1;
+        var y = (h - 2) - (v * (h - 4));
         out.push((Math.round(x * 100) / 100) + ',' + (Math.round(y * 100) / 100));
       }
       return out.join(' ');
@@ -485,7 +730,7 @@ function agentsPage() {
 
     agentsFleetTweakSparks(fromCallsDelta) {
       var v = Math.max(0, Number(fromCallsDelta) || 0);
-      var s = 0.08 * Math.log1p(v) + 0.02;
+      var s = 0.1 * Math.log1p(v) + 0.01;
       s = Math.min(1, s);
       this.fleetActivityNorm = 0.65 * this.fleetActivityNorm + 0.35 * s;
       this.fleetSparks = this._pushSeries(this.fleetSparks, this.fleetActivityNorm, 32);
@@ -551,6 +796,7 @@ function agentsPage() {
         if (was != null && was !== cur) {
           self.fleetOnAgentPing(aid, 1);
           self.agentTweakSparkToward(aid, self.phaseSparkTarget(cur), 0.06);
+          self.recordAgentHourly('status', aid, 1, Date.now());
         }
       });
       this._prevPhaseByAgent = next;
@@ -620,7 +866,10 @@ function agentsPage() {
       if (this._fleetLastSummaryCalls > 0) {
         var d = Math.max(0, calls - this._fleetLastSummaryCalls);
         this.agentsFleetTweakSparks(d);
-        if (d > 0) this.fleetOnAgentPing('__global__', d);
+        if (d > 0) {
+          this.fleetOnAgentPing('__global__', d);
+          this._fleetTasksByHour = this.fleetRecordHourly(this._fleetTasksByHour, d, Date.now());
+        }
       }
       this._fleetLastSummaryCalls = calls;
       var cost = typeof s.total_cost_usd === 'number' ? s.total_cost_usd : 0;
@@ -629,6 +878,7 @@ function agentsPage() {
         if (del > 0) {
           this._fleetSpendsMs = this._pushSeries(this._fleetSpendsMs, Date.now(), 800);
           this._fleetSpendsAmt = this._pushSeries(this._fleetSpendsAmt, del, 800);
+          this._fleetSpendByHour = this.fleetRecordHourly(this._fleetSpendByHour, del, Date.now());
         }
       }
       this.fleetLastCost = cost;
@@ -641,9 +891,11 @@ function agentsPage() {
           if (sdel > 0) {
             this._fleetSavedsMs = this._pushSeries(this._fleetSavedsMs, Date.now(), 800);
             this._fleetSavedsAmt = this._pushSeries(this._fleetSavedsAmt, sdel, 800);
+            this._fleetSavedByHour = this.fleetRecordHourly(this._fleetSavedByHour, sdel, Date.now());
           }
         }
         this.fleetLastSaved = saved;
+        this.fleetSavedToday = this.fleetSeriesTodayTotal(this._fleetSavedByHour);
       }
       this.fleetBuildSavedThisHour();
     },
@@ -704,6 +956,7 @@ function agentsPage() {
           var delta = c - prev;
           this.fleetOnAgentPing(aid, delta);
           this.agentTweakSpark(aid);
+          this.recordAgentHourly('node', aid, delta, Date.now());
           try {
             var appStore = Alpine.store('app');
             if (appStore && typeof appStore.setAgentActivityLine === 'function') {
@@ -730,6 +983,14 @@ function agentsPage() {
           sum += arr.length;
         } catch (e) { /* ignore */ }
       }
+      if (this.fleetLastGraphNodeTotal != null && sum > this.fleetLastGraphNodeTotal) {
+        this._fleetNodesByHour = this.fleetRecordHourly(
+          this._fleetNodesByHour,
+          (sum - this.fleetLastGraphNodeTotal),
+          Date.now()
+        );
+      }
+      this.fleetLastGraphNodeTotal = sum;
       this.fleetGraphNodeTotal = sum;
     },
 
@@ -745,6 +1006,7 @@ function agentsPage() {
       try { summary = await OpenFangAPI.get('/api/usage/summary').catch(function() { return null; }); } catch (e1) { /* ignore */ }
       try { daily = await OpenFangAPI.get('/api/usage/daily').catch(function() { return { days: [] }; }); } catch (e2) { daily = { days: [] }; }
       this.tasksToday = this.todayCallsFromDaily(daily);
+      if (typeof daily.today_cost_usd === 'number') this.fleetSpendToday = Math.max(0, Number(daily.today_cost_usd) || 0);
       if (summary) this.fleetOnSummary(summary);
       else { this.fleetBuildSpendThisHour(); this.fleetBuildSavedThisHour(); }
       try { usageRows = await OpenFangAPI.get('/api/usage').catch(function() { return { agents: [] }; }); } catch (e3) { usageRows = { agents: [] }; }
@@ -756,7 +1018,9 @@ function agentsPage() {
         if (!Object.prototype.hasOwnProperty.call(m, id)) continue;
         var ptc = (prev[id] != null) ? prev[id] : 0;
         if (m[id].tool_calls > ptc) {
-          self.fleetOnAgentPing(id, m[id].tool_calls - ptc);
+          var tdel = m[id].tool_calls - ptc;
+          self.fleetOnAgentPing(id, tdel);
+          self.recordAgentHourly('tool', id, tdel, Date.now());
         }
         if (m[id].tool_calls !== ptc) {
           self.agentTweakSpark(id);
@@ -908,12 +1172,12 @@ function agentsPage() {
 
     agentCurrentPhaseIntensity: function(agent) {
       var ph = this.agentCurrentPhaseClass(agent);
-      var base = 22;
+      var base = 12;
       if (ph === 'thinking') base = 58;
       else if (ph === 'tool') base = 74;
       else if (ph === 'streaming') base = 90;
       else if (ph === 'running') base = 46;
-      else if (ph === 'waiting') base = 36;
+      else if (ph === 'waiting') base = 24;
       else if (ph === 'error') base = 100;
 
       var ts = null;
@@ -955,7 +1219,7 @@ function agentsPage() {
           (Math.sin((t2 + seed2 * 0.55) / (5.4 + (seed2 % 4) * 0.35)) * 2.2);
       }
       var out = Math.round(base + freshnessBoost + pingBoost + idleWave + activeWave);
-      if (out < 16) out = 16;
+      if (out < 8) out = 8;
       if (out > 100) out = 100;
       return out;
     },
@@ -975,6 +1239,9 @@ function agentsPage() {
         }
         var ageSec = ts ? Math.max(0, Math.floor((Date.now() - ts) / 1000)) : 9999;
         if (ageSec > 300) return;
+        if (ph === 'tool' || ph === 'thinking' || ph === 'streaming' || ph === 'running') {
+          self.recordAgentHourly('status', a.id, 0.08, Date.now());
+        }
         if (ph === 'tool') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.06);
         else if (ph === 'thinking') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.055);
         else if (ph === 'streaming') self.agentTweakSparkToward(a.id, self.phaseSparkTarget(ph), 0.045);
@@ -1057,6 +1324,7 @@ function agentsPage() {
       if (this._activitySyncInt) { try { clearInterval(this._activitySyncInt); } catch (e0) { /* ignore */ } this._activitySyncInt = null; }
       if (this._idlePulseInt) { try { clearInterval(this._idlePulseInt); } catch (e00) { /* ignore */ } this._idlePulseInt = null; }
       if (this._activePulseInt) { try { clearInterval(this._activePulseInt); } catch (e000) { /* ignore */ } this._activePulseInt = null; }
+      if (this._agentHourlyPersistTimer) { try { clearTimeout(this._agentHourlyPersistTimer); } catch (e0000) { /* ignore */ } this._agentHourlyPersistTimer = null; }
       if (this._tweenRaf) { try { cancelAnimationFrame(this._tweenRaf); } catch (e) { /* ignore */ } this._tweenRaf = null; }
       if (this._demoKey) { try { document.removeEventListener('keydown', this._demoKey, true); } catch (e) { /* ignore */ } this._demoKey = null; }
     },
@@ -1143,6 +1411,9 @@ function agentsPage() {
       this.demoProfile = this.readFleetDemoProfileFromEnv();
       this.demoMode = this.readFleetDemoFromEnv();
       this.applyDemoThemeIfNeeded();
+      this.loadPersistedAgentHourly();
+      this.pruneAgentHourlyMaps();
+      this.schedulePersistAgentHourly();
       this._demoKey = function(e) {
         if (e.ctrlKey && e.shiftKey && (e.key === 'd' || e.key === 'D')) {
           e.preventDefault();
