@@ -835,16 +835,13 @@ mod tests {
         }
     }
 
-    static ARMARAOS_HOME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[tokio::test]
     async fn drain_inbox_returns_error_on_malformed_json() {
-        let (writer, dir, _g) = {
-            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-            let (w, d) = open_writer_in_mem();
-            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
-            (w, d, g)
-        };
+        // Hold for the full test: `openfang_home_dir()` is read on every `drain_inbox` / `inbox_path`
+        // (must match any parallel test that mutates `ARMARAOS_HOME` — see `runtime_env_test_lock`).
+        let _lock = crate::runtime_env_test_lock().lock().await;
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -858,12 +855,9 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_noops_on_empty_file() {
-        let (writer, dir, _g) = {
-            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-            let (w, d) = open_writer_in_mem();
-            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
-            (w, d, g)
-        };
+        let _lock = crate::runtime_env_test_lock().lock().await;
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -873,12 +867,9 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_quarantines_unsupported_schema_version() {
-        let (writer, dir, _g) = {
-            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-            let (w, d) = open_writer_in_mem();
-            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
-            (w, d, g)
-        };
+        let _lock = crate::runtime_env_test_lock().lock().await;
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -907,12 +898,9 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_accepts_missing_schema_version_for_backcompat() {
-        let (writer, dir, _g) = {
-            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-            let (w, d) = open_writer_in_mem();
-            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
-            (w, d, g)
-        };
+        let _lock = crate::runtime_env_test_lock().lock().await;
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
@@ -945,12 +933,9 @@ mod tests {
 
     #[tokio::test]
     async fn drain_inbox_ignores_unknown_fields_without_drift_failure() {
-        let (writer, dir, _g) = {
-            let _lock = ARMARAOS_HOME_TEST_LOCK.lock().expect("lock");
-            let (w, d) = open_writer_in_mem();
-            let g = EnvGuard::set("ARMARAOS_HOME", d.path());
-            (w, d, g)
-        };
+        let _lock = crate::runtime_env_test_lock().lock().await;
+        let (writer, dir) = open_writer_in_mem();
+        let _g = EnvGuard::set("ARMARAOS_HOME", dir.path());
         let inbox_dir = dir.path().join("agents").join(AGENT);
         tokio::fs::create_dir_all(&inbox_dir).await.unwrap();
         let inbox_path = inbox_dir.join(INBOX_FILENAME);
