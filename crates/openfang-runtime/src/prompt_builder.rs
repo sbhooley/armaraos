@@ -124,6 +124,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     if !tools_section.is_empty() {
         sections.push(tools_section);
     }
+    if ctx.is_subagent {
+        sections.push(SUBAGENT_KERNEL_SCHEDULING_NOTE.to_string());
+    } else if granted_kernel_scheduling_tools(&ctx.granted_tools) {
+        sections.push(TOP_LEVEL_KERNEL_SCHEDULING_DISCRETION.to_string());
+    }
 
     // Section 4 — Memory Protocol (always present)
     let mem_section = build_memory_section(&ctx.recalled_memories);
@@ -311,6 +316,30 @@ pub fn ensure_mandatory_host_anchor_sections(prompt: &mut String) {
         prompt.push_str("\n\n");
         prompt.push_str(ARMARAOS_NOT_OPENCLAW_SECTION);
     }
+}
+
+/// Shown to subagents (non-zero spawn depth): they cannot call kernel schedule/cron tools.
+const SUBAGENT_KERNEL_SCHEDULING_NOTE: &str = "\
+## Kernel scheduling (subagent)
+You are a **subagent**. Recurring ArmaraOS kernel jobs (`agent_turn` / `ainl_run` on a timer) can only be registered by a **top-level** agent. In this context you do **not** have `schedule_*` or `cron_*` tools.
+- If a recurring job is needed, message your **orchestrator / parent** with a concrete request: cadence, `program_path` or turn message, deliverables, and why it is safe. They must call `schedule_create` or `cron_create` for you.
+- If the user asked you to set a schedule yourself, explain this rule briefly and return the same structured request for the top-level agent to act on.";
+
+/// Shown to **top-level** agents that were granted kernel scheduling tools.
+const TOP_LEVEL_KERNEL_SCHEDULING_DISCRETION: &str = "\
+## Kernel scheduling (top-level)
+You can register kernel jobs with `schedule_*` / `cron_*` (persisted under `~/.armaraos/cron_jobs.json`). **Only top-level** agents may do this.
+- When you **orchestrate** subagents, you own whether recurring work gets registered, unless the user said otherwise. Subagents cannot create these jobs; they will ask you to.
+- **Discretion:** Grant a subagent’s scheduling request when it is clear, aligned with the user’s goals, and reasonable on cost, rate, and safety. Refuse or trim cadence when it is vague, duplicative, abusive of resources, or out of scope — state why.";
+
+fn granted_kernel_scheduling_tools(tools: &[String]) -> bool {
+    tools.iter().any(|t| {
+        matches!(
+            t.as_str(),
+            "schedule_create" | "schedule_list" | "schedule_delete" | "cron_create"
+                | "cron_list" | "cron_cancel"
+        )
+    })
 }
 
 /// Static tool-call behavior directives.
@@ -929,6 +958,23 @@ mod tests {
         assert!(prompt.contains("## Your Tools"));
         assert!(prompt.contains("## Operational Guidelines"));
         assert!(prompt.contains("## Memory"));
+        assert!(prompt.contains("## Kernel scheduling (subagent)"));
+        assert!(!prompt.contains("## Kernel scheduling (top-level)"));
+    }
+
+    #[test]
+    fn test_top_level_with_schedule_tools_gets_discretion() {
+        let mut ctx = basic_ctx();
+        ctx.granted_tools.push("schedule_create".to_string());
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## Kernel scheduling (top-level)"));
+        assert!(!prompt.contains("## Kernel scheduling (subagent)"));
+    }
+
+    #[test]
+    fn test_top_level_without_schedule_tools_omits_discretion() {
+        let prompt = build_system_prompt(&basic_ctx());
+        assert!(!prompt.contains("## Kernel scheduling (top-level)"));
     }
 
     #[test]

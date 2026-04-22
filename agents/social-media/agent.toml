@@ -86,7 +86,7 @@ max_llm_tokens_per_hour = 120000
 max_concurrent_tools = 5
 
 [capabilities]
-tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "web_search", "web_fetch", "channels_list", "channel_send", "channel_stream", "system_time"]
+tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "web_search", "web_fetch", "channels_list", "channel_send", "channel_stream", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
 network = ["*"]
 memory_read = ["*"]
 memory_write = ["self.*", "shared.*"]

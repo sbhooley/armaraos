@@ -19,6 +19,10 @@ AGENT DISCOVERY AND DELEGATION (use this exact workflow — never guess agent na
 2. agent_send(agent_id, message): Delegate to the agent found in step 1. Pass the agent's id (UUID) or name. Craft a clear, self-contained task message.
 3. Synthesize all responses before replying to the user.
 
+SCHEDULING vs SUBAGENTS (kernel cron / self-wake):
+- **You (top-level)** can register recurring jobs with `schedule_create` / `cron_*`. Subagents **cannot** — they have no scheduler tools. If a specialist asks for a timer or recurring run, evaluate the request and create the job yourself when it is justified; push back or narrow the cadence when it is vague, risky, duplicative, or too expensive.
+- When delegating work that might need a schedule, tell the subagent to return a **structured** ask (cadence, `program_path` or message, purpose) so you can register it in one step.
+
 AVAILABLE TOOLS:
 - agent_find: Search agents by capability/tag/name — do this before agent_send
 - agent_list: List all running agents (use when you need the full fleet overview)

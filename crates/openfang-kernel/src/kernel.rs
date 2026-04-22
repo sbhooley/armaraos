@@ -64,7 +64,38 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "mcp_ainl_ainl_compile",
     "mcp_ainl_ainl_run",
     "mcp_ainl_*",
+    // ArmaraOS kernel scheduler — so agents with a custom allowlist can still
+    // register recurring work (e.g. agent_turn / ainl_run) without hand-editing
+    // manifests. Block via tool_blocklist if a sandbox should not schedule.
+    "schedule_create",
+    "schedule_list",
+    "schedule_delete",
+    "channels_list",
 ];
+
+/// Kernel scheduling builtins merged into a **restricted** `capabilities.tools` list
+/// (non-empty, no `*`) so agents can create recurring "wake-up" jobs without
+/// duplicating the same tool names in every `agent.toml` / `AGENT.json`.
+const DEFAULT_AGENT_SCHEDULING_BUILTINS: &[&str] = &[
+    "schedule_create",
+    "schedule_list",
+    "schedule_delete",
+    "channels_list",
+];
+
+fn merge_scheduling_builtins_into_declared_tools(declared: &mut Vec<String>) {
+    if declared.is_empty() {
+        return;
+    }
+    if declared.iter().any(|t| t == "*") {
+        return;
+    }
+    for name in DEFAULT_AGENT_SCHEDULING_BUILTINS {
+        if !declared.iter().any(|d| d.eq_ignore_ascii_case(name)) {
+            declared.push((*name).to_string());
+        }
+    }
+}
 
 fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
     if allowlist.is_empty() {
@@ -7960,7 +7991,10 @@ impl OpenFangKernel {
     /// the model from calling tools the agent isn't designed to use.
     ///
     /// If `capabilities.tools` is empty (or contains `"*"`), all tools are
-    /// available (backwards compatible).
+    /// available (backwards compatible). When a **restricted** list is set,
+    /// `schedule_create` / `schedule_list` / `schedule_delete` / `channels_list`
+    /// are also included for built-in tool selection so agents can register kernel
+    /// recurring jobs; use `tool_blocklist` to opt out in tight sandboxes.
     fn available_tools(&self, agent_id: AgentId) -> Vec<ToolDefinition> {
         self.available_tools_with_registry(agent_id, None)
     }
@@ -8015,6 +8049,14 @@ impl OpenFangKernel {
         let tools_unrestricted =
             declared_tools.is_empty() || declared_tools.iter().any(|t| t == "*");
 
+        // For builtin selection only: include kernel scheduling tools so a
+        // restricted `capabilities.tools` list does not block self-serve cron.
+        // Skill/MCP steps still use `declared_tools` — scheduling is builtin-only.
+        let mut declared_builtins = declared_tools.clone();
+        if !tools_unrestricted {
+            merge_scheduling_builtins_into_declared_tools(&mut declared_builtins);
+        }
+
         // Step 1: Filter builtin tools.
         // Priority: declared tools > ToolProfile > all builtins.
         let has_tool_all = entry.as_ref().is_some_and(|_| {
@@ -8026,7 +8068,7 @@ impl OpenFangKernel {
             // Agent declares specific tools — only include matching builtins
             all_builtins
                 .into_iter()
-                .filter(|t| declared_tools.iter().any(|d| d == &t.name))
+                .filter(|t| declared_builtins.iter().any(|d| d == &t.name))
                 .collect()
         } else {
             // No specific tools declared — fall back to profile or all builtins
@@ -11161,6 +11203,32 @@ mod tests {
             validate_count, 1,
             "mcp_ainl_ainl_validate should not be duplicated when already present"
         );
+    }
+
+    #[test]
+    fn test_merge_scheduling_builtins_adds_for_restricted_list() {
+        let mut d = vec!["file_read".to_string()];
+        merge_scheduling_builtins_into_declared_tools(&mut d);
+        for required in DEFAULT_AGENT_SCHEDULING_BUILTINS {
+            assert!(
+                d.iter().any(|t| t.eq_ignore_ascii_case(required)),
+                "scheduling builtin missing: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_scheduling_builtins_noop_for_empty() {
+        let mut d: Vec<String> = vec![];
+        merge_scheduling_builtins_into_declared_tools(&mut d);
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn test_merge_scheduling_builtins_skips_wildcard() {
+        let mut d = vec!["*".to_string()];
+        merge_scheduling_builtins_into_declared_tools(&mut d);
+        assert_eq!(d, vec!["*".to_string()]);
     }
 
     #[test]

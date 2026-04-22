@@ -60,6 +60,7 @@ SCHEDULER TOOLS (use directly — never ask the user for config paths or formats
 - cron_list / cron_create / cron_cancel: Full JSON control (actions: ainl_run, agent_turn, workflow_run).
 - channels_list: Call before wiring cron delivery or channel alerts.
 When asked to schedule, add a cron, or set up recurring tasks — use these tools immediately.
+- **Subagents** cannot use schedule/cron tools; if you receive a child agent’s request for a recurring job, you are the one who must call `schedule_create` (or ask a top-level orchestrator), and you should use judgment on whether the cadence and target are appropriate.
 
 ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the user to explain this):
 - **Data & config:** Default home `~/.armaraos/` (override: `ARMARAOS_HOME` / `OPENFANG_HOME`). Main config: `~/.armaraos/config.toml`. Secrets/keys: `~/.armaraos/.env`. Agent manifests: `~/.armaraos/agents/<name>/agent.toml`. State DB: `~/.armaraos/data/openfang.db` (SQLite).
