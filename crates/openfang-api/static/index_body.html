@@ -2131,6 +2131,7 @@
                           <svg x-show="!(agent.identity && agent.identity.emoji)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M12 3v2"/><path d="M12 19v2"/><path d="M4.2 4.2l1.4 1.4"/><path d="M18.4 18.4l1.4 1.4"/><path d="M1 12h2"/><path d="M21 12h2"/><path d="M4.2 19.8l1.4-1.4"/><path d="M18.4 5.6l1.4-1.4"/><path d="M8 12h.01"/><path d="M16 12a4 4 0 0 0-4-4"/><path d="M12 16a4 4 0 0 0-4-4h4V8"/>
                           </svg>
+                          <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
                         </div>
                         <div class="agent-vitals-identity-text">
                           <div class="agent-vitals-headline">
@@ -2242,6 +2243,7 @@
                         <div class="agent-vitals-icon" aria-hidden="true">
                           <span class="agent-vitals-emoji" x-show="agent.identity && agent.identity.emoji" x-text="agent.identity.emoji"></span>
                           <svg x-show="!(agent.identity && agent.identity.emoji)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                          <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
                         </div>
                         <div class="agent-vitals-identity-text">
                           <div class="agent-vitals-headline">

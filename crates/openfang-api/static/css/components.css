@@ -8666,6 +8666,7 @@ button.tool-card-header {
 .agent-vitals-icon {
   color: var(--text-secondary);
   display: flex;
+  position: relative;
   width: 36px;
   height: 36px;
   border-radius: 10px;
@@ -8678,6 +8679,17 @@ button.tool-card-header {
 .agent-vitals-emoji {
   font-size: 20px;
   line-height: 1;
+}
+.agent-vitals-unread-dot {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--error);
+  border: 1px solid color-mix(in srgb, var(--surface) 75%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--error) 24%, transparent);
 }
 .agent-vitals-identity-text { min-width: 0; flex: 1; }
 .agent-vitals-headline {
