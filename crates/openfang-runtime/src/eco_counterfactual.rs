@@ -133,6 +133,7 @@ mod tests {
             content_recommendation_confidence: None,
             compression_profile_id: None,
             cache_effective_ttl_secs: None,
+            cache_prompt_streak: None,
         };
         let r = build_eco_counterfactual_receipt(
             &msg,

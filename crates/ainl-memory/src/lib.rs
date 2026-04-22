@@ -388,6 +388,18 @@ impl GraphMemory {
         self.store
             .search_failures_fts_for_agent(agent_id, query, limit)
     }
+
+    /// Full-graph FTS5 search (`ainl_nodes_fts`); see [`SqliteGraphStore::search_all_nodes_fts_for_agent`].
+    pub fn search_all_nodes_fts(
+        &self,
+        agent_id: &str,
+        query: &str,
+        project_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AinlMemoryNode>, String> {
+        self.store
+            .search_all_nodes_fts_for_agent(agent_id, query, project_id, limit)
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +511,25 @@ mod tests {
             .search_failures_for_agent("other-agent", "loop", 10)
             .expect("wrong agent id");
         assert!(wrong_agent.is_empty());
+    }
+
+    /// Full-graph `ainl_nodes_fts` — semantic fact is searchable, not only failures.
+    #[test]
+    fn all_nodes_fts_write_and_search_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("ainl_all_nodes_fts.db");
+        let memory = GraphMemory::new(&db_path).expect("graph memory");
+        let agent_id = "agent-fts-all";
+        let mut node = AinlMemoryNode::new_fact("unique-fts-violet-cat-42".into(), 0.8, Uuid::new_v4());
+        node.agent_id = agent_id.to_string();
+        let nid = node.id;
+        memory.write_node(&node).expect("write fact");
+
+        let hits = memory
+            .search_all_nodes_fts(agent_id, "violet", None, 10)
+            .expect("search");
+        assert_eq!(hits.len(), 1, "expected one all-nodes FTS hit");
+        assert_eq!(hits[0].id, nid);
     }
 
     #[test]

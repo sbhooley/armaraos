@@ -120,8 +120,34 @@ fn trajectory_steps_from_tools(tools: &[String]) -> Vec<TrajectoryStep> {
             error: None,
             vitals: None,
             freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
         })
         .collect()
+}
+
+/// Optional turn-level **frame** snapshot for trajectory learning (JSON).
+///
+/// Hosts may extend this over time; typical keys: `vitals_trust`, `compression_semantic_score`.
+#[must_use]
+pub fn trajectory_turn_frame_vars(
+    vitals_trust: Option<f32>,
+    compression_semantic: Option<f32>,
+) -> Option<serde_json::Value> {
+    if vitals_trust.is_none() && compression_semantic.is_none() {
+        return None;
+    }
+    let mut m = serde_json::Map::new();
+    if let Some(t) = vitals_trust {
+        m.insert("vitals_trust".to_string(), serde_json::json!(t));
+    }
+    if let Some(s) = compression_semantic {
+        m.insert(
+            "compression_semantic_score".to_string(),
+            serde_json::json!(s),
+        );
+    }
+    Some(serde_json::Value::Object(m))
 }
 
 fn consolidation_tracker() -> &'static StdMutex<HashMap<String, i64>> {
@@ -274,6 +300,7 @@ impl GraphMemoryWriter {
         vitals_gate: Option<String>,
         vitals_phase: Option<String>,
         vitals_trust: Option<f32>,
+        memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
         let kind = if delegation_to.is_some() {
             "delegation"
@@ -302,6 +329,10 @@ impl GraphMemoryWriter {
                 trace_json,
             );
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             if let AinlNodeType::Episode { ref mut episodic } = node.node_type {
                 if let Some(prev) = prev_id {
                     episodic.follows_episode_id = Some(prev.to_string());
@@ -387,6 +418,8 @@ impl GraphMemoryWriter {
         project_id: Option<&str>,
         duration_ms: u64,
         ainl_source_hash: Option<&str>,
+        trajectory_frame_vars: Option<serde_json::Value>,
+        trajectory_fitness_delta: Option<f32>,
     ) -> Option<Uuid> {
         if !trajectory_env_enabled() {
             return None;
@@ -405,6 +438,8 @@ impl GraphMemoryWriter {
                 project_id,
                 ainl_source_hash,
                 duration_ms,
+                trajectory_frame_vars,
+                trajectory_fitness_delta,
             )
         };
         match res {
@@ -449,6 +484,7 @@ impl GraphMemoryWriter {
         tool_name: Option<&str>,
         message: &str,
         session_id: Option<&str>,
+        memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
         if !failure_learning_env_enabled() {
             return None;
@@ -462,6 +498,10 @@ impl GraphMemoryWriter {
                 session_id,
             );
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             let id = node.id;
             inner.write_node(&node).map(|()| id)
         };
@@ -506,6 +546,7 @@ impl GraphMemoryWriter {
         tool_name: &str,
         message: &str,
         session_id: Option<&str>,
+        memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
         if !failure_learning_env_enabled() {
             return None;
@@ -515,6 +556,10 @@ impl GraphMemoryWriter {
             let inner = self.inner.lock().await;
             let mut node = AinlMemoryNode::new_tool_execution_failure(tool_name, msg, session_id);
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             let id = node.id;
             inner.write_node(&node).map(|()| id)
         };
@@ -560,6 +605,7 @@ impl GraphMemoryWriter {
         tool_name: &str,
         message: &str,
         session_id: Option<&str>,
+        memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
         if !failure_learning_env_enabled() {
             return None;
@@ -571,6 +617,10 @@ impl GraphMemoryWriter {
             let mut node =
                 AinlMemoryNode::new_agent_loop_precheck_failure(kind, tool_name, msg, session_id);
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             let id = node.id;
             inner.write_node(&node).map(|()| id)
         };
@@ -614,6 +664,7 @@ impl GraphMemoryWriter {
         &self,
         message: &str,
         session_id: Option<&str>,
+        memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
         if !failure_learning_env_enabled() {
             return None;
@@ -623,6 +674,10 @@ impl GraphMemoryWriter {
             let inner = self.inner.lock().await;
             let mut node = AinlMemoryNode::new_ainl_runtime_graph_validation_failure(msg, session_id);
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             let id = node.id;
             inner.write_node(&node).map(|()| id)
         };
@@ -668,6 +723,7 @@ impl GraphMemoryWriter {
         tool_sequence: Vec<String>,
         confidence: f32,
         trace_id: Option<String>,
+        memory_project_id: Option<&str>,
     ) {
         let seq_preview = tool_sequence.join(" → ");
         let res = {
@@ -707,6 +763,10 @@ impl GraphMemoryWriter {
                         procedural.trace_id = Some(t.clone());
                     }
                 }
+                crate::memory_project_scope::apply_memory_project_id_to_node(
+                    &mut node,
+                    memory_project_id,
+                );
                 let id = node.id;
                 inner.write_node(&node).map(|()| id)
             } else {
@@ -716,6 +776,10 @@ impl GraphMemoryWriter {
                     confidence,
                 );
                 node.agent_id = self.agent_id.clone();
+                crate::memory_project_scope::apply_memory_project_id_to_node(
+                    &mut node,
+                    memory_project_id,
+                );
                 if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
                     procedural.trace_id = trace_id.clone();
                 }
@@ -753,8 +817,14 @@ impl GraphMemoryWriter {
     }
 
     /// Record a semantic fact learned during a turn.
-    pub async fn record_fact(&self, fact: String, confidence: f32, source_turn_id: Uuid) {
-        self.record_fact_with_tags(fact, confidence, source_turn_id, &[])
+    pub async fn record_fact(
+        &self,
+        fact: String,
+        confidence: f32,
+        source_turn_id: Uuid,
+        memory_project_id: Option<&str>,
+    ) {
+        self.record_fact_with_tags(fact, confidence, source_turn_id, &[], memory_project_id)
             .await;
     }
 
@@ -765,11 +835,16 @@ impl GraphMemoryWriter {
         confidence: f32,
         source_turn_id: Uuid,
         extra_tags: &[String],
+        memory_project_id: Option<&str>,
     ) {
         let res = {
             let inner = self.inner.lock().await;
             let mut node = AinlMemoryNode::new_fact(fact.clone(), confidence, source_turn_id);
             node.agent_id = self.agent_id.clone();
+            crate::memory_project_scope::apply_memory_project_id_to_node(
+                &mut node,
+                memory_project_id,
+            );
             if let AinlNodeType::Semantic { ref mut semantic } = node.node_type {
                 semantic.source_episode_id = source_turn_id.to_string();
                 for t in extra_tags {
@@ -857,6 +932,7 @@ impl GraphMemoryWriter {
                 Some(target_agent_id.to_string()),
                 None,
                 &[],
+                None,
                 None,
                 None,
                 None,
@@ -1211,6 +1287,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .is_some());
@@ -1284,6 +1361,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await;
         let r1 = writer.run_persona_evolution_pass().await;
@@ -1297,6 +1375,7 @@ mod tests {
                 None,
                 Some(json!({ "outcome": "success" })),
                 &[],
+                None,
                 None,
                 None,
                 None,
@@ -1330,6 +1409,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                None,
                 None,
                 None,
                 None,
@@ -1420,7 +1500,8 @@ mod tests {
                 &[],
                 None,
                 None,
-                None
+                None,
+                None,
             )
             .await
             .is_some());
@@ -1447,11 +1528,11 @@ mod tests {
         };
 
         let id1 = writer
-            .record_turn(vec!["a".to_string()], None, None, &[], None, None, None)
+            .record_turn(vec!["a".to_string()], None, None, &[], None, None, None, None)
             .await
             .expect("ep1");
         let id2 = writer
-            .record_turn(vec!["b".to_string()], None, None, &[], None, None, None)
+            .record_turn(vec!["b".to_string()], None, None, &[], None, None, None, None)
             .await
             .expect("ep2");
 
@@ -1505,6 +1586,7 @@ mod tests {
                 vec!["tool_a".into(), "tool_b".into()],
                 0.85,
                 Some("trace-z99".into()),
+                None,
             )
             .await;
         let v = writer.export_graph_json().await.expect("export");
@@ -1535,7 +1617,7 @@ mod tests {
         let seq = vec!["tool_a".into(), "tool_b".into()];
         for _ in 0..3 {
             writer
-                .record_pattern("demo_pat", seq.clone(), 0.85, None)
+                .record_pattern("demo_pat", seq.clone(), 0.85, None, None)
                 .await;
         }
         let v = writer.export_graph_json().await.expect("export");
@@ -1601,7 +1683,7 @@ mod tests {
 
         let tools = vec!["tool_a".to_string(), "tool_b".to_string()];
         let episode_id = writer
-            .record_turn(tools.clone(), None, None, &[], None, None, None)
+            .record_turn(tools.clone(), None, None, &[], None, None, None, None)
             .await
             .expect("episode");
 
@@ -1614,6 +1696,8 @@ mod tests {
                 "sess-ci",
                 Some("proj-ci"),
                 0,
+                None,
+                None,
                 None,
             )
             .await
@@ -1663,7 +1747,7 @@ mod tests {
         };
 
         let episode_id = writer
-            .record_turn(vec!["only".into()], None, None, &[], None, None, None)
+            .record_turn(vec!["only".into()], None, None, &[], None, None, None, None)
             .await
             .expect("episode");
 
@@ -1676,6 +1760,8 @@ mod tests {
                 "sess",
                 None,
                 0,
+                None,
+                None,
                 None,
             )
             .await;

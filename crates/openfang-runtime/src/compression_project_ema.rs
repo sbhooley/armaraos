@@ -28,6 +28,18 @@ pub struct CompressionProjectProfilesFile {
     pub projects: HashMap<String, ProjectEmaEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CachePolicySnapshot {
+    /// Last `effective_ttl_with_hysteresis` seconds (operator visibility).
+    pub last_effective_ttl_secs: u64,
+    /// Same-key streak fed into TTL stretch.
+    pub last_streak: u32,
+    /// `ainl_compression` content-classifier label before merge.
+    #[serde(default)]
+    pub last_content_recommendation: String,
+    pub updated_at_unix: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectEmaEntry {
     /// EMA of observed savings ratio `tokens_saved / original_tokens` (0..=1).
@@ -42,6 +54,9 @@ pub struct ProjectEmaEntry {
     /// Unix seconds when this row was last updated.
     #[serde(default)]
     pub updated_at_unix: i64,
+    /// Richer per-project cache / adaptive hints (see Phase 5 in `SELF_LEARNING_INTEGRATION_MAP.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CachePolicySnapshot>,
 }
 
 #[inline]
@@ -140,6 +155,7 @@ pub fn record_turn(
             observations: 1,
             last_applied_mode: applied_mode_label.to_string(),
             updated_at_unix: now,
+            cache: None,
         });
 
     write_file_atomic(&path, &file)
@@ -180,6 +196,80 @@ pub fn maybe_record_from_turn(
     }
 }
 
+/// Merge adaptive **cache** telemetry into the on-disk per-project row (best-effort).
+pub fn maybe_record_cache_from_adaptive_snapshot(
+    agent_id: &str,
+    manifest: &AgentManifest,
+    snap: &openfang_types::adaptive_eco::AdaptiveEcoTurnSnapshot,
+) {
+    if !env_enabled() {
+        return;
+    }
+    if !crate::eco_mode_resolver::env_ainl_adaptive_compression() {
+        return;
+    }
+    let Some(pid) = manifest
+        .metadata
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+    else {
+        return;
+    };
+    if pid.is_empty() {
+        return;
+    }
+    let ttl = snap.cache_effective_ttl_secs.unwrap_or(0);
+    let streak = snap.cache_prompt_streak.unwrap_or(0);
+    let cr = snap
+        .content_recommendation
+        .as_deref()
+        .unwrap_or("");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let path = profiles_path_for_agent(agent_id);
+    let mut file = match load_file(agent_id) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::debug!(%agent_id, ?e, "compression_project_ema: load for cache merge failed");
+            return;
+        }
+    };
+    if file.version == 0 {
+        file.version = 1;
+    }
+    file.projects
+        .entry(pid.to_string())
+        .and_modify(|e| {
+            e.cache = Some(CachePolicySnapshot {
+                last_effective_ttl_secs: ttl,
+                last_streak: streak,
+                last_content_recommendation: cr.to_string(),
+                updated_at_unix: now,
+            });
+            e.updated_at_unix = now;
+        })
+        .or_insert_with(|| ProjectEmaEntry {
+            savings_ema: 0.0,
+            semantic_ema: 0.0,
+            observations: 0,
+            last_applied_mode: String::new(),
+            updated_at_unix: now,
+            cache: Some(CachePolicySnapshot {
+                last_effective_ttl_secs: ttl,
+                last_streak: streak,
+                last_content_recommendation: cr.to_string(),
+                updated_at_unix: now,
+            }),
+        });
+    if let Err(e) = write_file_atomic(&path, &file) {
+        tracing::debug!(%agent_id, ?e, "compression_project_ema: cache merge write failed (non-fatal)");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +288,7 @@ mod tests {
                 observations: 2,
                 last_applied_mode: "balanced".into(),
                 updated_at_unix: 1,
+                cache: None,
             },
         );
         let s = serde_json::to_string(&f).expect("ser");

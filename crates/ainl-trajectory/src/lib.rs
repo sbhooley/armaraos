@@ -27,6 +27,10 @@ pub struct TrajectoryDraft {
     pub outcome: TrajectoryOutcome,
     pub steps: Vec<TrajectoryStep>,
     pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_vars: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitness_delta: Option<f32>,
 }
 
 impl TrajectoryDraft {
@@ -40,6 +44,8 @@ impl TrajectoryDraft {
             outcome,
             steps: Vec::new(),
             duration_ms: 0,
+            frame_vars: None,
+            fitness_delta: None,
         }
     }
 
@@ -68,6 +74,8 @@ mod tests {
             error: None,
             vitals: None,
             freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
         });
         let j = serde_json::to_string(&d).unwrap();
         let back: TrajectoryDraft = serde_json::from_str(&j).unwrap();

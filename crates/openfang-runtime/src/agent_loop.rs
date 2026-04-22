@@ -171,6 +171,7 @@ async fn append_mcp_readiness_context(
     kernel: &Option<Arc<dyn KernelHandle>>,
     graph_memory: &Option<crate::graph_memory_writer::GraphMemoryWriter>,
     agent_id: &openfang_types::agent::AgentId,
+    manifest: &AgentManifest,
 ) {
     let Some(mcp_mtx) = mcp_connections else {
         return;
@@ -206,7 +207,14 @@ async fn append_mcp_readiness_context(
                 for id in ev.report.checks.keys() {
                     tags.push(format!("readiness:{id}"));
                 }
-                gm.record_fact_with_tags(fact, 0.95, uuid::Uuid::new_v4(), &tags)
+                let mem = crate::memory_project_scope::effective_memory_project_id(manifest);
+                gm.record_fact_with_tags(
+                    fact,
+                    0.95,
+                    uuid::Uuid::new_v4(),
+                    &tags,
+                    mem.as_deref(),
+                )
                     .await;
             }
         }
@@ -330,7 +338,7 @@ async fn run_ainl_runtime_engine_prelude(
     orchestration_ctx: &Option<openfang_types::orchestration::OrchestrationContext>,
     learning: &crate::graph_memory_learning::LearningRecorder,
     session: &openfang_memory::session::Session,
-) -> Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> {
+) -> Option<crate::AinlBridgeTelemetry> {
     if !ainl_runtime_engine_switch_active(manifest) {
         return None;
     }
@@ -805,7 +813,7 @@ pub struct AgentLoopResult {
     /// Machine-readable policy reasons for this turn.
     pub adaptive_eco_reason_codes: Option<Vec<String>>,
     /// Structured telemetry from ainl-runtime-engine, when that path handled the turn.
-    pub ainl_runtime_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry>,
+    pub ainl_runtime_telemetry: Option<crate::AinlBridgeTelemetry>,
 }
 
 // Note: whole-prompt compression telemetry from `ainl-context-compiler` is intentionally
@@ -1273,6 +1281,8 @@ pub async fn run_agent_loop(
     // Build the system prompt — kernel expands `[model].system_prompt` via prompt_builder; we
     // append recalled memories here since they are resolved at loop time.
     let mut system_prompt = loop_time_system_prompt_from_manifest(manifest);
+    let mut compose_graph_memory_segs: Option<Vec<ainl_context_compiler::Segment>> = None;
+    let mut compose_system_base: Option<String> = None;
     if !memories.is_empty() {
         let mem_pairs: Vec<(String, String)> = memories
             .iter()
@@ -1384,6 +1394,10 @@ pub async fn run_agent_loop(
             )
             .await;
             if !prompt_ctx.is_empty() {
+                if crate::compose_telemetry::compose_graph_memory_as_segments_from_env() {
+                    compose_system_base = Some(system_prompt.clone());
+                    compose_graph_memory_segs = Some(prompt_ctx.to_memory_block_segments());
+                }
                 system_prompt.push_str(&prompt_ctx.to_prompt_block());
             }
             if !prompt_ctx.selection_debug.is_empty() {
@@ -1445,6 +1459,7 @@ pub async fn run_agent_loop(
         &kernel,
         &graph_memory_for_mcp,
         &session.agent_id,
+        manifest,
     )
     .await;
 
@@ -1512,6 +1527,13 @@ pub async fn run_agent_loop(
         .metadata
         .get("adaptive_eco")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
+    if let Some(snap) = adaptive_snap.as_ref() {
+        crate::compression_project_ema::maybe_record_cache_from_adaptive_snapshot(
+            &session.agent_id.0.to_string(),
+            manifest,
+            snap,
+        );
+    }
     let adaptive_confidence = adaptive_snap.as_ref().map(|s| {
         openfang_types::adaptive_eco::compute_adaptive_confidence(s, compression_semantic_score)
     });
@@ -1602,21 +1624,26 @@ pub async fn run_agent_loop(
         messages = crate::session_repair::validate_and_repair(&messages);
     }
 
-    // Whole-prompt compression telemetry (M1 — Phase 6 of `SELF_LEARNING_INTEGRATION_MAP.md`).
+    // Whole-prompt compression telemetry (Phase 6 — M1 + optional M2 `AINL_CONTEXT_COMPOSE_APPLY`).
     //
-    // Runs in *measurement mode*: feed the assembled system prompt + history + current user
-    // message through `ainl_context_compiler` to compute accurate whole-prompt
-    // original/compressed token estimates, then stash them in the `compose_telemetry`
-    // side-channel for the kernel to consume after this loop returns. We deliberately do
-    // *not* swap the LLM-bound `messages` for the composed output yet — that's the M2 step.
-    //
-    // Failure here is silent (logged at debug) and the kernel falls back to the prior
-    // user-message-only estimation path, so this can never break a turn.
-    crate::compose_telemetry::measure_and_record(
+    // Feeds the assembled system prompt + history + current user message through
+    // `ainl_context_compiler` for whole-prompt token telemetry (`compose_telemetry` side channel).
+    // When `AINL_CONTEXT_COMPOSE_APPLY` is truthy and the transcript is plain text, the composed
+    // window replaces `system_prompt` and `messages` (M2).
+    let fr_seg = crate::compose_telemetry::load_failure_recall_segment_for_compose(
+        graph_memory.as_ref(),
         agent_id_str.as_str(),
-        &system_prompt,
-        &messages,
         user_message,
+    )
+    .await;
+    crate::compose_telemetry::process_compose_telemetry_for_turn(
+        agent_id_str.as_str(),
+        &mut system_prompt,
+        &mut messages,
+        user_message,
+        fr_seg,
+        compose_graph_memory_segs,
+        compose_system_base,
     );
 
     // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
@@ -1667,7 +1694,7 @@ pub async fn run_agent_loop(
     let mut actual_model_used: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
+    let ainl_prelude_telemetry: Option<crate::AinlBridgeTelemetry> = {
         let mut ainl_runtime_turn_allowed = true;
         if ainl_runtime_engine_switch_active(manifest) {
             if let Some(ref kh) = kernel {
@@ -2443,6 +2470,7 @@ pub async fn run_agent_loop(
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if memory_policy.allow_writes() {
                     if let Some(ref gm) = graph_memory {
+                    let mem_pid = crate::memory_project_scope::effective_memory_project_id(manifest);
                     let turn_trace =
                         graph_memory_turn_trace_json(
                             agent_id_str.as_str(),
@@ -2468,6 +2496,7 @@ pub async fn run_agent_loop(
                             ep_vitals_gate,
                             ep_vitals_phase,
                             ep_vitals_trust,
+                            mem_pid.as_deref(),
                         )
                         .await
                     {
@@ -2491,6 +2520,7 @@ pub async fn run_agent_loop(
                                 fact.confidence,
                                 episode_id,
                                 &fact_tags,
+                                mem_pid.as_deref(),
                             )
                             .await;
                         }
@@ -2503,6 +2533,7 @@ pub async fn run_agent_loop(
                                     pattern.tool_sequence,
                                     pattern.confidence,
                                     pattern_trace_id.clone(),
+                                    mem_pid.as_deref(),
                                 )
                                 .await;
                             } else {
@@ -2526,6 +2557,14 @@ pub async fn run_agent_loop(
                             crate::graph_memory_writer::ainl_source_hash_for_trajectory_persist(
                                 manifest,
                             );
+                        let trajectory_frame = crate::graph_memory_writer::trajectory_turn_frame_vars(
+                            ep_vitals_trust,
+                            compression_semantic_score,
+                        );
+                        let trajectory_fitness = crate::trajectory_fitness_state::vitals_trust_fitness_delta(
+                            agent_id_str.as_str(),
+                            ep_vitals_trust,
+                        );
                         gm.record_trajectory_for_episode(
                             episode_id,
                             &tools_for_episode,
@@ -2535,6 +2574,8 @@ pub async fn run_agent_loop(
                             project_id.as_deref(),
                             dur_ms,
                             traj_hash.as_deref(),
+                            trajectory_frame,
+                            trajectory_fitness,
                         )
                         .await;
                     } else {
@@ -4034,6 +4075,8 @@ pub async fn run_agent_loop_streaming(
     // Build the system prompt — kernel expands `[model].system_prompt` via prompt_builder; we
     // append recalled memories here since they are resolved at loop time.
     let mut system_prompt = loop_time_system_prompt_from_manifest(manifest);
+    let mut compose_graph_memory_segs: Option<Vec<ainl_context_compiler::Segment>> = None;
+    let mut compose_system_base: Option<String> = None;
     if !memories.is_empty() {
         let mem_pairs: Vec<(String, String)> = memories
             .iter()
@@ -4059,6 +4102,10 @@ pub async fn run_agent_loop_streaming(
             )
             .await;
             if !prompt_ctx.is_empty() {
+                if crate::compose_telemetry::compose_graph_memory_as_segments_from_env() {
+                    compose_system_base = Some(system_prompt.clone());
+                    compose_graph_memory_segs = Some(prompt_ctx.to_memory_block_segments());
+                }
                 system_prompt.push_str(&prompt_ctx.to_prompt_block());
             }
             if !prompt_ctx.selection_debug.is_empty() {
@@ -4122,6 +4169,7 @@ pub async fn run_agent_loop_streaming(
         &kernel,
         &graph_memory_for_mcp,
         &session.agent_id,
+        manifest,
     )
     .await;
 
@@ -4284,14 +4332,21 @@ pub async fn run_agent_loop_streaming(
         messages = crate::session_repair::validate_and_repair(&messages);
     }
 
-    // Whole-prompt compression telemetry (M1 — Phase 6 of `SELF_LEARNING_INTEGRATION_MAP.md`).
-    // See the matching block in `run_agent_loop` for full context. Same measurement-only
-    // semantics — the streaming loop never has its `messages` mutated by the compiler in M1.
-    crate::compose_telemetry::measure_and_record(
+    // Same Phase 6 compose path as the non-streaming loop (M1 + optional M2).
+    let fr_seg = crate::compose_telemetry::load_failure_recall_segment_for_compose(
+        graph_memory.as_ref(),
         agent_id_str.as_str(),
-        &system_prompt,
-        &messages,
         user_message,
+    )
+    .await;
+    crate::compose_telemetry::process_compose_telemetry_for_turn(
+        agent_id_str.as_str(),
+        &mut system_prompt,
+        &mut messages,
+        user_message,
+        fr_seg,
+        compose_graph_memory_segs,
+        compose_system_base,
     );
 
     // Use autonomous config max_iterations if set, else `[runtime_limits]` default.
@@ -4342,7 +4397,7 @@ pub async fn run_agent_loop_streaming(
     let mut actual_model_used: Option<String> = None;
 
     #[cfg(feature = "ainl-runtime-engine")]
-    let ainl_prelude_telemetry: Option<crate::ainl_runtime_bridge::AinlBridgeTelemetry> = {
+    let ainl_prelude_telemetry: Option<crate::AinlBridgeTelemetry> = {
         let mut ainl_runtime_turn_allowed = true;
         if ainl_runtime_engine_switch_active(manifest) {
             if let Some(ref kh) = kernel {
@@ -4795,6 +4850,7 @@ pub async fn run_agent_loop_streaming(
                 // AINL graph memory: episode + heuristic semantic/procedural extraction (before session persist)
                 if memory_policy.allow_writes() {
                     if let Some(ref gm) = graph_memory {
+                    let mem_pid = crate::memory_project_scope::effective_memory_project_id(manifest);
                     let turn_trace =
                         graph_memory_turn_trace_json(
                             agent_id_str.as_str(),
@@ -4824,6 +4880,7 @@ pub async fn run_agent_loop_streaming(
                             sv_gate,
                             sv_phase,
                             sv_trust,
+                            mem_pid.as_deref(),
                         )
                         .await
                     {
@@ -4847,6 +4904,7 @@ pub async fn run_agent_loop_streaming(
                                 fact.confidence,
                                 episode_id,
                                 &fact_tags,
+                                mem_pid.as_deref(),
                             )
                             .await;
                         }
@@ -4859,6 +4917,7 @@ pub async fn run_agent_loop_streaming(
                                     pattern.tool_sequence,
                                     pattern.confidence,
                                     pattern_trace_id.clone(),
+                                    mem_pid.as_deref(),
                                 )
                                 .await;
                             } else {
@@ -4882,6 +4941,15 @@ pub async fn run_agent_loop_streaming(
                             crate::graph_memory_writer::ainl_source_hash_for_trajectory_persist(
                                 manifest,
                             );
+                        let v_trust = stream_vitals.as_ref().map(|v| v.trust);
+                        let trajectory_frame = crate::graph_memory_writer::trajectory_turn_frame_vars(
+                            v_trust,
+                            compression_semantic_score,
+                        );
+                        let trajectory_fitness = crate::trajectory_fitness_state::vitals_trust_fitness_delta(
+                            agent_id_str.as_str(),
+                            v_trust,
+                        );
                         gm.record_trajectory_for_episode(
                             episode_id,
                             &tools_for_episode,
@@ -4891,6 +4959,8 @@ pub async fn run_agent_loop_streaming(
                             project_id.as_deref(),
                             dur_ms,
                             traj_hash.as_deref(),
+                            trajectory_frame,
+                            trajectory_fitness,
                         )
                         .await;
                     } else {

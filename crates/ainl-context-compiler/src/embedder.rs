@@ -6,6 +6,9 @@
 
 use std::error::Error;
 use std::fmt;
+use std::hash::{Hash, Hasher};
+
+const PLACEHOLDER_EMBED_DIM: usize = 16;
 
 /// Errors an [`Embedder`] implementation may return.
 #[derive(Debug)]
@@ -43,6 +46,40 @@ pub trait Embedder: Send + Sync {
     /// Embed a batch (default impl loops; backends should override for efficiency).
     fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedderError> {
         texts.iter().map(|t| self.embed(t)).collect()
+    }
+}
+
+/// Deterministic low-dimensional embedding for **tests** and offline M3 development.
+/// Maps text to a L2-normalized `PLACEHOLDER_EMBED_DIM`-vector from a 64-bit hash of the
+/// string — not semantically meaningful; cosine ranks correlate weakly with lexical overlap.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PlaceholderEmbedder;
+
+impl PlaceholderEmbedder {
+    /// Create a new deterministic hasher-based embedder (L2-normalized, fixed dimension).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl Embedder for PlaceholderEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, EmbedderError> {
+        use std::collections::hash_map::DefaultHasher;
+        let mut h = DefaultHasher::new();
+        text.hash(&mut h);
+        let x = h.finish();
+        let mut v = vec![0f32; PLACEHOLDER_EMBED_DIM];
+        for i in 0..PLACEHOLDER_EMBED_DIM {
+            v[i] = (((x >> (i * 4)) & 0xF) as f32) / 15.0;
+        }
+        let n: f32 = v.iter().map(|e| e * e).sum::<f32>().sqrt();
+        if n > 0.0 {
+            for t in v.iter_mut() {
+                *t /= n;
+            }
+        }
+        Ok(v)
     }
 }
 
@@ -84,5 +121,14 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];
         assert_eq!(cosine(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn placeholder_l2_unit_vector() {
+        let e = PlaceholderEmbedder::new();
+        let v = e.embed("hello world").expect("ok");
+        assert_eq!(v.len(), PLACEHOLDER_EMBED_DIM);
+        let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((n - 1.0).abs() < 1e-5 || n.abs() < 1e-5);
     }
 }

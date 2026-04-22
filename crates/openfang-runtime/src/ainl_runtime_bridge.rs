@@ -24,6 +24,9 @@ use tracing::{debug, info, warn};
 
 use crate::graph_memory_writer::GraphMemoryWriter;
 
+/// Re-exports: canonical types live in [`crate::ainl_bridge_telemetry`] (always built).
+pub use crate::ainl_bridge_telemetry::{AinlBridgeTelemetry, AinlBridgeTurnStatus};
+
 /// Typed bridge-construction failures for host routing setup.
 #[derive(Debug, Clone)]
 pub enum AinlRuntimeBridgeInitError {
@@ -65,22 +68,6 @@ pub struct TurnContext {
     pub vitals_gate: Option<String>,
     pub vitals_phase: Option<String>,
     pub vitals_trust: Option<f32>,
-}
-
-/// OpenFang-facing summary of an **ainl-runtime** turn (mirrors fields we surface on an EndTurn-style event).
-#[derive(Debug, Clone)]
-pub struct AinlBridgeTelemetry {
-    pub turn_status: TurnStatus,
-    pub partial_success: bool,
-    pub warning_count: usize,
-    pub has_extraction_report: bool,
-    pub memory_context_recent_episodes: usize,
-    pub memory_context_relevant_semantic: usize,
-    pub memory_context_active_patches: usize,
-    pub memory_context_has_persona_snapshot: bool,
-    pub patch_dispatch_count: usize,
-    pub patch_dispatch_adapter_output_count: usize,
-    pub steps_executed: u64,
 }
 
 /// OpenFang-facing summary of an **ainl-runtime** turn (mirrors fields we surface on an EndTurn-style event).
@@ -158,6 +145,16 @@ fn build_output_text(r: &AinlTurnResult) -> String {
     )
 }
 
+fn map_ainl_turn_status(s: TurnStatus) -> AinlBridgeTurnStatus {
+    match s {
+        TurnStatus::Ok => AinlBridgeTurnStatus::Ok,
+        TurnStatus::StepLimitExceeded { steps_executed } => AinlBridgeTurnStatus::StepLimitExceeded {
+            steps_executed,
+        },
+        TurnStatus::GraphMemoryDisabled => AinlBridgeTurnStatus::GraphMemoryDisabled,
+    }
+}
+
 fn collect_ainl_bridge_telemetry(
     ainl: &AinlTurnOutcome,
     r: &AinlTurnResult,
@@ -168,7 +165,7 @@ fn collect_ainl_bridge_telemetry(
         .filter(|p| p.adapter_output.is_some())
         .count();
     AinlBridgeTelemetry {
-        turn_status: r.status,
+        turn_status: map_ainl_turn_status(r.status),
         partial_success: ainl.is_partial_success(),
         warning_count: ainl.warnings().len(),
         has_extraction_report: r.extraction_report.is_some(),
@@ -183,7 +180,7 @@ fn collect_ainl_bridge_telemetry(
 }
 
 fn log_ainl_bridge_telemetry(ainl: &AinlTurnOutcome, telemetry: &AinlBridgeTelemetry) {
-    if telemetry.turn_status != TurnStatus::Ok {
+    if telemetry.turn_status != AinlBridgeTurnStatus::Ok {
         warn!(
             status = ?telemetry.turn_status,
             partial_success = telemetry.partial_success,

@@ -2419,6 +2419,7 @@ async fn tool_agent_delegate(
         )
         .ok();
 
+        let mem = crate::memory_project_scope::memory_project_id_from_process_env();
         let _ = gm
             .record_turn(
                 vec!["agent_delegate".to_string()],
@@ -2428,6 +2429,7 @@ async fn tool_agent_delegate(
                 None,
                 None,
                 None,
+                mem.as_deref(),
             )
             .await;
     }

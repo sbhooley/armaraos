@@ -223,6 +223,9 @@ pub struct AdaptiveEcoTurnSnapshot {
     /// `effective_ttl_with_hysteresis` (base = provider cache TTL) when adaptive compression env is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_effective_ttl_secs: Option<u64>,
+    /// Consecutive same logical cache key hits used for [`effective_ttl_with_hysteresis`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_prompt_streak: Option<u32>,
 }
 
 /// Per billing-agent hysteresis state for adaptive eco enforcement (in-memory; cleared on restart).

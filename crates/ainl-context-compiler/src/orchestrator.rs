@@ -6,8 +6,11 @@
 //! when the host injects a [`Summarizer`] (M2) or [`crate::embedder::Embedder`] (M3) — but the
 //! orchestrator never blocks or fails when those are absent.
 
+use std::cmp::Ordering;
+
 use crate::budget::BudgetPolicy;
 use crate::capability::CapabilityProbe;
+use crate::embedder::{cosine, Embedder};
 use crate::metrics::ContextCompilerMetrics;
 use crate::relevance::{HeuristicScorer, RelevanceScore, RelevanceScorer};
 use crate::segment::{Role, Segment, SegmentKind};
@@ -39,6 +42,7 @@ pub struct ContextCompiler {
     scorer: Arc<dyn RelevanceScorer>,
     budget: BudgetPolicy,
     summarizer: Option<Arc<dyn Summarizer>>,
+    embedder: Option<Arc<dyn Embedder>>,
     sink: SinkRef,
 }
 
@@ -50,6 +54,7 @@ impl ContextCompiler {
             scorer,
             budget,
             summarizer: None,
+            embedder: None,
             sink: None,
         }
     }
@@ -74,12 +79,19 @@ impl ContextCompiler {
         self
     }
 
+    /// Inject a Tier 2 / M3 embedder for relevance reranking of non-pinned segments.
+    #[must_use]
+    pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
     /// Return the active capability probe based on injected dependencies.
     #[must_use]
     pub fn probe(&self) -> CapabilityProbe {
         CapabilityProbe {
             summarizer: self.summarizer.is_some(),
-            embedder: false, // M3 hook
+            embedder: self.embedder.is_some(),
         }
     }
 
@@ -168,6 +180,36 @@ impl ContextCompiler {
             })
             .map(|(i, _)| i)
             .collect();
+
+        if let Some(emb) = &self.embedder {
+            if let Ok(qv) = emb.embed(latest_user_query) {
+                let pinned_order: Vec<(usize, RelevanceScore)> = scored
+                    .iter()
+                    .filter(|(i, _)| pinned_idx.contains(i))
+                    .copied()
+                    .collect();
+                let mut unpin: Vec<(usize, RelevanceScore)> = scored
+                    .iter()
+                    .filter(|(i, _)| !pinned_idx.contains(i))
+                    .copied()
+                    .collect();
+                unpin.sort_by(|(ia, _), (ib, _)| {
+                    let a_sim = emb
+                        .embed(&segments[*ia].content)
+                        .map(|v| cosine(&v, &qv))
+                        .unwrap_or(0.0);
+                    let b_sim = emb
+                        .embed(&segments[*ib].content)
+                        .map(|v| cosine(&v, &qv))
+                        .unwrap_or(0.0);
+                    b_sim
+                        .partial_cmp(&a_sim)
+                        .unwrap_or(Ordering::Equal)
+                });
+                scored = pinned_order;
+                scored.extend(unpin);
+            }
+        }
 
         // ── 3+4+5. Greedy fill with per-segment compression ─────────────────────────────
         let mut keep: Vec<Option<Segment>> = (0..segments.len()).map(|_| None).collect();
@@ -452,6 +494,32 @@ mod tests {
             .segments
             .iter()
             .any(|s| s.kind == SegmentKind::AnchoredSummaryRecall));
+    }
+
+    #[test]
+    fn with_embedder_reranks_unpinned_without_panic() {
+        use crate::embedder::PlaceholderEmbedder;
+        let mut budget = BudgetPolicy::default();
+        budget.total_window = 1_000;
+        let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget)
+            .with_embedder(Arc::new(PlaceholderEmbedder::new()));
+        // Two older turns with different text; user prompt matches the second.
+        let segments = vec![
+            Segment::system_prompt("sys"),
+            Segment::older_turn(
+                Role::User,
+                "unrelated zzz",
+                4,
+            ),
+            Segment::older_turn(Role::Assistant, "the answer is forty two", 3),
+            Segment::user_prompt("forty two"),
+        ];
+        let out = compiler.compose("forty two", segments, None, None);
+        assert!(!out.segments.is_empty());
+        assert_eq!(
+            out.telemetry.tier,
+            "heuristic_summarization_embedding"
+        );
     }
 
     #[test]

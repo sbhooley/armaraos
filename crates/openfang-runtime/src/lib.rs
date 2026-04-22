@@ -76,11 +76,18 @@ pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
 pub const USER_AGENT: &str = "openfang/0.3.48";
 
+/// Shared shape for per-turn **ainl-runtime-engine** telemetry (see [`agent_loop::AgentLoopResult`]);
+/// always available regardless of the `ainl-runtime-engine` feature (values are only populated
+/// when that feature is enabled and the prelude runs).
+pub mod ainl_bridge_telemetry;
+pub use ainl_bridge_telemetry::{AinlBridgeTelemetry, AinlBridgeTurnStatus};
+
 pub mod a2a;
 pub mod agent_loop;
 pub mod ainl_graph_extractor_bridge;
 #[cfg(feature = "ainl-runtime-engine")]
 pub mod ainl_runtime_bridge;
+
 pub mod ainl_semantic_tagger_bridge;
 
 pub mod ainl_bundle_cron;
@@ -91,6 +98,7 @@ pub mod auth_cooldown;
 pub mod browser;
 pub mod command_lane;
 pub mod compactor;
+mod context_compiler_summarizer;
 pub mod compression_project_ema;
 pub mod context_budget;
 pub mod context_overflow;
@@ -101,6 +109,7 @@ pub mod drivers;
 pub mod eco_counterfactual;
 pub mod eco_mode_resolver;
 pub mod compose_telemetry;
+pub(crate) mod trajectory_fitness_state;
 pub(crate) mod eco_telemetry;
 pub mod embedding;
 pub mod graceful_shutdown;
@@ -116,6 +125,7 @@ pub mod host_functions;
 pub mod image_gen;
 pub mod kernel_handle;
 pub mod link_understanding;
+pub mod memory_project_scope;
 pub mod llm_driver;
 pub mod llm_errors;
 pub mod loop_guard;

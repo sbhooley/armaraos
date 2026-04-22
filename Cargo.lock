@@ -112,6 +112,7 @@ dependencies = [
  "ainl-compression",
  "ainl-context-freshness",
  "ainl-contracts",
+ "ainl-failure-learning",
  "ainl-memory",
  "ainl-semantic-tagger",
  "ainl-trajectory",
@@ -133,6 +134,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ainl-failure-learning"
+version = "0.1.0"
+dependencies = [
+ "ainl-memory",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

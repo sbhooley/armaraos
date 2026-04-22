@@ -211,6 +211,7 @@ pub fn resolve_adaptive_eco_turn(
     let mut content_recommendation: Option<String> = None;
     let mut content_recommendation_confidence: Option<f32> = None;
     let mut cache_effective_ttl_secs: Option<u64> = None;
+    let mut cache_prompt_streak: Option<u32> = None;
 
     let r_content = if env_ainl_adaptive_compression() {
         Some(recommend_mode_for_content(user_message))
@@ -231,6 +232,7 @@ pub fn resolve_adaptive_eco_turn(
         }
         let project_key = format!("{}|{}", manifest.name, project_id.unwrap_or(""));
         let strike = next_cache_streak(manifest.name.as_str(), &project_key);
+        cache_prompt_streak = Some(strike);
         let cttl = effective_ttl_with_hysteresis(cfg.provider_prompt_cache_ttl_secs.max(1), strike);
         cache_effective_ttl_secs = Some(cttl.effective_ttl_secs);
         reason_codes.push(format!("ainl_cache_stretch:{}", cttl.effective_ttl_secs));
@@ -295,6 +297,7 @@ pub fn resolve_adaptive_eco_turn(
         content_recommendation_confidence,
         compression_profile_id,
         cache_effective_ttl_secs,
+        cache_prompt_streak,
     }
 }
 

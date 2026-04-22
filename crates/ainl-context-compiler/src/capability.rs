@@ -53,7 +53,8 @@ impl CapabilityProbe {
         match (self.summarizer, self.embedder) {
             (true, true) => Tier::HeuristicSummarizationEmbedding,
             (true, false) => Tier::HeuristicSummarization,
-            (false, _) => Tier::Heuristic,
+            (false, true) => Tier::HeuristicSummarizationEmbedding,
+            (false, false) => Tier::Heuristic,
         }
     }
 
@@ -63,7 +64,7 @@ impl CapabilityProbe {
         match (self.summarizer, self.embedder) {
             (true, true) => "summarizer_and_embedder_present",
             (true, false) => "summarizer_present",
-            (false, true) => "embedder_only_skipped_to_heuristic",
+            (false, true) => "embedder_present",
             (false, false) => "heuristic_only",
         }
     }
@@ -97,11 +98,11 @@ mod tests {
     }
 
     #[test]
-    fn embedder_only_falls_back_to_heuristic() {
+    fn embedder_only_unlocks_embedding_tier() {
         let p = CapabilityProbe {
             summarizer: false,
             embedder: true,
         };
-        assert_eq!(p.active_tier(), Tier::Heuristic);
+        assert_eq!(p.active_tier(), Tier::HeuristicSummarizationEmbedding);
     }
 }

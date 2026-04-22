@@ -17,6 +17,7 @@ ainl-context-freshness = { path = "../ainl-context-freshness", optional = true }
 ainl-semantic-tagger = { path = "../ainl-semantic-tagger", optional = true }
 ainl-memory = { path = "../ainl-memory", optional = true }
 ainl-trajectory = { path = "../ainl-trajectory", optional = true }
+ainl-failure-learning = { path = "../ainl-failure-learning", optional = true }
 
 [features]
 # Sources whose data already exists in M1.
@@ -28,6 +29,7 @@ ainl-trajectory = { path = "../ainl-trajectory", optional = true }
 default = [
     "sources-bulk",
     "sources-graph-memory",
+    "sources-failure-warnings",
     "freshness",
     "tagger",
     "vitals",
@@ -35,7 +37,7 @@ default = [
 
 sources-bulk = []
 sources-graph-memory = ["dep:ainl-memory"]
-sources-failure-warnings = []                            # off until ainl-failure-learning crate lands
+sources-failure-warnings = ["dep:ainl-failure-learning", "dep:ainl-memory"]
 sources-suggested-patterns = []                          # off until ainl-improvement-proposals crate lands
 sources-trajectory-recap = ["dep:ainl-trajectory"]       # opt-in (crate exists but signal source not wired in M1)
 
@@ -43,7 +45,7 @@ freshness = ["dep:ainl-context-freshness"]
 tagger = ["dep:ainl-semantic-tagger"]
 vitals = []                                               # always available via ainl-contracts
 
-# Reserved for M2 / M3 — the trait surfaces ship in M1 (so callers can pass a sink); their
-# implementations land later.
+# Reserved for optional future heavyweight backends. The `summarizer` trait, `embedder` trait,
+# [`PlaceholderEmbedder`], and orchestrator wiring are always compiled.
 summarizer = []
 embedder = []

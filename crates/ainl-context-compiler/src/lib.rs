@@ -51,8 +51,9 @@ pub mod relevance;
 pub mod segment;
 pub mod summarizer;
 
-#[cfg(feature = "embedder")]
 pub mod embedder;
+#[cfg(feature = "sources-failure-warnings")]
+pub mod failure_recall;
 
 pub use budget::BudgetPolicy;
 pub use capability::{CapabilityProbe, Tier};
@@ -60,7 +61,10 @@ pub use metrics::{ContextCompilerMetrics, SegmentMetrics};
 pub use orchestrator::{ComposedPrompt, ContextCompiler};
 pub use relevance::{HeuristicScorer, RelevanceScore, RelevanceScorer};
 pub use segment::{Role, Segment, SegmentKind};
+pub use embedder::{cosine, Embedder, EmbedderError, PlaceholderEmbedder};
 pub use summarizer::{AnchoredSummary, AnchoredSummarySection, Summarizer, SummarizerError};
+#[cfg(feature = "sources-failure-warnings")]
+pub use failure_recall::memory_block_for_user_query;
 
 use std::sync::Arc;
 

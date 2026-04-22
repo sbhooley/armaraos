@@ -1289,6 +1289,8 @@ pub(crate) fn trajectory_steps_for_runtime_turn(
             error,
             vitals: None,
             freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
         });
     }
 
@@ -1306,6 +1308,8 @@ pub(crate) fn trajectory_steps_for_runtime_turn(
             error: None,
             vitals: None,
             freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
         });
     }
 
@@ -1354,6 +1358,8 @@ pub(crate) fn maybe_persist_trajectory_after_episode(
         project_id.as_deref(),
         hash.as_deref(),
         duration_ms,
+        None,
+        None,
     )?;
     Ok(())
 }

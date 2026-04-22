@@ -416,6 +416,12 @@ pub struct TrajectoryNode {
     pub steps: Vec<TrajectoryStep>,
     #[serde(default)]
     pub duration_ms: u64,
+    /// Optional end-of-episode frame snapshot (JSON) — e.g. vitals + compression summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_vars: Option<serde_json::Value>,
+    /// Optional host-learner “fitness” or improvement signal (e.g. vitals trust, Δ reward).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitness_delta: Option<f32>,
 }
 
 /// Typed failure payload (persisted as `node_type = "failure"`).
@@ -481,6 +487,9 @@ pub struct AinlMemoryNode {
     pub memory_category: MemoryCategory,
     pub importance_score: f32,
     pub agent_id: String,
+    /// Optional host workspace / repo key (when `AINL_MEMORY_PROJECT_SCOPE` is enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     pub node_type: AinlNodeType,
     pub edges: Vec<AinlEdge>,
 }
@@ -494,6 +503,8 @@ struct AinlMemoryNodeWire {
     importance_score: Option<f32>,
     #[serde(default)]
     agent_id: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
     node_type: AinlNodeType,
     #[serde(default)]
     edges: Vec<AinlEdge>,
@@ -510,6 +521,11 @@ impl From<AinlMemoryNodeWire> for AinlMemoryNode {
             memory_category,
             importance_score,
             agent_id: w.agent_id.unwrap_or_default(),
+            project_id: w
+                .project_id
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             node_type: w.node_type,
             edges: w.edges,
         }
@@ -548,6 +564,7 @@ impl AinlMemoryNode {
             memory_category,
             importance_score,
             agent_id,
+            project_id: None,
             node_type,
             edges: Vec::new(),
         }
@@ -901,14 +918,19 @@ mod trajectory_tests {
                 error: None,
                 vitals: None,
                 freshness_at_step: None,
+                frame_vars: None,
+                tool_telemetry: None,
             }],
             duration_ms: 10,
+            frame_vars: None,
+            fitness_delta: None,
         };
         let node = AinlMemoryNode {
             id: Uuid::nil(),
             memory_category: MemoryCategory::Trajectory,
             importance_score: 0.5,
             agent_id: "agent".into(),
+            project_id: None,
             node_type: AinlNodeType::Trajectory { trajectory: traj },
             edges: Vec::new(),
         };

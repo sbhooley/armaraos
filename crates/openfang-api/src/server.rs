@@ -177,6 +177,10 @@ pub async fn build_router(
             axum::routing::get(crate::graph_memory::get_graph_memory_failures_recent),
         )
         .route(
+            "/api/graph-memory/nodes/search",
+            axum::routing::get(crate::graph_memory::get_graph_memory_nodes_search),
+        )
+        .route(
             "/api/graph-memory/snapshots",
             axum::routing::get(crate::graph_memory::get_graph_memory_snapshots),
         )

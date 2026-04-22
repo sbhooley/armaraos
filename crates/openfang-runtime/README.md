@@ -57,6 +57,31 @@ When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_
 
 **Introspection:** `openfang_runtime::graph_memory_learning_metrics()` returns best-effort counters (recorded vs skipped vs write-none) for operators / status surfaces.
 
+**Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
+
+## Phase 6: context compiler (`ainl_context_compiler`) and compose telemetry
+
+The agent loop feeds the assembled system prompt, history, and current user message through **`ainl_context_compiler::ContextCompiler::compose`** for whole-prompt token estimates. Results are published via the **`compose_telemetry` side channel** (same hand-off pattern as `eco_telemetry`): the kernel’s compression recorder can consume `take_compose_turn(agent_id)` after each turn. Authoritative behavior is in [`src/compose_telemetry.rs`](src/compose_telemetry.rs).
+
+| Env | When truthy (`1` / `true` / `yes` / `on`) | Notes |
+|-----|-----------------------------------------|--------|
+| **`AINL_COMPOSE_GRAPH_MEMORY_AS_SEGMENTS`** | Whole-prompt **telemetry** may use a “compiler-root” segment layout: `system` = the manifest/kernel string **before** the graph-memory prompt append, then optional failure-recall block, then one `MemoryBlock` per non-empty graph section (from `PromptMemoryContext::to_memory_block_segments`), then history and user. | The model still receives the **legacy** single `system_prompt` (graph block appended) unless M2 apply below replaces it. |
+| **`AINL_COMPOSE_FAILURE_RECALL`** | Adds a FTS failure `MemoryBlock` after the system segment in the **compose** path. | **Default off** — avoids duplicating failure text that may already be in the graph-memory prompt block. |
+| **`AINL_CONTEXT_COMPOSE_APPLY`** (M2) | After telemetry, the composed window **may** replace the in-memory `system_prompt` and `messages` passed to the driver. | **Strict:** apply runs only if **every** message in the turn uses `MessageContent::Text` (no `Blocks` / multimodal / tool-block transcripts). If any message is `Blocks`, apply is skipped (telemetry may still run). `map_composed_to_system_and_messages` also requires a non-empty message list; otherwise the host prompt is kept. **Default: off** (measurement only). |
+| **`AINL_CONTEXT_COMPOSE_SUMMARIZER`** | Uses Tier 1 anchored **summarization** when the compiler must drop `OlderTurn` segments over budget (in-process summarizer; no extra HTTP by default in the stub). | **Default: off** (extra CPU; can change tier strings in `record_compose_turn`). |
+| **`AINL_CONTEXT_COMPOSE_EMBED`** | Uses Tier 2 **embedding** rerank of score-ordered non-pinned segments when a host `Embedder` is available (`PlaceholderEmbedder` for tests; production wiring optional). | **Default: off** |
+
+**Reference:** [docs/SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) (Phase 6), [`compose_telemetry.rs`](src/compose_telemetry.rs).
+
+### M2 safe rollout and observability
+
+- **Start with `AINL_CONTEXT_COMPOSE_APPLY` unset** — whole-prompt compression telemetry is recorded, but the LLM request body is not rewritten.
+- **Canaries:** enable apply on a single process or a narrow slice of agents before a fleet default.
+- **Preconditions for apply:** sessions where stored history is plain **text** messages. Tool-heavy or multimodal histories that use `MessageContent::Blocks` will log `compose M2: skipping prompt swap (non-text MessageContent in history)` and keep the host-assembled prompt.
+- **What to watch:** `record_compose_turn` / `take_compose_turn` output (tier, `original_tokens` / `compressed_tokens`); daemon logs for M2 skip lines if apply is on but most turns are skipped. Dashboard “whole-prompt” figures reflect the **compiler-scored** window, which can diverge from the literal driver payload when `Blocks` are present and apply is off.
+
+**Follow-up (product):** optional per-agent `manifest.metadata["ainl_context_compose_apply"]` to OR with the env (not required for basic rollout).
+
 ## Trajectory rows (`Trajectory` nodes)
 
 After each successful **`record_turn`**, the loop may persist a **`Trajectory`** graph node (one coarse step per tool name on the turn) and an edge **`trajectory_of`** from that node to the episode row. This mirrors **extractor opt-out** semantics:

@@ -219,6 +219,8 @@ mod tests {
             error: None,
             vitals: None,
             freshness_at_step: Some(ContextFreshness::Fresh),
+            frame_vars: None,
+            tool_telemetry: None,
         };
         let j = serde_json::to_value(&s).unwrap();
         let back: TrajectoryStep = serde_json::from_value(j).unwrap();
@@ -353,6 +355,8 @@ mod tests {
             error: Some("boom".into()),
             vitals: Some(v.clone()),
             freshness_at_step: Some(ContextFreshness::Unknown),
+            frame_vars: None,
+            tool_telemetry: None,
         };
         let j = serde_json::to_value(&s).unwrap();
         let back: TrajectoryStep = serde_json::from_value(j).unwrap();

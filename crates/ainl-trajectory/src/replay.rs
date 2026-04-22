@@ -29,6 +29,12 @@ pub struct TrajectoryReplayLine {
     pub ainl_source_hash: Option<String>,
     pub duration_ms: u64,
     pub steps: Vec<TrajectoryStep>,
+    /// Trajectory-level frame snapshot (optional; see `ainl_memory::TrajectoryNode::frame_vars`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_vars: Option<serde_json::Value>,
+    /// Optional fitness / improvement signal for the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitness_delta: Option<f32>,
 }
 
 impl TrajectoryReplayLine {
@@ -70,6 +76,8 @@ pub fn trajectory_replay_line(
     ainl_source_hash: Option<&str>,
     duration_ms: u64,
     steps: Vec<TrajectoryStep>,
+    frame_vars: Option<serde_json::Value>,
+    fitness_delta: Option<f32>,
 ) -> TrajectoryReplayLine {
     TrajectoryReplayLine {
         schema_version: TRAJECTORY_REPLAY_SCHEMA_VERSION,
@@ -84,6 +92,8 @@ pub fn trajectory_replay_line(
         ainl_source_hash: ainl_source_hash.map(str::to_string),
         duration_ms,
         steps,
+        frame_vars,
+        fitness_delta,
     }
 }
 
@@ -117,7 +127,11 @@ mod tests {
                 error: None,
                 vitals: None,
                 freshness_at_step: None,
+                frame_vars: None,
+                tool_telemetry: None,
             }],
+            None,
+            None,
         );
         let encoded = line.to_jsonl_string().unwrap();
         let parsed = parse_jsonl(&encoded).unwrap();

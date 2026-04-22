@@ -35,6 +35,7 @@ async fn extract_facts_writes_semantic_row_via_graph_memory_hook() {
             None,
             None,
             None,
+            None,
         )
         .await
         .expect("episode id");
@@ -52,7 +53,7 @@ async fn extract_facts_writes_semantic_row_via_graph_memory_hook() {
 
     for (text, confidence) in facts {
         writer
-            .record_fact_with_tags(text, confidence, episode_id, &[])
+            .record_fact_with_tags(text, confidence, episode_id, &[], None)
             .await;
     }
 

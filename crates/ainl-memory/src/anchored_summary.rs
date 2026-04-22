@@ -65,6 +65,7 @@ impl GraphMemory {
             memory_category: MemoryCategory::Semantic,
             importance_score: 1.0,
             agent_id: agent_id.to_string(),
+            project_id: None,
             node_type: AinlNodeType::Semantic { semantic },
             edges: Vec::new(),
         };

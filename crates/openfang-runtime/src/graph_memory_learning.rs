@@ -165,6 +165,8 @@ pub fn failure_recall_fts_query(user_message: &str) -> Option<String> {
 pub struct LearningRecorder {
     gm: Option<GraphMemoryWriter>,
     policy: LearningStackPolicy,
+    /// When `AINL_MEMORY_PROJECT_SCOPE` is on, copied from the manifest (tags failure nodes, etc.).
+    memory_project_id: Option<String>,
 }
 
 impl LearningRecorder {
@@ -173,6 +175,7 @@ impl LearningRecorder {
         Self {
             gm,
             policy: LearningStackPolicy::resolve(manifest),
+            memory_project_id: crate::memory_project_scope::effective_memory_project_id(manifest),
         }
     }
 
@@ -222,6 +225,7 @@ impl LearningRecorder {
                 Some(tool_name),
                 msg.as_str(),
                 Some(sid.as_str()),
+                self.memory_project_id.as_deref(),
             )
             .await;
         if r.is_some() {
@@ -243,7 +247,12 @@ impl LearningRecorder {
         let sid = session.id.0.to_string();
         let msg = sanitize_failure_message(message);
         let r = gm
-            .record_tool_execution_failure(tool_name, msg.as_str(), Some(sid.as_str()))
+            .record_tool_execution_failure(
+                tool_name,
+                msg.as_str(),
+                Some(sid.as_str()),
+                self.memory_project_id.as_deref(),
+            )
             .await;
         if r.is_some() {
             record_ok();
@@ -265,7 +274,13 @@ impl LearningRecorder {
         let sid = session.id.0.to_string();
         let msg = sanitize_failure_message(message);
         let r = gm
-            .record_agent_loop_tool_precheck_failure(kind, tool_name, msg.as_str(), Some(sid.as_str()))
+            .record_agent_loop_tool_precheck_failure(
+                kind,
+                tool_name,
+                msg.as_str(),
+                Some(sid.as_str()),
+                self.memory_project_id.as_deref(),
+            )
             .await;
         if r.is_some() {
             record_ok();
@@ -282,7 +297,11 @@ impl LearningRecorder {
         let sid = session.id.0.to_string();
         let msg = sanitize_failure_message(message);
         let r = gm
-            .record_ainl_runtime_graph_validation_failure(msg.as_str(), Some(sid.as_str()))
+            .record_ainl_runtime_graph_validation_failure(
+                msg.as_str(),
+                Some(sid.as_str()),
+                self.memory_project_id.as_deref(),
+            )
             .await;
         if r.is_some() {
             record_ok();

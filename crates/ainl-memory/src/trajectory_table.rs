@@ -24,6 +24,10 @@ pub struct TrajectoryDetailRecord {
     pub ainl_source_hash: Option<String>,
     pub duration_ms: u64,
     pub steps: Vec<TrajectoryStep>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_vars: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fitness_delta: Option<f32>,
 }
 
 impl TrajectoryDetailRecord {
@@ -42,6 +46,8 @@ impl TrajectoryDetailRecord {
             self.ainl_source_hash.as_deref(),
             self.duration_ms,
             self.steps.clone(),
+            self.frame_vars.clone(),
+            self.fitness_delta,
         )
     }
 
@@ -70,6 +76,8 @@ mod tests {
             ainl_source_hash: Some("h1".into()),
             duration_ms: 7,
             steps: vec![],
+            frame_vars: None,
+            fitness_delta: None,
         };
         let line = r.to_replay_jsonl().unwrap();
         let rows = ainl_trajectory::parse_jsonl(&line).unwrap();

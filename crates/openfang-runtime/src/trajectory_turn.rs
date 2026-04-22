@@ -49,6 +49,17 @@ pub fn record_trajectory_tool_step(
     };
     let duration_ms = started.elapsed().as_millis() as u64;
     let ts = chrono::Utc::now().timestamp_millis();
+    let content_len = tool_result.content.chars().count();
+    let tool_telemetry = serde_json::json!({
+        "tool": tool_name,
+        "tool_use_id": tool_use_id,
+        "content_len": content_len,
+        "is_error": tool_result.is_error,
+        "duration_ms": duration_ms,
+    });
+    let frame_vars = std::env::var("AINL_TRAJECTORY_FRAME_JSON")
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
     let step = TrajectoryStep {
         step_id: format!("s_{slot}_{tool_use_id}"),
         timestamp_ms: ts,
@@ -65,6 +76,8 @@ pub fn record_trajectory_tool_step(
         },
         vitals: None,
         freshness_at_step: None,
+        frame_vars,
+        tool_telemetry: Some(tool_telemetry),
     };
     buf.record_at(*slot, step);
 }

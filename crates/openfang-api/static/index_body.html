@@ -8910,7 +8910,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <button type="button" class="btn btn-primary btn-sm" @click="loadProposals()" :disabled="loading">Refresh</button>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:minmax(320px,1.1fr) minmax(280px,0.9fr);gap:16px;align-items:stretch">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:stretch">
           <div class="card" style="padding:12px 14px;min-width:0">
             <p class="text-xs" style="margin:0 0 8px;color:var(--error)" x-show="disabledMessage" x-text="disabledMessage"></p>
             <template x-if="loading">

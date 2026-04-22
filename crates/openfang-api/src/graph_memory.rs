@@ -109,6 +109,18 @@ pub struct FailuresSearchQuery {
     pub limit: usize,
 }
 
+/// Query for [`get_graph_memory_nodes_search`] (`GET /api/graph-memory/nodes/search`).
+#[derive(serde::Deserialize)]
+pub struct NodesFtsSearchQuery {
+    pub agent_id: String,
+    pub q: String,
+    #[serde(default = "default_failures_search_limit")]
+    pub limit: usize,
+    /// When set, restrict to this project and legacy unscoped rows (see `ainl_memory` FTS).
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
 /// Query for [`get_graph_memory_failures_recent`] (`GET /api/graph-memory/failures/recent`).
 #[derive(serde::Deserialize)]
 pub struct FailuresRecentQuery {
@@ -1200,6 +1212,37 @@ pub async fn get_graph_memory_failures_search(
     match gm.search_failures_for_agent(&agent_id, q.q.trim(), q.limit) {
         Ok(nodes) => Json(json!({ "failures": nodes })),
         Err(_) => Json(json!({ "failures": [] })),
+    }
+}
+
+/// GET /api/graph-memory/nodes/search?agent_id=…&q=…&limit=…&project_id=…
+///
+/// Full-graph FTS5 over `ainl_nodes_fts` (all node kinds; contrast with failure-only search).
+pub async fn get_graph_memory_nodes_search(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<NodesFtsSearchQuery>,
+) -> Json<Value> {
+    let Ok(agent_id) = sanitize_agent_id(&q.agent_id) else {
+        return Json(json!({ "nodes": [] }));
+    };
+    let path = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let gm = match GraphMemory::new(&path) {
+        Ok(g) => g,
+        Err(_) => return Json(json!({ "nodes": [] })),
+    };
+    let pid = q
+        .project_id
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    match gm.search_all_nodes_fts(
+        &agent_id,
+        q.q.trim(),
+        pid.as_deref(),
+        q.limit,
+    ) {
+        Ok(nodes) => Json(json!({ "nodes": nodes })),
+        Err(_) => Json(json!({ "nodes": [] })),
     }
 }
 

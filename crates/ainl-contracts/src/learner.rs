@@ -1,6 +1,6 @@
 //! Shared learner payloads (trajectory steps, failure taxonomy, proposal envelopes).
 //!
-//! Consumed by upcoming `ainl-trajectory` / `ainl-failure-learning` crates; hosts embed these in graph nodes.
+//! Consumed by `ainl-trajectory` / `ainl-failure-learning` crates; hosts embed these in graph nodes.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,12 @@ pub struct TrajectoryStep {
     pub vitals: Option<CognitiveVitals>,
     #[serde(default)]
     pub freshness_at_step: Option<ContextFreshness>,
+    /// Optional per-step state snapshot (host-defined JSON, e.g. turn counters, budget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_vars: Option<serde_json::Value>,
+    /// Optional structured tool telemetry (latency breakdown, I/O, HTTP, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_telemetry: Option<serde_json::Value>,
 }
 
 /// Overall outcome of a recorded trajectory.

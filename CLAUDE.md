@@ -50,6 +50,9 @@ Rules are mandatory for AI agents and contributors:
 
 **Scheduled AINL + desktop AINL env:** Kernel injects **`AINL_ALLOW_IR_DECLARED_ADAPTERS=1`** on each scheduled **`ainl run`** child by default (manifest **`ainl_allow_ir_declared_adapters`** opt-out). Desktop sets the same when unset after dotenv. Detail route includes **`scheduled_ainl_host_adapter.ainl_allow_ir_declared_adapters`**. See **`docs/scheduled-ainl.md`**.
 
+## Phase 6 — whole-prompt compose (`ainl-context-compiler` + `compose_telemetry`)
+Operator envs, M2 apply constraints, and optional summarizer/embedder: **`crates/openfang-runtime/README.md`** (sections *Phase 6* and *M2 safe rollout*). Architecture and phase table: **`docs/SELF_LEARNING_INTEGRATION_MAP.md`** (Phase 6, §8 / §13 / §16). Implementation: **`crates/openfang-runtime/src/compose_telemetry.rs`**, **`crates/ainl-context-compiler/src/orchestrator.rs`**.
+
 ## Build & Verify Workflow
 After every feature implementation, run ALL THREE checks:
 ```bash

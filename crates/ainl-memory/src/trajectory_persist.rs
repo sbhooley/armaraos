@@ -37,6 +37,8 @@ fn coarse_steps_from_tools(tools: &[String]) -> Vec<TrajectoryStep> {
             error: None,
             vitals: None,
             freshness_at_step: None,
+            frame_vars: None,
+            tool_telemetry: None,
         })
         .collect()
 }
@@ -54,6 +56,8 @@ pub fn persist_trajectory_for_episode(
     project_id: Option<&str>,
     ainl_source_hash: Option<&str>,
     duration_ms: u64,
+    frame_vars: Option<serde_json::Value>,
+    fitness_delta: Option<f32>,
 ) -> Result<(Uuid, Uuid), String> {
     let recorded_at = chrono::Utc::now().timestamp();
     let traj_body = TrajectoryNode {
@@ -65,8 +69,13 @@ pub fn persist_trajectory_for_episode(
         outcome,
         steps: steps.clone(),
         duration_ms,
+        frame_vars: frame_vars.clone(),
+        fitness_delta,
     };
-    let node = AinlMemoryNode::new_trajectory(traj_body, agent_id);
+    let mut node = AinlMemoryNode::new_trajectory(traj_body, agent_id);
+    if let Some(p) = project_id.map(str::trim).filter(|s| !s.is_empty()) {
+        node.project_id = Some(p.to_string());
+    }
     let graph_traj_id = node.id;
     memory.write_node(&node)?;
     memory.insert_graph_edge_checked(graph_traj_id, episode_graph_id, "trajectory_of")?;
@@ -84,6 +93,8 @@ pub fn persist_trajectory_for_episode(
         ainl_source_hash: ainl_source_hash.map(str::to_string),
         duration_ms,
         steps,
+        frame_vars,
+        fitness_delta,
     };
     memory.insert_trajectory_detail(&row)?;
     Ok((graph_traj_id, detail_id))
@@ -112,5 +123,7 @@ pub fn persist_trajectory_coarse_tools(
         project_id,
         ainl_source_hash,
         0,
+        None,
+        None,
     )
 }

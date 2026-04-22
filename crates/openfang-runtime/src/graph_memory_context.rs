@@ -151,6 +151,63 @@ impl PromptMemoryContext {
             &self.procedural_lines,
         )
     }
+
+    /// One [`ainl_context_compiler::Segment::memory_block`] per non-empty section (same content as
+    /// [`Self::to_prompt_block`], split for Phase 6 “compiler as root” / budget-aware scoring).
+    /// Labels match `ainl_contracts::context_compiler::segment_kind::MEMORY_BLOCK` usage in hosts.
+    pub fn to_memory_block_segments(&self) -> Vec<ainl_context_compiler::Segment> {
+        use ainl_context_compiler::Segment;
+        let mut out = Vec::new();
+        if !self.episodic_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_recent_attempts",
+                memory_section_str("## RecentAttempts", &self.episodic_lines),
+            ));
+        }
+        if !self.failure_recall_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_failure_recall",
+                memory_section_str("## FailureRecall", &self.failure_recall_lines),
+            ));
+        }
+        if !self.semantic_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_known_facts",
+                memory_section_str("## KnownFacts", &self.semantic_lines),
+            ));
+        }
+        if !self.conflict_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_known_conflicts",
+                memory_section_str("## KnownConflicts", &self.conflict_lines),
+            ));
+        }
+        if !self.pattern_candidate_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_suggested_pattern_candidates",
+                memory_section_str("## SuggestedPatternCandidates", &self.pattern_candidate_lines),
+            ));
+        }
+        if !self.procedural_lines.is_empty() {
+            out.push(Segment::memory_block(
+                "graph_suggested_procedure",
+                memory_section_str("## SuggestedProcedure", &self.procedural_lines),
+            ));
+        }
+        out
+    }
+}
+
+fn memory_section_str(heading: &str, lines: &[String]) -> String {
+    let mut s = String::new();
+    s.push_str(heading);
+    s.push('\n');
+    for line in lines {
+        s.push_str("- ");
+        s.push_str(line);
+        s.push('\n');
+    }
+    s
 }
 
 pub fn memory_context_metrics() -> serde_json::Value {
@@ -1322,5 +1379,30 @@ mod tests {
             .get("graph_memory_kernel_notify_err_total")
             .is_some());
         assert!(metrics.get("injected_failure_recall_total").is_some());
+    }
+
+    #[test]
+    fn to_memory_block_segments_matches_prompt_sections() {
+        use ainl_context_compiler::SegmentKind;
+
+        let mut ctx = PromptMemoryContext::default();
+        ctx.episodic_lines = vec!["e1".to_string()];
+        ctx.failure_recall_lines = vec!["f1".to_string()];
+        ctx.semantic_lines = vec!["s1".to_string()];
+
+        let segs = ctx.to_memory_block_segments();
+        assert_eq!(segs.len(), 3);
+        assert!(segs.iter().all(|s| s.kind == SegmentKind::MemoryBlock));
+        assert_eq!(
+            segs[0].tool_name.as_deref(),
+            Some("graph_recent_attempts")
+        );
+        assert_eq!(segs[1].tool_name.as_deref(), Some("graph_failure_recall"));
+        assert_eq!(segs[2].tool_name.as_deref(), Some("graph_known_facts"));
+
+        let block = ctx.to_prompt_block();
+        for s in &segs {
+            assert!(block.contains(s.content.trim()), "segment text in block");
+        }
     }
 }

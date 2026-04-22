@@ -27,6 +27,7 @@ members = [
     "crates/ainl-context-compiler",
     "crates/ainl-impact-policy",
     "crates/ainl-trajectory",
+    "crates/ainl-failure-learning",
     "crates/ainl-improvement-proposals",
     "xtask",
 ]

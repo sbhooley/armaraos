@@ -2076,7 +2076,9 @@ function app() {
         'migration': 'settings',
         'usage': 'analytics',
         'approval': 'approvals',
-        'app-store': 'ainl-library'
+        'app-store': 'ainl-library',
+        'failures': 'graph-failures',
+        'proposals': 'graph-proposals'
       };
       function handleHash() {
         var raw = window.location.hash.replace(/^#/, '') || 'agents';
