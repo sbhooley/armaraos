@@ -45,6 +45,8 @@ function skillsPage() {
     mcpInstallerLoading: false,
     mcpInstallerBusy: false,
     mcpInstallerError: '',
+    mcpHostReadiness: null,
+    mcpUvBootstrapBusy: false,
 
     // Custom MCP (primary flow)
     mcpShowPresets: false,
@@ -494,6 +496,11 @@ function skillsPage() {
           this.mcpPresetId = this.mcpPresets[0].preset_id;
         }
         this.applyMcpPresetSelection();
+        try {
+          this.mcpHostReadiness = await OpenFangAPI.get('/api/system/mcp-host-readiness');
+        } catch (e2) {
+          this.mcpHostReadiness = null;
+        }
       } catch(e) {
         this.mcpInstallerError = e.message || String(e);
       }
@@ -620,6 +627,32 @@ function skillsPage() {
       } catch(e) {
         OpenFangToast.error('Reconnect failed: ' + openFangErrText(e));
       }
+    },
+
+    async mcpBootstrapUv() {
+      this.mcpUvBootstrapBusy = true;
+      try {
+        var res = await OpenFangAPI.post('/api/system/bootstrap-uv', {});
+        if (res && res.ok === false) {
+          OpenFangToast.error(res.error || 'Install failed');
+        } else {
+          OpenFangToast.success((res && res.message) || 'uv install completed');
+        }
+        await this.loadMcpInstallerData();
+      } catch (e) {
+        OpenFangToast.error(openFangErrText(e));
+      }
+      this.mcpUvBootstrapBusy = false;
+    },
+
+    async mcpCopyUvInstallCommand() {
+      var cmd = (this.mcpHostReadiness && this.mcpHostReadiness.uv_install_sh) || 'curl -LsSf https://astral.sh/uv/install.sh | sh';
+      try {
+        if (typeof copyTextToClipboard === 'function') {
+          await copyTextToClipboard(cmd);
+          OpenFangToast.success('Copied install command');
+        }
+      } catch (e) { /* ignore */ }
     },
 
     async registerMcpIntegrationLegacy(integrationId) {

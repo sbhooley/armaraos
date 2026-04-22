@@ -3848,6 +3848,23 @@
 
           <!-- TAB: MCP Servers -->
           <div x-show="tab === 'mcp'">
+            <div class="info-card mb-3" x-show="mcpHostReadiness != null" x-cloak>
+              <h4>Host tools for <code>google-workspace-mcp</code></h4>
+              <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 8px">
+                This preset runs <code>uvx workspace-mcp</code> (PyPI <code>workspace-mcp</code>). You also need a Google Cloud OAuth <strong>client</strong> — enter ID (and usually secret) in the form fields when you install the preset below, or in <a href="#settings" @click.prevent="$store.app.navigate &amp;&amp; $store.app.navigate('settings'); sessionStorage.setItem('armaraos-settings-tab','tools');" class="text-accent" style="color:var(--accent)">Settings → Tools</a> for a dedicated panel.
+              </p>
+              <p class="text-xs mb-2" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available" style="color:var(--warn, #c9a227)">
+                <code>uvx</code> not on PATH. Install the <a href="https://docs.astral.sh/uv/" @click.prevent="armaraosOpenExternalUrl($event, 'https://docs.astral.sh/uv/')" class="text-accent" style="color:var(--accent)">uv</a> tool (adds <code>~/.local/bin/uvx</code>) or set <code>ARMARAOS_WORKSPACE_MCP_COMMAND</code> to a custom <code>workspace-mcp</code> launch. Optional: <code>ARMARAOS_AUTO_INSTALL_UV=1</code> on the daemon runs the installer at startup before MCP connects.
+              </p>
+              <div class="flex flex-wrap gap-2 items-center" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available">
+                <button type="button" class="btn btn-primary btn-sm" @click="mcpBootstrapUv()" :disabled="mcpUvBootstrapBusy">
+                  <span x-show="!mcpUvBootstrapBusy">Run uv installer (macOS / Linux)</span>
+                  <span x-show="mcpUvBootstrapBusy" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
+                </button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="mcpCopyUvInstallCommand()">Copy install (curl | sh)</button>
+                <span class="text-xs text-dim" x-show="mcpHostReadiness.auto_install_uv_configured" x-cloak>Auto-install at boot is on.</span>
+              </div>
+            </div>
             <div class="info-card mb-3">
               <h4>Add custom MCP server</h4>
               <p class="mb-2">Connect any stdio, SSE, or HTTP MCP server without editing <code>config.toml</code>. Pick a unique id, choose transport, then add environment variables. Secrets are stored in the daemon credential vault when possible.</p>
@@ -5146,7 +5163,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
           <!-- Tools tab -->
           <div x-show="tab === 'tools'">
-            <div class="info-card mb-4" style="border:1px solid var(--border-subtle, rgba(255,255,255,0.1))" x-data x-show="mcpHostReadiness != null" x-cloak>
+            <div class="info-card mb-4" style="border:1px solid var(--border-subtle, rgba(255,255,255,0.1))" x-show="mcpHostReadiness != null" x-cloak>
               <h4 style="margin-top:0">Google Workspace MCP (Gmail, Calendar, Drive, Docs, …)</h4>
               <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 10px">
                 The bundled <code>google-workspace-mcp</code> server runs <code>uvx workspace-mcp</code> and needs a Google Cloud <strong>OAuth client</strong> (ID + usually secret) from
