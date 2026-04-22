@@ -385,7 +385,7 @@ pub enum SystemEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provenance: Option<GraphMemoryWriteProvenance>,
     },
-    /// Validated improvement proposal materialized as a `semantic` graph fact (opt-in `AINL_IMPROVEMENT_PROPOSALS_ENABLED` flow).
+    /// Validated improvement proposal materialized as a `semantic` graph fact (`AINL_IMPROVEMENT_PROPOSALS_ENABLED` on by default; opt out with `0` / `false` / `no` / `off`).
     ImprovementProposalAdopted {
         /// Agent that owns the graph DB and proposal ledger.
         agent_id: AgentId,

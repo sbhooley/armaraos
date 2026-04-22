@@ -38,18 +38,17 @@ static ADOPT_GRAPH_WRITE_ERR: AtomicU64 = AtomicU64::new(0);
 static ADOPT_IDEMPOTENT: AtomicU64 = AtomicU64::new(0);
 static ADOPT_REPAIR: AtomicU64 = AtomicU64::new(0);
 
-/// When set to a truthy token (`1`, `true`, `yes`, `on`), proposal submit/validate APIs are
-/// active. Default: **off** (explicit opt-in).
+/// When **unset** or any non-falsy value, the improvement-proposals HTTP routes and ledger
+/// host APIs are **on** (same opt-out as `AINL_TRAJECTORY_ENABLED`: `0`, `false`, `no`, `off`).
 #[must_use]
 pub fn env_enabled() -> bool {
-    std::env::var("AINL_IMPROVEMENT_PROPOSALS_ENABLED")
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
+    match std::env::var("AINL_IMPROVEMENT_PROPOSALS_ENABLED") {
+        Ok(s) => {
+            let v = s.trim().to_ascii_lowercase();
+            !(v == "0" || v == "false" || v == "no" || v == "off")
+        }
+        Err(_) => true,
+    }
 }
 
 /// Re-exported for tests / tools that need the same `graph` + size pre-check as the ledger
@@ -126,7 +125,10 @@ pub fn submit(
 ) -> Result<ImprovementProposalId, String> {
     if !env_enabled() {
         SUBMIT_WHEN_DISABLED.fetch_add(1, Ordering::Relaxed);
-        return Err("AINL_IMPROVEMENT_PROPOSALS_ENABLED is not set to a truthy value".to_string());
+        return Err(
+            "improvement proposals are disabled (AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off)"
+                .to_string(),
+        );
     }
     let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
         SUBMIT_LEDGER_ERR.fetch_add(1, Ordering::Relaxed);
@@ -158,7 +160,10 @@ pub fn validate_proposal(
 ) -> Result<AdoptResult, String> {
     if !env_enabled() {
         VALIDATE_WHEN_DISABLED.fetch_add(1, Ordering::Relaxed);
-        return Err("AINL_IMPROVEMENT_PROPOSALS_ENABLED is not set to a truthy value".to_string());
+        return Err(
+            "improvement proposals are disabled (AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off)"
+                .to_string(),
+        );
     }
     let mode = mode.unwrap_or_else(default_validate_mode);
     let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
@@ -202,7 +207,10 @@ pub fn list_proposals(
     limit: usize,
 ) -> Result<Vec<ImprovementProposalListItem>, String> {
     if !env_enabled() {
-        return Err("AINL_IMPROVEMENT_PROPOSALS_ENABLED is not set to a truthy value".to_string());
+        return Err(
+            "improvement proposals are disabled (AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off)"
+                .to_string(),
+        );
     }
     let ledger = open_ledger(home_dir, agent_id)?;
     ledger
@@ -269,7 +277,10 @@ pub fn adopt_validated_proposal(
 ) -> Result<AdoptToGraphResult, String> {
     if !env_enabled() {
         ADOPT_WHEN_DISABLED.fetch_add(1, Ordering::Relaxed);
-        return Err("AINL_IMPROVEMENT_PROPOSALS_ENABLED is not set to a truthy value".to_string());
+        return Err(
+            "improvement proposals are disabled (AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off)"
+                .to_string(),
+        );
     }
     let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
         ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
@@ -436,7 +447,38 @@ pub fn adopt_validated_proposal(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, OnceLock};
+
     use super::*;
+
+    static AINL_IMPROVEMENT_PROPOSALS_ENV_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    #[test]
+    fn env_enabled_unset_is_on_and_opt_out_off() {
+        const K: &str = "AINL_IMPROVEMENT_PROPOSALS_ENABLED";
+        let _g = AINL_IMPROVEMENT_PROPOSALS_ENV_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("lock");
+        let prev = std::env::var(K).ok();
+        let restore = || {
+            match &prev {
+                Some(s) => std::env::set_var(K, s),
+                None => std::env::remove_var(K),
+            }
+        };
+        std::env::remove_var(K);
+        assert!(env_enabled());
+        for off in ["0", "false", "no", "off"] {
+            std::env::set_var(K, off);
+            assert!(!env_enabled(), "expected opt-out: {off}");
+        }
+        for on in ["1", "true", "yes", "on", ""] {
+            std::env::set_var(K, on);
+            assert!(env_enabled(), "expected on: {on:?}");
+        }
+        restore();
+    }
 
     #[test]
     fn structural_accepts_graph_header() {

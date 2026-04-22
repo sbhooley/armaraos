@@ -13,10 +13,10 @@
 //! - `GET /api/compression/project-profiles` — on-disk EMA map (`compression_project_profiles.json`) when enabled
 //! - `GET /api/graph-memory/failures/search` — FTS search over typed `failure` graph nodes
 //! - `GET /api/graph-memory/failures/recent` — recent typed `failure` graph rows (newest first)
-//! - `POST /api/graph-memory/improvement-proposals/submit` — ledger submit (opt-in via
-//!   `AINL_IMPROVEMENT_PROPOSALS_ENABLED`)
+//! - `POST /api/graph-memory/improvement-proposals/submit` — ledger submit (on by default; opt out
+//!   with `AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off`)
 //! - `POST /api/graph-memory/improvement-proposals/validate` — run default structural validator
-//!   (opt-in via the same env)
+//!   (same gate)
 //! - `POST /api/graph-memory/improvement-proposals/adopt` — materialize a validated proposal into
 //!   `ainl_memory.db` and publish `SystemEvent::GraphMemoryWrite` + `ImprovementProposalAdopted`
 
@@ -2138,7 +2138,7 @@ pub async fn post_improvement_proposal_submit(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "ok": false,
-                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+                "error": "improvement proposals are disabled. Unset AINL_IMPROVEMENT_PROPOSALS_ENABLED or set 1/true/yes/on (opt out with 0/false/no/off)."
             })),
         );
     }
@@ -2200,7 +2200,7 @@ pub async fn post_improvement_proposal_validate(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "ok": false,
-                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+                "error": "improvement proposals are disabled. Unset AINL_IMPROVEMENT_PROPOSALS_ENABLED or set 1/true/yes/on (opt out with 0/false/no/off)."
             })),
         );
     }
@@ -2259,7 +2259,7 @@ pub async fn get_improvement_proposals(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "ok": false,
-                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on",
+                "error": "improvement proposals are disabled. Unset AINL_IMPROVEMENT_PROPOSALS_ENABLED or set 1/true/yes/on (opt out with 0/false/no/off).",
                 "proposals": []
             })),
         );
@@ -2307,7 +2307,7 @@ pub async fn post_improvement_proposal_adopt(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "ok": false,
-                "error": "improvement proposals disabled; set AINL_IMPROVEMENT_PROPOSALS_ENABLED to 1, true, yes, or on"
+                "error": "improvement proposals are disabled. Unset AINL_IMPROVEMENT_PROPOSALS_ENABLED or set 1/true/yes/on (opt out with 0/false/no/off)."
             })),
         );
     }

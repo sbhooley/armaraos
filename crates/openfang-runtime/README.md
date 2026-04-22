@@ -57,7 +57,7 @@ When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_
 
 **Introspection:** `openfang_runtime::graph_memory_learning_metrics()` returns best-effort counters (recorded vs skipped vs write-none) for operators / status surfaces.
 
-**Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
+**Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals — **on by default**; set to `0` / `false` / `no` / `off` to disable), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
 
 | Env | Behavior |
 |-----|----------|

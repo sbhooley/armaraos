@@ -8502,7 +8502,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap">
             <div>
               <p style="margin:0;font-size:0.86rem;font-weight:600">Improvement proposals (ledger)</p>
-              <p class="text-dim text-xs" style="margin:3px 0 0">Submit → validate → adopt (when enabled on the daemon). <span class="font-mono" style="font-size:0.68rem">AINL_IMPROVEMENT_PROPOSALS_ENABLED</span></p>
+              <p class="text-dim text-xs" style="margin:3px 0 0">Submit → validate → adopt (on by default). Opt out: <span class="font-mono" style="font-size:0.68rem">AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off</span></p>
             </div>
             <button type="button" class="btn btn-ghost btn-sm" @click="loadImprovementProposals()">Refresh</button>
           </div>
@@ -8910,7 +8910,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Improvement proposals</h2>
-            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (requires <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
+            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (default on; 503 if opted out with <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="loadProposals(); selected = null" aria-label="Agent for proposals">
