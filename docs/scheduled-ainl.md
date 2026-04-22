@@ -97,7 +97,9 @@ On a **successful** scheduled **`ainl run`**, the kernel normally appends a sche
 
 **Dashboard toasts + bell:** the embedded app treats those same **successful** `CronJobCompleted` events as **low-signal** and does not show an info toast or notification-center row for them, so the bell stays meaningful for work you care to react to. Other scheduled jobs keep the previous success toast + row behavior.
 
-Implementation pointers: **`cron_success_suppresses_session_append`** in **`crates/openfang-kernel/src/kernel.rs`**, and **`armaraosRoutineMonitorCronJobName()`** in **`crates/openfang-api/static/js/app.js`** (must stay aligned with the curated job names).
+**Desktop (Tauri):** the same job names are filtered in **`openfang-desktop`** so **native OS notifications** are not posted for those successful runs; see **[desktop.md](desktop.md#native-os-notifications)**. Failures still notify.
+
+Implementation pointers: **`cron_success_suppresses_session_append`** in **`crates/openfang-kernel/src/kernel.rs`**, **`armaraosRoutineMonitorCronJobName()`** in **`crates/openfang-api/static/js/app.js`**, and **`routine_monitor_cron_quiet_success`** in **`crates/openfang-desktop/src/lib.rs`** (keep all three aligned with the curated job names).
 
 **Related (chat LLM, not the AINL subprocess):** **`openfang-runtime`** opens per-agent SQLite **`~/.armaraos/agents/<id>/ainl_memory.db`** via **`GraphMemoryWriter`** and, in **`run_agent_loop` / `run_agent_loop_streaming`**, appends recent **Persona** nodes (strength ≥ **0.1**, last **90** days) to the **system prompt** as **`[Persona traits active: …]`**. The same loop optionally writes a **per-agent JSON export** for **ainativelang** (shared directory via **`AINL_GRAPH_MEMORY_ARMARAOS_EXPORT`** or default **`ainl_graph_memory_export.json`** — see **[graph-memory.md](graph-memory.md)** *On-disk layout*). That path uses the **`ainl-memory`** crate (Rust), separate from the JSON **`ainl_graph_memory`** file used inside **`ainl run`**. See **[data-directory.md](data-directory.md)**, **[graph-memory.md](graph-memory.md)** (Rust runtime hub), and **`AI_Native_Lang/docs/adapters/AINL_GRAPH_MEMORY.md`**.
 

@@ -28,6 +28,20 @@ use std::time::Instant;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 
+/// Curated AINL cron monitors: **success** should not post native OS notifications.
+/// Keep in sync with `armaraosRoutineMonitorCronJobName` in `openfang-api/static/js/app.js`
+/// and `cron_success_suppresses_session_append` in `openfang-kernel`.
+fn routine_monitor_cron_quiet_success(job_name: &str) -> bool {
+    matches!(
+        job_name,
+        "armaraos-agent-health-monitor"
+            | "armaraos-system-health-monitor"
+            | "armaraos-daily-budget-digest"
+            | "armaraos-budget-threshold-alert"
+            | "armaraos-ainl-health-weekly"
+    )
+}
+
 /// Managed state: the port the embedded server listens on.
 pub struct PortState(pub u16);
 
@@ -263,6 +277,14 @@ pub fn run() {
                 loop {
                     match event_rx.recv().await {
                         Ok(event) => {
+                            if let EventPayload::System(SystemEvent::CronJobCompleted {
+                                job_name, ..
+                            }) = &event.payload
+                            {
+                                if routine_monitor_cron_quiet_success(job_name) {
+                                    continue;
+                                }
+                            }
                             let (title, body) = match &event.payload {
                                 EventPayload::Lifecycle(LifecycleEvent::Spawned {
                                     agent_id,

@@ -148,7 +148,7 @@ The app subscribes to the kernel's event bus and forwards selected events as nat
 | `SystemEvent::CronJobCompleted` / `CronJobFailed` | Scheduled job status | Job name + preview or error |
 | `SystemEvent::ApprovalPending` | "Approval needed" | Tool / agent / summary |
 
-**Not toasted:** `SystemEvent::HealthCheckFailed` is intentionally **skipped** (too noisy during recovery); use logs and the Web UI for health issues. Most other bus events are also skipped.
+**Not toasted:** `SystemEvent::HealthCheckFailed` is intentionally **skipped** (too noisy during recovery); use logs and the Web UI for health issues. **`CronJobCompleted`** for the same **curated routine monitors** as the Web UI (**`armaraos-agent-health-monitor`**, system health, daily/threshold budget, weekly AINL smoke — see **[scheduled-ainl.md](scheduled-ainl.md#session-transcript-notifications-and-routine-monitors)**) is also **skipped** so success does not spam Notification Center; **`CronJobFailed`** for those jobs still notifies. Most other bus events are also skipped.
 
 The notification listener runs as an async task spawned via `tauri::async_runtime::spawn` and handles broadcast lag gracefully (logs a warning and continues).
 
