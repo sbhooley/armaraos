@@ -8940,7 +8940,13 @@ impl OpenFangKernel {
 /// Shipped/curated AINL cron "monitors" (health, budget ping, etc.): on **success** we still
 /// audit and emit `CronJobCompleted`, but we do **not** append the JSON/markdown blob to the
 /// agent session — operators rely on toasts / notifications for failures instead.
+///
+/// **Test jobs:** names starting with `test-ainl-` (e.g. `test-ainl-stub` in integration tests) are
+/// also suppressed so CI / dev cron runs never pollute agent transcriptions.
 fn cron_success_suppresses_session_append(job_name: &str, program_path: &str) -> bool {
+    if job_name.starts_with("test-ainl-") {
+        return true;
+    }
     const BY_NAME: &[&str] = &[
         "armaraos-agent-health-monitor",
         "armaraos-system-health-monitor",

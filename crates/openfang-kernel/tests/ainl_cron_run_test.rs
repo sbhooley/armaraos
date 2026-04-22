@@ -79,6 +79,26 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
         out
     );
 
+    // `test-ainl-*` job names do not write scheduler output into the agent session (no chat bloat).
+    let entry = kernel
+        .registry
+        .get(assistant.id)
+        .expect("registry entry for assistant");
+    let session = kernel
+        .memory
+        .get_session(entry.session_id)
+        .expect("get session")
+        .expect("session exists");
+    let scheduler_in_session = session.messages.iter().any(|m| {
+        m.content
+            .text_content()
+            .contains("ARMARAOS_SCHEDULER_V2")
+    });
+    assert!(
+        !scheduler_in_session,
+        "test-ainl-stub must not append scheduler output to agent session"
+    );
+
     unsafe {
         std::env::remove_var("ARMARAOS_AINL_BIN");
     }

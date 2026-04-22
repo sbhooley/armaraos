@@ -29,10 +29,13 @@ function isInternalAutomationProbeChatAgentName(name) {
   );
 }
 
-/** Curated AINL cron monitors (health/budget); success is intentionally quiet. See `cron_success_suppresses_session_append` in the kernel. */
+/** Curated AINL cron monitors (health/budget) and `test-ainl-*` integration jobs: success is intentionally quiet. See `cron_success_suppresses_session_append` in the kernel. */
 function armaraosRoutineMonitorCronJobName(name) {
   if (!name) return false;
   var n = String(name);
+  if (n.indexOf('test-ainl-') === 0) {
+    return true;
+  }
   return (
     n === 'armaraos-agent-health-monitor' ||
     n === 'armaraos-system-health-monitor' ||

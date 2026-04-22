@@ -29,9 +29,13 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 
 /// Curated AINL cron monitors: **success** should not post native OS notifications.
+/// `test-ainl-*` job names match integration tests and are quiet too.
 /// Keep in sync with `armaraosRoutineMonitorCronJobName` in `openfang-api/static/js/app.js`
 /// and `cron_success_suppresses_session_append` in `openfang-kernel`.
 fn routine_monitor_cron_quiet_success(job_name: &str) -> bool {
+    if job_name.starts_with("test-ainl-") {
+        return true;
+    }
     matches!(
         job_name,
         "armaraos-agent-health-monitor"
