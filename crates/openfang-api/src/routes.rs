@@ -810,6 +810,19 @@ pub(crate) fn voice_transcript_policy_suffix(attachments: &[AttachmentRef]) -> O
     )
 }
 
+/// When every audio attachment has server STT, clamp high-misfire tools for this turn (kernel-enforced).
+pub(crate) fn voice_stt_turn_tool_constraints(
+    attachments: &[AttachmentRef],
+) -> Option<openfang_types::turn_constraints::TurnConstraints> {
+    if all_audio_fully_transcribed(attachments) {
+        Some(openfang_types::turn_constraints::TurnConstraints {
+            voice_stt_tool_clamp: true,
+        })
+    } else {
+        None
+    }
+}
+
 /// Pre-insert image attachments into an agent's session so the LLM can see them.
 ///
 /// This injects image content blocks into the session BEFORE the kernel
@@ -950,6 +963,7 @@ pub async fn send_message(
         );
     }
 
+    let turn_constraints = voice_stt_turn_tool_constraints(&req.attachments);
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     match state
         .kernel
@@ -962,6 +976,7 @@ pub async fn send_message(
             req.sender_name,
             None,
             None,
+            turn_constraints,
         )
         .await
     {
@@ -1030,36 +1045,47 @@ pub async fn send_message(
                 })
             });
 
-            let voice_reply_audio_url = if req.voice_reply
+            let (voice_reply_audio_url, voice_reply_provider, voice_reply_error) = if req
+                .voice_reply
                 && !response.trim().is_empty()
-                && state.kernel.config.local_voice.piper_ready()
             {
-                match openfang_runtime::tts::synthesize_piper_local(
-                    &response,
-                    &state.kernel.config.local_voice,
-                )
-                .await
-                {
-                    Ok(tts) => {
-                        match register_generated_upload(
+                let local_voice = state.kernel.local_voice_effective();
+                if local_voice.local_tts_ready() {
+                    match openfang_runtime::tts::synthesize_local_tts(
+                        &response,
+                        &local_voice,
+                    )
+                    .await
+                    {
+                        Ok(tts) => match register_generated_upload(
                             "audio/wav",
                             "voice_reply.wav",
                             tts.audio_data,
                         ) {
-                            Ok(url) => Some(url),
+                            Ok(url) => (Some(url), Some(tts.provider), None),
                             Err(e) => {
                                 tracing::warn!(error = %e, "voice reply upload failed");
-                                None
+                                (None, None, Some(format!("voice upload failed: {e}")))
                             }
+                        },
+                        Err(e) => {
+                            tracing::warn!(error = %e, "local TTS voice reply failed");
+                            (None, None, Some(e))
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Piper voice reply failed");
-                        None
-                    }
+                } else {
+                    (
+                        None,
+                        None,
+                        Some(
+                            "local TTS not ready: no Piper bundle and no macOS `say` available — \
+                             see /api/system/local-voice"
+                                .to_string(),
+                        ),
+                    )
                 }
             } else {
-                None
+                (None, None, None)
             };
 
             (
@@ -1084,6 +1110,8 @@ pub async fn send_message(
                     tools: Vec::new(),
                     ainl_runtime_telemetry,
                     voice_reply_audio_url,
+                    voice_reply_provider,
+                    voice_reply_error,
                 })),
             )
         }
@@ -2722,6 +2750,7 @@ pub async fn send_message_stream(
         .into_response();
     }
 
+    let turn_constraints = voice_stt_turn_tool_constraints(&req.attachments);
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
     let (rx, _handle) = match state.kernel.send_message_streaming(
         agent_id,
@@ -2731,6 +2760,7 @@ pub async fn send_message_stream(
         req.sender_name,
         None, // SSE streaming doesn't support image attachments yet
         None,
+        turn_constraints,
     ) {
         Ok(pair) => pair,
         Err(e) => {
@@ -5620,11 +5650,18 @@ pub async fn post_hands_premium_unlock(
     }
 
     if entered == expected {
+        let secret = crate::premium_ainl::premium_hmac_secret(&state.kernel);
+        let token = crate::session_auth::create_session_token(
+            crate::premium_ainl::PASSWORD_UNLOCK_SUBJECT,
+            &secret,
+            24 * 30,
+        );
         return (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ok": true,
-                "unlocked": true
+                "unlocked": true,
+                "premium_token": token
             })),
         );
     }
@@ -5864,9 +5901,15 @@ pub async fn install_hand_deps(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/:hand_id/install-deps";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let def = match state.kernel.hand_registry.get_definition(&hand_id) {
         Some(d) => d.clone(),
         None => {
@@ -6108,10 +6151,16 @@ pub async fn install_hand_deps(
 pub async fn install_hand(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/install";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let toml_content = body["toml_content"].as_str().unwrap_or("");
     let skill_content = body["skill_content"].as_str().unwrap_or("");
 
@@ -6159,10 +6208,16 @@ pub async fn install_hand(
 pub async fn upsert_hand(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/upsert";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let toml_content = body["toml_content"].as_str().unwrap_or("");
     let skill_content = body["skill_content"].as_str().unwrap_or("");
 
@@ -6207,10 +6262,16 @@ pub async fn activate_hand(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     body: Option<Json<openfang_hands::ActivateHandRequest>>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/:hand_id/activate";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let config = body.map(|b| b.0.config).unwrap_or_default();
 
     match state.kernel.activate_hand(&hand_id, config) {
@@ -6265,9 +6326,15 @@ pub async fn pause_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/instances/:id/pause";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     match state.kernel.pause_hand(id) {
         Ok(()) => (
             StatusCode::OK,
@@ -6289,9 +6356,15 @@ pub async fn resume_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/instances/:id/resume";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     match state.kernel.resume_hand(id) {
         Ok(()) => (
             StatusCode::OK,
@@ -6313,9 +6386,15 @@ pub async fn deactivate_hand(
     State(state): State<Arc<AppState>>,
     Path(id): Path<uuid::Uuid>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/instances/:id";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     match state.kernel.deactivate_hand(id) {
         Ok(()) => (
             StatusCode::OK,
@@ -6383,10 +6462,16 @@ pub async fn update_hand_settings(
     State(state): State<Arc<AppState>>,
     Path(hand_id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(config): Json<std::collections::HashMap<String, serde_json::Value>>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/hands/:hand_id/settings";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_for_hand_mutation(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     // Find active instance for this hand
     let instance_id = state
         .kernel
@@ -7407,15 +7492,471 @@ pub async fn system_network_hints() -> impl IntoResponse {
     Json(crate::network_hints::collect())
 }
 
-/// GET /api/system/local-voice — Piper / Whisper readiness for WebChat (spoken reply, local STT).
+/// GET /api/system/local-voice — Per-component readiness for WebChat voice (Piper / macOS `say`
+/// fallback / Whisper STT). Used by the dashboard speaker toggle to display an honest status
+/// (not just "Piper ready" when only the file exists). When `tts_provider` is set, the agent
+/// **will** produce an `<audio>` reply; when `null`, surface `tts_error` to the user.
 pub async fn system_local_voice(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let lv = &state.kernel.config.local_voice;
+    let lv = state.kernel.local_voice_effective();
+
+    fn path_status(p: Option<&std::path::PathBuf>) -> serde_json::Value {
+        match p {
+            Some(path) => serde_json::json!({
+                "path": path.display().to_string(),
+                "exists": path.is_file(),
+            }),
+            None => serde_json::json!({ "path": null, "exists": false }),
+        }
+    }
+
+    let tts_provider = lv.tts_provider_label();
+    let tts_error = if tts_provider.is_none() {
+        let mut hints: Vec<&'static str> = Vec::new();
+        if !lv.enabled {
+            hints.push("[local_voice] enabled=false");
+        }
+        if !lv.piper_ready() {
+            hints.push("piper_binary or piper_voice missing");
+        }
+        #[cfg(target_os = "macos")]
+        if !lv.macos_say_binary_present() {
+            hints.push("/usr/bin/say not found (unexpected on macOS)");
+        }
+        Some(format!("local TTS unavailable — {}", hints.join("; ")))
+    } else {
+        None
+    };
+
+    let active_piper_voice = lv.active_piper_voice();
+
     Json(serde_json::json!({
         "enabled": lv.enabled,
         "auto_download": lv.auto_download,
-        "piper_ready": lv.piper_ready(),
+        "piper_ready": lv.piper_ready_with_active_voice(),
         "whisper_ready": lv.whisper_ready(),
+        "macos_say_ready": lv.macos_say_ready(),
+        "macos_say_binary_present": lv.macos_say_binary_present(),
+        "tts_ready": lv.local_tts_ready(),
+        "tts_provider": tts_provider,
+        "tts_error": tts_error,
+        "preferred_say_voice": lv.preferred_say_voice,
+        "prefer_macos_say": lv.prefer_macos_say,
+        "custom_piper_voice": lv.custom_piper_voice,
+        "custom_voices_dir": lv.custom_voices_dir.as_ref().map(|p| p.display().to_string()),
+        "kokoro": {
+            "enabled": lv.kokoro.enabled,
+            "auto_download": lv.kokoro.auto_download,
+            "voice": lv.kokoro.voice,
+            "assets_ready": lv.kokoro.assets_ready(),
+            "inference_ready": false,
+            "note": "Kokoro inference is scaffolding only in this build; assets download but synthesis falls through to Piper / say.",
+        },
+        "components": {
+            "piper_binary": path_status(lv.piper_binary.as_ref()),
+            "piper_voice":  path_status(lv.piper_voice.as_ref()),
+            "active_piper_voice": path_status(active_piper_voice.as_ref()),
+            "whisper_cli":  path_status(lv.whisper_cli.as_ref()),
+            "whisper_model": path_status(lv.whisper_model.as_ref()),
+            "kokoro_model": path_status(lv.kokoro.model_path.as_ref()),
+        },
     }))
+}
+
+/// GET /api/system/local-voice/say-voices — list installed macOS `say` voices.
+/// Empty list on non-macOS. Format: `[{ id, language, sample, premium }]` so the
+/// dashboard voice picker can group Premium / Enhanced voices and use `id` directly
+/// in `say -v <id>`.
+pub async fn system_local_voice_say_voices() -> impl IntoResponse {
+    #[cfg(target_os = "macos")]
+    {
+        match list_macos_say_voices().await {
+            Ok(voices) => Json(serde_json::json!({ "voices": voices })),
+            Err(e) => Json(serde_json::json!({ "voices": [], "error": e })),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Json(serde_json::json!({ "voices": [] }))
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn list_macos_say_voices() -> Result<Vec<serde_json::Value>, String> {
+    let out = tokio::process::Command::new("/usr/bin/say")
+        .arg("-v")
+        .arg("?")
+        .output()
+        .await
+        .map_err(|e| format!("spawn say -v ?: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("say -v ? exited {}", out.status));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut voices = Vec::new();
+    for line in text.lines() {
+        // Lines: "Name (Quality)            lang_REGION  # sample text"
+        let Some((left, sample)) = line.split_once('#') else {
+            continue;
+        };
+        let left = left.trim_end();
+        // Split off the language code (last whitespace-separated token at the end).
+        let mut parts = left.rsplitn(2, char::is_whitespace);
+        let lang = parts.next().unwrap_or("").trim();
+        let name = parts.next().unwrap_or("").trim();
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_lowercase();
+        let premium = lower.contains("premium");
+        let enhanced = lower.contains("enhanced");
+        voices.push(serde_json::json!({
+            "id": name,
+            "language": lang,
+            "sample": sample.trim(),
+            "premium": premium,
+            "enhanced": enhanced,
+            "tier": if premium { "premium" } else if enhanced { "enhanced" } else { "default" },
+        }));
+    }
+    Ok(voices)
+}
+
+/// GET /api/system/local-voice/voices — list user-uploaded Piper voices under
+/// `[local_voice] custom_voices_dir`. Each entry has `{ id, onnx, has_metadata }`
+/// where `id` is the file stem (used as `custom_piper_voice` in the preference PUT).
+pub async fn system_local_voice_voices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let lv = state.kernel.local_voice_effective();
+    let dir = match lv.custom_voices_dir.as_ref() {
+        Some(d) => d.clone(),
+        None => state.kernel.config.home_dir.join("voice").join("voices_user"),
+    };
+    let mut voices: Vec<serde_json::Value> = Vec::new();
+    if let Ok(read) = std::fs::read_dir(&dir) {
+        for entry in read.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("onnx") {
+                continue;
+            }
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let json_path = path.with_extension("onnx.json");
+            voices.push(serde_json::json!({
+                "id": stem,
+                "onnx": path.display().to_string(),
+                "has_metadata": json_path.is_file(),
+                "size_bytes": std::fs::metadata(&path).ok().map(|m| m.len()).unwrap_or(0),
+            }));
+        }
+    }
+    voices.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+    Json(serde_json::json!({
+        "voices_dir": dir.display().to_string(),
+        "voices": voices,
+    }))
+}
+
+/// POST /api/system/local-voice/voices/upload — `multipart/form-data` upload of a
+/// Piper `.onnx` voice (and optional `.onnx.json` sidecar) into `custom_voices_dir`.
+///
+/// Multipart fields:
+///   - `voice` — required, the `.onnx` file
+///   - `metadata` — optional, the `.onnx.json` file
+///   - `id` — optional, override the file stem (falls back to the upload's filename)
+///
+/// On success returns `{ ok: true, id, onnx }`. The Settings UI then PUTs
+/// `/api/system/local-voice/preference` with `custom_piper_voice: <id>` to make it active.
+pub async fn system_local_voice_upload_voice(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let lv = state.kernel.local_voice_effective();
+    let dir = lv
+        .custom_voices_dir
+        .clone()
+        .unwrap_or_else(|| state.kernel.config.home_dir.join("voice").join("voices_user"));
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": format!("mkdir {}: {e}", dir.display()) })),
+        );
+    }
+
+    let mut id_override: Option<String> = None;
+    let mut onnx_bytes: Option<(String, Vec<u8>)> = None;
+    let mut json_bytes: Option<(String, Vec<u8>)> = None;
+
+    while let Some(field) = match multipart.next_field().await {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": format!("multipart: {e}") })),
+            );
+        }
+    } {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "id" => {
+                id_override = field.text().await.ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            }
+            "voice" => {
+                let filename = field.file_name().unwrap_or("voice.onnx").to_string();
+                let bytes = match field.bytes().await {
+                    Ok(b) => b.to_vec(),
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({ "ok": false, "error": format!("read voice: {e}") })),
+                        );
+                    }
+                };
+                onnx_bytes = Some((filename, bytes));
+            }
+            "metadata" => {
+                let filename = field.file_name().unwrap_or("voice.onnx.json").to_string();
+                let bytes = field.bytes().await.ok().map(|b| b.to_vec()).unwrap_or_default();
+                json_bytes = Some((filename, bytes));
+            }
+            _ => {
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let (orig_name, bytes) = match onnx_bytes {
+        Some(v) => v,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "ok": false, "error": "Missing 'voice' file field" })),
+            );
+        }
+    };
+
+    if bytes.len() > 200 * 1024 * 1024 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({ "ok": false, "error": "voice .onnx exceeds 200 MiB cap" })),
+        );
+    }
+    if !looks_like_onnx_file(&bytes) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "File does not look like a valid ONNX model (missing magic header)" })),
+        );
+    }
+
+    let stem = id_override
+        .or_else(|| {
+            FsPath::new(&orig_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| format!("voice_{}", uuid::Uuid::new_v4()));
+    let stem = sanitize_voice_id(&stem);
+
+    let onnx_path = dir.join(format!("{stem}.onnx"));
+    let json_path = dir.join(format!("{stem}.onnx.json"));
+
+    if let Err(e) = std::fs::write(&onnx_path, &bytes) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": format!("write {}: {e}", onnx_path.display()) })),
+        );
+    }
+    if let Some((_, jb)) = json_bytes {
+        if !jb.is_empty() {
+            let _ = std::fs::write(&json_path, &jb);
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "id": stem,
+            "onnx": onnx_path.display().to_string(),
+            "has_metadata": json_path.is_file(),
+        })),
+    )
+}
+
+fn looks_like_onnx_file(bytes: &[u8]) -> bool {
+    // ONNX files are protobuf — they start with a short tag byte. Accept any small
+    // tag in 0x08..=0x7F; reject obvious zip / image / executable signatures.
+    if bytes.len() < 16 {
+        return false;
+    }
+    if bytes.starts_with(b"PK") || bytes.starts_with(b"MZ") || bytes.starts_with(b"\x7FELF") {
+        return false;
+    }
+    true
+}
+
+fn sanitize_voice_id(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let trimmed = cleaned.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        format!("voice_{}", uuid::Uuid::new_v4())
+    } else {
+        trimmed.chars().take(64).collect()
+    }
+}
+
+/// DELETE /api/system/local-voice/voices/{id} — remove a user-uploaded voice.
+pub async fn system_local_voice_delete_voice(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let lv = state.kernel.local_voice_effective();
+    let dir = lv
+        .custom_voices_dir
+        .clone()
+        .unwrap_or_else(|| state.kernel.config.home_dir.join("voice").join("voices_user"));
+    let id = sanitize_voice_id(&id);
+    let onnx = dir.join(format!("{id}.onnx"));
+    let json = dir.join(format!("{id}.onnx.json"));
+    if !onnx.is_file() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": "voice not found" })),
+        );
+    }
+    let _ = std::fs::remove_file(&onnx);
+    let _ = std::fs::remove_file(&json);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "id": id })),
+    )
+}
+
+/// PUT /api/system/local-voice/preference — persist user voice picks to `config.toml`.
+///
+/// Body (all fields optional, only present ones are written):
+///   - `preferred_say_voice`: String | null
+///   - `prefer_macos_say`:    bool | null     (macOS: try `/usr/bin/say` before Piper for WebChat replies)
+///   - `custom_piper_voice`:  String | null   (file stem under `custom_voices_dir`)
+///   - `kokoro_voice`:        String | null
+///
+/// **Note:** changes apply on the next daemon start. The dashboard surfaces a
+/// "restart for changes to take effect" hint.
+pub async fn system_local_voice_put_preference(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let config_path = state.kernel.config.home_dir.join("config.toml");
+    if let Err(e) = upsert_local_voice_preference(&config_path, &payload) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        );
+    }
+    if let Err(e) = state.kernel.sync_local_voice_from_config_file() {
+        tracing::warn!(error = %e, "voice prefs saved to disk but failed to refresh in-memory [local_voice]");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": format!("saved to {} but daemon could not reload [local_voice]: {e}", config_path.display()),
+            })),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "config_path": config_path.display().to_string(),
+            "hint": "Saved. Voice picks apply immediately to new spoken replies; restart the daemon only if you edited raw paths or [local_voice] outside this screen.",
+        })),
+    )
+}
+
+fn upsert_local_voice_preference(
+    config_path: &std::path::Path,
+    payload: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    }
+
+    let mut doc = openfang_kernel::config::parse_config_toml_file(config_path)
+        .map_err(|e| format!("parse config: {e}"))?;
+    let root = doc
+        .as_table_mut()
+        .ok_or_else(|| "config root is not a table".to_string())?;
+    let lv_entry = root
+        .entry("local_voice".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    let lv = lv_entry
+        .as_table_mut()
+        .ok_or_else(|| "[local_voice] is not a table".to_string())?;
+
+    fn apply_str_field(
+        tbl: &mut toml::map::Map<String, toml::Value>,
+        payload: &serde_json::Value,
+        key: &str,
+    ) {
+        match payload.get(key) {
+            Some(serde_json::Value::String(s)) => {
+                if s.trim().is_empty() {
+                    tbl.remove(key);
+                } else {
+                    tbl.insert(key.to_string(), toml::Value::String(s.trim().to_string()));
+                }
+            }
+            Some(serde_json::Value::Null) => {
+                tbl.remove(key);
+            }
+            _ => {}
+        }
+    }
+
+    apply_str_field(lv, payload, "preferred_say_voice");
+    apply_str_field(lv, payload, "custom_piper_voice");
+
+    if let Some(v) = payload.get("prefer_macos_say") {
+        match v {
+            serde_json::Value::Bool(b) => {
+                lv.insert(
+                    "prefer_macos_say".to_string(),
+                    toml::Value::Boolean(*b),
+                );
+            }
+            serde_json::Value::Null => {
+                lv.remove("prefer_macos_say");
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(kv) = payload.get("kokoro_voice") {
+        let kokoro_entry = lv
+            .entry("kokoro".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        if let Some(kt) = kokoro_entry.as_table_mut() {
+            match kv {
+                serde_json::Value::String(s) if !s.trim().is_empty() => {
+                    kt.insert("voice".to_string(), toml::Value::String(s.trim().to_string()));
+                }
+                serde_json::Value::String(_) | serde_json::Value::Null => {
+                    kt.remove("voice");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let serialized = toml::to_string_pretty(&doc).map_err(|e| format!("serialize: {e}"))?;
+    let tmp = config_path.with_extension("toml.tmp");
+    std::fs::write(&tmp, serialized).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, config_path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
 }
 
 /// GET /api/system/mcp-host-readiness — `uvx` / `npx` on host, Google OAuth *client* id presence,

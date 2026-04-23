@@ -142,6 +142,26 @@ pub async fn build_router(
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
         .route(
+            "/premium-ainl-verify.html",
+            axum::routing::get(crate::premium_ainl::verify_page),
+        )
+        .route(
+            "/api/premium/ainl/nonce",
+            axum::routing::post(crate::premium_ainl::post_nonce),
+        )
+        .route(
+            "/api/premium/ainl/verify",
+            axum::routing::post(crate::premium_ainl::post_verify),
+        )
+        .route(
+            "/api/premium/ainl/redeem",
+            axum::routing::post(crate::premium_ainl::post_redeem),
+        )
+        .route(
+            "/api/premium/ainl/status",
+            axum::routing::get(crate::premium_ainl::get_status),
+        )
+        .route(
             "/api/metrics",
             axum::routing::get(routes::prometheus_metrics),
         )
@@ -638,6 +658,26 @@ pub async fn build_router(
         .route(
             "/api/system/local-voice",
             axum::routing::get(routes::system_local_voice),
+        )
+        .route(
+            "/api/system/local-voice/say-voices",
+            axum::routing::get(routes::system_local_voice_say_voices),
+        )
+        .route(
+            "/api/system/local-voice/voices",
+            axum::routing::get(routes::system_local_voice_voices),
+        )
+        .route(
+            "/api/system/local-voice/voices/upload",
+            axum::routing::post(routes::system_local_voice_upload_voice),
+        )
+        .route(
+            "/api/system/local-voice/voices/{id}",
+            axum::routing::delete(routes::system_local_voice_delete_voice),
+        )
+        .route(
+            "/api/system/local-voice/preference",
+            axum::routing::put(routes::system_local_voice_put_preference),
         )
         .route(
             "/api/system/daemon-resources",

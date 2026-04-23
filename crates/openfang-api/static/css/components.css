@@ -3406,6 +3406,103 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   background: color-mix(in srgb, var(--agent-bg) 96%, var(--surface) 4%);
 }
 
+/* User voice turns: transcript / “Recording…” + collapsed internal context (chat.js — tokens only). */
+.chat-user-voice-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message.user .message-bubble .chat-user-voice-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.48;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message.user .message-bubble .chat-user-voice-recording {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.chat-voice-ctx-details {
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface2) 55%, transparent);
+  overflow: hidden;
+  box-shadow: var(--shadow-xs);
+}
+
+[data-theme="light"] .chat-voice-ctx-details {
+  background: color-mix(in srgb, var(--surface2) 72%, var(--surface) 28%);
+  border-color: var(--border-subtle);
+}
+
+.chat-voice-ctx-details > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: var(--text-dim);
+  user-select: none;
+  transition: color 0.15s var(--ease-smooth, ease), background 0.15s var(--ease-smooth, ease);
+}
+
+.chat-voice-ctx-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-voice-ctx-details > summary:hover {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface3) 28%, transparent);
+}
+
+.chat-voice-ctx-details > summary:focus {
+  outline: none;
+}
+
+.chat-voice-ctx-details > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.chat-voice-ctx-chevron {
+  font-size: 9px;
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+.message.user .message-bubble .chat-voice-ctx-pre.tool-pre {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 82%, transparent);
+  border-radius: 0;
+  max-height: min(28vh, 200px);
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.35;
+  background: color-mix(in srgb, var(--surface) 88%, var(--surface2) 12%);
+  color: var(--text-secondary);
+}
+
+[data-theme="light"] .message.user .message-bubble .chat-voice-ctx-pre.tool-pre {
+  background: var(--surface);
+  border-top-color: var(--border-subtle);
+}
+
 /* Agent/user reply typography polish for markdown readability density. */
 .message-bubble.markdown-body {
   font-size: 12.5px;

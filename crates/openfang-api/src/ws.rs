@@ -589,6 +589,8 @@ async fn handle_text_message(
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
+            let turn_constraints =
+                crate::routes::voice_stt_turn_tool_constraints(&attachment_refs);
             match state.kernel.send_message_streaming(
                 agent_id,
                 &content,
@@ -597,6 +599,7 @@ async fn handle_text_message(
                 None,
                 ws_content_blocks,
                 None,
+                turn_constraints,
             ) {
                 Ok((mut rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.
@@ -973,37 +976,53 @@ async fn handle_text_message(
                                 response_payload["adaptive_eco_reason_codes"] =
                                     serde_json::json!(c);
                             }
-                            if voice_reply
-                                && !response_text.trim().is_empty()
-                                && state.kernel.config.local_voice.piper_ready()
-                            {
-                                match openfang_runtime::tts::synthesize_piper_local(
-                                    &response_text,
-                                    &state.kernel.config.local_voice,
-                                )
-                                .await
-                                {
-                                    Ok(tts) => {
-                                        match crate::routes::register_generated_upload(
-                                            "audio/wav",
-                                            "voice_reply.wav",
-                                            tts.audio_data,
-                                        ) {
-                                            Ok(url) => {
-                                                response_payload["voice_reply_audio_url"] =
-                                                    serde_json::json!(url);
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(
-                                                    error = %e,
-                                                    "WS: voice reply upload failed"
-                                                );
+                            if voice_reply && !response_text.trim().is_empty() {
+                                let local_voice = state.kernel.local_voice_effective();
+                                if local_voice.local_tts_ready() {
+                                    match openfang_runtime::tts::synthesize_local_tts(
+                                        &response_text,
+                                        &local_voice,
+                                    )
+                                    .await
+                                    {
+                                        Ok(tts) => {
+                                            match crate::routes::register_generated_upload(
+                                                "audio/wav",
+                                                "voice_reply.wav",
+                                                tts.audio_data,
+                                            ) {
+                                                Ok(url) => {
+                                                    response_payload["voice_reply_audio_url"] =
+                                                        serde_json::json!(url);
+                                                    response_payload["voice_reply_provider"] =
+                                                        serde_json::json!(tts.provider);
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        "WS: voice reply upload failed"
+                                                    );
+                                                    response_payload["voice_reply_error"] =
+                                                        serde_json::json!(format!(
+                                                            "voice upload failed: {e}"
+                                                        ));
+                                                }
                                             }
                                         }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "WS: local TTS voice reply failed"
+                                            );
+                                            response_payload["voice_reply_error"] =
+                                                serde_json::json!(e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::warn!(error = %e, "WS: Piper voice reply failed");
-                                    }
+                                } else {
+                                    response_payload["voice_reply_error"] = serde_json::json!(
+                                        "local TTS not ready: no Piper bundle and no \
+                                         macOS `say` available — see /api/system/local-voice"
+                                    );
                                 }
                             }
                             let _ = send_json(sender, &response_payload).await;

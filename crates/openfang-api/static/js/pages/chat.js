@@ -1727,12 +1727,7 @@ function chatPage() {
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
             compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
             savingsPct: data.compression_savings_pct || 0, ecoMetaTooltip: ecoTip || null });
-          if (data.voice_reply_audio_url && typeof Audio !== 'undefined') {
-            try {
-              var wsAu = new Audio(window.location.origin + data.voice_reply_audio_url);
-              wsAu.play().catch(function() {});
-            } catch (eWsAu) {}
-          }
+          this._attachVoiceReply(this.messages[this.messages.length - 1], data);
           this._updateMemoryAppliedIndicatorForTurn();
           // Snapshot to cache so switching away and back shows the complete turn instantly
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
@@ -1945,9 +1940,61 @@ function chatPage() {
       return '<div class="markdown-body message-scheduler-md">' + this.renderMarkdown(p.body) + '</div>';
     },
 
+    /**
+     * Strip server-injected voice/STT scaffolding from **display** only. The full string is still
+     * stored on `msg.text` (canonical session / LLM turn); the UI hides `[ARMAVOS_*]` blocks so
+     * users see their words (or a short “Recording...” line) instead of UUID / tool boilerplate.
+     */
+    stripVoiceAgentUiNoise: function(text) {
+      if (!text) return '';
+      var t = String(text);
+      t = t.replace(/\[ARMAVOS_VOICE_CONTEXT\][\s\S]*?\[\/ARMAVOS_VOICE_CONTEXT\]/g, '');
+      t = t.replace(/\[ARMAVOS_VOICE_POLICY\][\s\S]*?\[\/ARMAVOS_VOICE_POLICY\]/g, '');
+      t = t.replace(
+        /\n{1,}\*\*Voice\/audio attachments\*\*[\s\S]*?Do not ask the user to paste a UUID\./g,
+        ''
+      );
+      return t.replace(/\n{3,}/g, '\n\n').trim();
+    },
+
+    /** True when the visible text is only the client/server “call media_transcribe” hint (no real words yet). */
+    isVoiceTranscribePlaceholder: function(s) {
+      var t = (s || '').trim();
+      if (!t) return true;
+      return /^\[Voice message/i.test(t) && /media_transcribe/i.test(t) && /file_id/i.test(t);
+    },
+
     /** Main chat bubble HTML (shared so tool-call turns can render reply below tool cards without duplicating logic). */
     formatChatMessageHtml: function(msg) {
       if (!msg || !msg.text) return '';
+      // User turns: hide voice pipeline markers by default; keep full text in a collapsed <details>
+      // (same spirit as tool cards — technical payload available on demand).
+      if (msg.role === 'user' && !msg.isHtml && !msg.thinking) {
+        var raw = msg.text;
+        var stripped = this.stripVoiceAgentUiNoise(raw);
+        var visible = stripped;
+        if (this.isVoiceTranscribePlaceholder(visible)) visible = '';
+        var esc = this.escapeHtml(visible);
+        if (this.searchQuery && this.searchQuery.trim()) esc = this.highlightSearch(esc);
+        // Human-facing body: transcript or a tiny recording hint — never the UUID wall (styles: components.css).
+        var bodyHtml = visible
+          ? '<div class="chat-user-voice-body">' + esc + '</div>'
+          : '<p class="chat-user-voice-recording">Recording...</p>';
+        var showVoiceDetails =
+          stripped.trim() !== String(raw).trim() || (!visible && String(raw).trim().length > 0);
+        if (!showVoiceDetails) return bodyHtml;
+        // Collapsed strip: same spirit as tool cards — technical payload on demand, tokenized chrome only.
+        var detailsHtml =
+          '<details class="chat-voice-ctx-details">' +
+          '<summary>' +
+          '<span class="chat-voice-ctx-chevron" aria-hidden="true">▸</span>' +
+          '<span>Internal context</span>' +
+          '</summary>' +
+          '<pre class="tool-pre chat-voice-ctx-pre">' +
+          this.escapeHtml(raw) +
+          '</pre></details>';
+        return '<div class="chat-user-voice-wrap">' + bodyHtml + detailsHtml + '</div>';
+      }
       var inner = msg.isHtml ? msg.text : ((msg.role === 'agent' || msg.role === 'system') && !msg.thinking
         ? this.renderMarkdown(msg.text)
         : this.escapeHtml(msg.text));
@@ -1958,6 +2005,11 @@ function chatPage() {
     copyMessage: function(msg) {
       var self = this;
       var text = msg.text || '';
+      if (msg.role === 'user' && text) {
+        var origU = text;
+        text = this.stripVoiceAgentUiNoise(text);
+        if (!String(text).trim() && String(origU).trim()) text = 'Recording...';
+      }
       if (msg.isHtml && text) {
         var div = document.createElement('div');
         div.innerHTML = text;
@@ -1996,7 +2048,10 @@ function chatPage() {
       var sorted = this.bookmarkCategoriesSorted();
       this.bookmarkCategoryId = sorted[0] ? sorted[0].id : '';
       this.bookmarkNewCategory = '';
-      var line = (msg.text || '').split('\n')[0].trim();
+      var line = (msg.role === 'user' ? this.stripVoiceAgentUiNoise(msg.text || '') : (msg.text || ''))
+        .split('\n')[0]
+        .trim();
+      if (!line && msg.role === 'user') line = 'Recording...';
       this.bookmarkTitle = line.length > 140 ? line.slice(0, 137) + '...' : line;
       this.bookmarkModalOpen = true;
     },
@@ -2236,12 +2291,7 @@ function chatPage() {
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
           compressedInput: httpCompressedInput, originalInput: httpCompressedInput ? (self._lastSentOriginal || '') : null,
           savingsPct: res.compression_savings_pct || 0, ecoMetaTooltip: httpEcoTip || null });
-        if (res.voice_reply_audio_url && typeof Audio !== 'undefined') {
-          try {
-            var httpAu = new Audio(window.location.origin + res.voice_reply_audio_url);
-            httpAu.play().catch(function() {});
-          } catch (eHttpAu) {}
-        }
+        this._attachVoiceReply(this.messages[this.messages.length - 1], res);
         this._updateMemoryAppliedIndicatorForTurn();
       } catch(e) {
         this.messages = this.messages.filter(function(m) { return !m.thinking; });
@@ -2659,20 +2709,72 @@ function chatPage() {
     escapeHtml: escapeHtml,
 
     /**
-     * Toggle whether to request a Piper spoken reply from the daemon (text or voice turn).
-     * When turning on, preflight `GET /api/system/local-voice` so the UI only enables if Piper
-     * is actually ready; otherwise a toast explains typical fixes (first online launch, config).
+     * Attach a voice reply (or its failure reason) to the just-pushed agent message.
+     *
+     * The server cascades local TTS (Kokoro stub, then either **macOS `say` -> Piper** when
+     * Settings → Voice enables “Prefer macOS say”, else **Piper -> macOS `say`**), so an audio URL
+     * may arrive even when Piper is broken (the rhasspy/piper 2023.11.14-2 macOS aarch64 release
+     * ships .dSYM debug symbols but omits the dylibs the binary links against). When neither
+     * provider succeeds, the server now sends `voice_reply_error` so we can show the user a
+     * real reason instead of silently producing nothing.
+     *
+     * Strategy:
+     *   1. Always attempt autoplay (browsers may reject without user gesture).
+     *   2. **Always** embed a markdown link into the message body so the inline `<audio controls>`
+     *      from `markdownEmbedAudioUploadLinks` renders as a "tap to play" fallback that's robust
+     *      to autoplay denial — this is the deterministic fix for "speaker says ready but I never
+     *      hear anything" reports.
      */
-    /** If localStorage had spoken-reply on but Piper is gone, turn off and explain (toast + footer). */
+    _attachVoiceReply: function(message, payload) {
+      if (!message || !payload) return;
+      if (payload.voice_reply_audio_url) {
+        var url = payload.voice_reply_audio_url;
+        var providerLabel = (payload.voice_reply_provider === 'macos_say')
+          ? 'macOS say'
+          : (payload.voice_reply_provider === 'piper' ? 'Piper' : 'voice reply');
+        // Append a hidden (but renderable) markdown link so the audio embedder produces controls.
+        var marker = '\n\n[' + providerLabel + ' audio reply](' + url + ')';
+        if (message.text && message.text.indexOf(url) === -1) {
+          message.text = message.text + marker;
+        }
+        if (typeof Audio !== 'undefined') {
+          try {
+            var au = new Audio(window.location.origin + url);
+            au.play().catch(function() {
+              if (typeof OpenFangToast !== 'undefined') {
+                OpenFangToast.info('Voice reply ready — tap the inline player to listen (browser blocked autoplay).');
+              }
+            });
+          } catch (e) { /* non-fatal */ }
+        }
+      } else if (payload.voice_reply_error) {
+        // Server tried and failed (e.g. broken Piper bundle). Tell the user, don't pretend.
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.warn('Voice reply unavailable: ' + payload.voice_reply_error);
+        }
+        var note = '\n\n*(voice reply unavailable: ' + String(payload.voice_reply_error).replace(/[*_`]/g, '') + ')*';
+        if (message.text && message.text.indexOf('voice reply unavailable') === -1) {
+          message.text = message.text + note;
+        }
+      }
+    },
+
+    /**
+     * Toggle whether to request a local TTS spoken reply from the daemon.
+     * When turning on, preflight `GET /api/system/local-voice` so the UI only enables if some
+     * provider (Piper OR macOS `say`) can actually synthesize; otherwise a toast explains the
+     * specific failure (e.g. "Piper bundle missing dylibs and /usr/bin/say not found").
+     */
+    /** If localStorage had spoken-reply on but no TTS provider is ready, turn off and explain. */
     _syncVoiceReplyWithServer: async function() {
       if (!this.voiceReplyEnabled) return;
       if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) return;
       try {
         var s = await OpenFangAPI.get('/api/system/local-voice');
-        if (s && s.piper_ready) return;
+        if (s && (s.tts_ready || s.piper_ready)) return;
         this.voiceReplyEnabled = false;
         try { localStorage.setItem('armaraos-voice-reply', '0'); } catch (e) { /* non-fatal */ }
-        this.voiceReplyHint = 'Spoken replies were saved as on, but Piper is not ready — tap the speaker again for setup tips.';
+        this.voiceReplyHint = 'Spoken replies were saved as on, but no local TTS is ready — tap the speaker again for diagnostics.';
         if (typeof OpenFangToast !== 'undefined') {
           OpenFangToast.warn(this.voiceReplyHint);
         }
@@ -2698,30 +2800,59 @@ function chatPage() {
         return;
       }
       var self = this;
+      // The toast points users at Settings → Voice on every enable (success or failure):
+      // success → confirms which voice is active and how to change it;
+      // failure → tells them what's missing AND where to fix / install / pick a voice.
+      var goToVoiceSettings = function() {
+        try {
+          window.location.hash = 'settings';
+          setTimeout(function() {
+            try {
+              var sp = (window.Alpine && Alpine.store && Alpine.store('settingsPage'));
+              if (sp) {
+                sp.tab = 'voice';
+                if (typeof sp.loadVoiceSettings === 'function') sp.loadVoiceSettings();
+              } else {
+                window.dispatchEvent(new CustomEvent('armaraos:open-settings-tab', { detail: { tab: 'voice' } }));
+              }
+            } catch(e) { /* non-fatal */ }
+          }, 120);
+        } catch(e) { /* non-fatal */ }
+      };
       try {
         var s = await OpenFangAPI.get('/api/system/local-voice');
-        if (s && s.piper_ready) {
+        var ready = !!(s && (s.tts_ready || s.piper_ready));
+        if (ready) {
           self.voiceReplyEnabled = true;
           self.voiceReplyHint = '';
           try { localStorage.setItem('armaraos-voice-reply', '1'); } catch (e2) { /* non-fatal */ }
+          var providerName = (s && s.tts_provider === 'macos_say')
+            ? ('macOS ' + (s.preferred_say_voice ? '"' + s.preferred_say_voice + '"' : 'system voice') + ' (say)')
+            : (s && s.tts_provider === 'piper'
+                ? ('Piper' + (s.custom_piper_voice ? ' / custom "' + s.custom_piper_voice + '"' : ' (en_US-lessac-medium)'))
+                : 'local TTS');
           if (typeof OpenFangToast !== 'undefined') {
-            OpenFangToast.success('Spoken replies on — after you send a message, the assistant reply may auto-play (Piper) when the server returns audio.');
+            OpenFangToast.success(
+              'Spoken replies on — using ' + providerName + '. To change voice or upload your own, open Settings → Voice.',
+              { actionLabel: 'Open Settings → Voice', onAction: goToVoiceSettings, duration: 8000 }
+            );
           }
         } else {
           var notEnabled = s && s.enabled === false;
+          var detail = (s && s.tts_error) ? (' (' + s.tts_error + ')') : '';
           var msg = notEnabled
-            ? 'Spoken reply needs local Piper TTS, but [local_voice] is disabled in config. Enable it in config.toml, or set paths manually. See "Local voice" in the docs.'
-            : (s && s.auto_download === false
-              ? 'Spoken reply needs Piper (TTS) but auto-download is off. Go online to place binaries under ~/.armaraos/voice/, or set [local_voice] paths in config.toml. See "Local voice" in the docs.'
-              : 'Spoken reply is not available yet: Piper (local TTS) is not ready. The first daemon run on a working network usually auto-downloads it; if you were fully offline, connect, restart the daemon, and try again. See "Local voice" (Whisper + Piper) in the docs.');
-          self.voiceReplyHint = 'Piper not ready — spoken reply cannot turn on. See docs/local-voice.md or GET /api/system/local-voice.';
-          if (typeof OpenFangToast !== 'undefined') OpenFangToast.warn(msg);
+            ? 'Spoken reply needs local TTS but [local_voice] is disabled. Enable it in Settings → Voice.'
+            : 'Spoken reply not ready' + detail + '. Open Settings → Voice to see component status, install a voice, or pick a fallback.';
+          self.voiceReplyHint = 'Local TTS not ready — open Settings → Voice for diagnostics and to pick / install a voice.';
+          if (typeof OpenFangToast !== 'undefined') {
+            OpenFangToast.warn(msg, { actionLabel: 'Open Settings → Voice', onAction: goToVoiceSettings, duration: 10000 });
+          }
         }
       } catch (err) {
         var m = (err && err.message) ? err.message : 'request failed';
-        self.voiceReplyHint = 'Could not verify Piper — check connection to the daemon.';
+        self.voiceReplyHint = 'Could not verify local TTS — check connection to the daemon, then open Settings → Voice.';
         if (typeof OpenFangToast !== 'undefined') {
-          OpenFangToast.error('Could not verify local voice / Piper: ' + m);
+          OpenFangToast.error('Could not verify local voice: ' + m, { actionLabel: 'Open Settings → Voice', onAction: goToVoiceSettings });
         }
       }
     },

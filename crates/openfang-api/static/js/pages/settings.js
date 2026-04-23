@@ -123,6 +123,43 @@ function settingsPage() {
     verifyingChain: false,
     chainResult: null,
 
+    // -- Voice settings state (Settings → Voice tab) --
+    voiceLoading: false,
+    voiceData: null,
+    sayVoices: [],
+    customVoices: [],
+    voicePrefDraft: { preferred_say_voice: '', prefer_macos_say: false, custom_piper_voice: '', kokoro_voice: 'af_heart' },
+    voicePrefServer: { preferred_say_voice: '', prefer_macos_say: false, custom_piper_voice: '', kokoro_voice: 'af_heart' },
+    voicePrefSaving: false,
+    voicePrefStatus: '',
+    voiceUploading: false,
+    voiceUploadError: '',
+    onnxFileInput: null,
+    onnxJsonFileInput: null,
+    onnxIdInput: '',
+    /** MIT-licensed Kokoro-82M voice ids (American/British/Japanese/etc). Populated statically;
+        the runtime auto-downloads the chosen one from HuggingFace `onnx-community/Kokoro-82M-v1.0-ONNX`. */
+    kokoroVoices: [
+      'af_heart', 'af_bella', 'af_nicole', 'af_sarah', 'af_sky',
+      'am_adam', 'am_michael',
+      'bf_emma', 'bf_isabella',
+      'bm_george', 'bm_lewis'
+    ],
+
+    /** Computed rows for the auto-installed components panel (Voice tab). */
+    get voiceComponentRows() {
+      var c = (this.voiceData && this.voiceData.components) || {};
+      return [
+        { key: 'whisper_cli', label: 'Whisper CLI (speech-to-text engine)', ok: !!(c.whisper_cli && c.whisper_cli.exists), path: c.whisper_cli && c.whisper_cli.path },
+        { key: 'whisper_model', label: 'Whisper ggml-base model (~150 MiB)', ok: !!(c.whisper_model && c.whisper_model.exists), path: c.whisper_model && c.whisper_model.path },
+        { key: 'piper_binary', label: 'Piper binary', ok: !!(c.piper_binary && c.piper_binary.exists), path: c.piper_binary && c.piper_binary.path },
+        { key: 'piper_voice', label: 'Piper bundled voice (en_US-lessac-medium)', ok: !!(c.piper_voice && c.piper_voice.exists), path: c.piper_voice && c.piper_voice.path },
+        { key: 'active_piper_voice', label: 'Piper active voice (resolved at synth time)', ok: !!(c.active_piper_voice && c.active_piper_voice.exists), path: c.active_piper_voice && c.active_piper_voice.path },
+        { key: 'macos_say', label: 'macOS /usr/bin/say (built-in fallback)', ok: !!(this.voiceData && (this.voiceData.macos_say_binary_present || this.voiceData.macos_say_ready)), path: '/usr/bin/say' },
+        { key: 'kokoro', label: 'Kokoro-82M model (opt-in, ~310 MiB)', ok: !!(c.kokoro_model && c.kokoro_model.exists), path: c.kokoro_model && c.kokoro_model.path },
+      ];
+    },
+
     coreFeatures: [
       {
         name: 'Path Traversal Prevention', key: 'path_traversal',
@@ -1536,6 +1573,203 @@ function settingsPage() {
         this.securityData = null;
       }
       this.secLoading = false;
+    },
+
+    // --------------------------------------------------------------------
+    // Voice tab — local TTS / STT installation status, voice picker, upload
+    // --------------------------------------------------------------------
+
+    /** Fetch /api/system/local-voice + /say-voices + /voices in parallel and seed the draft from server values. */
+    async loadVoiceSettings(refresh) {
+      var self = this;
+      self.voiceLoading = !refresh;
+      try {
+        var results = await Promise.allSettled([
+          OpenFangAPI.get('/api/system/local-voice'),
+          OpenFangAPI.get('/api/system/local-voice/say-voices'),
+          OpenFangAPI.get('/api/system/local-voice/voices'),
+        ]);
+        if (results[0].status === 'fulfilled') {
+          self.voiceData = results[0].value || null;
+        }
+        if (results[1].status === 'fulfilled') {
+          self.sayVoices = (results[1].value && results[1].value.voices) || [];
+          // Sort: premium > enhanced > default, alphabetical within tier.
+          var rank = function(t) { return t === 'premium' ? 0 : t === 'enhanced' ? 1 : 2; };
+          self.sayVoices.sort(function(a, b) {
+            var dr = rank(a.tier) - rank(b.tier);
+            if (dr !== 0) return dr;
+            return (a.id || '').localeCompare(b.id || '');
+          });
+        }
+        if (results[2].status === 'fulfilled') {
+          self.customVoices = (results[2].value && results[2].value.voices) || [];
+        }
+        // Keep draft + server snapshot aligned with what the daemon reports (includes prefs
+        // applied immediately after `PUT /api/system/local-voice/preference`).
+        if (self.voiceData) {
+          var srv = {
+            preferred_say_voice: self.voiceData.preferred_say_voice || '',
+            prefer_macos_say: !!self.voiceData.prefer_macos_say,
+            custom_piper_voice: self.voiceData.custom_piper_voice || '',
+            kokoro_voice: (self.voiceData.kokoro && self.voiceData.kokoro.voice) || 'af_heart',
+          };
+          self.voicePrefServer = srv;
+          self.voicePrefDraft = Object.assign({}, srv);
+        }
+      } catch(e) {
+        // network or auth error — keep whatever we had
+      }
+      self.voiceLoading = false;
+    },
+
+    /** Discard local edits to the voice preferences and reload from disk. */
+    resetVoicePrefDraft() {
+      this.voicePrefDraft = Object.assign({}, this.voicePrefServer);
+      this.voicePrefStatus = '';
+    },
+
+    /** PUT /api/system/local-voice/preference and update the "server" snapshot on success. */
+    async saveVoicePreference() {
+      this.voicePrefSaving = true;
+      this.voicePrefStatus = '';
+      try {
+        var body = {
+          preferred_say_voice: this.voicePrefDraft.preferred_say_voice || null,
+          prefer_macos_say: !!this.voicePrefDraft.prefer_macos_say,
+          custom_piper_voice: this.voicePrefDraft.custom_piper_voice || null,
+          kokoro_voice: this.voicePrefDraft.kokoro_voice || null,
+        };
+        var res = await OpenFangAPI.put('/api/system/local-voice/preference', body);
+        this.voicePrefStatus = '✓ Saved. ' + (res && res.hint ? res.hint : 'Voice picks apply immediately.');
+        await this.loadVoiceSettings(true);
+      } catch(e) {
+        this.voicePrefStatus = 'Save failed: ' + (e && e.message ? e.message : 'unknown error');
+      }
+      this.voicePrefSaving = false;
+    },
+
+    /** Multipart upload — POST /api/system/local-voice/voices/upload — refresh the list on success. */
+    async uploadCustomVoice() {
+      if (!this.onnxFileInput) {
+        this.voiceUploadError = 'Choose a .onnx file first.';
+        return;
+      }
+      this.voiceUploading = true;
+      this.voiceUploadError = '';
+      try {
+        var form = new FormData();
+        form.append('voice', this.onnxFileInput);
+        if (this.onnxJsonFileInput) {
+          form.append('metadata', this.onnxJsonFileInput);
+        }
+        if (this.onnxIdInput && this.onnxIdInput.trim()) {
+          form.append('id', this.onnxIdInput.trim());
+        }
+        var hdrs = {};
+        var token = (window.OpenFangAPI && OpenFangAPI.getToken && OpenFangAPI.getToken()) || '';
+        if (token) hdrs['Authorization'] = 'Bearer ' + token;
+        var resp = await fetch(OpenFangAPI.baseUrl + '/api/system/local-voice/voices/upload', {
+          method: 'POST',
+          headers: hdrs,
+          body: form,
+        });
+        var json = await resp.json().catch(function() { return {}; });
+        if (!resp.ok || json.ok === false) {
+          throw new Error(json.error || ('HTTP ' + resp.status));
+        }
+        // Auto-select the newly uploaded voice (matches user expectation).
+        if (json.id) {
+          this.voicePrefDraft.custom_piper_voice = json.id;
+          // Persist pick immediately so the next `loadVoiceSettings` (and the daemon) do not
+          // drop the selection — `config.toml` + in-memory `[local_voice]` sync via PUT.
+          try {
+            await OpenFangAPI.put('/api/system/local-voice/preference', {
+              preferred_say_voice: this.voicePrefDraft.preferred_say_voice || null,
+              prefer_macos_say: !!this.voicePrefDraft.prefer_macos_say,
+              custom_piper_voice: json.id,
+              kokoro_voice: this.voicePrefDraft.kokoro_voice || null,
+            });
+          } catch (e2) {
+            this.voiceUploadError =
+              'Voice uploaded but failed to set as active: ' +
+              (e2 && e2.message ? e2.message : 'unknown error') +
+              ' — click Save voice preferences.';
+          }
+        }
+        this.onnxFileInput = null;
+        this.onnxJsonFileInput = null;
+        this.onnxIdInput = '';
+        // Reset only the file inputs inside the Voice tab (never clear unrelated uploads).
+        var vroot = this.$refs && this.$refs.voiceSettingsPanel;
+        if (vroot) {
+          vroot.querySelectorAll('input[type="file"]').forEach(function(el) {
+            el.value = '';
+          });
+        }
+        await this.loadVoiceSettings(true);
+      } catch(e) {
+        this.voiceUploadError = 'Upload failed: ' + (e && e.message ? e.message : 'unknown error');
+      }
+      this.voiceUploading = false;
+    },
+
+    /** DELETE /api/system/local-voice/voices/{id} after a confirm prompt. */
+    async deleteCustomVoice(id) {
+      if (!id) return;
+      if (!window.confirm('Remove uploaded voice "' + id + '"? The .onnx file will be deleted from disk.')) return;
+      try {
+        await OpenFangAPI.delete('/api/system/local-voice/voices/' + encodeURIComponent(id));
+        // If the deleted voice was the active pick, clear it in config + daemon so UI and TTS agree.
+        if (this.voicePrefDraft.custom_piper_voice === id || this.voicePrefServer.custom_piper_voice === id) {
+          this.voicePrefDraft.custom_piper_voice = '';
+          try {
+            await OpenFangAPI.put('/api/system/local-voice/preference', {
+              preferred_say_voice: this.voicePrefDraft.preferred_say_voice || null,
+              prefer_macos_say: !!this.voicePrefDraft.prefer_macos_say,
+              custom_piper_voice: null,
+              kokoro_voice: this.voicePrefDraft.kokoro_voice || null,
+            });
+          } catch (e2) {
+            this.voicePrefStatus =
+              'Voice removed from disk but failed to clear active selection in config: ' +
+              (e2 && e2.message ? e2.message : 'unknown error') +
+              ' — click Save voice preferences.';
+          }
+        }
+        await this.loadVoiceSettings(true);
+      } catch(e) {
+        this.voicePrefStatus = 'Delete failed: ' + (e && e.message ? e.message : 'unknown error');
+      }
+    },
+
+    /** Local browser preview using the Web Speech API — works on macOS without round-tripping the daemon. */
+    previewSayVoice(voiceId) {
+      if (!('speechSynthesis' in window)) {
+        this.voicePrefStatus = 'Preview unsupported in this browser.';
+        return;
+      }
+      try {
+        var u = new SpeechSynthesisUtterance("Hi, I'm " + (voiceId || 'the system voice') + ". This is how I'll sound when responding to you.");
+        var voices = window.speechSynthesis.getVoices();
+        var match = voices.find(function(v) { return v.name === voiceId || v.name === voiceId.replace(/ \(.*\)$/, ''); });
+        if (match) u.voice = match;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+      } catch(e) {
+        this.voicePrefStatus = 'Preview failed: ' + (e && e.message ? e.message : 'unknown');
+      }
+    },
+
+    /** Open System Settings → Accessibility → Spoken Content (macOS only). Falls back to a hint. */
+    openMacosVoiceDownload() {
+      try {
+        if (window.armaraosOpenExternalUrl) {
+          window.armaraosOpenExternalUrl({ preventDefault: function(){} }, 'x-apple.systempreferences:com.apple.preference.universalaccess?Speech');
+          return;
+        }
+      } catch(e) { /* ignore */ }
+      this.voicePrefStatus = 'Open System Settings → Accessibility → Spoken Content → System Voice → Manage Voices to install Premium / Enhanced voices.';
     },
 
     isActive(key) {

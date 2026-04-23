@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ArmaraOS — Verify $AINL</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 560px; }
+    h1 { font-size: 1.25rem; margin: 0 0 12px; }
+    p { color: #444; line-height: 1.5; }
+    button { padding: 10px 16px; font-size: 1rem; cursor: pointer; border-radius: 8px; border: 1px solid #ccc; background: #111; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .err { color: #b00020; margin-top: 12px; white-space: pre-wrap; }
+    .ok { color: #0a6; margin-top: 12px; }
+    code { font-size: 0.85rem; word-break: break-all; }
+    .fallback { margin-top: 14px; padding: 12px; border: 1px solid #d8d8d8; border-radius: 8px; background: #fafafa; display: none; }
+    .fallback .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+    .fallback input { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; padding: 8px; border-radius: 8px; border: 1px solid #c8c8c8; }
+    .btn-secondary { background: #fff; color: #111; }
+    .hint { color: #666; font-size: 0.92rem; }
+  </style>
+</head>
+<body>
+  <h1>Verify $AINL for ArmaraOS Premium</h1>
+  <p>This page runs in your <strong>desktop browser</strong> so Phantom (or another Solana wallet) can sign. ArmaraOS will open again via a deep link when verification succeeds.</p>
+  <p>Required: at least <strong>1,000,000</strong> <code>$AINL</code> in the connected wallet on Solana mainnet.</p>
+  <p><button id="go" type="button">1. Connect wallet &amp; verify</button></p>
+  <div id="msg" class="err" style="display:none"></div>
+  <div id="done" class="ok" style="display:none"></div>
+  <div id="fallback" class="fallback">
+    <div><strong>Deep link fallback</strong></div>
+    <div class="hint">If ArmaraOS did not open automatically, copy this code and paste it into Premium → “Use fallback code”.</div>
+    <div class="row">
+      <input id="ticket" type="text" readonly value="" />
+    </div>
+    <div class="row">
+      <button id="copyTicket" type="button" class="btn-secondary">Copy code</button>
+      <button id="openApp" type="button">Open ArmaraOS again</button>
+    </div>
+  </div>
+  <script>
+(function () {
+  var btn = document.getElementById('go');
+  var msg = document.getElementById('msg');
+  var done = document.getElementById('done');
+  var fallback = document.getElementById('fallback');
+  var ticketInput = document.getElementById('ticket');
+  var copyBtn = document.getElementById('copyTicket');
+  var openBtn = document.getElementById('openApp');
+  var lastDeepLink = '';
+
+  function showErr(t) {
+    msg.style.display = 'block';
+    msg.textContent = t || 'Error';
+    done.style.display = 'none';
+  }
+  function showOk(t) {
+    done.style.display = 'block';
+    done.textContent = t || 'Done';
+    msg.style.display = 'none';
+  }
+
+  function showFallback(ticket, deepLink) {
+    if (!ticket || !deepLink) return;
+    lastDeepLink = deepLink;
+    ticketInput.value = ticket;
+    fallback.style.display = 'block';
+  }
+
+  function b64FromBytes(u8) {
+    var bin = '';
+    for (var i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
+  }
+
+  btn.onclick = async function () {
+    msg.style.display = 'none';
+    done.style.display = 'none';
+    btn.disabled = true;
+    try {
+      var w = window;
+      var prov = (w.solana && w.solana.isPhantom) ? w.solana : (w.phantom && w.phantom.solana) ? w.phantom.solana : w.solana;
+      if (!prov || typeof prov.connect !== 'function') {
+        showErr('No Solana wallet found. Install Phantom for Chrome/Brave/Edge, reload this page, and try again.');
+        btn.disabled = false;
+        return;
+      }
+      await prov.connect();
+
+      var nonceRes = await fetch('/api/premium/ainl/nonce', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!nonceRes.ok) {
+        var t1 = await nonceRes.text();
+        showErr('Could not start verification: ' + (t1 || nonceRes.status));
+        btn.disabled = false;
+        return;
+      }
+      var nonceJson = await nonceRes.json();
+      var message = String(nonceJson.message || '');
+      if (!message) {
+        showErr('Server returned an empty message to sign.');
+        btn.disabled = false;
+        return;
+      }
+
+      var enc = new TextEncoder().encode(message);
+      if (typeof prov.signMessage !== 'function') {
+        showErr('This wallet does not support signMessage.');
+        btn.disabled = false;
+        return;
+      }
+      var signed = await prov.signMessage(enc);
+      var sigBytes = signed.signature;
+      if (!sigBytes || !sigBytes.length) {
+        showErr('Wallet returned an empty signature.');
+        btn.disabled = false;
+        return;
+      }
+      var pubkey = (signed.publicKey && signed.publicKey.toBase58)
+        ? signed.publicKey.toBase58()
+        : (prov.publicKey && prov.publicKey.toBase58 ? prov.publicKey.toBase58() : '');
+      if (!pubkey) {
+        showErr('Could not read wallet public key.');
+        btn.disabled = false;
+        return;
+      }
+
+      var body = {
+        public_key: pubkey,
+        message: message,
+        signature_b64: b64FromBytes(new Uint8Array(sigBytes))
+      };
+      var vRes = await fetch('/api/premium/ainl/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var vText = await vRes.text();
+      if (!vRes.ok) {
+        try {
+          var j = JSON.parse(vText);
+          showErr(j.detail || j.error || vText || vRes.status);
+        } catch (e) {
+          showErr(vText || String(vRes.status));
+        }
+        btn.disabled = false;
+        return;
+      }
+      var vJson = JSON.parse(vText);
+      var link = String(vJson.deep_link || '');
+      var ticket = String(vJson.ticket || '');
+      if (!link) {
+        showErr('Server did not return a deep link.');
+        btn.disabled = false;
+        return;
+      }
+      showOk('Verification complete. Opening ArmaraOS...');
+      showFallback(ticket, link);
+      setTimeout(function() {
+        if (lastDeepLink) window.location.href = lastDeepLink;
+      }, 250);
+      window.location.href = link;
+    } catch (e) {
+      showErr((e && e.message) ? e.message : String(e));
+    }
+    btn.disabled = false;
+  };
+
+  copyBtn.onclick = async function () {
+    var code = String(ticketInput.value || '').trim();
+    if (!code) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(code);
+        showOk('Code copied. Paste it into ArmaraOS Premium fallback input.');
+        return;
+      }
+    } catch (e0) { /* ignore */ }
+    ticketInput.select();
+    try { document.execCommand('copy'); } catch (e1) { /* ignore */ }
+    showOk('Code selected. Copy and paste it into ArmaraOS Premium fallback input.');
+  };
+
+  openBtn.onclick = function () {
+    if (!lastDeepLink) return;
+    window.location.href = lastDeepLink;
+  };
+})();
+  </script>
+</body>
+</html>

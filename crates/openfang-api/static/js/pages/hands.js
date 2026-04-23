@@ -7,6 +7,10 @@ function handsPage() {
     premiumUnlockPassword: '',
     premiumUnlockError: '',
     premiumUnlockLoading: false,
+    premiumVerifyLoading: false,
+    premiumTicketCode: '',
+    premiumTicketLoading: false,
+    premiumTicketError: '',
     premiumTokenUrl: 'https://pump.fun/coin/56hrCR3n7danhHNjWaU4VeUHpE1eRE9VRBWpHRPKpump',
     premiumTokenCa: '56hrCR3n7danhHNjWaU4VeUHpE1eRE9VRBWpHRPKpump',
     tab: 'available',
@@ -73,10 +77,106 @@ function handsPage() {
 
     initPremiumGate() {
       try {
-        this.premiumUnlocked = localStorage.getItem('armaraos-premium-unlocked') === '1';
-      } catch (e) {
-        this.premiumUnlocked = false;
+        if (typeof OpenFangAPI !== 'undefined' && OpenFangAPI.loadPremiumAinlTokenFromStorage) {
+          OpenFangAPI.loadPremiumAinlTokenFromStorage();
+        }
+      } catch (e0) { /* ignore */ }
+      // Optimistic unlock: if we already hold a premium token in this runtime,
+      // lift the overlay immediately and then verify with the server.
+      try {
+        var tok = OpenFangAPI && OpenFangAPI.getPremiumAinlToken ? OpenFangAPI.getPremiumAinlToken() : '';
+        if (tok && String(tok).trim()) this.premiumUnlocked = true;
+      } catch (e00) { /* ignore */ }
+      if (!this._premiumAinlUpdatedEv) {
+        this._premiumAinlUpdatedEv = true;
+        var self = this;
+        window.addEventListener('armaraos-premium-ainl-updated', function() {
+          self.premiumUnlocked = true;
+          self.refreshPremiumAinlStatus();
+        });
       }
+      void this.refreshPremiumAinlStatus();
+    },
+
+    async refreshPremiumAinlStatus() {
+      try {
+        var st = await OpenFangAPI.get('/api/premium/ainl/status');
+        if (st && st.ok) {
+          this.premiumUnlocked = true;
+          try {
+            localStorage.setItem('armaraos-premium-unlocked', '1');
+          } catch (e1) { /* ignore */ }
+          return;
+        }
+        this.premiumUnlocked = false;
+        try {
+          localStorage.removeItem('armaraos-premium-unlocked');
+        } catch (e2) { /* ignore */ }
+        if (st && (st.reason === 'insufficient_balance' || st.reason === 'invalid_token')) {
+          try {
+            if (OpenFangAPI.clearPremiumAinlToken) OpenFangAPI.clearPremiumAinlToken();
+          } catch (e3) { /* ignore */ }
+        }
+      } catch (e) {
+        // Do not lock users out on transient status probe failures if we have a token.
+        try {
+          var tok = OpenFangAPI && OpenFangAPI.getPremiumAinlToken ? OpenFangAPI.getPremiumAinlToken() : '';
+          if (!tok || !String(tok).trim()) this.premiumUnlocked = false;
+        } catch (e4) {
+          this.premiumUnlocked = false;
+        }
+      }
+    },
+
+    async openPremiumVerifyInBrowser() {
+      this.premiumVerifyLoading = true;
+      try {
+        if (typeof isArmaraosDesktopShell === 'function' && isArmaraosDesktopShell()) {
+          await ArmaraosDesktopTauriInvoke('open_premium_ainl_verify_browser');
+        } else {
+          var u = OpenFangAPI.baseUrl + '/premium-ainl-verify.html';
+          if (typeof window !== 'undefined') window.open(u, '_blank', 'noopener,noreferrer');
+        }
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.info) {
+          OpenFangToast.info('Complete wallet signing in your browser, then return to ArmaraOS.');
+        }
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.error) {
+          OpenFangToast.error((e && e.message) ? e.message : String(e));
+        }
+      }
+      this.premiumVerifyLoading = false;
+    },
+
+    async submitPremiumTicketRedeem() {
+      var code = (this.premiumTicketCode || '').trim();
+      this.premiumTicketError = '';
+      if (!code) {
+        this.premiumTicketError = 'Enter the fallback code from the browser page.';
+        return;
+      }
+      this.premiumTicketLoading = true;
+      try {
+        var data = await OpenFangAPI.post('/api/premium/ainl/redeem', { ticket: code });
+        if (!data || !data.token) {
+          throw new Error('Redeem did not return a session token.');
+        }
+        if (OpenFangAPI.setPremiumAinlToken) {
+          OpenFangAPI.setPremiumAinlToken(data.token);
+        }
+        this.premiumUnlocked = true;
+        this.premiumTicketCode = '';
+        try {
+          localStorage.setItem('armaraos-premium-unlocked', '1');
+        } catch (e0) {}
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
+        }
+        this.showToast('Premium verified from fallback code.');
+      } catch (e) {
+        this.premiumTicketError = (e && e.message) ? e.message : 'Redeem failed.';
+      }
+      this.premiumTicketLoading = false;
     },
 
     openPremiumTokenLink(ev) {
@@ -103,12 +203,15 @@ function handsPage() {
       }
       this.premiumUnlockLoading = true;
       try {
-        await OpenFangAPI.post('/api/hands/premium-unlock', { password: pass });
+        var data = await OpenFangAPI.post('/api/hands/premium-unlock', { password: pass });
         this.premiumUnlocked = true;
         this.premiumUnlockPassword = '';
         try {
           localStorage.setItem('armaraos-premium-unlocked', '1');
         } catch (e0) {}
+        if (data && data.premium_token && OpenFangAPI.setPremiumAinlToken) {
+          OpenFangAPI.setPremiumAinlToken(data.premium_token);
+        }
         this.showToast('Premium unlocked on this device.');
       } catch (e) {
         this.premiumUnlockError = (e && e.message) ? e.message : 'Unlock failed.';

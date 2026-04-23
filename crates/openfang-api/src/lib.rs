@@ -9,6 +9,7 @@ pub mod graph_memory;
 pub mod middleware;
 pub mod network_hints;
 pub mod openai_compat;
+pub mod premium_ainl;
 pub mod rate_limiter;
 pub mod routes;
 pub mod server;

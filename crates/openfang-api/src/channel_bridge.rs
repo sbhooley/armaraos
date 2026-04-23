@@ -395,6 +395,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                                 None,
                                 Some(orch),
                                 adaptive,
+                                None,
                             )
                             .await
                             .map_err(|e| format!("{e}"))?;

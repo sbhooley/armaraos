@@ -4551,6 +4551,26 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                    @click="openPremiumTokenLink($event)">
                   CA: <span x-text="premiumTokenCa"></span>
                 </a>
+                <div class="text-sm" style="margin-top:12px;line-height:1.55;color:var(--text-dim)">
+                  Desktop: Phantom runs in your system browser. After signing, ArmaraOS will reopen automatically when the deep link is handled.
+                </div>
+                <button type="button"
+                        class="btn btn-primary"
+                        style="margin-top:10px"
+                        @click="openPremiumVerifyInBrowser()"
+                        :disabled="premiumVerifyLoading"
+                        x-text="premiumVerifyLoading ? 'Opening browser…' : 'Verify in browser (Phantom)'"></button>
+                <form class="premium-admin-unlock" style="margin-top:10px" @submit.prevent="submitPremiumTicketRedeem()">
+                  <input class="form-input"
+                         type="text"
+                         x-model="premiumTicketCode"
+                         placeholder="Fallback code from browser">
+                  <button class="btn btn-ghost btn-sm"
+                          type="submit"
+                          :disabled="premiumTicketLoading"
+                          x-text="premiumTicketLoading ? 'Redeeming…' : 'Use fallback code'"></button>
+                  <div class="text-xs" style="color:var(--danger)" x-show="premiumTicketError" x-text="premiumTicketError"></div>
+                </form>
               </div>
               <form class="premium-admin-unlock" @submit.prevent="submitPremiumUnlock()">
                 <input class="form-input"
@@ -5147,6 +5167,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; if (!configSchema) loadConfigSchema()">Config</div>
             <div class="tabs-separator"></div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">Tools</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'voice' }" @click="tab = 'voice'; loadVoiceSettings()">Voice</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; if (!securityData && !secLoading) loadSecurity()">Security</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'network' }" @click="tab = 'network'; if (!peers.length && !peersLoading) { loadPeers(); startPeerPolling(); }">Network</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'budget' }" @click="tab = 'budget'">Budget</div>
@@ -5485,6 +5506,186 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </template>
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          <!-- Voice tab — local TTS / STT installation status, voice picker, custom Piper upload, Kokoro -->
+          <div x-show="tab === 'voice'" x-ref="voiceSettingsPanel">
+            <div class="info-card">
+              <h4>Voice replies &amp; transcription</h4>
+              <p>
+                ArmaraOS uses <strong>local</strong> Whisper (speech-to-text) and Piper / macOS <code>say</code> / Kokoro
+                (text-to-speech) so voice messages and spoken replies never leave your machine.
+                Pick a voice the agent should reply with, upload your own Piper <code>.onnx</code> voice, and check that the
+                auto-downloaded models landed correctly. The dashboard speaker toggle in chat uses these settings.
+              </p>
+            </div>
+
+            <div x-show="voiceLoading" class="loading-state"><div class="spinner"></div><span>Checking local voice components…</span></div>
+
+            <div x-show="!voiceLoading && voiceData">
+              <!-- Component readiness -->
+              <div class="card mb-4">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                  <span>Auto-installed components</span>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="loadVoiceSettings(true)">Refresh</button>
+                </div>
+                <div class="text-xs text-dim" style="margin:0 0 10px;line-height:1.5">
+                  These are downloaded into <code x-text="voiceData?.components?.whisper_model?.path ? voiceData.components.whisper_model.path.replace(/\/[^/]+$/, '') : '~/.armaraos/voice/'"></code>
+                  on first daemon start. Files are idempotent — won't re-download if present.
+                </div>
+                <div style="display:grid;grid-template-columns:1fr;gap:6px">
+                  <template x-for="row in voiceComponentRows" :key="row.key">
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border-subtle, rgba(255,255,255,.08));border-radius:6px">
+                      <span :style="`display:inline-block;width:10px;height:10px;border-radius:50%;background:${row.ok ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)'};flex-shrink:0`"></span>
+                      <div style="flex:1;min-width:0">
+                        <div style="font-weight:600" x-text="row.label"></div>
+                        <code class="text-xs text-dim" style="display:block;word-break:break-all" x-text="row.path || (row.ok ? 'available' : 'missing')"></code>
+                      </div>
+                      <span class="text-xs" :style="`color:${row.ok ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)'}`" x-text="row.ok ? 'OK' : 'missing'"></span>
+                    </div>
+                  </template>
+                </div>
+                <div class="text-xs" x-show="voiceData?.tts_error" style="margin-top:10px;color:var(--warning, #f59e0b);line-height:1.5" x-text="voiceData?.tts_error"></div>
+                <div class="text-xs text-dim" x-show="!voiceData?.tts_error && voiceData?.tts_provider" style="margin-top:10px">
+                  Active TTS provider: <strong style="color:var(--text)" x-text="voiceData.tts_provider"></strong>
+                  <span x-show="voiceData.tts_provider === 'macos_say' && voiceData.preferred_say_voice"> · voice
+                    <strong style="color:var(--text)" x-text="voiceData.preferred_say_voice"></strong>
+                  </span>
+                  <span x-show="voiceData.tts_provider === 'piper' && voiceData.custom_piper_voice"> · custom voice
+                    <strong style="color:var(--text)" x-text="voiceData.custom_piper_voice"></strong>
+                  </span>
+                </div>
+              </div>
+
+              <!-- macOS say voice picker -->
+              <div class="card mb-4" x-show="sayVoices.length > 0">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                  <span>macOS system voice (<code>say</code>)</span>
+                  <span class="text-xs text-dim">Tier: Premium &gt; Enhanced &gt; default</span>
+                </div>
+                <p class="text-xs text-dim" style="margin:0 0 10px;line-height:1.55">
+                  By default, spoken replies try <strong>Piper</strong> first when it is installed. Check <strong>Prefer macOS say</strong> below to run <code>/usr/bin/say</code> <em>before</em> Piper so the voice you pick here (or the system default) is what you hear. Piper remains a fallback if <code>say</code> fails.
+                  Premium / Enhanced voices have to be downloaded once via
+                  <a href="#" class="text-accent" style="color:var(--accent)" @click.prevent="openMacosVoiceDownload()">System Settings → Accessibility → Spoken Content → System Voice → Manage Voices</a>
+                  (e.g. "Susan (Enhanced)", "Ava (Premium)"). After installing, click <em>Refresh</em> above.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <select class="form-input" x-model="voicePrefDraft.preferred_say_voice" style="flex:1;min-width:240px">
+                    <option value="">— System default —</option>
+                    <template x-for="v in sayVoices" :key="v.id">
+                      <option :value="v.id" x-text="v.id + (v.language ? ' · ' + v.language : '') + (v.tier !== 'default' ? ' · ' + v.tier : '')"></option>
+                    </template>
+                  </select>
+                  <button type="button" class="btn btn-ghost btn-sm" :disabled="!voicePrefDraft.preferred_say_voice" @click="previewSayVoice(voicePrefDraft.preferred_say_voice)">Preview</button>
+                </div>
+                <label class="text-xs" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-top:10px;line-height:1.5">
+                  <input type="checkbox" x-model="voicePrefDraft.prefer_macos_say" style="margin-top:3px;flex-shrink:0">
+                  <span>Prefer macOS <code>say</code> for spoken replies (try before Piper)</span>
+                </label>
+              </div>
+
+              <!-- Custom Piper voices -->
+              <div class="card mb-4">
+                <div class="card-header">Custom Piper voices</div>
+                <p class="text-xs text-dim" style="margin:0 0 10px;line-height:1.55">
+                  Drop a Piper <code>.onnx</code> voice (and the matching <code>.onnx.json</code> sidecar if you have it) here.
+                  When selected, the agent uses it instead of the default
+                  <code>en_US-lessac-medium</code> for spoken replies. Files land in
+                  <code x-text="voiceData?.custom_voices_dir || '~/.armaraos/voice/voices_user/'"></code>.
+                  Browse voices on
+                  <a href="#" class="text-accent" style="color:var(--accent)" @click.prevent="armaraosOpenExternalUrl && armaraosOpenExternalUrl($event, 'https://huggingface.co/rhasspy/piper-voices/tree/main')">HuggingFace rhasspy/piper-voices</a>.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+                  <input type="file" accept=".onnx" @change="onnxFileInput = $event.target.files[0]" style="flex:1;min-width:200px;font-size:12px">
+                  <input type="file" accept=".json" @change="onnxJsonFileInput = $event.target.files[0]" style="flex:1;min-width:200px;font-size:12px" :title="'Optional .onnx.json metadata sidecar'">
+                  <input type="text" class="form-input" x-model="onnxIdInput" placeholder="(optional) voice id" style="flex:1;min-width:160px">
+                  <button type="button" class="btn btn-primary btn-sm" :disabled="!onnxFileInput || voiceUploading" @click="uploadCustomVoice()">
+                    <span x-show="!voiceUploading">Upload</span>
+                    <span x-show="voiceUploading">Uploading…</span>
+                  </button>
+                </div>
+                <div class="text-xs" x-show="voiceUploadError" style="color:var(--error);margin-bottom:8px;line-height:1.5" x-text="voiceUploadError"></div>
+
+                <table class="data-table" x-show="customVoices.length > 0" style="width:100%;font-size:13px">
+                  <thead>
+                    <tr>
+                      <th style="text-align:left">Active</th>
+                      <th style="text-align:left">Voice id</th>
+                      <th style="text-align:left">Size</th>
+                      <th style="text-align:left">Metadata</th>
+                      <th style="text-align:right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="v in customVoices" :key="v.id">
+                      <tr>
+                        <td>
+                          <input type="radio" :value="v.id" x-model="voicePrefDraft.custom_piper_voice" :id="'cpv-' + v.id">
+                        </td>
+                        <td><label :for="'cpv-' + v.id" style="cursor:pointer" x-text="v.id"></label></td>
+                        <td x-text="(v.size_bytes / 1024 / 1024).toFixed(1) + ' MB'"></td>
+                        <td>
+                          <span class="text-xs" :style="`color:${v.has_metadata ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)'}`"
+                            x-text="v.has_metadata ? 'present' : 'missing (.onnx.json)'"></span>
+                        </td>
+                        <td style="text-align:right">
+                          <button type="button" class="btn btn-ghost btn-sm" @click="deleteCustomVoice(v.id)">Remove</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <div class="text-xs text-dim" x-show="customVoices.length === 0" style="padding:8px 0">No custom voices uploaded yet.</div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                  <label class="text-xs" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer">
+                    <input type="radio" value="" x-model="voicePrefDraft.custom_piper_voice">
+                    <span>Use bundled Piper voice (<code>en_US-lessac-medium</code>) when Piper runs</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Kokoro -->
+              <div class="card mb-4">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                  <span>Kokoro-82M (MIT-licensed multi-voice neural TTS)</span>
+                  <span class="text-xs"
+                        :style="`padding:2px 8px;border-radius:9999px;background:${voiceData?.kokoro?.assets_ready ? 'var(--success, #22c55e)' : 'var(--bg-elevated, rgba(255,255,255,.06))'};color:${voiceData?.kokoro?.assets_ready ? '#000' : 'var(--text-dim, #888)'};font-weight:600`"
+                        x-text="voiceData?.kokoro?.enabled ? (voiceData.kokoro.assets_ready ? 'assets ready' : 'downloading…') : 'disabled'"></span>
+                </div>
+                <p class="text-xs text-dim" style="margin:0 0 10px;line-height:1.55">
+                  Kokoro is an expressive 82M-parameter neural TTS with 50+ voices, MIT-licensed and runs on M-series Macs / Linux.
+                  Enabling it auto-downloads the ONNX model (~310 MiB) and the chosen voice embedding into <code>~/.armaraos/voice/kokoro/</code> on the next daemon start.
+                  <strong style="color:var(--warning)">Inference is scaffolding only in this build</strong> — the assets land but the speaker reply still falls through to Piper / <code>say</code> until the Rust ONNX inference path lands.
+                </p>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <select class="form-input" x-model="voicePrefDraft.kokoro_voice" style="flex:1;min-width:200px">
+                    <template x-for="v in kokoroVoices" :key="v">
+                      <option :value="v" x-text="v"></option>
+                    </template>
+                  </select>
+                  <span class="text-xs text-dim">Default voice id (MIT). Auto-downloads on next daemon start.</span>
+                </div>
+              </div>
+
+              <!-- Save / restart hint -->
+              <div class="card mb-4">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+                  <div class="text-xs text-dim" style="line-height:1.5;flex:1;min-width:240px">
+                    Voice picks save to <code>~/.armaraos/config.toml</code> under <code>[local_voice]</code> and apply
+                    <strong style="color:var(--text)">immediately</strong> to new spoken replies. Restart the daemon only if you hand-edit
+                    other <code>[local_voice]</code> paths on disk outside this screen.
+                  </div>
+                  <div style="display:flex;gap:8px">
+                    <button type="button" class="btn btn-ghost btn-sm" @click="resetVoicePrefDraft()">Reset</button>
+                    <button type="button" class="btn btn-primary btn-sm" :disabled="voicePrefSaving" @click="saveVoicePreference()">
+                      <span x-show="!voicePrefSaving">Save voice preferences</span>
+                      <span x-show="voicePrefSaving">Saving…</span>
+                    </button>
+                  </div>
+                </div>
+                <div class="text-xs" x-show="voicePrefStatus" style="margin-top:8px;line-height:1.5" :style="`color:${voicePrefStatus.startsWith('✓') ? 'var(--success, #22c55e)' : 'var(--error)'}`" x-text="voicePrefStatus"></div>
+              </div>
             </div>
           </div>
 

@@ -391,6 +391,7 @@ async fn stream_response(
             None,
             None,
             None,
+            None,
         )
         .map_err(|e| format!("Streaming setup failed: {e}"))?;
 

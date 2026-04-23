@@ -107,9 +107,19 @@ pub struct MessageResponse {
     /// Structured telemetry for ainl-runtime-engine turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ainl_runtime_telemetry: Option<serde_json::Value>,
-    /// Playable URL (e.g. `/api/uploads/{uuid}.wav`) for a local Piper TTS rendering of `response` when `voice_reply` was requested.
+    /// Playable URL (e.g. `/api/uploads/{uuid}.wav`) for a local TTS rendering of `response` when `voice_reply` was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_reply_audio_url: Option<String>,
+    /// Provider that synthesized `voice_reply_audio_url` (`"piper"` | `"macos_say"`).
+    /// Surfaced so the UI can render an honest source label instead of always claiming Piper.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_reply_provider: Option<String>,
+    /// Failure reason when `voice_reply` was requested but no audio could be produced (e.g. broken
+    /// Piper bundle on macOS missing dylibs). Surfaced to the chat so the user gets actionable
+    /// feedback instead of silent fallback to text-only — fixes the "speaker says ready but never
+    /// sends audio" bug from rhasspy/piper 2023.11.14-2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_reply_error: Option<String>,
 }
 
 /// Request to install a skill from the marketplace.
@@ -189,6 +199,8 @@ mod message_response_contract_tests {
             tools: Vec::<ToolTurnRecord>::new(),
             ainl_runtime_telemetry: None,
             voice_reply_audio_url: None,
+            voice_reply_provider: None,
+            voice_reply_error: None,
         };
 
         let v = serde_json::to_value(&msg).expect("serialize MessageResponse");

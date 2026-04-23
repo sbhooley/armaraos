@@ -19,9 +19,26 @@ var OpenFangToast = (function() {
     return _container;
   }
 
-  function toast(message, type, duration) {
+  // Backwards-compatible options arg:
+  //   - number   → legacy `duration` (ms)
+  //   - object   → { duration?, actionLabel?, onAction? } — when actionLabel + onAction are
+  //                provided, an inline action button renders inside the toast and clicking
+  //                it invokes onAction(). Used by the chat speaker toggle to deep-link the
+  //                user into Settings → Voice on enable/failure.
+  function _normalizeOpts(opts, defaultDuration) {
+    if (opts == null) return { duration: defaultDuration };
+    if (typeof opts === 'number') return { duration: opts };
+    return {
+      duration: typeof opts.duration === 'number' ? opts.duration : defaultDuration,
+      actionLabel: opts.actionLabel,
+      onAction: opts.onAction,
+    };
+  }
+
+  function toast(message, type, opts) {
     type = type || 'info';
-    duration = duration || 4000;
+    var resolved = _normalizeOpts(opts, 4000);
+    var duration = resolved.duration;
     var id = ++_toastId;
     var el = document.createElement('div');
     el.className = 'toast toast-' + type;
@@ -32,6 +49,20 @@ var OpenFangToast = (function() {
     msgSpan.textContent = message;
     el.appendChild(msgSpan);
 
+    if (resolved.actionLabel && typeof resolved.onAction === 'function') {
+      var actionBtn = document.createElement('button');
+      actionBtn.className = 'toast-action';
+      actionBtn.type = 'button';
+      actionBtn.textContent = resolved.actionLabel;
+      actionBtn.style.cssText = 'background:transparent;border:1px solid currentColor;border-radius:4px;padding:2px 8px;margin-left:8px;font-size:12px;cursor:pointer;color:inherit;';
+      actionBtn.onclick = function(e) {
+        e.stopPropagation();
+        try { resolved.onAction(); } catch(_) { /* swallow */ }
+        dismissToast(el);
+      };
+      el.appendChild(actionBtn);
+    }
+
     var closeBtn = document.createElement('button');
     closeBtn.className = 'toast-close';
     closeBtn.textContent = '\u00D7';
@@ -41,7 +72,6 @@ var OpenFangToast = (function() {
     el.onclick = function(e) { if (e.target === el) dismissToast(el); };
     getContainer().appendChild(el);
 
-    // Auto-dismiss
     if (duration > 0) {
       setTimeout(function() { dismissToast(el); }, duration);
     }
@@ -54,10 +84,10 @@ var OpenFangToast = (function() {
     setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
   }
 
-  function success(msg, duration) { return toast(msg, 'success', duration); }
-  function error(msg, duration) { return toast(msg, 'error', duration || 6000); }
-  function warn(msg, duration) { return toast(msg, 'warn', duration || 5000); }
-  function info(msg, duration) { return toast(msg, 'info', duration); }
+  function success(msg, opts) { return toast(msg, 'success', opts); }
+  function error(msg, opts)   { return toast(msg, 'error',   _normalizeOpts(opts, 6000)); }
+  function warn(msg, opts)    { return toast(msg, 'warn',    _normalizeOpts(opts, 5000)); }
+  function info(msg, opts)    { return toast(msg, 'info',    opts); }
 
   // Styled confirmation modal — replaces native confirm()
   // opts: { confirmLabel?, danger? } — danger defaults true (destructive styling).
@@ -183,6 +213,37 @@ var OpenFangAPI = (function() {
   var BASE = window.location.origin;
   var WS_BASE = BASE.replace(/^http/, 'ws');
   var _authToken = '';
+  var _premiumAinlToken = '';
+
+  function loadPremiumAinlTokenFromStorage() {
+    try {
+      var t = localStorage.getItem('armaraos-premium-ainl-token');
+      _premiumAinlToken = t ? String(t) : '';
+    } catch (e) {
+      _premiumAinlToken = '';
+    }
+  }
+
+  function setPremiumAinlToken(token) {
+    _premiumAinlToken = token ? String(token) : '';
+    try {
+      if (_premiumAinlToken) {
+        localStorage.setItem('armaraos-premium-ainl-token', _premiumAinlToken);
+      } else {
+        localStorage.removeItem('armaraos-premium-ainl-token');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function clearPremiumAinlToken() {
+    setPremiumAinlToken('');
+  }
+
+  function getPremiumAinlToken() {
+    return _premiumAinlToken || '';
+  }
+
+  loadPremiumAinlTokenFromStorage();
 
   // Connection state tracking
   var _connectionState = 'connected';
@@ -194,6 +255,7 @@ var OpenFangAPI = (function() {
   function headers() {
     var h = { 'Content-Type': 'application/json' };
     if (_authToken) h['Authorization'] = 'Bearer ' + _authToken;
+    if (_premiumAinlToken) h['X-Armaraos-Premium-Ainl'] = _premiumAinlToken;
     return h;
   }
 
@@ -551,6 +613,10 @@ var OpenFangAPI = (function() {
     baseUrl: BASE,
     setAuthToken: setAuthToken,
     getToken: getToken,
+    getPremiumAinlToken: getPremiumAinlToken,
+    loadPremiumAinlTokenFromStorage: loadPremiumAinlTokenFromStorage,
+    setPremiumAinlToken: setPremiumAinlToken,
+    clearPremiumAinlToken: clearPremiumAinlToken,
     sseUrl: sseUrl,
     getNetworkHints: getNetworkHints,
     get: get,

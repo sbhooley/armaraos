@@ -88,6 +88,43 @@ function ArmaraosDesktopTauriInvoke(cmd, args) {
   });
 }
 
+/** Redeem a one-time Premium ticket (deep link) into an API session token. */
+async function armaraosRedeemPremiumAinlTicket(ticket) {
+  var t = String(ticket || '').trim();
+  if (!t) throw new Error('Missing ticket');
+  var j = await OpenFangAPI.post('/api/premium/ainl/redeem', { ticket: t });
+  if (!j || !j.token) throw new Error('Redeem failed: missing token');
+  OpenFangAPI.setPremiumAinlToken(j.token);
+  try {
+    localStorage.setItem('armaraos-premium-unlocked', '1');
+  } catch (e0) { /* ignore */ }
+  try {
+    window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
+  } catch (e1) { /* ignore */ }
+  try {
+    OpenFangToast.success('Premium verified ($AINL)');
+  } catch (e2) { /* ignore */ }
+}
+
+function armaraosExtractPremiumTicketFromDeepLinkPayload(payload) {
+  try {
+    var urls = [];
+    if (typeof payload === 'string') urls = [payload];
+    else if (Array.isArray(payload)) urls = payload;
+    for (var i = 0; i < urls.length; i++) {
+      var raw = String(urls[i] || '').trim();
+      if (!raw) continue;
+      if (raw.indexOf('armaraos://premium-ainl') !== 0) continue;
+      try {
+        var u = new URL(raw);
+        var t = String(u.searchParams.get('ticket') || '').trim();
+        if (t) return t;
+      } catch (e0) { /* ignore malformed URL */ }
+    }
+  } catch (e1) { /* ignore */ }
+  return '';
+}
+
 /** Opens https URLs (Terms, Privacy, etc.); uses Tauri `open_external_url` in desktop shell. */
 function armaraosOpenExternalUrl(ev, url) {
   if (!url) return;
@@ -2369,6 +2406,43 @@ function app() {
           } catch (e) { /* ignore */ }
         });
       }
+
+      // Premium: redeem deep-link tickets emitted by the desktop shell (single-instance argv forwarding).
+      (function armaraosPremiumAinlDeepLink() {
+        if (!isArmaraosDesktopShell()) return;
+        try {
+          if (window.__armaraosPremiumAinlDeepLinkInit) return;
+          window.__armaraosPremiumAinlDeepLinkInit = true;
+        } catch (eInit) { /* ignore */ }
+        try {
+          var w = typeof window !== 'undefined' ? window : null;
+          var evApi = w && w.__TAURI__ && w.__TAURI__.event;
+          if (!evApi || typeof evApi.listen !== 'function') return;
+          evApi.listen('deep-link://new-url', function(ev) {
+            var ticket = armaraosExtractPremiumTicketFromDeepLinkPayload(ev && ev.payload);
+            if (!ticket) return;
+            armaraosRedeemPremiumAinlTicket(ticket).catch(function(err) {
+              try {
+                OpenFangToast.error(openFangErrText(err) || String(err));
+              } catch (e0) { /* ignore */ }
+            });
+          });
+          evApi.listen('premium-ainl-ticket', function(ev) {
+            var ticket = '';
+            try {
+              ticket = typeof ev.payload === 'string' ? ev.payload : '';
+            } catch (e0) {
+              ticket = '';
+            }
+            if (!ticket) return;
+            armaraosRedeemPremiumAinlTicket(ticket).catch(function(err) {
+              try {
+                OpenFangToast.error(openFangErrText(err) || String(err));
+              } catch (e1) { /* ignore */ }
+            });
+          });
+        } catch (e2) { /* ignore */ }
+      })();
 
       // Desktop: poll AINL status while Rust boots the venv + pip (startup ensure_ainl_installed).
       (function armaraosDesktopAinlPoll() {
