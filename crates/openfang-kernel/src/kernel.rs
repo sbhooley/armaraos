@@ -284,7 +284,8 @@ fn maybe_inject_default_ainl_mcp_server(
 ///
 /// Resolution order:
 /// 1. `ARMARAOS_WORKSPACE_MCP_COMMAND` — full command line, split on whitespace
-/// 2. `uvx` on PATH with `workspace-mcp --tool-tier core` (PyPI: `workspace-mcp`,
+/// 2. `uvx` on PATH with `workspace-mcp --tool-tier core --tools ...`
+///    (PyPI: `workspace-mcp`,
 ///    [taylorwilsdon/google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp))
 ///
 /// Returns `None` when `uv`/`uvx` is not available and no override is set.
@@ -305,6 +306,13 @@ fn resolve_default_google_workspace_mcp_command() -> Option<(String, Vec<String>
                 "workspace-mcp".to_string(),
                 "--tool-tier".to_string(),
                 "core".to_string(),
+                "--tools".to_string(),
+                "gmail".to_string(),
+                "drive".to_string(),
+                "calendar".to_string(),
+                "docs".to_string(),
+                "sheets".to_string(),
+                "slides".to_string(),
             ],
         ));
     }
