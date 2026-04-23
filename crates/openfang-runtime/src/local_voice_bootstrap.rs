@@ -193,6 +193,66 @@ fn run_bootstrap(
         cfg.piper_voice = Some(onnx);
     }
 
+    // User-uploaded Piper voices (`.onnx` + optional `.onnx.json`) live in a stable
+    // location so the Settings → Voice picker, the upload endpoint, and manual file
+    // drops all reference the same directory.
+    if cfg.custom_voices_dir.is_none() {
+        let user_voices = voice_root.join("voices_user");
+        std::fs::create_dir_all(&user_voices).map_err(|e| format!("user voices dir: {e}"))?;
+        cfg.custom_voices_dir = Some(user_voices);
+    } else if let Some(dir) = cfg.custom_voices_dir.as_ref() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    if cfg.kokoro.enabled && cfg.kokoro.auto_download {
+        if let Err(e) = ensure_kokoro_assets(client, &voice_root, &mut cfg.kokoro) {
+            warn!(error = %e, "local_voice: kokoro asset download incomplete");
+        }
+    }
+
+    Ok(())
+}
+
+const KOKORO_MODEL_URL: &str =
+    "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model.onnx";
+/// Default voice embedding (`af_heart` ≈ expressive American-female base voice).
+fn kokoro_voice_url(voice: &str) -> String {
+    format!("https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/{voice}.bin")
+}
+
+fn ensure_kokoro_assets(
+    client: &Client,
+    voice_root: &Path,
+    cfg: &mut openfang_types::config::KokoroConfig,
+) -> Result<(), String> {
+    let kokoro_root = voice_root.join("kokoro");
+    let voices_dir = kokoro_root.join("voices");
+    std::fs::create_dir_all(&voices_dir).map_err(|e| format!("mkdir kokoro: {e}"))?;
+
+    let model_path = kokoro_root.join("kokoro-v1.0.onnx");
+    if cfg.model_path.is_none() {
+        if !model_path.is_file() || file_len(&model_path).unwrap_or(0) < 50_000_000 {
+            info!("local_voice: downloading Kokoro-82M ONNX model (~310 MiB)…");
+            download_to_file(client, KOKORO_MODEL_URL, &model_path, "application/octet-stream")?;
+        }
+        cfg.model_path = Some(model_path);
+    }
+
+    if cfg.voices_dir.is_none() {
+        cfg.voices_dir = Some(voices_dir.clone());
+    }
+
+    let voice_bin = voices_dir.join(format!("{}.bin", cfg.voice));
+    if !voice_bin.is_file() {
+        info!(voice = %cfg.voice, "local_voice: downloading Kokoro voice embedding…");
+        download_to_file(
+            client,
+            &kokoro_voice_url(&cfg.voice),
+            &voice_bin,
+            "application/octet-stream",
+        )?;
+    }
+
     Ok(())
 }
 

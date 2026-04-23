@@ -16,23 +16,23 @@ ainl-runtime-engine = ["dep:ainl-runtime"]
 openfang-types = { path = "../openfang-types" }
 openfang-memory = { path = "../openfang-memory" }
 openfang-skills = { path = "../openfang-skills" }
-ainl-compression = { path = "../ainl-compression", version = "0.1.0-alpha" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
-ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
-ainl-contracts = { path = "../ainl-contracts" }
+ainl-compression = { path = "../ainl-compression", version = "0.1.1-alpha" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
+ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
 ainl-improvement-proposals = { path = "../ainl-improvement-proposals", version = "0.1.0" }
-ainl-failure-learning = { path = "../ainl-failure-learning" }
-ainl-repo-intel = { path = "../ainl-repo-intel" }
-ainl-context-freshness = { path = "../ainl-context-freshness" }
-ainl-context-compiler = { path = "../ainl-context-compiler" }
-ainl-impact-policy = { path = "../ainl-impact-policy" }
+ainl-failure-learning = { path = "../ainl-failure-learning", version = "0.1.0" }
+ainl-repo-intel = { path = "../ainl-repo-intel", version = "0.1.0" }
+ainl-context-freshness = { path = "../ainl-context-freshness", version = "0.1.0" }
+ainl-context-compiler = { path = "../ainl-context-compiler", version = "0.1.0" }
+ainl-impact-policy = { path = "../ainl-impact-policy", version = "0.1.0" }
 armara-provider-api = { path = "../../../ainl-inference-server/crates/armara-provider-api" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6", optional = true }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6", optional = true }
-ainl-persona = { path = "../ainl-persona", version = "0.1.6", optional = true }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.7", optional = true }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.7", optional = true }
+ainl-persona = { path = "../ainl-persona", version = "0.1.7", optional = true }
 # Workspace path keeps `ainl-memory` / `ainl-persona` in sync with `openfang-runtime` (crates.io
 # `ainl-runtime` alone would pull registry copies and fail to type-check). Version aligns with crates.io.
-ainl-runtime = { path = "../ainl-runtime", version = "0.3.7-alpha", optional = true, features = ["async"] }
+ainl-runtime = { path = "../ainl-runtime", version = "0.3.8-alpha", optional = true, features = ["async"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
