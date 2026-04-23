@@ -1,6 +1,6 @@
-# Dashboard: Get started (Overview) page
+# Dashboard: Command Center (Overview) page
 
-The **Get started** route is the default landing view in the embedded dashboard (`#overview`). It aggregates health, usage, setup checklist, token economics, estimated savings, operations snapshot, panel cards, provider badges, and activity. This document describes layout, **Quick actions**, data sources, and where to change them.
+The **Command Center** route is the default landing view in the embedded dashboard (hash still **`#overview`**). It aggregates fleet metrics + agent vitals (shared with **All Agents**), health, usage, setup checklist, token economics, operations snapshot (now including system health, security, channels, and MCP), graph memory, provider badges, and activity. This document describes layout, **Quick actions**, data sources, and where to change them.
 
 > Design policy: all visual changes in this page must follow the canonical rules in [`dashboard-design-system.md`](dashboard-design-system.md).
 
@@ -11,7 +11,8 @@ The **Get started** route is the default landing view in the embedded dashboard 
 | Markup (Alpine template) | `crates/openfang-api/static/index_body.html` — search `page === 'overview'` |
 | Page logic (data loads, checklist, formatters, wizard CTA state) | `crates/openfang-api/static/js/pages/overview.js` — `overviewPage()` |
 | Overview-specific styles | `crates/openfang-api/static/css/components.css` — classes prefixed `overview-` |
-| Root app navigation (Get started re-click) | `crates/openfang-api/static/js/app.js` — `navigateOverview()` |
+| Root app navigation (Command Center re-click) | `crates/openfang-api/static/js/app.js` — `navigateOverview()` |
+| Shared fleet UI logic | `crates/openfang-api/static/js/fleet-vitals-mixin.js` — `armaraosFleetVitalsCore()` (used by overview + All Agents) |
 
 The dashboard is a single-page Alpine app; new overview sections usually need HTML **and** any new fields or getters in `overview.js`.
 
@@ -19,18 +20,18 @@ The dashboard is a single-page Alpine app; new overview sections usually need HT
 
 Order matters for scanability and for the loading skeleton matching the real layout.
 
-1. **Page header** — Title *Get started*; **Setup Wizard** / **Run setup again** (see [Setup Wizard visibility](#setup-wizard-visibility)); health pill; manual refresh. Wrapper row: `overview-page-header-row` / `overview-page-header-actions`.
+1. **Page header** — Title *Command Center*; **Setup Wizard** / **Run setup again** (see [Setup Wizard visibility](#setup-wizard-visibility)); health pill; manual refresh. Wrapper row: `overview-page-header-row` / `overview-page-header-actions`.
 2. **Live strip** (conditional) — Last kernel SSE line + **Timeline** when `kernelEvents.last` is set.
 3. **Quick actions** — See below; hidden on load error; replaced by a skeleton while `loading` is true (grid includes **seven** skeleton cells matching seven actions).
-4. **Loading skeleton** — Shown only while `loading`; includes a Quick actions-shaped skeleton, a **four-cell** token/cost row placeholder (`overview-economics-stats--single-row`), a tall placeholder for the **Operations snapshot** card, then panel grid placeholders.
+4. **Loading skeleton** — Shown only while `loading`; includes a Quick actions-shaped skeleton, a **fleet metric strip** placeholder (`command-center-fleet-block--skeleton`) + short agent area stub, a tall placeholder for the **Operations snapshot** card, then a **single** graph-memory panel placeholder.
 5. **Error state** — Connection failure, retry, debug copy (no Quick actions).
 6. **Setup checklist** — When `showSetupChecklist` (see `overview.js`); dismiss uses `localStorage` key `of-checklist-dismissed`.
 7. **Onboarding banner** — When onboarding store says so and checklist was dismissed.
 8. **Main content** (after successful load) — In order:
    - **Token Economics** (conditional) — `x-show` when `budget` has a limit and/or spend (`GET /api/budget`); **View Usage** / **Configure Budget** actions.
-   - **Token / cost row** (four equal columns) — `overview-economics-stats--single-row`: **Tokens used**, **Total cost** (from `loadUsage()` → `GET /api/usage/summary` — **measured** completed calls in SQLite), **Tokens saved (est.)**, **Cost saved (est.)** — see [Measured vs estimated](#measured-vs-estimated-savings).
-   - **Operations snapshot** — single card: integration row + optional kernel/observability block — see [Operations snapshot card](#operations-snapshot-card).
-   - **Panel grid** — System health, Security, Channels, MCP servers, MCP readiness, Graph memory (as applicable).
+   - **Fleet metric strip + agent vitals** — same deck/cards as **All Agents** (`fleet-metric-deck`, `agent-vitals-grid`); data from shared `armaraosFleetVitalsCore` + `startCommandCenterFleet()` in `overview.js`.
+   - **Operations snapshot** — single card: integration row, optional kernel/observability KPIs, **and** merged subsections: **System health**, **Security systems**, **Connected channels**, **MCP servers**, **MCP readiness** — see [Operations snapshot card](#operations-snapshot-card).
+   - **Panel grid** — **Graph memory** only (when `graphMemorySignalsActive`); other former panels are folded into Operations snapshot.
    - **LLM Providers** — Badge row (`overview-provider-card`); **below** the panel grid, **above** recent activity.
    - **Recent activity** / empty state, then bottom **Quick** link cards (if present in the build).
 
@@ -38,7 +39,7 @@ The **Skills/MCP** page (`#skills` → **MCP Servers**) includes a **Host tools 
 
 ## Measured vs estimated savings
 
-- **Tokens used** and **Total cost** on Get started are **actual rollups** from the persistent usage store (`GET /api/usage/summary`: `total_input_tokens`, `total_output_tokens`, `total_cost_usd` for **completed** LLM-metered calls).
+- **Tokens used** and **Total cost** (e.g. on the **Usage** page and API consumers) are **actual rollups** from the persistent usage store (`GET /api/usage/summary`: `total_input_tokens`, `total_output_tokens`, `total_cost_usd` for **completed** LLM-metered calls).
 - **Tokens saved (est.)** and **Cost saved (est.)** are **not** second meter readings from the provider. They combine:
   - **Compression + prompt-cache economics** from **`GET /api/status` → `eco_compression`** (7-day window in the status payload) — heuristics (e.g. estimated original vs compressed input, cache reads, model-catalog pricing) aggregated in SQLite.
   - **Quota / budget blocks** from **`status.quota_enforcement`** (7-day) and/or fallbacks from **`summary.quota_enforcement`** on the usage summary (all time in that API) — **estimated** input/output for **turns that were blocked** before the LLM ran (no literal completion tokens exist for those events).

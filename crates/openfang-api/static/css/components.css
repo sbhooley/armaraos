@@ -3051,15 +3051,14 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   -webkit-overflow-scrolling: touch;
   scroll-padding-bottom: 24px;
   background:
-    radial-gradient(ellipse 75% 48% at 50% -18%, var(--accent-subtle), transparent 70%),
-    var(--bg-primary);
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-elevated) 42%, var(--bg-primary) 58%) 0%, var(--bg-primary) 26%, var(--bg) 100%);
 }
 
 .message {
-  margin-bottom: 22px;
+  margin-bottom: 16px;
   animation: slideUp 0.25s var(--ease-smooth);
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: flex-start;
   position: relative;
 }
@@ -3073,9 +3072,9 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 }
 
 .message-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--surface);
@@ -3106,23 +3105,32 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 
 .message-body {
   min-width: 0;
-  max-width: 100%;
+  max-width: min(100%, 920px);
   flex: 1;
   position: relative;
+}
+
+.message.agent .message-body,
+.message.system .message-body {
+  max-width: min(88%, 860px);
+}
+
+.message.user .message-body {
+  max-width: min(78%, 760px);
 }
 
 /* Stack tool cards above the final assistant reply within one turn */
 .message-reply-with-tools {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
 }
 .message-tools-cluster {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3135,26 +3143,26 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 .message-tools-cluster-intro {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 8px 10px;
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(245, 158, 11, 0.18);
-  background: linear-gradient(145deg, rgba(245, 158, 11, 0.06) 0%, var(--surface) 55%);
-  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface2) 38%, var(--surface) 62%);
+  box-shadow: var(--shadow-xs);
 }
 [data-theme="light"] .message-tools-cluster-intro {
-  background: linear-gradient(145deg, rgba(245, 158, 11, 0.07) 0%, var(--surface) 55%);
+  background: color-mix(in srgb, var(--surface2) 44%, var(--surface) 56%);
 }
 .message-tools-cluster-intro-icon {
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--accent, #ff5c00);
+  background: color-mix(in srgb, var(--surface3) 58%, var(--surface2) 42%);
+  color: var(--text-dim);
 }
 .message-tools-cluster-intro-meta {
   flex: 1;
@@ -3162,16 +3170,17 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 }
 .message-tools-cluster-intro-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12px;
   letter-spacing: -0.01em;
   color: var(--text);
-  line-height: 1.3;
+  line-height: 1.35;
 }
 .message-tools-cluster-intro-sub {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: 10px;
+  color: var(--text-dim);
   margin-top: 2px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
+  letter-spacing: 0;
 }
 .message-tools-cluster-pill {
   flex-shrink: 0;
@@ -3179,101 +3188,91 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 4px 8px;
+  padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--accent, #ff5c00);
-  border: 1px solid rgba(245, 158, 11, 0.22);
+  background: color-mix(in srgb, var(--surface2) 85%, transparent);
+  color: var(--text-dim);
+  border: 1px solid var(--border-subtle);
   align-self: flex-start;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 /* Elevate individual tool cards inside chat to match message-scheduler-card depth */
 .message-tools-cluster .tool-card {
-  background: linear-gradient(145deg, rgba(245, 158, 11, 0.05) 0%, var(--agent-bg) 48%);
-  border: 1px solid rgba(245, 158, 11, 0.16);
-  border-left: 3px solid var(--accent, #ff5c00);
+  background: color-mix(in srgb, var(--surface) 82%, var(--surface2) 18%);
+  border: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   padding: 0;
   overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-xs);
 }
 .message-tools-cluster .tool-card:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 
 .message-tools-cluster .tool-card[data-tool^="file_"],
 .message-tools-cluster .tool-card[data-tool^="directory_"] {
-  background: linear-gradient(145deg, rgba(96, 165, 250, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(96, 165, 250, 0.22);
-  border-left-color: #60a5fa;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #60a5fa 10%);
+  border-left-color: color-mix(in srgb, #60a5fa 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="web_"],
 .message-tools-cluster .tool-card[data-tool^="link_"] {
-  background: linear-gradient(145deg, rgba(52, 211, 153, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(52, 211, 153, 0.22);
-  border-left-color: #34d399;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #34d399 10%);
+  border-left-color: color-mix(in srgb, #34d399 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="shell"],
 .message-tools-cluster .tool-card[data-tool^="exec_"] {
-  background: linear-gradient(145deg, rgba(251, 191, 36, 0.09) 0%, var(--agent-bg) 48%);
-  border-color: rgba(251, 191, 36, 0.28);
-  border-left-color: #fbbf24;
+  border-color: color-mix(in srgb, var(--border-subtle) 88%, #fbbf24 12%);
+  border-left-color: color-mix(in srgb, #fbbf24 52%, var(--border-light) 48%);
 }
 .message-tools-cluster .tool-card[data-tool^="agent_"] {
-  background: linear-gradient(145deg, rgba(167, 139, 250, 0.08) 0%, var(--agent-bg) 48%);
-  border-color: rgba(167, 139, 250, 0.24);
-  border-left-color: #a78bfa;
+  border-color: color-mix(in srgb, var(--border-subtle) 89%, #a78bfa 11%);
+  border-left-color: color-mix(in srgb, #a78bfa 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="memory_"],
 .message-tools-cluster .tool-card[data-tool^="knowledge_"] {
-  background: linear-gradient(145deg, rgba(244, 114, 182, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(244, 114, 182, 0.22);
-  border-left-color: #f472b6;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #f472b6 10%);
+  border-left-color: color-mix(in srgb, #f472b6 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="cron_"],
 .message-tools-cluster .tool-card[data-tool^="schedule_"] {
-  background: linear-gradient(145deg, rgba(251, 146, 60, 0.08) 0%, var(--agent-bg) 48%);
-  border-color: rgba(251, 146, 60, 0.24);
-  border-left-color: #fb923c;
+  border-color: color-mix(in srgb, var(--border-subtle) 89%, #fb923c 11%);
+  border-left-color: color-mix(in srgb, #fb923c 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="browser_"],
 .message-tools-cluster .tool-card[data-tool^="playwright_"] {
-  background: linear-gradient(145deg, rgba(45, 212, 191, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(45, 212, 191, 0.22);
-  border-left-color: #2dd4bf;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #2dd4bf 10%);
+  border-left-color: color-mix(in srgb, #2dd4bf 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="container_"],
 .message-tools-cluster .tool-card[data-tool^="docker_"] {
-  background: linear-gradient(145deg, rgba(56, 189, 248, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(56, 189, 248, 0.22);
-  border-left-color: #38bdf8;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #38bdf8 10%);
+  border-left-color: color-mix(in srgb, #38bdf8 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="image_"],
 .message-tools-cluster .tool-card[data-tool^="tts_"] {
-  background: linear-gradient(145deg, rgba(232, 121, 249, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(232, 121, 249, 0.22);
-  border-left-color: #e879f9;
+  border-color: color-mix(in srgb, var(--border-subtle) 90%, #e879f9 10%);
+  border-left-color: color-mix(in srgb, #e879f9 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="hand_"] {
-  background: linear-gradient(145deg, rgba(245, 158, 11, 0.07) 0%, var(--agent-bg) 48%);
-  border-color: rgba(245, 158, 11, 0.22);
-  border-left-color: var(--accent, #ff5c00);
+  border-color: color-mix(in srgb, var(--border-subtle) 88%, var(--accent) 12%);
+  border-left-color: color-mix(in srgb, var(--accent) 48%, var(--border-light) 52%);
 }
 
 .message-tools-cluster .tool-card.tool-card-error {
-  background: linear-gradient(145deg, rgba(239, 68, 68, 0.07) 0%, var(--error-subtle) 55%);
-  border-color: rgba(239, 68, 68, 0.28);
+  background: color-mix(in srgb, var(--surface) 92%, var(--error-subtle) 8%);
+  border-color: color-mix(in srgb, var(--border-subtle) 72%, var(--error) 28%);
   border-left-color: var(--error);
 }
 
 .message-tools-cluster .tool-card-header {
-  padding: 11px 14px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--surface2) 30%, transparent);
 }
 [data-theme="light"] .message-tools-cluster .tool-card-header {
-  background: rgba(0, 0, 0, 0.02);
+  background: color-mix(in srgb, var(--surface2) 45%, transparent);
 }
 .message-tools-cluster .tool-card-header:hover {
   background: var(--surface2);
@@ -3281,18 +3280,18 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 
 .message-tools-cluster .tool-card-icon-badge {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(245, 158, 11, 0.1);
-  color: var(--accent, #ff5c00);
+  background: color-mix(in srgb, var(--accent-subtle) 68%, var(--surface2) 32%);
+  color: var(--accent);
 }
 .message-tools-cluster .tool-card-icon-badge .tool-card-icon {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   opacity: 1;
 }
 
@@ -3341,8 +3340,8 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   color: #e879f9;
 }
 .message-tools-cluster .tool-card[data-tool^="hand_"] .tool-card-icon-badge {
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--accent, #ff5c00);
+  background: color-mix(in srgb, var(--accent-subtle) 68%, var(--surface2) 32%);
+  color: var(--accent);
 }
 
 .message-tools-cluster .tool-card.tool-card-error .tool-card-icon-badge {
@@ -3351,50 +3350,113 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 }
 
 .message-tools-cluster .tool-card-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
 }
 
 .message-tools-cluster .tool-card-body {
   border-top: none;
-  background: var(--agent-bg);
-  padding: 12px 14px;
+  background: color-mix(in srgb, var(--surface2) 78%, var(--surface) 22%);
+  padding: 10px 12px;
 }
 
 .message-bubble {
-  padding: 12px 16px;
+  padding: 9px 11px;
   border-radius: var(--radius-lg);
-  font-size: 13.5px;
-  line-height: 1.65;
+  font-size: 12.5px;
+  line-height: 1.48;
   word-break: break-word;
   box-shadow: var(--shadow-xs);
 }
 
 .message.user .message-bubble {
-  background: var(--user-bg);
-  border: 1px solid rgba(245, 158, 11, 0.14);
+  /* Off-black glass for user turns: subtle depth, quieter than amber fills. */
+  background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+  backdrop-filter: blur(7px) saturate(108%);
   border-bottom-right-radius: var(--radius-sm);
+  box-shadow: var(--shadow-xs), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .message.agent .message-bubble {
-  background: var(--agent-bg);
-  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--agent-bg) 94%, var(--surface) 6%);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 92%, transparent);
   border-bottom-left-radius: var(--radius-sm);
-  padding: 12px 16px;
+  padding: 9px 11px;
+}
+[data-theme="light"] .message.user .message-bubble {
+  background: color-mix(in srgb, var(--surface) 94%, var(--surface2) 6%);
+  border-color: var(--border-subtle);
+  backdrop-filter: none;
 }
 
 /* Assistant text reply in the same turn as tool calls — lighter cousin of scheduler / tool-cluster chrome */
 .message.agent .message-bubble.message-rich-reply,
 .message.system .message-bubble.message-rich-reply {
-  background: linear-gradient(165deg, rgba(245, 158, 11, 0.045) 0%, var(--agent-bg) 40%);
-  border: 1px solid rgba(245, 158, 11, 0.16);
-  border-left: 3px solid var(--accent, #ff5c00);
+  background: color-mix(in srgb, var(--agent-bg) 98%, var(--surface2) 2%);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
+  border-left: 1px solid var(--border-light);
   border-bottom-left-radius: var(--radius-sm);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-xs);
 }
 [data-theme="light"] .message.agent .message-bubble.message-rich-reply,
 [data-theme="light"] .message.system .message-bubble.message-rich-reply {
-  background: linear-gradient(165deg, rgba(245, 158, 11, 0.06) 0%, var(--agent-bg) 40%);
+  background: color-mix(in srgb, var(--agent-bg) 96%, var(--surface) 4%);
+}
+
+/* Agent/user reply typography polish for markdown readability density. */
+.message-bubble.markdown-body {
+  font-size: 12.5px;
+  line-height: 1.48;
+  color: var(--text-secondary);
+}
+.message-bubble.markdown-body p {
+  margin: 0 0 0.5em;
+}
+.message-bubble.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.message-bubble.markdown-body ul,
+.message-bubble.markdown-body ol {
+  margin: 0.35em 0 0.55em 1.15em;
+  padding: 0;
+}
+.message-bubble.markdown-body li {
+  margin: 0.2em 0;
+}
+.message-bubble.markdown-body h1,
+.message-bubble.markdown-body h2,
+.message-bubble.markdown-body h3,
+.message-bubble.markdown-body h4 {
+  margin: 0.45em 0 0.3em;
+  line-height: 1.32;
+  font-weight: 600;
+  color: var(--text);
+}
+.message-bubble.markdown-body a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-light) 78%, transparent);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.message-bubble.markdown-body a:hover {
+  color: color-mix(in srgb, var(--accent) 74%, var(--text) 26%);
+  border-bottom-color: color-mix(in srgb, var(--accent-light) 52%, transparent);
+  background: color-mix(in srgb, var(--accent-subtle) 46%, transparent);
+}
+.message-bubble.markdown-body code {
+  font-size: 11px;
+}
+.message-bubble.markdown-body pre {
+  margin: 0.45em 0 0.6em;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface2) 78%, var(--bg-elevated) 22%);
+  border: 1px solid var(--border-subtle);
 }
 
 /* Scheduled job inbox cards (kernel scheduler v2 envelope or legacy `[Scheduler]` line + output) */
@@ -3660,8 +3722,37 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 /* Opt-in: request Piper TTS for assistant reply (next to mic) */
 .btn-voice-reply-on {
   color: var(--accent) !important;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle)) !important;
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface2) 90%) !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-subtle)) !important;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface2) 84%) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.voice-reply-pill {
+  margin-left: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 28%, var(--surface2));
+  color: var(--accent);
+  vertical-align: middle;
+}
+/* Inline audio for markdown links to /api/uploads/*.mp3 etc. */
+.markdown-audio-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  max-width: min(100%, 420px);
+}
+.markdown-audio-inline audio {
+  width: 100%;
+  border-radius: var(--radius-sm);
+}
+.markdown-audio-inline .markdown-audio-fallback {
+  font-size: 12px;
+  align-self: flex-start;
 }
 @keyframes recording-pulse {
   0%, 100% { opacity: 1; }
@@ -3927,6 +4018,20 @@ button.tool-card-header {
   font-size: 11.5px;
 }
 
+.tool-card-summary {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card-status {
+  margin-left: 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
 .tool-card-spinner {
   width: 14px; height: 14px;
   border: 2px solid var(--border);
@@ -3966,6 +4071,40 @@ button.tool-card-header {
   overscroll-behavior-y: auto;
   background: var(--bg);
   animation: slideDown 0.15s var(--ease-smooth);
+}
+
+.tool-auth-callout {
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, var(--accent) 30%);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 90%, var(--accent-subtle) 10%);
+}
+
+.tool-auth-callout-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.tool-auth-callout-copy {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.tool-auth-callout-link {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tool-auth-callout-link:hover {
+  color: var(--accent-light);
+  border-bottom-color: color-mix(in srgb, var(--accent-light) 45%, transparent);
 }
 
 .tool-section-label {
@@ -4028,13 +4167,13 @@ button.tool-card-header {
   color: var(--text);
   border: none;
   border-radius: 14px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
   resize: none;
-  min-height: 44px;
+  min-height: 40px;
   max-height: 150px;
-  line-height: 1.5;
+  line-height: 1.45;
   transition: background 0.2s var(--ease-smooth);
 }
 
@@ -4052,12 +4191,12 @@ button.tool-card-header {
 .input-row {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px;
+  padding: 6px;
   background: var(--surface);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xs), var(--shadow-inset);
   transition:
     border-color 0.16s var(--ease-smooth),
@@ -4067,8 +4206,8 @@ button.tool-card-header {
 }
 
 .input-row:focus-within {
-  border-color: color-mix(in srgb, var(--border) 72%, var(--accent) 28%);
-  box-shadow: 0 0 0 1px var(--accent-subtle), var(--shadow-sm), var(--shadow-inset);
+  border-color: color-mix(in srgb, var(--border) 80%, var(--accent) 20%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-subtle) 78%, transparent), var(--shadow-sm), var(--shadow-inset);
   transform: none;
 }
 
@@ -4077,13 +4216,13 @@ button.tool-card-header {
 }
 
 .input-row.is-sending {
-  border-color: color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent), var(--shadow-sm), var(--shadow-inset);
+  border-color: color-mix(in srgb, var(--border) 84%, var(--accent) 16%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent), var(--shadow-sm), var(--shadow-inset);
 }
 
 .btn-send {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: none;
   background: var(--accent);
@@ -4109,8 +4248,8 @@ button.tool-card-header {
 
 /* Stop button variant during streaming */
 .btn-stop {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   border: 2px solid var(--error);
   background: var(--error-subtle);
@@ -9165,4 +9304,51 @@ button.tool-card-header {
   margin: -2px 0 12px 22px;
   line-height: 1.45;
   max-width: 520px;
+}
+
+/* Command Center (#overview): fleet block wrapper (optional extra spacing) */
+.command-center-fleet-block .armaraos-fleet-body {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Operations snapshot: merged system / security / MCP panels */
+.overview-snapshot-card--expanded {
+  padding: 0 0 4px 0;
+}
+.overview-snapshot-top--row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px 20px;
+}
+.overview-snapshot-header-corner {
+  flex: 0 0 auto;
+  text-align: right;
+  min-width: 0;
+  padding: 0 2px 0 8px;
+  margin-left: auto;
+}
+.overview-snapshot-consolidated {
+  margin-top: 16px;
+  padding: 0 4px 22px 4px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.overview-snapshot-subsection {
+  min-width: 0;
+}
+.overview-snapshot-subsection--llm {
+  margin-top: 0;
+}
+.overview-snapshot-subtitle {
+  color: var(--text-dim);
+}
+.overview-snapshot-card--expanded .overview-snapshot-foot--compression {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px 4px 6px 4px;
 }

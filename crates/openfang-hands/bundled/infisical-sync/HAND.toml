@@ -13,6 +13,7 @@ tools = [
   "shell_exec",
   "file_read", "file_write",
   "vault_set", "vault_get", "vault_list", "vault_delete",
+  "mcp_*",
 ]
 
 # ─── Requirements ─────────────────────────────────────────────────────────────

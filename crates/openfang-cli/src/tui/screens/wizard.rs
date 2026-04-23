@@ -22,7 +22,13 @@ const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         name: "openrouter",
         env_var: "OPENROUTER_API_KEY",
-        default_model: "elephant-alpha",
+        default_model: "nvidia/nemotron-3-super-120b-a12b:free",
+        needs_key: true,
+    },
+    ProviderInfo {
+        name: "standardcompute",
+        env_var: "STANDARDCOMPUTE_API_KEY",
+        default_model: "StandardCompute",
         needs_key: true,
     },
     ProviderInfo {
@@ -507,7 +513,7 @@ fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let prompt = Paragraph::new(vec![
         Line::from(vec![Span::raw("  Choose your LLM provider:")]),
         Line::from(vec![Span::styled(
-            "  Tip: OpenRouter first — key at openrouter.com; default model elephant-alpha (openrouter/elephant-alpha).",
+            "  Tip: OpenRouter first — key at openrouter.com; bundled default model nvidia/nemotron-3-super-120b-a12b:free (OpenRouter :free).",
             theme::dim_style(),
         )]),
     ]);

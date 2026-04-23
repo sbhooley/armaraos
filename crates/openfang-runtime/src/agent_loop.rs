@@ -38,7 +38,7 @@ use openfang_memory::session::Session;
 use openfang_memory::MemorySubstrate;
 use openfang_skills::registry::SkillRegistry;
 use openfang_types::agent::{AgentManifest, FallbackModel};
-use openfang_types::config::LlmConfig;
+use openfang_types::config::{LlmConfig, OPENROUTER_FREE_FALLBACK_MODELS};
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{Memory, MemoryFilter, MemorySource};
 use openfang_types::message::{
@@ -3605,10 +3605,10 @@ async fn try_openrouter_free_fallbacks(
     request: CompletionRequest,
     llm_fb: &LlmFallbackContext<'_>,
 ) -> OpenFangResult<(crate::llm_driver::CompletionResponse, String)> {
-    // Models requested by product default strategy.
+    // Hardcoded OpenRouter `:free` alternates (exclude primary `DEFAULT_OPENROUTER_MODEL_ID` which is Nemotron).
     const FB_MODELS: [&str; 2] = [
         "stepfun/step-3.5-flash:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        OPENROUTER_FREE_FALLBACK_MODELS[0],
     ];
 
     let api_key = std::env::var("OPENROUTER_API_KEY").ok();
@@ -3873,7 +3873,7 @@ async fn try_openrouter_free_fallbacks_stream(
 ) -> OpenFangResult<(crate::llm_driver::CompletionResponse, String)> {
     const FB_MODELS: [&str; 2] = [
         "stepfun/step-3.5-flash:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        OPENROUTER_FREE_FALLBACK_MODELS[0],
     ];
 
     let api_key = std::env::var("OPENROUTER_API_KEY").ok();

@@ -117,6 +117,16 @@ impl SetupWizard {
             }
         }
 
+        // Connected Model Context Protocol tools (names `mcp_*`); use `mcp_servers` allowlist
+        // on the agent to limit servers without listing each tool. Omit when the manifest is
+        // all-tools (`tools` left empty) or an explicit `*` is already in the list.
+        if !caps.tools.is_empty() && !caps.tools.iter().any(|t| t == "*") {
+            let s = "mcp_*".to_string();
+            if !caps.tools.contains(&s) {
+                caps.tools.push(s);
+            }
+        }
+
         // Build schedule
         let schedule = if intent.scheduled {
             if let Some(ref cron) = intent.schedule {
@@ -372,6 +382,11 @@ mod tests {
             .capabilities
             .tools
             .contains(&"web_search".to_string()));
+        assert!(plan
+            .manifest
+            .capabilities
+            .tools
+            .contains(&"mcp_*".to_string()));
     }
 
     #[test]

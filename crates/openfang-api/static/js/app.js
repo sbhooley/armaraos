@@ -207,6 +207,20 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+/**
+ * Turn markdown links to same-host `/api/uploads/….(wav|mp3|…)` into inline `<audio controls>`.
+ * UUID-only upload URLs (e.g. Piper without extension) stay as plain links so image URLs are not mis-rendered.
+ */
+function markdownEmbedAudioUploadLinks(html) {
+  if (!html) return html;
+  var re = /<a\s+href="([^"]*\/api\/uploads\/[^"]+\.(?:wav|mp3|m4a|aac|ogg|opus|webm|flac)(?:\?[^"]*)?)"([^>]*)>([\s\S]*?)<\/a>/gi;
+  return html.replace(re, function(match, url, mid, inner) {
+    var strip = (inner || '').replace(/<[^>]+>/g, '').trim();
+    var label = strip || 'Open audio';
+    return '<span class="markdown-audio-inline"><audio controls preload="metadata" src="' + url + '"></audio><a href="' + url + '" target="_blank" rel="noopener" class="markdown-audio-fallback">' + escapeHtml(label) + '</a></span>';
+  });
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
   if (typeof marked !== 'undefined') {
@@ -247,6 +261,7 @@ function renderMarkdown(text) {
     html = html.replace(/<pre><code/g, '<pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code');
     // Open external links in new tab
     html = html.replace(/<a\s+href="(https?:\/\/[^"]*)"(?![^>]*target=)([^>]*)>/gi, '<a href="$1" target="_blank" rel="noopener"$2>');
+    html = markdownEmbedAudioUploadLinks(html);
     return html;
   }
   return escapeHtml(text);
@@ -652,6 +667,10 @@ document.addEventListener('alpine:init', function() {
     pendingApprovalCount: 0,
     lastPendingApprovalSignature: '',
     pendingAgent: null,
+    /** When set, Agents page should open the detail modal for this agent (e.g. from Command Center). */
+    pendingOpenAgentDetail: null,
+    /** When set, Agents page should open the New Agent (spawn) wizard on next mount or via event. */
+    pendingOpenSpawnWizard: false,
     focusMode: localStorage.getItem('openfang-focus') === 'true',
     showOnboarding: false,
     showAuthPrompt: false,
@@ -1131,6 +1150,31 @@ document.addEventListener('alpine:init', function() {
       if (h !== 'agents') {
         window.location.hash = 'agents';
       }
+    },
+
+    /** Open the agent settings/detail modal (Agents page) from Command Center or other routes. */
+    openAgentSettings(agent) {
+      if (!agent) return;
+      this.recordRecentAgent(agent);
+      this.pendingOpenAgentDetail = agent;
+      var h = (window.location.hash || '').replace(/^#/, '');
+      if (h !== 'agents') {
+        window.location.hash = 'agents';
+      }
+    },
+
+    /** Open the multi-step New Agent wizard (same as + New Agent on All Agents). */
+    openNewAgentWizard() {
+      var p = (window.location.hash || '').replace(/^#/, '') || 'overview';
+      if (p !== 'agents') {
+        this.pendingOpenSpawnWizard = true;
+        window.location.hash = 'agents';
+        return;
+      }
+      this.pendingOpenSpawnWizard = false;
+      try {
+        window.dispatchEvent(new CustomEvent('armaraos-open-spawn-wizard'));
+      } catch (e) { /* ignore */ }
     },
 
     async refreshApprovals() {
@@ -2037,7 +2081,7 @@ function app() {
     isDesktopShell() {
       return isArmaraosDesktopShell();
     },
-    page: 'agents',
+    page: 'overview',
     themeMode: getStoredThemeMode(),
     theme: (() => {
       return effectiveThemeFromMode(getStoredThemeMode());
@@ -2084,7 +2128,7 @@ function app() {
         'proposals': 'graph-proposals'
       };
       function handleHash() {
-        var raw = window.location.hash.replace(/^#/, '') || 'agents';
+        var raw = window.location.hash.replace(/^#/, '') || 'overview';
         var pagePart = raw;
         var query = '';
         var qIdx = raw.indexOf('?');
@@ -2387,7 +2431,7 @@ function app() {
       this.mobileMenuOpen = false;
     },
 
-    /** Get started nav: re-click while on overview reveals Setup Wizard for onboarded users. */
+    /** Command Center (#overview) nav: re-click while on overview reveals Setup Wizard for onboarded users. */
     navigateOverview() {
       if (this.page === 'overview') {
         window.dispatchEvent(new CustomEvent('openfang-overview-nav-same-page'));
@@ -2471,7 +2515,7 @@ function app() {
       this.maybeOfferFirstRunWizard();
     },
 
-    /** One-time redirect to Setup Wizard for new installs (default #agents, no agents, daemon up). */
+    /** One-time redirect to Setup Wizard for new installs (default #overview, no agents, daemon up). */
     maybeOfferFirstRunWizard() {
       try {
         if (typeof localStorage === 'undefined') return;
@@ -2479,7 +2523,7 @@ function app() {
         if (localStorage.getItem('of-first-run-wizard-offered') === 'true') return;
         var store = Alpine.store('app');
         if (!store.connected || store.agentCount > 0) return;
-        if (this.page !== 'agents') return;
+        if (this.page !== 'overview') return;
         localStorage.setItem('of-first-run-wizard-offered', 'true');
         window.location.hash = 'wizard';
       } catch (e) { /* ignore */ }

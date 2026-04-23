@@ -794,6 +794,22 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
     }
 }
 
+/// When server STT already produced transcripts, append hard guidance so models do not treat
+/// transcribed proper nouns as implicit Google Workspace queries or confuse WebChat Piper with Telegram.
+pub(crate) fn voice_transcript_policy_suffix(attachments: &[AttachmentRef]) -> Option<&'static str> {
+    if !all_audio_fully_transcribed(attachments) {
+        return None;
+    }
+    Some(
+        "\n\n[ARMAVOS_VOICE_POLICY] This turn includes **server-transcribed microphone speech** (STT). The natural language below is what the **user said aloud** — answer that intent.\n\
+- **Do not** auto-run Google Workspace / Gmail / Drive / Calendar MCP tools just because the transcript contains company names, domains, email addresses, or pasted thread content. Use Workspace MCP **only** when the user **explicitly** asked you to search or open their mail/Drive/calendar (clear intent like \"search my email\", \"what's in Drive\", \"check my calendar\").\n\
+- Short greetings (\"hello\", \"can you hear me\", \"respond with your voice\") need a **normal conversational reply** — not account-wide search.\n\
+- **WebChat voice back (Piper):** If the user wants **audio in the browser**, the dashboard **speaker** toggle + daemon **Piper** handle playback. Reply in **plain text** in chat.\n\
+- **No fake voice stack:** Do **not** substitute with `channel_send` / Telegram, **`mcp_ainl_*`** (AINL MCP), **`web_search`** (e.g. Piper install guides), or **`shell_exec`** (pip/piper/espeak/afplay/sox) to \"generate voice\" for this UI — none of those are the WebChat speaker path; Piper is **server** `[local_voice]`, not something you bootstrap via tools for dashboard playback.\n\
+- **`channel_send`:** Never pass an empty `recipient`. If `channels_list` shows no default recipient for a channel, **ask** for the id or skip — do not guess.\n[/ARMAVOS_VOICE_POLICY]\n",
+    )
+}
+
 /// Pre-insert image attachments into an agent's session so the LLM can see them.
 ///
 /// This injects image content blocks into the session BEFORE the kernel
@@ -917,6 +933,9 @@ pub async fn send_message(
         let audio_hint = audio_upload_tool_hints(&req.attachments);
         if !audio_hint.is_empty() {
             message_for_agent.push_str(&audio_hint);
+        }
+        if let Some(policy) = voice_transcript_policy_suffix(&req.attachments) {
+            message_for_agent.push_str(policy);
         }
     }
 
@@ -2685,6 +2704,9 @@ pub async fn send_message_stream(
         let audio_hint = audio_upload_tool_hints(&req.attachments);
         if !audio_hint.is_empty() {
             message_for_agent.push_str(&audio_hint);
+        }
+        if let Some(policy) = voice_transcript_policy_suffix(&req.attachments) {
+            message_for_agent.push_str(policy);
         }
     }
 
@@ -11350,6 +11372,75 @@ pub async fn get_agent_tools(
     )
 }
 
+/// GET /api/agents/{id}/llm-tools — Tool definitions this agent receives on each LLM call.
+///
+/// Differs from `GET /api/tools` (host-wide catalog): this applies the agent's
+/// `capabilities.tools`, skill/MCP allowlists, `tool_allowlist` / `tool_blocklist`,
+/// and [`AgentMode`] (`assist` removes all `mcp_*` tools).
+pub async fn get_agent_llm_tools(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    ext: Option<Extension<RequestId>>,
+) -> impl IntoResponse {
+    let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents/:id/llm-tools";
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
+            )
+        }
+    };
+    let entry = match state.kernel.registry.get(agent_id) {
+        Some(e) => e,
+        None => {
+            return api_json_error(
+                StatusCode::NOT_FOUND,
+                &rid,
+                PATH,
+                "Agent not found",
+                format!("No agent registered for id {id}."),
+                None,
+            )
+        }
+    };
+    let tools = state
+        .kernel
+        .effective_llm_tool_definitions(agent_id)
+        .unwrap_or_default();
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(tools.len());
+    for t in &tools {
+        let mut row = serde_json::json!({
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.input_schema,
+        });
+        if let Some(obj) = row.as_object_mut() {
+            if t.name.starts_with("mcp_") {
+                obj.insert("source".to_string(), serde_json::json!("mcp"));
+            }
+        }
+        out.push(row);
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "agent_id": id,
+            "agent_name": entry.name,
+            "mode": entry.mode,
+            "tool_count": tools.len(),
+            "tools": out,
+            "hint": "This is the set passed to the LLM for this agent. GET /api/tools is the host-wide list (no per-agent filters). If mode is assist or observe, MCP tools are omitted by design."
+        })),
+    )
+}
+
 /// PUT /api/agents/{id}/tools — Update an agent's tool allowlist/blocklist.
 pub async fn set_agent_tools(
     State(state): State<Arc<AppState>>,
@@ -11563,12 +11654,22 @@ pub async fn get_agent_mcp_servers(
             )
         }
     };
-    // Collect known MCP server names from connected tools
+    // Collect MCP server names that have at least one connected tool (use configured
+    // server names for matching — `google-workspace-mcp` tools are not `mcp_google_*`).
     let mut available: Vec<String> = Vec::new();
     if let Ok(mcp_tools) = state.kernel.mcp_tools.lock() {
+        let server_cfg: Vec<String> = state
+            .kernel
+            .effective_mcp_servers
+            .read()
+            .map(|g| g.iter().map(|e| e.name.clone()).collect())
+            .unwrap_or_default();
+        let refs: Vec<&str> = server_cfg.iter().map(|s| s.as_str()).collect();
         let mut seen = std::collections::HashSet::new();
         for tool in mcp_tools.iter() {
-            if let Some(server) = openfang_runtime::mcp::extract_mcp_server(&tool.name) {
+            if let Some(server) =
+                openfang_runtime::mcp::extract_mcp_server_from_known(&tool.name, &refs)
+            {
                 if seen.insert(server.to_string()) {
                     available.push(server.to_string());
                 }
@@ -15673,8 +15774,105 @@ static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::new(Da
 /// previous temp so only the newest clip is retained by default.
 static AGENT_LAST_VOICE_FILE: LazyLock<DashMap<AgentId, String>> = LazyLock::new(DashMap::new);
 
+/// True when `file_id` is a safe basename for `openfang_uploads`: a UUID, or `uuid.ext`
+/// (stem parses as UUID; extension is short alphanumeric). Rejects path segments.
+fn is_safe_upload_basename(file_id: &str) -> bool {
+    if file_id.is_empty() || file_id.len() > 128 {
+        return false;
+    }
+    if file_id.contains('/')
+        || file_id.contains('\\')
+        || file_id.contains("..")
+        || file_id.starts_with('.')
+    {
+        return false;
+    }
+    if uuid::Uuid::parse_str(file_id).is_ok() {
+        return true;
+    }
+    let Some((stem, ext)) = file_id.rsplit_once('.') else {
+        return false;
+    };
+    if ext.is_empty() || ext.len() > 12 {
+        return false;
+    }
+    if !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    uuid::Uuid::parse_str(stem).is_ok()
+}
+
+/// When `UPLOAD_REGISTRY` has no entry (e.g. `text_to_speech` wrote `uuid.mp3` directly), infer MIME from basename.
+fn infer_content_type_from_upload_basename(file_id: &str) -> Option<String> {
+    let ext = upload_extension_lower(file_id)?;
+    Some(
+        match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" | "jpe" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            "svg" => "image/svg+xml",
+            "ico" => "image/x-icon",
+            "mp3" | "mpeg" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" | "oga" => "audio/ogg",
+            "opus" => "audio/opus",
+            "flac" => "audio/flac",
+            "m4a" => "audio/mp4",
+            "aac" => "audio/aac",
+            "webm" => "audio/webm",
+            "mp4" => "video/mp4",
+            "mov" => "video/quicktime",
+            "mkv" => "video/x-matroska",
+            "pdf" => "application/pdf",
+            "json" => "application/json",
+            "txt" | "md" | "markdown" => "text/plain",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
+/// Stable file extension for server-generated uploads (Piper WAV, etc.) so URLs include `.wav`
+/// and the dashboard can embed `<audio>` from markdown.
+fn extension_for_generated_upload(content_type: &str, suggested_filename: &str) -> String {
+    const AUDIO_EXT: &[&str] = &["wav", "mp3", "ogg", "opus", "flac", "m4a", "aac", "webm"];
+    if let Some(ext) = upload_extension_lower(suggested_filename) {
+        if AUDIO_EXT.contains(&ext.as_str()) {
+            return ext;
+        }
+    }
+    let ct = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match ct.as_str() {
+        "audio/wav" | "audio/x-wav" | "audio/wave" => "wav".into(),
+        "audio/mpeg" | "audio/mp3" => "mp3".into(),
+        "audio/ogg" => "ogg".into(),
+        "audio/opus" => "opus".into(),
+        "audio/flac" => "flac".into(),
+        "audio/mp4" | "audio/x-m4a" => "m4a".into(),
+        "audio/aac" => "aac".into(),
+        "audio/webm" => "webm".into(),
+        _ if ct.starts_with("audio/") => "bin".into(),
+        _ => {
+            if let Some(ext) = upload_extension_lower(suggested_filename) {
+                if ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.is_empty() && ext.len() <= 12
+                {
+                    return ext;
+                }
+            }
+            "bin".into()
+        }
+    }
+}
+
 fn remove_stored_upload_file(file_id: &str) {
-    if uuid::Uuid::parse_str(file_id).is_err() {
+    if !is_safe_upload_basename(file_id) {
         return;
     }
     let p = std::env::temp_dir().join("openfang_uploads").join(file_id);
@@ -15737,7 +15935,9 @@ pub(crate) fn register_generated_upload(
             MAX_UPLOAD_SIZE / (1024 * 1024)
         ));
     }
-    let file_id = uuid::Uuid::new_v4().to_string();
+    let stem = uuid::Uuid::new_v4().to_string();
+    let ext = extension_for_generated_upload(content_type, suggested_filename);
+    let file_id = format!("{stem}.{ext}");
     let upload_dir = std::env::temp_dir().join("openfang_uploads");
     std::fs::create_dir_all(&upload_dir).map_err(|e| e.to_string())?;
     let path = upload_dir.join(&file_id);
@@ -16283,8 +16483,7 @@ pub async fn upload_file(
 
 /// GET /api/uploads/{file_id} — Serve an uploaded file.
 pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
-    // Validate file_id is a UUID to prevent path traversal
-    if uuid::Uuid::parse_str(&file_id).is_err() {
+    if !is_safe_upload_basename(&file_id) {
         return (
             StatusCode::BAD_REQUEST,
             [(
@@ -16302,7 +16501,6 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
     let content_type = match UPLOAD_REGISTRY.get(&file_id) {
         Some(m) => m.content_type.clone(),
         None => {
-            // Infer content type from file magic bytes
             if !file_path.exists() {
                 return (
                     StatusCode::NOT_FOUND,
@@ -16313,7 +16511,14 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
                     b"{\"error\":\"File not found\"}".to_vec(),
                 );
             }
-            "image/png".to_string()
+            infer_content_type_from_upload_basename(&file_id).unwrap_or_else(|| {
+                if uuid::Uuid::parse_str(&file_id).is_ok() {
+                    // Legacy: image_generate used bare UUID filenames on disk.
+                    "image/png".to_string()
+                } else {
+                    "application/octet-stream".to_string()
+                }
+            })
         }
     };
 
@@ -19207,6 +19412,44 @@ mod voice_message_tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn test_safe_upload_basename_accepts_uuid_and_uuid_ext() {
+        let u = uuid::Uuid::new_v4().to_string();
+        assert!(super::is_safe_upload_basename(&u));
+        assert!(super::is_safe_upload_basename(&format!("{u}.wav")));
+        assert!(super::is_safe_upload_basename(&format!("{u}.mp3")));
+        assert!(!super::is_safe_upload_basename(&format!("{u}.tar.gz")));
+        assert!(!super::is_safe_upload_basename("../../../etc/passwd"));
+        assert!(!super::is_safe_upload_basename("not-a-uuid.wav"));
+    }
+
+    #[test]
+    fn test_infer_content_type_from_upload_basename_audio() {
+        let u = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            super::infer_content_type_from_upload_basename(&format!("{u}.mp3")).as_deref(),
+            Some("audio/mpeg")
+        );
+        assert_eq!(
+            super::infer_content_type_from_upload_basename(&format!("{u}.wav")).as_deref(),
+            Some("audio/wav")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_register_generated_upload_includes_extension_in_path() {
+        let url = super::register_generated_upload("audio/wav", "voice_reply.wav", vec![0x52, 0x49])
+            .expect("register");
+        assert!(
+            url.contains(".wav"),
+            "expected /api/uploads/{{uuid}}.wav, got {url}"
+        );
+        let fid = url.trim_start_matches("/api/uploads/");
+        assert!(super::is_safe_upload_basename(fid));
+        super::remove_stored_upload_file(fid);
+    }
+
+    #[test]
     fn test_looks_like_placeholder_detects_client_fallback() {
         let s = "transcribe with **media_transcribe** using file_id `abc`";
         assert!(super::looks_like_voice_tool_placeholder(s));
@@ -19251,6 +19494,35 @@ mod voice_message_tests {
         );
         let out = super::merge_client_with_voice_transcripts("Caption here", &ts(&["voice only"]));
         assert_eq!(out, "Caption here\n\n[Voice]:\nvoice only");
+    }
+
+    #[test]
+    #[serial]
+    fn test_voice_transcript_policy_suffix_when_stt_ready() {
+        assert!(super::voice_transcript_policy_suffix(&[]).is_none());
+        let id = uuid::Uuid::new_v4().to_string();
+        let att = vec![AttachmentRef {
+            file_id: id.clone(),
+            filename: "a.webm".into(),
+            content_type: "audio/webm".into(),
+        }];
+        assert!(super::voice_transcript_policy_suffix(&att).is_none());
+        super::UPLOAD_REGISTRY.insert(
+            id.clone(),
+            super::UploadMeta {
+                filename: "a.webm".into(),
+                content_type: "audio/webm".to_string(),
+                transcription: Some("hello there".to_string()),
+                expires_at: None,
+            },
+        );
+        let s = super::voice_transcript_policy_suffix(&att).expect("policy");
+        assert!(s.contains("ARMAVOS_VOICE_POLICY"));
+        assert!(s.contains("Workspace"));
+        assert!(s.contains("mcp_ainl"));
+        assert!(s.contains("web_search"));
+        assert!(s.contains("shell_exec"));
+        super::remove_stored_upload_file(&id);
     }
 
     #[test]

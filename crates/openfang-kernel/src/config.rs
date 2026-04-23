@@ -5,6 +5,7 @@
 
 use openfang_types::config::{
     DefaultModelConfig, FallbackProviderConfig, KernelConfig, DEFAULT_OPENROUTER_MODEL_ID,
+    OPENROUTER_FREE_FALLBACK_MODELS,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -301,6 +302,8 @@ fn migrate_legacy_openrouter_default_model(config: &mut KernelConfig) {
     const LEGACY: &[&str] = &[
         "openrouter/google/gemini-2.5-flash",
         "google/gemini-2.5-flash",
+        "elephant-alpha",
+        "openrouter/elephant-alpha",
     ];
     if LEGACY.contains(&m) {
         info!(
@@ -460,16 +463,14 @@ pub fn openfang_home() -> PathBuf {
     openfang_types::config::openfang_home_dir()
 }
 
-/// Primary OpenRouter model for fresh ArmaraOS **desktop** installs (no `config.toml` yet).
+/// Primary OpenRouter model id for fresh ArmaraOS **desktop** installs (no `config.toml` yet).
 pub const DESKTOP_DEFAULT_OPENROUTER_MODEL: &str = DEFAULT_OPENROUTER_MODEL_ID;
-/// Fallback OpenRouter model when the primary fails (same `OPENROUTER_API_KEY`).
-pub const DESKTOP_FALLBACK_OPENROUTER_MODEL: &str = "nvidia/nemotron-3-super-120b-a12b:free";
 
 /// Apply bundled OpenRouter defaults for the ArmaraOS desktop app when the user has no
 /// `config.toml` yet. The desktop shell calls this before [`crate::OpenFangKernel::boot_with_config`].
 ///
-/// Sets `[default_model]` to OpenRouter + [`DESKTOP_DEFAULT_OPENROUTER_MODEL`] and adds
-/// one `[[fallback_providers]]` entry for [`DESKTOP_FALLBACK_OPENROUTER_MODEL`].
+/// Sets `[default_model]` to OpenRouter + [`DESKTOP_DEFAULT_OPENROUTER_MODEL`] and adds one
+/// `[[fallback_providers]]` entry from [`OPENROUTER_FREE_FALLBACK_MODELS`] (skips duplicate of primary).
 pub fn apply_desktop_bundled_llm_defaults(config: &mut KernelConfig) {
     config.default_model = DefaultModelConfig {
         provider: "openrouter".to_string(),
@@ -477,9 +478,19 @@ pub fn apply_desktop_bundled_llm_defaults(config: &mut KernelConfig) {
         api_key_env: "OPENROUTER_API_KEY".to_string(),
         base_url: None,
     };
+    let fb_model = OPENROUTER_FREE_FALLBACK_MODELS
+        .iter()
+        .copied()
+        .find(|m| *m != DEFAULT_OPENROUTER_MODEL_ID)
+        .unwrap_or_else(|| {
+            OPENROUTER_FREE_FALLBACK_MODELS
+                .first()
+                .copied()
+                .unwrap_or("meta-llama/llama-3.1-8b-instruct:free")
+        });
     config.fallback_providers = vec![FallbackProviderConfig {
         provider: "openrouter".to_string(),
-        model: DESKTOP_FALLBACK_OPENROUTER_MODEL.to_string(),
+        model: fb_model.to_string(),
         api_key_env: String::new(),
         base_url: None,
     }];

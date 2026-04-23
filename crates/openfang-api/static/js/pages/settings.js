@@ -2,11 +2,21 @@
 'use strict';
 
 function settingsPage() {
+  // `Object.assign` invokes source getters once and copies returned values as
+  // plain properties. Use methods (`filteredToolsList`) for derived lists, not
+  // `get filteredTools()` accessors, or the UI stays stuck on the initial snapshot.
   return Object.assign(armaraosDaemonLifecycleControls(), {
     tab: 'providers',
     sysInfo: {},
     usageData: [],
     tools: [],
+    /** Per-agent inventory from GET /api/agents/:id/llm-tools (what the model receives). */
+    llmToolsAgents: [],
+    llmToolsAgentId: '',
+    llmToolsLoading: false,
+    llmToolsError: '',
+    llmToolsResult: null,
+    llmToolSearch: '',
     config: {},
     providers: [],
     models: [],
@@ -278,6 +288,7 @@ function settingsPage() {
           this.loadSysInfo(),
           this.loadUsage(),
           this.loadTools(),
+          this.loadLlmToolsAgents(),
           this.loadMcpHostReadiness(),
           this.loadConfig(),
           this.loadProviders(),
@@ -500,6 +511,55 @@ function settingsPage() {
       } catch(e) { this.tools = []; }
     },
 
+    /** Load agent ids for the LLM tool inventory picker; does not throw (errors stay local). */
+    async loadLlmToolsAgents() {
+      this.llmToolsError = '';
+      try {
+        var data = await OpenFangAPI.get('/api/agents');
+        var agents = data && data.agents != null ? data.agents : data;
+        if (!Array.isArray(agents)) agents = [];
+        this.llmToolsAgents = agents;
+        var firstId = '';
+        for (var i = 0; i < agents.length; i++) {
+          var a = agents[i];
+          if (a && (a.id || a.agent_id)) {
+            firstId = String(a.id || a.agent_id);
+            break;
+          }
+        }
+        if (!this.llmToolsAgentId && firstId) {
+          this.llmToolsAgentId = firstId;
+        }
+        if (this.llmToolsAgentId) {
+          await this.fetchLlmToolsInventory();
+        } else {
+          this.llmToolsResult = null;
+        }
+      } catch (e) {
+        this.llmToolsAgents = [];
+        this.llmToolsResult = null;
+        this.llmToolsError = openFangErrText(e) || String(e);
+      }
+    },
+
+    async fetchLlmToolsInventory() {
+      if (!this.llmToolsAgentId) {
+        this.llmToolsResult = null;
+        return;
+      }
+      this.llmToolsLoading = true;
+      this.llmToolsError = '';
+      try {
+        this.llmToolsResult = await OpenFangAPI.get(
+          '/api/agents/' + encodeURIComponent(this.llmToolsAgentId) + '/llm-tools'
+        );
+      } catch (e) {
+        this.llmToolsResult = null;
+        this.llmToolsError = openFangErrText(e) || String(e);
+      }
+      this.llmToolsLoading = false;
+    },
+
     async loadMcpHostReadiness() {
       try {
         this.mcpHostReadiness = await OpenFangAPI.get('/api/system/mcp-host-readiness');
@@ -673,7 +733,7 @@ function settingsPage() {
           : [];
         // If stale filters/search hide all rows, auto-clear once so the catalog
         // cannot appear empty while models are present.
-        if (this.models.length > 0 && this.filteredModels.length === 0) {
+        if (this.models.length > 0 && this.filteredModelsList().length === 0) {
           if ((this.modelSearch || '').trim() || this.modelProviderFilter || this.modelTierFilter) {
             this.modelSearch = '';
             this.modelProviderFilter = '';
@@ -807,20 +867,40 @@ function settingsPage() {
       this.configSaving[key] = false;
     },
 
-    get filteredTools() {
-      var q = this.toolSearch.toLowerCase().trim();
-      if (!q) return this.tools;
-      return this.tools.filter(function(t) {
-        return t.name.toLowerCase().indexOf(q) !== -1 ||
+    /** Host-wide tools table search — must be a method: `Object.assign` snapshots getters as static values. */
+    filteredToolsList() {
+      var q = (this.toolSearch || '').toLowerCase().trim();
+      var list = this.tools || [];
+      if (!q) return list;
+      return list.filter(function(t) {
+        if (!t) return false;
+        var nm = (t.name || '').toLowerCase();
+        return nm.indexOf(q) !== -1 ||
                (t.description || '').toLowerCase().indexOf(q) !== -1;
       });
     },
 
-    get filteredModels() {
+    /** Per-agent LLM tools search — must be a method (see `filteredToolsList`). */
+    filteredLlmToolsList() {
+      var r = this.llmToolsResult;
+      if (!r || !Array.isArray(r.tools)) return [];
+      var q = (this.llmToolSearch || '').toLowerCase().trim();
+      if (!q) return r.tools;
+      return r.tools.filter(function(t) {
+        if (!t) return false;
+        var n = (t.name || '').toLowerCase();
+        var d = (t.description || '').toLowerCase();
+        return n.indexOf(q) !== -1 || d.indexOf(q) !== -1;
+      });
+    },
+
+    /** Models table — must be a method (see `filteredToolsList` for why). */
+    filteredModelsList() {
       var self = this;
       var pf = (self.modelProviderFilter || '').trim();
       var tf = (self.modelTierFilter || '').trim().toLowerCase();
-      return this.models.filter(function(m) {
+      var list = self.models || [];
+      return list.filter(function(m) {
         if (!m) return false;
         var pid = m.id != null ? String(m.id) : '';
         var pprovider = m.provider != null ? String(m.provider) : '';
@@ -838,22 +918,24 @@ function settingsPage() {
       });
     },
 
-    get uniqueProviderNames() {
+    /** Provider filter dropdown values — method (see `filteredToolsList`). */
+    uniqueProviderNamesList() {
       var seen = {};
-      this.models.forEach(function(m) {
+      (this.models || []).forEach(function(m) {
         if (m && m.provider) seen[m.provider] = true;
       });
       // Keep the provider filter populated even when /api/models fails but
       // /api/providers succeeds.
-      this.providers.forEach(function(p) {
+      (this.providers || []).forEach(function(p) {
         if (p && p.id) seen[p.id] = true;
       });
       return Object.keys(seen).sort();
     },
 
-    get uniqueTiers() {
+    /** Tier filter dropdown values — method (see `filteredToolsList`). */
+    uniqueTiersList() {
       var seen = {};
-      this.models.forEach(function(m) {
+      (this.models || []).forEach(function(m) {
         if (m && m.tier != null && String(m.tier).length) {
           seen[String(m.tier).toLowerCase()] = true;
         }

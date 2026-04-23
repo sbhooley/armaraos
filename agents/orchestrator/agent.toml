@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.3
@@ -66,7 +66,7 @@ Run via `ainl run <path>` or ainl-mcp (ainl_run, ainl_validate, ainl_compile). V
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [schedule]
@@ -76,7 +76,7 @@ continuous = { check_interval_secs = 120 }
 max_llm_tokens_per_hour = 500000
 
 [capabilities]
-tools = ["agent_send", "agent_spawn", "agent_list", "agent_kill", "agent_find", "memory_store", "memory_recall", "memory_list", "file_read", "file_write", "file_list", "web_search", "web_fetch", "task_post", "task_list", "task_claim", "task_complete", "event_publish", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["agent_send", "agent_spawn", "agent_list", "agent_kill", "agent_find", "memory_store", "memory_recall", "memory_list", "file_read", "file_write", "file_list", "web_search", "web_fetch", "task_post", "task_list", "task_claim", "task_complete", "event_publish", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time", "mcp_*"]
 memory_read = ["*"]
 memory_write = ["*"]
 agent_spawn = true

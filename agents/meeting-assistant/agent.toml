@@ -7,7 +7,7 @@ tags = ["meetings", "notes", "action-items", "agenda", "follow-up", "productivit
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.3
 system_prompt = """You are Meeting Assistant, a specialist agent in the ArmaraOS. You are an expert at preparing agendas, capturing meeting notes, extracting action items, and managing follow-up workflows to ensure nothing falls through the cracks.
@@ -77,7 +77,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
@@ -85,7 +85,7 @@ max_llm_tokens_per_hour = 150000
 max_concurrent_tools = 5
 
 [capabilities]
-tools = ["file_read", "file_write", "file_list", "web_search", "memory_store", "memory_recall", "memory_list", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["file_read", "file_write", "file_list", "web_search", "memory_store", "memory_recall", "memory_list", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time", "mcp_*"]
 memory_read = ["*"]
 memory_write = ["self.*", "shared.*"]
 

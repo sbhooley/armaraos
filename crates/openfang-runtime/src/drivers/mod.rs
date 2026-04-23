@@ -29,6 +29,7 @@ use openfang_types::model_catalog::{
     HUGGINGFACE_BASE_URL, KIMI_CODING_BASE_URL, LEMONADE_BASE_URL, LMSTUDIO_BASE_URL,
     MINIMAX_BASE_URL, MISTRAL_BASE_URL, MOONSHOT_BASE_URL, NVIDIA_NIM_BASE_URL, OLLAMA_BASE_URL,
     OPENAI_BASE_URL, OPENROUTER_BASE_URL, PERPLEXITY_BASE_URL, QIANFAN_BASE_URL, QWEN_BASE_URL,
+    STANDARDCOMPUTE_BASE_URL,
     REPLICATE_BASE_URL, SAMBANOVA_BASE_URL, TOGETHER_BASE_URL, VENICE_BASE_URL, VLLM_BASE_URL,
     VOLCENGINE_BASE_URL, VOLCENGINE_CODING_BASE_URL, XAI_BASE_URL, ZAI_BASE_URL,
     ZAI_CODING_BASE_URL, ZHIPU_BASE_URL, ZHIPU_CODING_BASE_URL,
@@ -54,6 +55,11 @@ fn provider_defaults(provider: &str) -> Option<ProviderDefaults> {
         "openrouter" => Some(ProviderDefaults {
             base_url: OPENROUTER_BASE_URL,
             api_key_env: "OPENROUTER_API_KEY",
+            key_required: true,
+        }),
+        "standardcompute" => Some(ProviderDefaults {
+            base_url: STANDARDCOMPUTE_BASE_URL,
+            api_key_env: "STANDARDCOMPUTE_API_KEY",
             key_required: true,
         }),
         "deepseek" => Some(ProviderDefaults {
@@ -747,6 +753,7 @@ pub fn known_providers() -> &'static [&'static str] {
         "openai",
         "groq",
         "openrouter",
+        "standardcompute",
         "deepseek",
         "together",
         "mistral",
@@ -885,7 +892,7 @@ mod tests {
         assert!(providers.contains(&"claude-code"));
         assert!(providers.contains(&"qwen-code"));
         assert!(providers.contains(&"azure"));
-        assert_eq!(providers.len(), 37);
+        assert_eq!(providers.len(), 38);
     }
 
     #[test]

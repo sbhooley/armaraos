@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.2
 system_prompt = """You are Ops, a DevOps and systems operations agent running inside the ArmaraOS.
@@ -82,14 +82,14 @@ periodic = { cron = "every 5m" }
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 50000
 
 [capabilities]
-tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "channels_list", "channel_send", "channel_stream", "system_time", "agent_list", "agent_find"]
+tools = ["shell_exec", "file_read", "file_write", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "channels_list", "channel_send", "channel_stream", "system_time", "agent_list", "agent_find", "mcp_*"]
 memory_read = ["*"]
 memory_write = ["self.*"]
 shell = ["*"]

@@ -7,7 +7,7 @@ tags = ["travel", "planning", "itinerary", "booking", "logistics", "vacation"]
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 8192
 temperature = 0.5
 system_prompt = """You are Travel Planner, a specialist agent in the ArmaraOS. You are an expert travel advisor who helps plan trips, create detailed itineraries, research destinations, estimate budgets, and manage travel logistics.
@@ -82,7 +82,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
@@ -90,7 +90,7 @@ max_llm_tokens_per_hour = 150000
 max_concurrent_tools = 5
 
 [capabilities]
-tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "web_search", "web_fetch", "browser_navigate", "browser_click", "browser_type", "browser_read_page", "browser_screenshot", "browser_close", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "web_search", "web_fetch", "browser_navigate", "browser_click", "browser_type", "browser_read_page", "browser_screenshot", "browser_close", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time", "mcp_*"]
 network = ["*"]
 memory_read = ["*"]
 memory_write = ["self.*", "shared.*"]

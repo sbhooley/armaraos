@@ -107,7 +107,7 @@ pub struct MessageResponse {
     /// Structured telemetry for ainl-runtime-engine turns.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ainl_runtime_telemetry: Option<serde_json::Value>,
-    /// Playable URL (e.g. `/api/uploads/…`) for a local Piper TTS rendering of `response` when `voice_reply` was requested.
+    /// Playable URL (e.g. `/api/uploads/{uuid}.wav`) for a local Piper TTS rendering of `response` when `voice_reply` was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_reply_audio_url: Option<String>,
 }

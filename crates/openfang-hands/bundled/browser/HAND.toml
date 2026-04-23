@@ -12,6 +12,7 @@ tools = [
     "schedule_create", "schedule_list", "schedule_delete",
     "file_write", "file_read",
     "channel_send", "event_publish",
+    "mcp_*",
 ]
 
 [[requires]]

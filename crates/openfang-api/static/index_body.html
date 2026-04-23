@@ -222,23 +222,7 @@
     </div>
 
     <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
-      <!-- Get started — dashboard / setup checklist -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Get started">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Get started</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigateOverview()" :aria-current="page === 'overview' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
-              <span class="nav-label">Get started</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Agents — All Agents, bookmarks, quick-open rows, sessions / approvals -->
+      <!-- Agents — command center, bookmarks, quick-open rows, sessions / approvals -->
       <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
         <div class="nav-section-title" @click="collapsed = !collapsed">
           <span class="nav-label">Agents</span>
@@ -246,14 +230,9 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents')" :aria-current="page === 'agents' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-              <span class="nav-label">All Agents</span>
-              <span class="nav-unread-badge" x-show="$store.app.chatUnreadTotal > 0" x-text="$store.app.chatUnreadTotal > 99 ? '99+' : $store.app.chatUnreadTotal" title="Unread chat activity"></span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2 2.9 6 6.6.6-5 4.4 1.5 6.5L12 16l-6 3.5 1.5-6.5-5-4.4 6.6-.6z"/></svg></span>
-              <span class="nav-label">Premium</span>
+            <a class="nav-item" :class="{ active: page === 'overview' }" @click="navigateOverview()" :aria-current="page === 'overview' ? 'page' : false" title="Command Center">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span>
+              <span class="nav-label">Command Center</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'bookmarks' }" @click="navigate('bookmarks')" :aria-current="page === 'bookmarks' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></span>
@@ -433,7 +412,7 @@
         <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
-      <div class="text-xs text-dim sidebar-footer-shortcuts" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K · All Agents | Ctrl+N new</div>
+      <div class="text-xs text-dim sidebar-footer-shortcuts" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K · Command Center | Ctrl+N new</div>
       <div class="sidebar-footer-desktop-hint text-xs text-dim" style="padding:4px 16px 12px;line-height:1.5" x-show="isDesktopShell() && !sidebarCollapsed">
         Support and community links are in the app <strong style="color:var(--text-secondary)">Help</strong> menu.
       </div>
@@ -516,14 +495,13 @@
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
 
-    <!-- Page: Get started (overview route) -->
+    <!-- Page: Command Center (overview route #overview) -->
     <template x-if="page === 'overview'">
-      <div x-data="overviewPage" x-init="initOverviewWizardCta(); loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()" @openfang-overview-nav-same-page.window="onOverviewNavSamePage()" class="overview-page-root">
+      <div x-data="overviewPage" x-init="initOverviewWizardCta(); loadOverview().then(() => { startAutoRefresh(); startCommandCenterFleet(); })" @page-leave.window="onOverviewPageLeave()" @openfang-overview-nav-same-page.window="onOverviewNavSamePage()" class="overview-page-root">
         <div class="page-header overview-page-header">
           <div class="overview-page-header-row">
-            <h2>Get started</h2>
+            <h2>Command Center</h2>
             <div class="flex items-center gap-2 flex-wrap overview-page-header-actions">
-              <button type="button" class="btn btn-primary btn-sm" x-show="overviewWizardCtaVisible && !loading && !loadError" @click="location.hash='wizard'">Setup Wizard</button>
               <button type="button" class="btn btn-ghost btn-sm" x-show="onboarded && !overviewWizardCtaVisible && !loading && !loadError" @click="revealSetupWizardCta()" title="Show Setup Wizard again">Run setup again</button>
               <span class="health-indicator" :class="health.status === 'ok' ? 'health-ok' : 'health-down'" x-text="health.status === 'ok' ? 'Healthy' : 'Unreachable'"></span>
               <button class="btn btn-ghost btn-sm" @click="silentRefresh()" title="Refresh" style="padding:4px 8px">
@@ -566,11 +544,23 @@
               <span class="overview-quick-actions-sub text-xs text-dim">Common tasks</span>
             </div>
             <div class="overview-quick-actions-grid">
-              <button type="button" class="overview-quick-action-tile" @click="location.hash='agents'">
+              <button type="button" class="overview-quick-action-tile" @click="$store.app.openNewAgentWizard()">
                 <span class="overview-quick-action-icon" aria-hidden="true">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
                 </span>
                 <span class="overview-quick-action-label">New Agent</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="location.hash='hands'" title="Premium autonomous agent packages">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12 2 2.9 6 6.6.6-5 4.4 1.5 6.5L12 16l-6 3.5 1.5-6.5-5-4.4 6.6-.6z"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Premium Agents</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" x-show="overviewWizardCtaVisible" @click="location.hash='wizard'" title="Guided setup and activation">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 6 6c0 1.88-.5 2.5-1 3.5L16 18H8l-1-5.5c-.5-1-1-1.62-1-3.5a6 6 0 0 0 6-6Z"/><path d="M8 18h8"/><path d="M10 22h4"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Setup Wizard</span>
               </button>
               <button type="button" class="overview-quick-action-tile" @click="location.hash='skills'">
                 <span class="overview-quick-action-icon" aria-hidden="true">
@@ -607,6 +597,12 @@
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="m4.93 4.93 2.83 2.83"/><path d="m16.24 16.24 2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="m4.93 19.07 2.83-2.83"/><path d="m16.24 7.76 2.83-2.83"/></svg>
                 </span>
                 <span class="overview-quick-action-label">Daemon &amp; runtime</span>
+              </button>
+              <button type="button" class="overview-quick-action-tile" @click="goConfigureProviders()" title="Add API keys and manage LLM providers">
+                <span class="overview-quick-action-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                </span>
+                <span class="overview-quick-action-label">Configure provider</span>
               </button>
             </div>
           </div>
@@ -654,13 +650,22 @@
                 <div class="skeleton overview-quick-action-skel"></div>
                 <div class="skeleton overview-quick-action-skel"></div>
                 <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
+                <div class="skeleton overview-quick-action-skel"></div>
               </div>
             </div>
-            <div class="stats-row stats-row-lg overview-economics-stats overview-economics-stats--single-row" style="margin-bottom:20px">
-              <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:40px;height:28px"></div><div class="skeleton skeleton-text" style="width:120px;height:12px;margin-top:8px"></div></div>
-              <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:40px;height:28px"></div><div class="skeleton skeleton-text" style="width:110px;height:12px;margin-top:8px"></div></div>
-              <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:50px;height:28px"></div><div class="skeleton skeleton-text" style="width:80px;height:12px;margin-top:8px"></div></div>
-              <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:50px;height:28px"></div><div class="skeleton skeleton-text" style="width:90px;height:12px;margin-top:8px"></div></div>
+            <div class="command-center-fleet-block command-center-fleet-block--skeleton mb-4" style="margin-bottom:20px" aria-hidden="true">
+              <div class="fleet-status-sticky-inner">
+                <div class="fleet-metric-deck" style="display:flex;gap:10px;flex-wrap:wrap">
+                  <div class="fleet-metric" style="flex:1;min-width:100px"><div class="skeleton" style="height:52px;border-radius:var(--radius-md)"></div></div>
+                  <div class="fleet-metric" style="flex:1;min-width:100px"><div class="skeleton" style="height:52px;border-radius:var(--radius-md)"></div></div>
+                  <div class="fleet-metric" style="flex:1;min-width:100px"><div class="skeleton" style="height:52px;border-radius:var(--radius-md)"></div></div>
+                  <div class="fleet-metric" style="flex:1;min-width:100px"><div class="skeleton" style="height:52px;border-radius:var(--radius-md)"></div></div>
+                  <div class="fleet-metric" style="flex:1;min-width:100px"><div class="skeleton" style="height:52px;border-radius:var(--radius-md)"></div></div>
+                </div>
+              </div>
+              <div class="skeleton" style="height:120px;margin-top:12px;border-radius:var(--radius-md)"></div>
             </div>
             <div class="card mb-4 overview-snapshot-card overview-snapshot-card--skeleton" aria-hidden="true">
               <div class="overview-snapshot-top">
@@ -682,7 +687,7 @@
                 <div class="skeleton overview-snapshot-skel-kpi"></div>
               </div>
             </div>
-            <div class="overview-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div>
+            <div class="overview-grid"><div class="skeleton skeleton-card" style="min-height:120px"></div></div>
           </div>
           <!-- Error state -->
           <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s">
@@ -798,65 +803,322 @@
             </div>
           </div>
 
-          <!-- Token / cost metrics (single row above operations snapshot) -->
-          <div class="stats-row stats-row-lg overview-economics-stats overview-economics-stats--single-row">
-            <div class="stat-card stat-card-lg overview-hero-stat overview-economics-stat animate-entry stagger-1">
-              <div class="overview-stat-row">
-                <div class="overview-stat-icon overview-stat-icon--blue">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-                </div>
-                <div>
-                  <div class="stat-value" x-text="formatNumber(usageSummary.total_tokens)"></div>
-                  <div class="stat-label" title="All-time: billed input+output token totals from the usage ledger (post-compression).">Tokens used</div>
+          <!-- Fleet status strip (same micro-graphs as All Agents) + agent vitals cards -->
+          <div class="command-center-fleet-block mb-4" :class="{ 'armaraos-fleet-canvas--demo': demoMode, 'armaraos-fleet-canvas--cinema': demoMode && demoProfile === 'cinema' }" x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
+            <div class="fleet-status-sticky" role="region" aria-label="Fleet status">
+              <div class="fleet-status-sticky-inner">
+                <div class="fleet-metric-deck" aria-label="Aggregates">
+                  <div class="fleet-metric fleet-metric--gold">
+                    <div class="fleet-metric-top">
+                      <span class="fleet-metric-kicker">Active</span>
+                      <div class="fleet-metric-active-row">
+                        <div class="fleet-activity-mono">
+                          <span class="fleet-metric-primary" x-text="(typeof displayActiveCount === 'number' ? displayActiveCount : runningCount)"></span>
+                          <span class="fleet-metric-suffix" x-text="' / ' + agents.length"></span>
+                        </div>
+                        <svg class="fleet-metric-sparkline fleet-metric-sparkline--inline" viewBox="0 0 120 28" preserveAspectRatio="none" aria-label="Overall fleet activity trend">
+                          <polyline :points="fleetActivityPolyline()" fill="none" vector-effect="non-scaling-stroke" stroke="var(--success)" stroke-width="1.1" />
+                        </svg>
+                      </div>
+                      <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
+                    </div>
+                  </div>
+                  <div class="fleet-metric">
+                    <div class="fleet-metric-top">
+                      <span class="fleet-metric-kicker">Tasks today</span>
+                      <span class="fleet-metric-value" x-text="tasksToday || 0"></span>
+                      <div class="fleet-mini-bars fleet-mini-bars--tasks" role="img" aria-label="Tasks by hour (last 8 hours)">
+                        <template x-for="b in fleetMetricBars('tasks')" :key="b.key">
+                          <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                        </template>
+                      </div>
+                      <div class="fleet-mini-bars-caption">Last 8h</div>
+                      <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
+                    </div>
+                  </div>
+                  <div class="fleet-metric">
+                    <div class="fleet-metric-top">
+                      <span class="fleet-metric-kicker">Graph nodes</span>
+                      <span class="fleet-metric-value" x-text="fleetGraphNodeTotal || 0"></span>
+                      <div class="fleet-mini-bars fleet-mini-bars--nodes" role="img" aria-label="Graph nodes recorded by hour (last 8 hours)">
+                        <template x-for="b in fleetMetricBars('nodes')" :key="b.key">
+                          <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                        </template>
+                      </div>
+                      <div class="fleet-mini-bars-caption">Last 8h</div>
+                      <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
+                    </div>
+                  </div>
+                  <div class="fleet-metric">
+                    <div class="fleet-metric-top">
+                      <span class="fleet-metric-kicker">Spend (today, est.)</span>
+                      <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSpendToday * 10000) / 10000).toFixed(4)"></span>
+                      <div class="fleet-mini-bars fleet-mini-bars--spend" role="img" aria-label="Spend by hour (last 8 hours)">
+                        <template x-for="b in fleetMetricBars('spend')" :key="b.key">
+                          <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                        </template>
+                      </div>
+                      <div class="fleet-mini-bars-caption">Last 8h</div>
+                      <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
+                    </div>
+                  </div>
+                  <div class="fleet-metric">
+                    <div class="fleet-metric-top">
+                      <span class="fleet-metric-kicker">Saved (today, est.)</span>
+                      <span class="fleet-metric-value" x-text="'$' + (Math.round(fleetSavedToday * 10000) / 10000).toFixed(4)"></span>
+                      <div class="fleet-mini-bars fleet-mini-bars--saved" role="img" aria-label="Saved by hour (last 8 hours)">
+                        <template x-for="b in fleetMetricBars('saved')" :key="b.key">
+                          <span class="fleet-mini-bar" :class="{ 'is-current': b.isCurrent }" :style="'height:' + b.pct + '%'" :title="b.title"></span>
+                        </template>
+                      </div>
+                      <div class="fleet-mini-bars-caption">Last 8h</div>
+                      <div class="fleet-metric-legend fleet-metric-legend-spacer"></div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-            <div class="stat-card stat-card-lg overview-hero-stat overview-economics-stat animate-entry stagger-2">
-              <div class="overview-stat-row">
-                <div class="overview-stat-icon overview-stat-icon--green">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            <div x-show="demoMode" class="armaraos-demo-watermark" aria-hidden="true">ArmaraOS · Live</div>
+            <div class="armaraos-fleet-body">
+              <div class="agents-running-block" x-show="agents.length">
+                <div x-show="chatPickerPrimaryAgents.length">
+                  <div class="agents-section-label agents-section-label--top">Your agents</div>
+                  <div class="agent-vitals-grid">
+                    <template x-for="agent in chatPickerPrimaryAgents" :key="agent.id">
+                      <div
+                        class="agent-vitals-card"
+                        :class="{
+                          'is-ping': agentPinging[agent.id] === true,
+                          'agent-vitals-card--error': String(agent.state) === 'Crashed',
+                          'agent-vitals-card--pinned': isFleetAgentPinned(agent),
+                          'is-live': isAgentRunningState(agent) && ($store.app.agentActivityLines[agent.id] || demoMode)
+                        }"
+                        role="group"
+                        :data-agent-id="agent.id"
+                        @click="fleetClickCard(agent, $event)"
+                        @keydown.enter.prevent="chatWithAgent(agent)"
+                        @keydown.space.prevent="chatWithAgent(agent)"
+                        tabindex="0"
+                      >
+                        <button
+                          type="button"
+                          class="agent-vitals-corner-pin"
+                          :class="{ 'is-active': isFleetAgentPinned(agent) }"
+                          @click="toggleFleetAgentPin(agent, $event)"
+                          :title="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                          :aria-label="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1.8 5.2 3.5 3.2H6.3l3.5-3.2z"/><path d="M12 11.5V21"/></svg>
+                        </button>
+                        <button type="button" class="agent-vitals-corner-gear" @click="showDetail(agent); fleetActionsStop($event)" title="Agent settings" aria-label="Agent settings">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </button>
+                        <div class="agent-vitals-toprow">
+                          <div class="agent-vitals-pillrow">
+                            <span class="badge" :class="String(agent.state) === 'Crashed' ? 'badge-error' : (String(agent.state) === 'Running' ? 'badge-success' : 'badge-muted')" x-text="String(agent.state) === 'Crashed' ? 'Error' : agent.state">
+                            </span>
+                            <span
+                              class="agent-vitals-dot"
+                              :class="{'is-on': isAgentRunningState(agent) && ( !!$store.app.agentActivityLines[agent.id] || demoMode ) }"
+                            ></span>
+                            <span class="agent-vitals-cog" title="Cognitive vitals">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
+                            <span x-show="String(agent.state) === 'Crashed'" class="badge badge-error agent-vitals-badge-stabilize">Stabilize</span>
+                            <span x-show="demoMode" class="badge badge-warn agent-vitals-badge-demo">Demo</span>
+                          </div>
+                          <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
+                            <template x-for="h in agentHourlyBars(agent)" :key="h.key">
+                              <span class="agent-vitals-hourly-hour" :title="h.title">
+                                <span class="agent-vitals-hourly-bar is-status" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.statusPct + '%'"></span>
+                                <span class="agent-vitals-hourly-bar is-tool" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.toolPct + '%'"></span>
+                                <span class="agent-vitals-hourly-bar is-node" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.nodePct + '%'"></span>
+                              </span>
+                            </template>
+                          </div>
+                        </div>
+                        <div class="agent-vitals-midrow">
+                          <div class="agent-vitals-identity" aria-label="agent identity">
+                            <div class="agent-vitals-icon" aria-hidden="true">
+                              <span class="agent-vitals-emoji" x-show="agent.identity && agent.identity.emoji" x-text="agent.identity.emoji"></span>
+                              <svg x-show="!(agent.identity && agent.identity.emoji)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 3v2"/><path d="M12 19v2"/><path d="M4.2 4.2l1.4 1.4"/><path d="M18.4 18.4l1.4 1.4"/><path d="M1 12h2"/><path d="M21 12h2"/><path d="M4.2 19.8l1.4-1.4"/><path d="M18.4 5.6l1.4-1.4"/><path d="M8 12h.01"/><path d="M16 12a4 4 0 0 0-4-4"/><path d="M12 16a4 4 0 0 0-4-4h4V8"/>
+                              </svg>
+                              <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                            </div>
+                            <div class="agent-vitals-identity-text">
+                              <div class="agent-vitals-headline">
+                                <div class="agent-vitals-name truncate" x-text="agent.name"></div>
+                                <div class="agent-vitals-live-line" :class="'is-' + agentCurrentPhaseClass(agent)">
+                                  <span class="agent-vitals-live-glyph" aria-hidden="true" x-text="agentPhaseGlyph(agent)"></span>
+                                  <span class="agent-vitals-live-text" x-text="agentCurrentPhaseDetail(agent)"></span>
+                                </div>
+                              </div>
+                              <div class="agent-vitals-model text-dim font-mono truncate" x-text="(agent.model_provider || '') + ':' + (agent.model_name || '')"></div>
+                            </div>
+                          </div>
+                          <div class="agent-vitals-metricrow">
+                            <div class="agent-vitals-metriccol">
+                              <div class="agent-metric-mono" x-text="lastActivityLabel(agent)"></div>
+                              <div class="agent-metric-mono" x-text="'Tasks (tools) · ' + toolCallsForAgent(agent)"></div>
+                              <div class="agent-metric-mono" x-text="(nodeDeltaText(agent))"></div>
+                            </div>
+                            <div class="agent-vitals-actions" @click.stop>
+                              <button
+                                x-show="isAgentRunningState(agent)"
+                                class="agent-vitals-qbtn"
+                                type="button"
+                                @click="setMode(agent, 'full'); fleetActionsStop($event);"
+                                title="Activate (full tools)"
+                              >Activate</button>
+                              <button
+                                x-show="isAgentRunningState(agent)"
+                                class="agent-vitals-qbtn"
+                                type="button"
+                                @click="setMode(agent, 'observe'); fleetActionsStop($event);"
+                                title="Pause tool use (observe)"
+                              >Pause</button>
+                              <button class="agent-vitals-qbtn" type="button" @click="showDetail(agent); fleetActionsStop($event);" title="Inspect">Inspect</button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="agent-vitals-telemetry" :class="'phase-' + agentCurrentPhaseClass(agent)">
+                          <div class="agent-vitals-telemetry-head">
+                            <span class="agent-vitals-phase-kicker">Workload intensity</span>
+                            <span class="agent-vitals-phase-time" x-text="agentCurrentPhaseFreshness(agent)"></span>
+                          </div>
+                          <div class="agent-vitals-feed" x-show="agentActivityFeed(agent).length > 0">
+                            <template x-for="row in agentActivityFeed(agent).slice(0,2)" :key="row.ts">
+                              <div class="agent-vitals-feed-row" :class="'is-' + (row.phase || 'running')">
+                                <span class="agent-vitals-feed-dot" aria-hidden="true"></span>
+                                <span class="agent-vitals-feed-text" x-text="row.text"></span>
+                              </div>
+                            </template>
+                          </div>
+                          <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
+                            <span class="agent-vitals-logline-fill" :class="['is-' + agentCurrentPhaseClass(agent), 'is-workload-' + agentWorkloadBand(agent)]" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
                 </div>
-                <div>
-                  <div class="stat-value stat-value-accent" x-text="formatCost(usageSummary.total_cost)"></div>
-                  <div class="stat-label" title="All-time: estimated USD recorded on completed LLM calls.">Total cost</div>
-                </div>
-              </div>
-            </div>
-            <div class="stat-card stat-card-lg overview-hero-stat overview-economics-stat animate-entry stagger-3" title="Cumulative (est.): input tokens you did not pay for — compression and prompt-cache counterfactuals in SQLite, plus all-time cap/budget–blocked input (heuristic), since telemetry exists." @click="location.hash='settings'" style="cursor:pointer">
-              <div class="overview-stat-row">
-                <div class="overview-stat-icon overview-stat-icon--amber">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
-                </div>
-                <div>
-                  <div class="stat-value stat-value-success" x-text="formatNumber(overviewTokensSaved)"></div>
-                  <div class="stat-label">Input tokens not billed (est.)</div>
-                </div>
-              </div>
-            </div>
-            <div class="stat-card stat-card-lg overview-hero-stat overview-economics-stat animate-entry stagger-4" title="Cumulative (est.): counterfactual USD for unsent input (catalog-priced per event + cache discount), plus catalog-priced avoided spend from blocked turns, aligned with the DB totals above." @click="location.hash='settings'" style="cursor:pointer">
-              <div class="overview-stat-row">
-                <div class="overview-stat-icon overview-stat-icon--teal">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
-                </div>
-                <div>
-                  <div class="stat-value stat-value-success" x-text="formatCost(overviewCostSavedUsd)"></div>
-                  <div class="stat-label">USD not spent (est.)</div>
+                <div x-show="chatPickerSystemAgents.length" :class="{ 'agent-vitals-system-offset': chatPickerPrimaryAgents.length }">
+                  <button type="button" class="chat-section-toggle" @click="systemChatAgentsExpanded = !systemChatAgentsExpanded" :aria-expanded="systemChatAgentsExpanded">
+                    <span class="chat-section-toggle-chevron" :style="systemChatAgentsExpanded ? 'transform:rotate(90deg)' : ''">&rsaquo;</span>
+                    <span>Automation &amp; probe chats</span>
+                    <span class="font-mono normal-case agent-vitals-system-count" x-text="'(' + chatPickerSystemAgents.length + ')'"></span>
+                  </button>
+                  <p class="text-xs text-dim agent-vitals-system-help" x-show="!systemChatAgentsExpanded">Allowlist probe, offline cron, and IR-off allow sessions — expand to open their chats.</p>
+                  <div class="agent-vitals-grid" x-show="systemChatAgentsExpanded" x-transition>
+                    <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
+                      <div
+                        class="agent-vitals-card agent-vitals-card--system"
+                        :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent) }"
+                        @click="fleetClickCard(agent, $event)"
+                        @keydown.enter.prevent="chatWithAgent(agent)"
+                        @keydown.space.prevent="chatWithAgent(agent)"
+                        role="group"
+                        tabindex="0"
+                      >
+                        <button
+                          type="button"
+                          class="agent-vitals-corner-pin"
+                          :class="{ 'is-active': isFleetAgentPinned(agent) }"
+                          @click="toggleFleetAgentPin(agent, $event)"
+                          :title="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                          :aria-label="isFleetAgentPinned(agent) ? 'Unpin card' : 'Pin card'"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1.8 5.2 3.5 3.2H6.3l3.5-3.2z"/><path d="M12 11.5V21"/></svg>
+                        </button>
+                        <button type="button" class="agent-vitals-corner-gear" @click="showDetail(agent); fleetActionsStop($event)" title="Agent settings" aria-label="Agent settings">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </button>
+                        <div class="agent-vitals-toprow">
+                          <div class="agent-vitals-pillrow">
+                            <span class="badge" :class="String(agent.state) === 'Crashed' ? 'badge-error' : (String(agent.state) === 'Running' ? 'badge-success' : 'badge-muted')" x-text="String(agent.state) === 'Crashed' ? 'Error' : agent.state"></span>
+                            <span class="agent-vitals-dot" :class="{'is-on': isAgentRunningState(agent) && $store.app.agentActivityLines[agent.id]}"></span>
+                            <span class="agent-vitals-cog" title="Cognitive">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
+                          </div>
+                          <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
+                            <template x-for="h in agentHourlyBars(agent)" :key="h.key">
+                              <span class="agent-vitals-hourly-hour" :title="h.title">
+                                <span class="agent-vitals-hourly-bar is-status" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.statusPct + '%'"></span>
+                                <span class="agent-vitals-hourly-bar is-tool" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.toolPct + '%'"></span>
+                                <span class="agent-vitals-hourly-bar is-node" :class="{ 'is-current': h.isCurrent }" :style="'height:' + h.nodePct + '%'"></span>
+                              </span>
+                            </template>
+                          </div>
+                        </div>
+                        <div class="agent-vitals-midrow">
+                          <div class="agent-vitals-identity" aria-label="agent identity">
+                            <div class="agent-vitals-icon" aria-hidden="true">
+                              <span class="agent-vitals-emoji" x-show="agent.identity && agent.identity.emoji" x-text="agent.identity.emoji"></span>
+                              <svg x-show="!(agent.identity && agent.identity.emoji)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                              <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                            </div>
+                            <div class="agent-vitals-identity-text">
+                              <div class="agent-vitals-headline">
+                                <div class="agent-vitals-name truncate" x-text="agent.name"></div>
+                                <div class="agent-vitals-live-line" :class="'is-' + agentCurrentPhaseClass(agent)">
+                                  <span class="agent-vitals-live-glyph" aria-hidden="true" x-text="agentPhaseGlyph(agent)"></span>
+                                  <span class="agent-vitals-live-text" x-text="agentCurrentPhaseDetail(agent)"></span>
+                                </div>
+                              </div>
+                              <div class="agent-vitals-model text-dim font-mono truncate" x-text="(agent.model_provider || '') + ':' + (agent.model_name || '')"></div>
+                            </div>
+                          </div>
+                          <div class="agent-vitals-metricrow">
+                            <div class="agent-vitals-metriccol">
+                              <div class="agent-metric-mono" x-text="lastActivityLabel(agent)"></div>
+                              <div class="agent-metric-mono" x-text="'Tools · ' + toolCallsForAgent(agent)"></div>
+                            </div>
+                            <div class="agent-vitals-actions" @click.stop>
+                              <button class="agent-vitals-qbtn" type="button" @click="showDetail(agent); fleetActionsStop($event);">Inspect</button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="agent-vitals-telemetry" :class="'phase-' + agentCurrentPhaseClass(agent)">
+                          <div class="agent-vitals-telemetry-head">
+                            <span class="agent-vitals-phase-kicker">Workload intensity</span>
+                            <span class="agent-vitals-phase-time" x-text="agentCurrentPhaseFreshness(agent)"></span>
+                          </div>
+                          <div class="agent-vitals-feed" x-show="agentActivityFeed(agent).length > 0">
+                            <template x-for="row in agentActivityFeed(agent).slice(0,2)" :key="row.ts">
+                              <div class="agent-vitals-feed-row" :class="'is-' + (row.phase || 'running')">
+                                <span class="agent-vitals-feed-dot" aria-hidden="true"></span>
+                                <span class="agent-vitals-feed-text" x-text="row.text"></span>
+                              </div>
+                            </template>
+                          </div>
+                          <div class="agent-vitals-logline" aria-hidden="true" title="Current phase intensity indicator">
+                            <span class="agent-vitals-logline-fill" :class="['is-' + agentCurrentPhaseClass(agent), 'is-workload-' + agentWorkloadBand(agent)]" :style="'width:' + agentCurrentPhaseIntensity(agent) + '%'"></span>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
           <div
-            class="card mb-4 overview-snapshot-card animate-entry stagger-5"
+            class="card mb-4 overview-snapshot-card overview-snapshot-card--expanded animate-entry stagger-5"
             x-show="!loading && !loadError"
             role="region"
             aria-label="Operations snapshot"
           >
-            <div class="overview-snapshot-top">
+            <div class="overview-snapshot-top overview-snapshot-top--row">
               <div class="overview-snapshot-title-block">
                 <div class="overview-snapshot-eyebrow text-xs text-dim">Live</div>
                 <h3 class="overview-snapshot-title">Operations snapshot</h3>
                 <p class="overview-snapshot-lede text-xs text-dim">Integrations, usage, and kernel health in one place.</p>
+              </div>
+              <div class="overview-snapshot-header-corner" title="Kernel status and version">
+                <div class="text-xs text-dim" style="margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em">System</div>
+                <div class="flex items-center gap-2 flex-wrap" style="justify-content:flex-end">
+                  <span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status === 'ok' ? 'OK' : (health.status || '—')"></span>
+                  <span class="font-mono text-xs" style="color:var(--text-dim);max-width:9rem" x-text="status.version || '—'"></span>
+                </div>
               </div>
             </div>
             <div class="overview-snapshot-integrations" aria-label="Integration summary">
@@ -869,7 +1131,7 @@
                 <span class="overview-snapshot-int-label">Skills</span>
               </button>
               <div class="overview-snapshot-int">
-                <span class="overview-snapshot-int-value font-mono" x-text="connectedMcp.length"></span>
+                <span class="overview-snapshot-int-value font-mono" x-text="availableMcp.length"></span>
                 <span class="overview-snapshot-int-label">MCP servers</span>
               </div>
               <div class="overview-snapshot-int">
@@ -919,13 +1181,71 @@
                 </div>
               </div>
             </div>
+
+            <div class="overview-snapshot-consolidated" aria-label="Security, LLM, and integrations">
+              <div class="overview-snapshot-subsection">
+                <h4 class="overview-snapshot-subtitle text-xs text-dim" style="margin:0 0 8px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">Security systems</h4>
+                <div style="display:flex;flex-wrap:wrap;gap:5px">
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Merkle Audit</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Taint Tracking</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">WASM Sandbox</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">GCRA Rate Limit</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Ed25519 Signing</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">SSRF Protection</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Secret Zeroize</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Loop Guard</span>
+                  <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Session Repair</span>
+                </div>
+                <p class="text-xs text-dim" style="margin:8px 0 0">9 defense-in-depth systems active</p>
+              </div>
+              <div class="overview-snapshot-subsection overview-snapshot-subsection--llm" x-show="providers.length" aria-label="LLM providers">
+                <div class="flex justify-between items-center flex-wrap gap-2" style="margin-bottom:8px">
+                  <h4 class="overview-snapshot-subtitle text-xs text-dim" style="margin:0;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">LLM providers</h4>
+                  <span class="text-xs text-dim" x-text="configuredProviders.length + '/' + providers.length + ' configured'"></span>
+                </div>
+                <div class="flex flex-wrap" style="align-items:center;gap:6px">
+                  <template x-for="p in providers" :key="p.id">
+                    <div class="badge" :class="providerBadgeClass(p)" :title="providerTooltip(p)" style="cursor:pointer;transition:all 0.15s var(--ease-spring);padding:4px 10px" @click="goConfigureProviders()" @mouseenter="$el.style.transform='translateY(-1px)'" @mouseleave="$el.style.transform=''">
+                      <span x-show="p.auth_status === 'configured'" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px" :style="p.health === 'cooldown' || p.health === 'open' ? 'background:var(--warning);animation:pulse-ring 1.5s infinite' : 'background:var(--success)'"></span>
+                      <span x-text="p.display_name"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div class="overview-snapshot-subsection" x-show="mcpServers.length">
+                <h4 class="overview-snapshot-subtitle text-xs text-dim" style="margin:0 0 8px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">MCP servers</h4>
+                <div style="display:flex;flex-wrap:wrap;gap:5px">
+                  <template x-for="s in mcpServers" :key="s.name">
+                    <div class="badge" :class="s.status === 'connected' ? 'badge-success' : 'badge-dim'" style="font-size:9px;padding:2px 8px">
+                      <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="s.status === 'connected' ? 'background:var(--success)' : 'background:var(--text-dim)'"></span>
+                      <span x-text="s.name"></span>
+                      <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' tools)'"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div class="overview-snapshot-subsection" x-show="mcpReadinessChecks.length">
+                <h4 class="overview-snapshot-subtitle text-xs text-dim" style="margin:0 0 8px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase">MCP readiness</h4>
+                <p class="text-xs text-dim" style="margin:0 0 8px" x-show="mcpReadiness && mcpReadiness.version != null">
+                  Schema v<span x-text="mcpReadiness.version"></span> — tool integrations detected from connected MCP servers.
+                </p>
+                <div style="display:flex;flex-wrap:wrap;gap:5px">
+                  <template x-for="c in mcpReadinessChecks" :key="c.id">
+                    <span class="badge" :class="c.ready ? 'badge-success' : 'badge-warn'" style="font-size:9px;padding:2px 8px;text-transform:none" :title="c.ready ? 'Ready' : 'Not ready — see openfang doctor'">
+                      <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="c.ready ? 'background:var(--success)' : 'background:var(--warning)'"></span>
+                      <span x-text="c.label"></span>
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </div>
             <!--
               v15: per-event compression billing rollup. Shows pre-compression input baseline vs
               what the provider actually billed, summed across all persisted compression turns.
               Hidden until at least one v15 row is recorded (older rows have billed_input_tokens=0).
             -->
             <div
-              class="overview-snapshot-foot"
+              class="overview-snapshot-foot overview-snapshot-foot--compression"
               x-show="overviewBilledInputTokensTotal > 0"
               x-cloak
               aria-label="Compression billing breakdown"
@@ -946,91 +1266,7 @@
           </div>
 
           <div class="overview-grid overview-panel-grid">
-            <!-- System Health -->
-            <div class="card overview-panel-card">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-                System Health
-              </div>
-              <div class="detail-grid" style="margin-top:8px">
-                <div class="detail-row"><span class="detail-label">Status</span><span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status || 'unknown'"></span></div>
-                <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value font-mono" x-text="status.version || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Provider</span><span class="detail-value" x-text="status.default_provider || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Model</span><span class="detail-value font-mono" style="font-size:11px" x-text="status.default_model || '-'"></span></div>
-              </div>
-            </div>
-
-            <!-- Security Systems -->
-            <div class="card overview-panel-card">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Security Systems
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Merkle Audit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Taint Tracking</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">WASM Sandbox</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">GCRA Rate Limit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Ed25519 Signing</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">SSRF Protection</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Secret Zeroize</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Loop Guard</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Session Repair</span>
-              </div>
-              <div class="text-xs text-dim" style="margin-top:8px">9 defense-in-depth systems active</div>
-            </div>
-
-            <!-- Connected Channels -->
-            <div class="card overview-panel-card" x-show="channels.length">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
-                Connected Channels
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <template x-for="ch in channels" :key="ch.name">
-                  <span class="badge badge-info" style="font-size:9px;text-transform:capitalize;padding:2px 8px" x-text="ch.name"></span>
-                </template>
-              </div>
-              <div class="text-xs text-dim" style="margin-top:8px" x-text="channels.length + ' channel(s) connected'"></div>
-            </div>
-
-            <!-- MCP Servers -->
-            <div class="card overview-panel-card" x-show="mcpServers.length">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><path d="M6 6h.01M6 18h.01"/></svg>
-                MCP Servers
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <template x-for="s in mcpServers" :key="s.name">
-                  <div class="badge" :class="s.status === 'connected' ? 'badge-success' : 'badge-dim'" style="font-size:9px;padding:2px 8px">
-                    <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="s.status === 'connected' ? 'background:var(--success)' : 'background:var(--text-dim)'"></span>
-                    <span x-text="s.name"></span>
-                    <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' tools)'"></span>
-                  </div>
-                </template>
-              </div>
-            </div>
-
-            <!-- MCP tool readiness (generic checks; calendar first) -->
-            <div class="card overview-panel-card" x-show="mcpReadinessChecks.length">
-              <div class="card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                MCP readiness
-              </div>
-              <p class="text-xs text-dim" style="margin:0 0 8px 0" x-show="mcpReadiness && mcpReadiness.version != null">
-                Schema v<span x-text="mcpReadiness.version"></span> — tool integrations detected from connected MCP servers.
-              </p>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <template x-for="c in mcpReadinessChecks" :key="c.id">
-                  <span class="badge" :class="c.ready ? 'badge-success' : 'badge-warn'" style="font-size:9px;padding:2px 8px;text-transform:none" :title="c.ready ? 'Ready' : 'Not ready — see openfang doctor'">
-                    <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="c.ready ? 'background:var(--success)' : 'background:var(--warning)'"></span>
-                    <span x-text="c.label"></span>
-                  </span>
-                </template>
-              </div>
-            </div>
-
-            <!-- Graph memory health -->
+            <!-- Graph memory health (other panels merged into Operations snapshot) -->
             <div class="card overview-panel-card" x-show="graphMemorySignalsActive">
               <div class="card-header">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 2v20"/><path d="M2 12h20"/><circle cx="12" cy="12" r="3"/></svg>
@@ -1049,25 +1285,6 @@
                 <a class="btn btn-ghost btn-sm" href="#graph-memory">Open Graph Memory</a>
                 <a class="btn btn-ghost btn-sm" href="#settings">Memory Settings</a>
               </div>
-            </div>
-          </div>
-
-          <!-- LLM providers — below MCP panels, above activity -->
-          <div class="card mt-4 overview-provider-card" x-show="providers.length" style="overflow:hidden">
-            <div class="flex justify-between items-center mb-2">
-              <div class="card-header" style="margin:0">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                LLM Providers
-              </div>
-              <span class="text-xs text-dim" x-text="configuredProviders.length + '/' + providers.length + ' configured'"></span>
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-              <template x-for="p in providers" :key="p.id">
-                <div class="badge" :class="providerBadgeClass(p)" :title="providerTooltip(p)" style="cursor:pointer;transition:all 0.15s var(--ease-spring);padding:4px 10px" @click="location.hash='settings'" @mouseenter="$el.style.transform='translateY(-1px)'" @mouseleave="$el.style.transform=''">
-                  <span x-show="p.auth_status === 'configured'" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px" :style="p.health === 'cooldown' || p.health === 'open' ? 'background:var(--warning);animation:pulse-ring 1.5s infinite' : 'background:var(--success)'"></span>
-                  <span x-text="p.display_name"></span>
-                </div>
-              </template>
             </div>
           </div>
 
@@ -1108,37 +1325,6 @@
               <h3 style="color:var(--text-secondary);margin-bottom:4px">No Recent Activity</h3>
               <p class="text-xs text-dim">Activity will appear here once agents start processing.</p>
               <button class="btn btn-primary btn-sm" @click="location.hash='agents'" style="margin-top:12px">Chat with an Agent</button>
-            </div>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="animate-entry stagger-6 overview-bottom-actions" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:12px;margin-top:20px">
-            <div class="quick-action-card" @click="location.hash='agents'">
-              <div class="quick-action-icon" style="background:var(--accent-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Create Agent</div>
-                <div class="quick-action-desc">Spawn a new agent</div>
-              </div>
-            </div>
-            <div class="quick-action-card" @click="location.hash='settings'">
-              <div class="quick-action-icon" style="background:var(--success-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Configure Provider</div>
-                <div class="quick-action-desc">Set up an LLM provider</div>
-              </div>
-            </div>
-            <div class="quick-action-card" @click="location.hash='skills'">
-              <div class="quick-action-icon" style="background:var(--info-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Browse Skills/MCP</div>
-                <div class="quick-action-desc">Explore available skills</div>
-              </div>
             </div>
           </div>
 
@@ -1451,7 +1637,8 @@
                                       <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
                                     </div>
                                     <span class="tool-card-name" x-text="tool.name"></span>
-                                    <span class="text-xs text-dim" x-text="tool.running ? 'running...' : (tool.is_error ? 'error' : (tool.result ? (tool.result.length > 500 ? Math.round(tool.result.length/1024) + 'KB' : 'done') : 'done'))" style="margin-left:auto"></span>
+                                    <span class="tool-card-summary text-xs text-dim" x-text="toolSummaryText(tool)"></span>
+                                    <span class="text-xs text-dim tool-card-status" x-text="toolStatusText(tool)"></span>
                                     <span class="tool-expand-chevron" :style="tool.expanded ? 'transform:rotate(90deg)' : ''" style="transition:transform 0.15s">&#9654;</span>
                                   </button>
                                   <div x-show="tool._imageUrls && tool._imageUrls.length" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px">
@@ -1473,6 +1660,11 @@
                                     </div>
                                   </div>
                                   <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+                                    <div class="tool-auth-callout" x-show="toolAuthUrl(tool)">
+                                      <div class="tool-auth-callout-title">Authorization needed</div>
+                                      <div class="tool-auth-callout-copy">Open this URL to authorize access, then rerun your request.</div>
+                                      <a class="tool-auth-callout-link" :href="toolAuthUrl(tool)" target="_blank" rel="noopener noreferrer">Open authorization URL</a>
+                                    </div>
                                     <div x-show="tool.input" style="margin-bottom:6px">
                                       <div class="tool-section-label">Input</div>
                                       <pre class="tool-pre" x-text="formatToolJson(tool.input)"></pre>
@@ -1580,12 +1772,13 @@
                 <!-- Spoken reply (Piper): opt-in; server checked via /api/system/local-voice on enable -->
                 <button type="button" class="btn btn-ghost btn-sm" :class="{ 'btn-voice-reply-on': voiceReplyEnabled }" @click="toggleVoiceReply()"
                         :title="voiceReplyEnabled ? 'Spoken assistant reply: on — next replies may include Piper TTS. Click to turn off.' : 'Spoken assistant reply: off — click to enable. We check that local Piper (TTS) is ready; if not, a toast explains how to fix (usually first online run auto-downloads under ~/.armaraos/voice/).'"
-                        :aria-pressed="voiceReplyEnabled ? 'true' : 'false'" aria-label="Toggle spoken assistant reply" style="padding:6px 8px;flex-shrink:0">
+                        :aria-pressed="voiceReplyEnabled ? 'true' : 'false'" aria-label="Toggle spoken assistant reply" style="padding:6px 8px;flex-shrink:0;display:inline-flex;align-items:center">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
                     <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
                     <path d="M19.07 4.93a9 9 0 0 1 0 14.14"/>
                   </svg>
+                  <span class="voice-reply-pill" x-show="voiceReplyEnabled" x-cloak>ON</span>
                 </button>
                 <!-- Recording indicator -->
                 <div class="recording-indicator" x-show="recording" x-transition>
@@ -1670,6 +1863,7 @@
                   <span class="text-xs text-dim" x-text="tokenCount > 0 ? '~' + tokenCount + ' tokens' : (attachments.length ? attachments.length + ' file(s)' : '')"></span>
                   <span class="queue-badge" x-show="messageQueue.length > 0" x-text="messageQueue.length + ' queued'"></span>
                 </div>
+                <div class="text-xs" x-show="voiceReplyHint" style="margin-top:4px;line-height:1.4;color:var(--warning)" x-text="voiceReplyHint"></div>
                 <div class="tip-bar" x-show="currentTip && !sending">
                   <span class="text-xs" x-text="currentTip"></span>
                   <button class="tip-bar-dismiss" @click="dismissTips()" title="Dismiss">&times;</button>
@@ -1925,7 +2119,9 @@
                     <h4 style="margin-bottom:8px;font-size:13px">Tool Filters</h4>
                     <p class="text-xs text-dim" style="margin-bottom:12px">Allowlist: only these tools available (empty = all). Blocklist: these tools excluded.</p>
                     <p class="text-xs text-dim" style="margin-bottom:8px">Alerts / channels: add <span class="font-mono">channel_send</span> and <span class="font-mono">event_publish</span> when you use a non-empty allowlist, or remove them from the blocklist.</p>
+                    <p class="text-xs text-dim" style="margin-bottom:8px">Google Workspace / other MCP: the kernel merges <span class="font-mono">mcp_*</span> into any <strong>non-empty</strong> allowlist at runtime so connected servers (e.g. <span class="font-mono">google-workspace-mcp</span>) stay available without listing every tool. Add <span class="font-mono">mcp_*</span> here too if you want it visible in this list; use <strong>blocklist</strong> <span class="font-mono">mcp_*</span> to deny all MCP for a locked-down agent.</p>
                     <button type="button" class="btn btn-ghost btn-sm mb-2" @click="ensureMessagingTools()">Add messaging tools</button>
+                    <button type="button" class="btn btn-ghost btn-sm mb-2" style="margin-left:6px" @click="ensureMcpGlobAllowlist()" title="Adds mcp_* to the saved allowlist (optional; kernel also merges it at runtime)">Show MCP glob on allowlist</button>
                     <div class="form-group">
                       <label style="font-size:12px">Allowlist <span class="text-dim" x-text="'(' + toolFilters.tool_allowlist.length + ')'"></span></label>
                       <div class="flex flex-wrap gap-1 mb-1">
@@ -2698,12 +2894,14 @@
             <button class="btn btn-ghost btn-sm" @click="loadData()">Retry</button>
           </div>
           <div x-show="!loading && !loadError">
-          <div class="card mb-4" style="border-left:3px solid var(--accent)">
-            <div class="font-bold" style="font-size:13px;margin-bottom:4px">What are Workflows?</div>
-            <div class="text-sm text-dim" style="line-height:1.6">
-              Workflows chain multiple agents into automated pipelines. Each step runs an agent with a prompt template,
-              passing output from one step as input to the next. Steps can run sequentially, fan out in parallel, loop, or branch conditionally.
-              <br><span style="margin-top:4px;display:inline-block">Try the <strong style="color:var(--accent);cursor:pointer" @click="$dispatch('wf-switch-tab','builder')">Visual Builder</strong> to drag and drop workflow steps.</span>
+          <div class="card sessions-intro-card">
+            <div class="sessions-intro-accent"></div>
+            <div class="sessions-intro-body">
+              <div class="sessions-intro-title">What are workflows?</div>
+              <p class="text-sm text-dim sessions-intro-copy">
+                Workflows chain multiple agents into automated pipelines. Each step runs an agent with a prompt template, passing output from one step as input to the next. Steps can run sequentially, fan out in parallel, loop, or branch conditionally.
+                <span style="margin-top:4px;display:inline-block">Try the <strong style="color:var(--accent);cursor:pointer" @click="$dispatch('wf-switch-tab','builder')">Visual Builder</strong> to drag and drop workflow steps.</span>
+              </p>
             </div>
           </div>
           <div class="flex gap-2 mb-4">
@@ -3054,17 +3252,16 @@
             </div>
             <div x-show="!loading && !loadError">
               <!-- Explainer -->
-              <div class="card mb-4" style="border-left:3px solid var(--accent)">
-                <div class="font-bold" style="font-size:13px;margin-bottom:4px">Scheduled Jobs</div>
-                <div class="text-sm text-dim" style="line-height:1.6">
-                  Create cron-based scheduled jobs that send messages to agents on a recurring schedule.
-                  Use cron expressions like <code style="color:var(--accent)">*/5 * * * *</code> (every 5 min) or
-                  <code style="color:var(--accent)">0 9 * * 1-5</code> (weekdays at 9am). You can also run any job
-                  manually with the "Run Now" button. Advanced jobs can run workflows or
-                  <span class="text-dim">AINL</span> programs from your synced library (see below).
-                </div>
-                <div class="text-xs text-dim mt-2" style="line-height:1.5">
-                  <strong style="color:var(--text)">Secrets:</strong> Scheduled <code>ainl run</code> uses the same API keys as the rest of the daemon (vault / <code>~/.armaraos/.env</code> / environment). Optional per-agent adapter policy: manifest metadata <code>ainl_host_adapter_allowlist</code> (or <code>off</code>). See <a href="https://github.com/sbhooley/armaraos/blob/main/docs/scheduled-ainl.md" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">docs/scheduled-ainl.md</a>.
+              <div class="card sessions-intro-card">
+                <div class="sessions-intro-accent"></div>
+                <div class="sessions-intro-body">
+                  <div class="sessions-intro-title">Scheduled jobs</div>
+                  <p class="text-sm text-dim sessions-intro-copy">
+                    Create cron-based scheduled jobs that send messages to agents on a recurring schedule. Use cron expressions like <code style="color:var(--accent)">*/5 * * * *</code> (every 5 min) or <code style="color:var(--accent)">0 9 * * 1-5</code> (weekdays at 9am). You can also run any job manually with the "Run Now" button. Advanced jobs can run workflows or <span class="text-dim">AINL</span> programs from your synced library (see below).
+                  </p>
+                  <p class="text-sm text-dim sessions-intro-copy" style="margin-top:8px">
+                    <strong style="color:var(--text)">Secrets:</strong> Scheduled <code>ainl run</code> uses the same API keys as the rest of the daemon (vault / <code>~/.armaraos/.env</code> / environment). Optional per-agent adapter policy: manifest metadata <code>ainl_host_adapter_allowlist</code> (or <code>off</code>). See <a href="https://github.com/sbhooley/armaraos/blob/main/docs/scheduled-ainl.md" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">docs/scheduled-ainl.md</a>.
+                  </p>
                 </div>
               </div>
 
@@ -3859,7 +4056,7 @@
             <div class="info-card mb-3">
               <h4>Host tools for <code>google-workspace-mcp</code></h4>
               <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 8px">
-                This preset runs <code>uvx workspace-mcp</code> (PyPI <code>workspace-mcp</code>). You also need a Google Cloud OAuth <strong>client</strong> — enter Client ID and (if applicable) secret in the <strong>Preset examples</strong> form below, or in <a href="#settings" @click.prevent="goToSettingsTools()" class="text-accent" style="color:var(--accent)">Settings → Tools</a> for a dedicated panel that saves to the vault.
+                This preset runs <code>uvx workspace-mcp</code> (PyPI <code>workspace-mcp</code>). You need a Google Cloud OAuth <strong>client</strong> (Desktop is fine) — use the <strong>Built-in presets</strong> section just below, or <a href="#settings" @click.prevent="goToSettingsTools()" class="text-accent" style="color:var(--accent)">Settings → Tools</a> to save the same values to the vault. <span class="text-dim">Google account sign-in for Gmail/Drive is completed in the browser when a tool is first used (not on this page).</span>
               </p>
               <p class="text-xs text-dim mb-2" x-show="!mcpHostReadiness" x-cloak>Host status is still loading or could not be read; you can still configure OAuth and <code>uv</code> using the tools below.</p>
               <p class="text-xs mb-2" x-show="mcpHostReadiness &amp;&amp; !mcpHostReadiness.uvx_available" x-cloak style="color:var(--warn, #c9a227)">
@@ -3874,6 +4071,70 @@
                 <span class="text-xs text-dim" x-show="mcpHostReadiness.auto_install_uv_configured" x-cloak>Auto-install at boot is on.</span>
               </div>
             </div>
+
+            <div class="info-card mb-3">
+              <h4>Built-in presets <span class="text-dim" style="font-weight:normal">(Google Workspace, GitHub, …)</span></h4>
+              <button type="button" class="btn btn-ghost btn-sm mb-2" @click="mcpShowPresets = !mcpShowPresets">
+                <span x-text="mcpShowPresets ? '▼' : '▶'"></span> Show / hide preset list
+              </button>
+              <div x-show="mcpShowPresets" x-cloak>
+              <p class="mb-2 text-xs text-dim">Curated installs that match built-in templates. <strong>Google Workspace (unified)</strong> is the default in the list — enter your OAuth app’s Client ID and (usually) secret, then <strong>Install</strong>. After the server runs, the first use of a Google tool may open a sign-in flow in your browser (handled by <code>workspace-mcp</code>).</p>
+
+              <p x-show="mcpPresetId && mcpCurrentIntegrationId() &amp;&amp; !mcpSelectedTemplate &amp;&amp; !mcpInstallerLoading" class="text-xs mb-2" style="color:var(--warn,#f59e0b)">The integration <code x-text="mcpCurrentIntegrationId()"></code> is not in this build’s <code>GET /api/integrations/available</code> list, so the form can’t load. Update to a current ArmaraOS release, or add the server with <strong>Add custom MCP server</strong> below.</p>
+
+              <div class="flex flex-wrap gap-2 items-center mb-2" x-show="mcpPresets.length">
+                <label class="text-xs text-dim" style="min-width:120px">Choose preset</label>
+                <select class="input input-sm" style="max-width:420px" x-model="mcpPresetId" @change="applyMcpPresetSelection()">
+                  <template x-for="p in mcpPresets" :key="p.preset_id">
+                    <option :value="p.preset_id" x-text="p.title + ' — ' + p.subtitle"></option>
+                  </template>
+                </select>
+              </div>
+
+              <template x-if="mcpSelectedTemplate &amp;&amp; mcpSelectedTemplate.id === 'google-calendar'">
+                <div class="mb-3">
+                  <p class="text-xs text-dim mb-2">Google Calendar uses OAuth in the full integration flow. This button registers the template so the daemon can launch the MCP server; complete OAuth via CLI/TUI if prompted.</p>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="btn btn-primary btn-sm" @click="registerMcpIntegrationLegacy('google-calendar')" :disabled="mcpInstallerBusy">Register Google Calendar</button>
+                    <button class="btn btn-ghost btn-sm" x-show="isMcpIntegrationInstalled('google-calendar')" @click="reconnectMcpIntegration('google-calendar')" :disabled="mcpInstallerBusy">Reconnect</button>
+                  </div>
+                </div>
+              </template>
+
+              <div x-show="mcpSelectedTemplate &amp;&amp; mcpSelectedTemplate.id !== 'google-calendar'">
+                <div class="card" style="padding:12px;margin-top:8px">
+                  <div class="text-xs text-dim mb-2" x-show="mcpSelectedTemplate" x-text="mcpSelectedTemplate ? (mcpSelectedTemplate.description || '') : ''"></div>
+
+                  <div x-show="mcpSelectedTemplate &amp;&amp; mcpSelectedTemplate.id === 'filesystem'" class="mb-2">
+                    <label class="text-xs text-dim">Allowed directories (comma-separated absolute paths)</label>
+                    <textarea class="input" style="min-height:72px;width:100%;margin-top:4px" x-model="mcpForm.allowed_paths" placeholder="/Users/you/Documents/project, /path/to/other"></textarea>
+                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors.allowed_paths" x-text="mcpFieldErrors.allowed_paths"></div>
+                  </div>
+
+                  <template x-if="mcpSelectedTemplate &amp;&amp; mcpSelectedTemplate.required_env &amp;&amp; mcpSelectedTemplate.required_env.length">
+                    <div>
+                      <template x-for="field in mcpSelectedTemplate.required_env" :key="field.name">
+                        <div class="mb-2">
+                          <label class="text-xs text-dim" x-text="field.label + ' (' + field.name + ')'"></label>
+                          <input class="input" style="width:100%;margin-top:4px" :type="field.is_secret ? 'password' : 'text'" x-model="mcpForm[field.name]" />
+                          <div class="text-xs text-dim mt-1" x-show="field.help" x-text="field.help"></div>
+                          <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors[field.name]" x-text="mcpFieldErrors[field.name]"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <div class="flex flex-wrap gap-2 mt-2">
+                    <button class="btn btn-ghost btn-sm" @click="validateMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate">Validate</button>
+                    <button class="btn btn-primary btn-sm" @click="installMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate || isMcpIntegrationInstalled(mcpCurrentIntegrationId())">Install</button>
+                    <button class="btn btn-ghost btn-sm" x-show="mcpPresetId &amp;&amp; isMcpIntegrationInstalled(mcpCurrentIntegrationId())" @click="reconnectMcpIntegration(mcpCurrentIntegrationId())" :disabled="mcpInstallerBusy">Reconnect</button>
+                  </div>
+                  <p class="text-xs text-dim mt-2" x-show="mcpFieldErrors._general" x-text="mcpFieldErrors._general"></p>
+                </div>
+              </div>
+              </div>
+            </div>
+
             <div class="info-card mb-3">
               <h4>Add custom MCP server</h4>
               <p class="mb-2">Connect any stdio, SSE, or HTTP MCP server without editing <code>config.toml</code>. Pick a unique id, choose transport, then add environment variables. Secrets are stored in the daemon credential vault when possible.</p>
@@ -3978,66 +4239,6 @@
                   <button class="btn btn-ghost btn-sm" x-show="isCustomMcpInstalled()" @click="reconnectMcpIntegration((customMcpForm.id || '').trim())" :disabled="mcpInstallerBusy">Reconnect</button>
                   <button class="btn btn-ghost btn-sm" type="button" @click="resetCustomMcpForm()">Clear form</button>
                 </div>
-              </div>
-            </div>
-
-            <div class="info-card mb-3">
-              <button type="button" class="btn btn-ghost btn-sm mb-2" @click="mcpShowPresets = !mcpShowPresets">
-                <span x-text="mcpShowPresets ? '▼' : '▶'"></span> Preset examples <span class="text-dim">(GitHub, filesystem, Postgres, …)</span>
-              </button>
-              <div x-show="mcpShowPresets" x-cloak>
-              <p class="mb-2 text-xs text-dim">Curated installs that match built-in templates. Use these when you want a guided setup for a known integration.</p>
-
-              <div class="flex flex-wrap gap-2 items-center mb-2" x-show="mcpPresets.length">
-                <label class="text-xs text-dim" style="min-width:120px">Preset</label>
-                <select class="input input-sm" style="max-width:420px" x-model="mcpPresetId" @change="applyMcpPresetSelection()">
-                  <template x-for="p in mcpPresets" :key="p.preset_id">
-                    <option :value="p.preset_id" x-text="p.title + ' — ' + p.subtitle"></option>
-                  </template>
-                </select>
-              </div>
-
-              <template x-if="mcpSelectedTemplate && mcpSelectedTemplate.id === 'google-calendar'">
-                <div class="mb-3">
-                  <p class="text-xs text-dim mb-2">Google Calendar uses OAuth in the full integration flow. This button registers the template so the daemon can launch the MCP server; complete OAuth via CLI/TUI if prompted.</p>
-                  <div class="flex flex-wrap gap-2">
-                    <button class="btn btn-primary btn-sm" @click="registerMcpIntegrationLegacy('google-calendar')" :disabled="mcpInstallerBusy">Register Google Calendar</button>
-                    <button class="btn btn-ghost btn-sm" x-show="isMcpIntegrationInstalled('google-calendar')" @click="reconnectMcpIntegration('google-calendar')" :disabled="mcpInstallerBusy">Reconnect</button>
-                  </div>
-                </div>
-              </template>
-
-              <div x-show="mcpSelectedTemplate && mcpSelectedTemplate.id !== 'google-calendar'">
-                <div class="card" style="padding:12px;margin-top:8px">
-                  <div class="text-xs text-dim mb-2" x-show="mcpSelectedTemplate" x-text="mcpSelectedTemplate ? (mcpSelectedTemplate.description || '') : ''"></div>
-
-                  <div x-show="mcpSelectedTemplate && mcpSelectedTemplate.id === 'filesystem'" class="mb-2">
-                    <label class="text-xs text-dim">Allowed directories (comma-separated absolute paths)</label>
-                    <textarea class="input" style="min-height:72px;width:100%;margin-top:4px" x-model="mcpForm.allowed_paths" placeholder="/Users/you/Documents/project, /path/to/other"></textarea>
-                    <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors.allowed_paths" x-text="mcpFieldErrors.allowed_paths"></div>
-                  </div>
-
-                  <template x-if="mcpSelectedTemplate && mcpSelectedTemplate.required_env && mcpSelectedTemplate.required_env.length">
-                    <div>
-                      <template x-for="field in mcpSelectedTemplate.required_env" :key="field.name">
-                        <div class="mb-2">
-                          <label class="text-xs text-dim" x-text="field.label + ' (' + field.name + ')'"></label>
-                          <input class="input" style="width:100%;margin-top:4px" :type="field.is_secret ? 'password' : 'text'" x-model="mcpForm[field.name]" />
-                          <div class="text-xs text-dim mt-1" x-show="field.help" x-text="field.help"></div>
-                          <div class="text-xs mt-1" style="color:var(--danger,#ef4444)" x-show="mcpFieldErrors[field.name]" x-text="mcpFieldErrors[field.name]"></div>
-                        </div>
-                      </template>
-                    </div>
-                  </template>
-
-                  <div class="flex flex-wrap gap-2 mt-2">
-                    <button class="btn btn-ghost btn-sm" @click="validateMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate">Validate</button>
-                    <button class="btn btn-primary btn-sm" @click="installMcpPreset()" :disabled="mcpInstallerBusy || !mcpSelectedTemplate || isMcpIntegrationInstalled(mcpCurrentIntegrationId())">Install</button>
-                    <button class="btn btn-ghost btn-sm" x-show="mcpPresetId && isMcpIntegrationInstalled(mcpCurrentIntegrationId())" @click="reconnectMcpIntegration(mcpCurrentIntegrationId())" :disabled="mcpInstallerBusy">Reconnect</button>
-                  </div>
-                  <p class="text-xs text-dim mt-2" x-show="mcpFieldErrors._general" x-text="mcpFieldErrors._general"></p>
-                </div>
-              </div>
               </div>
             </div>
 
@@ -5083,7 +5284,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <p>Browse all available models across providers. Models marked "Available" have their provider configured and ready to use.</p>
             </div>
             <div class="text-xs text-dim mb-2">
-              <span x-text="'Loaded ' + models.length + ' models from ' + uniqueProviderNames.length + ' providers'"></span>
+              <span x-text="'Loaded ' + models.length + ' models from ' + uniqueProviderNamesList().length + ' providers'"></span>
               <span x-show="typeof OpenFangAPI !== 'undefined' && OpenFangAPI.baseUrl" x-text="' • API: ' + OpenFangAPI.baseUrl"></span>
             </div>
             <div class="info-card mb-4" style="border:1px solid var(--error);background:rgba(239,68,68,0.06)" x-show="modelsLoadError || providersLoadError">
@@ -5102,13 +5303,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
               <select class="form-select" style="width:160px" x-model="modelProviderFilter">
                 <option value="">All Providers</option>
-                <template x-for="pn in uniqueProviderNames" :key="pn">
+                <template x-for="pn in uniqueProviderNamesList()" :key="pn">
                   <option :value="pn" x-text="pn"></option>
                 </template>
               </select>
               <select class="form-select" style="width:140px" x-model="modelTierFilter">
                 <option value="">All Tiers</option>
-                <template x-for="t in uniqueTiers" :key="t">
+                <template x-for="t in uniqueTiersList()" :key="t">
                   <option :value="t" x-text="t"></option>
                 </template>
               </select>
@@ -5139,18 +5340,18 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button class="btn btn-primary btn-sm mt-2" @click="addCustomModel()" :disabled="!customModelId.trim()" x-text="editingCustomModelId ? 'Save Model' : 'Add Model'"></button>
               <span class="text-xs text-dim ml-2" x-text="customModelStatus"></span>
             </div>
-            <div class="text-xs text-dim mb-2" x-text="filteredModels.length + ' of ' + models.length + ' models'"></div>
-            <div class="empty-state-inline" x-show="!filteredModels.length && !loading" style="text-align:center;padding:32px 16px">
+            <div class="text-xs text-dim mb-2" x-text="filteredModelsList().length + ' of ' + models.length + ' models'"></div>
+            <div class="empty-state-inline" x-show="!filteredModelsList().length && !loading" style="text-align:center;padding:32px 16px">
               <div style="font-size:32px;margin-bottom:8px;opacity:0.5">&#x1F916;</div>
               <h3 style="margin:0 0 4px;font-size:14px" x-text="models.length ? 'No models match your search' : (modelsLoadError ? 'Catalog request failed' : 'No models available')"></h3>
               <p class="text-xs text-dim" x-text="models.length ? 'Try a different search term or clear filters.' : (modelsLoadError ? 'See the error banner above, or click Refresh.' : 'The built-in catalog should list many models even without API keys. If this stays empty, the daemon may be unreachable — try Refresh or restart.')"></p>
               <button class="btn btn-ghost btn-sm mt-2" x-show="models.length && (modelSearch || modelProviderFilter || modelTierFilter)" @click="modelSearch=''; modelProviderFilter=''; modelTierFilter=''">Clear Filters</button>
             </div>
-            <div class="table-wrap" x-show="filteredModels.length">
+            <div class="table-wrap" x-show="filteredModelsList().length">
               <table>
                 <thead><tr><th>Model</th><th>Provider</th><th>Tier</th><th>Context</th><th>Input Cost</th><th>Output Cost</th><th>Status</th><th></th></tr></thead>
                 <tbody>
-                  <template x-for="m in filteredModels" :key="m.id">
+                  <template x-for="m in filteredModelsList()" :key="m.id">
                     <tr>
                       <td style="font-size:11px"><div class="font-bold" x-text="m.display_name || m.id"></div><div class="text-xs text-dim" style="font-family:var(--font-mono);opacity:0.7;user-select:all" x-show="m.display_name && m.display_name !== m.id" x-text="m.id"></div></td>
                       <td class="text-dim" x-text="m.provider"></td>
@@ -5207,22 +5408,76 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
             </div>
+            <div class="info-card mb-4" style="border:1px solid var(--border-subtle, rgba(255,255,255,0.1))">
+              <h4 style="margin-top:0">LLM tool inventory (per agent)</h4>
+              <p class="text-xs text-dim" style="line-height:1.55;margin:0 0 12px">
+                <code>GET /api/tools</code> below is the <strong>host-wide catalog</strong>. The list here is <code>GET /api/agents/&lt;id&gt;/llm-tools</code> — the <strong>exact tool definitions</strong> sent to the model for the chosen agent (after mode, allowlists, and MCP wiring). Opening the API URL in a raw browser tab often looks blank or shows JSON only; use this panel instead.
+              </p>
+              <div x-show="llmToolsLoading" class="loading-state" style="padding:12px 0"><div class="spinner"></div><span>Loading LLM tools…</span></div>
+              <p class="text-xs" style="color:var(--error);margin:0 0 8px" x-show="llmToolsError && !llmToolsLoading" x-text="llmToolsError"></p>
+              <div class="flex flex-wrap gap-2 items-end mb-3" x-show="!llmToolsLoading">
+                <div style="min-width:200px;flex:1">
+                  <label class="text-xs text-dim">Agent</label>
+                  <select class="form-select" style="margin-top:6px;font-size:13px;width:100%"
+                    x-model="llmToolsAgentId"
+                    @change="fetchLlmToolsInventory()">
+                    <template x-if="!llmToolsAgents || !llmToolsAgents.length">
+                      <option value="" disabled selected>No agents on this daemon</option>
+                    </template>
+                    <template x-for="a in (llmToolsAgents || [])" :key="a.id">
+                      <option :value="a.id" x-text="(a.name || a.id) + ' (' + String(a.id).slice(0,8) + '…)'"></option>
+                    </template>
+                  </select>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" @click="loadLlmToolsAgents()" :disabled="llmToolsLoading">Refresh agents + tools</button>
+              </div>
+              <template x-if="llmToolsResult && !llmToolsLoading">
+                <div class="text-xs text-dim mb-2" style="line-height:1.6">
+                  <span><strong class="text-dim" style="color:var(--text)">Mode</strong> <code x-text="llmToolsResult.mode"></code></span>
+                  <span class="text-dim" aria-hidden="true"> · </span>
+                  <span><strong class="text-dim" style="color:var(--text)">Tools</strong> <span x-text="llmToolsResult.tool_count"></span></span>
+                  <span class="text-dim" aria-hidden="true"> · </span>
+                  <span><strong class="text-dim" style="color:var(--text)">Name</strong> <span x-text="llmToolsResult.agent_name || '—'"></span></span>
+                </div>
+              </template>
+              <p class="text-xs text-dim mb-2" style="line-height:1.55" x-show="llmToolsResult && llmToolsResult.hint && !llmToolsLoading" x-text="llmToolsResult.hint"></p>
+              <div class="search-input mb-3" x-show="llmToolsResult && llmToolsResult.tools && llmToolsResult.tools.length && !llmToolsLoading">
+                <span style="color:var(--text-muted)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
+                <input type="search" placeholder="Search this agent's LLM tools…" x-model="llmToolSearch" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="text-xs text-dim mb-2" x-show="llmToolsResult && Array.isArray(llmToolsResult.tools) && !llmToolsLoading" x-text="filteredLlmToolsList().length + ' of ' + (llmToolsResult.tools ? llmToolsResult.tools.length : 0) + ' tools shown'"></div>
+              <div x-show="llmToolsResult && llmToolsResult.tools && !llmToolsResult.tools.length && !llmToolsLoading" class="text-xs text-dim" style="padding:8px 0">No tools are passed to the LLM for this agent (check mode, allowlists, and MCP servers).</div>
+              <div class="table-wrap" x-show="filteredLlmToolsList().length && !llmToolsLoading">
+                <table>
+                  <thead><tr><th>Tool</th><th>Source</th><th>Description</th></tr></thead>
+                  <tbody>
+                    <template x-for="t in filteredLlmToolsList()" :key="t.name">
+                      <tr>
+                        <td class="font-bold" style="white-space:nowrap;font-size:12px" x-text="t.name"></td>
+                        <td class="text-dim" style="white-space:nowrap;font-size:11px" x-text="t.source || (t.name && String(t.name).indexOf('mcp_') === 0 ? 'mcp' : '—')"></td>
+                        <td class="text-dim" style="font-size:12px;line-height:1.45" x-text="t.description"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
             <div class="search-input mb-4">
               <span style="color:var(--text-muted)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span>
               <input placeholder="Search tools..." x-model="toolSearch">
             </div>
-            <div class="text-xs text-dim mb-2" x-text="filteredTools.length + ' of ' + tools.length + ' tools'"></div>
-            <div x-show="!filteredTools.length && !loading" style="text-align:center;padding:32px 16px">
+            <div class="text-xs text-dim mb-2" x-text="filteredToolsList().length + ' of ' + tools.length + ' tools'"></div>
+            <div x-show="!filteredToolsList().length && !loading" style="text-align:center;padding:32px 16px">
               <div style="font-size:32px;margin-bottom:8px;opacity:0.5">&#x1F527;</div>
               <h3 style="margin:0 0 4px;font-size:14px" x-text="tools.length ? 'No tools match your search' : 'No tools available'"></h3>
               <p class="text-xs text-dim" x-text="tools.length ? 'Try a different search term.' : 'Tools will appear once agents are configured.'"></p>
               <button class="btn btn-ghost btn-sm mt-2" x-show="tools.length && toolSearch" @click="toolSearch=''">Clear Search</button>
             </div>
-            <div class="table-wrap" x-show="filteredTools.length">
+            <div class="table-wrap" x-show="filteredToolsList().length">
               <table>
                 <thead><tr><th>Tool</th><th>Description</th></tr></thead>
                 <tbody>
-                  <template x-for="t in filteredTools" :key="t.name">
+                  <template x-for="t in filteredToolsList()" :key="t.name">
                     <tr>
                       <td class="font-bold" style="white-space:nowrap" x-text="t.name"></td>
                       <td class="text-dim" x-text="t.description"></td>
@@ -6328,7 +6583,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           >
             <span style="font-weight: 600; color: var(--text)">Free tier and $0 catalog pricing.</span>
             <strong>Tokens</strong> (input and output) always include free routes and $0-priced models, so you see real usage volume.
-            <strong>Estimated cost</strong> here, <strong>compression “USD not spent (est.)”</strong> on Get started, and the Budget compression rollups all use the model catalog: if the effective price is
+            <strong>Estimated cost</strong> here, <strong>compression “USD not spent (est.)”</strong> on the Usage page and Command Center summaries, and the Budget compression rollups all use the model catalog: if the effective price is
             <strong>$0 per million</strong> tokens, that traffic adds
             <strong>$0</strong> to spend and
             <strong>$0</strong> to counterfactual dollars saved. We do not impute a paid rate when the catalog says the marginal price is zero.
@@ -7174,6 +7429,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </div>
           <!-- Content -->
           <div x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
+            <div class="card sessions-intro-card">
+              <div class="sessions-intro-accent"></div>
+              <div class="sessions-intro-body">
+                <div class="sessions-intro-title">How agent comms works</div>
+                <p class="text-sm text-dim sessions-intro-copy">Use this page to monitor inter-agent coordination. Check <strong>Agent Topology</strong> to see active links, then follow the <strong>Live Event Feed</strong> to trace handoffs and messages in real time.</p>
+              </div>
+            </div>
             <!-- Topology -->
             <div class="card mb-4">
               <div class="card-header">
@@ -7466,7 +7728,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="card" style="text-align:left;margin-bottom:16px;border-left:3px solid var(--accent);max-width:520px;margin-left:auto;margin-right:auto">
                 <div class="card-header">Recommended: OpenRouter (free to start)</div>
                 <p style="font-size:12px;color:var(--text-dim);line-height:1.65;margin:0">
-                  We recommend <strong>OpenRouter</strong>: visit <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> for a <strong>free API key</strong>. ArmaraOS is pre-configured to use the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> by default. You can switch to any other model or a paid provider anytime in Settings or when creating agents.
+                  We recommend <strong>OpenRouter</strong>: visit <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> for a <strong>free API key</strong>. ArmaraOS ships with the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> by default. You can switch to any other model or provider anytime in Settings or when creating agents.
                 </p>
               </div>
               <div class="card" style="text-align:left;margin-bottom:20px">
@@ -7519,7 +7781,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="wizard-card">
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Connect an LLM Provider</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:12px;line-height:1.6">
-                ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a> (create a key in the OpenRouter dashboard). This app defaults to the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> for new agents unless you configure a different provider or model later.
+                ArmaraOS needs at least one LLM provider to power your agents. <strong>OpenRouter</strong> is selected first by default: get a <strong>free API key</strong> at <a href="https://openrouter.com" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.com</a>. The bundled default model is <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code>. You can switch providers or models anytime in Settings.
               </p>
               <div class="info-card" x-show="showWizardNetworkBanner" style="border-left-color:var(--accent);margin-bottom:14px">
                 <div class="flex justify-between items-start gap-2">
@@ -7663,7 +7925,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Create Your First Agent</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Pick a template to get started quickly. You can customize the agent later or create more from the Agents page.</p>
               <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 16px;line-height:1.5">
-                Templates use <strong>OpenRouter</strong> with the <strong>free</strong> model <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
+                Templates use <strong>OpenRouter</strong> with <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
               </p>
 
               <!-- Category filter pills -->
@@ -8737,7 +8999,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Trajectories</h2>
-            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Rows from <code class="text-xs">ainl_trajectories</code> via <code class="text-xs">GET /api/trajectories</code> plus <code class="text-xs">GET /api/graph-memory/failures/recent</code> (headlines), detail JSON on select, and a feed of <strong>TrajectoryRecorded</strong>, <strong>FailureLearned</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">trajectory</code> / <code class="text-xs">failure</code>) from the dashboard SSE bus (<code class="text-xs">armaraos-kernel-event</code>) — <strong>ImprovementProposalAdopted</strong> lines link to <a class="text-xs" style="color:var(--accent)" href="#graph-proposals">Proposals</a>. Full failure tools: <a class="text-xs" style="color:var(--accent)" href="#graph-failures">Failures</a>.</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="refreshPanels()" aria-label="Agent for trajectories">
@@ -8746,6 +9007,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </template>
             </select>
             <button type="button" class="btn btn-primary btn-sm" @click="refreshPanels()" :disabled="loading">Refresh</button>
+          </div>
+        </div>
+        <div class="card sessions-intro-card" style="margin-bottom:14px">
+          <div class="sessions-intro-accent"></div>
+          <div class="sessions-intro-body">
+            <div class="sessions-intro-title">How trajectories work</div>
+            <p class="text-sm text-dim sessions-intro-copy">Rows from <code class="text-xs">ainl_trajectories</code> via <code class="text-xs">GET /api/trajectories</code> plus <code class="text-xs">GET /api/graph-memory/failures/recent</code> (headlines), detail JSON on select, and a feed of <strong>TrajectoryRecorded</strong>, <strong>FailureLearned</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">trajectory</code> / <code class="text-xs">failure</code>) from the dashboard SSE bus (<code class="text-xs">armaraos-kernel-event</code>) — <strong>ImprovementProposalAdopted</strong> lines link to <a style="color:var(--accent)" href="#graph-proposals">Proposals</a>. Full failure tools: <a style="color:var(--accent)" href="#graph-failures">Failures</a>.</p>
           </div>
         </div>
         <details class="card" style="padding:10px 14px;margin:0 0 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)" @toggle="if ($event.target.open) { loadCompressionProfiles() }">
@@ -8833,7 +9101,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Learning failures</h2>
-            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Typed <code class="text-xs">failure</code> nodes: <code class="text-xs">GET /api/graph-memory/failures/recent</code> / <code class="text-xs">search</code>. Live: <strong>FailureLearned</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">failure</code>) on <code class="text-xs">armaraos-kernel-event</code>. Trajectories: <a class="text-xs" style="color:var(--accent)" href="#trajectories">Trajectories</a>.</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="refreshAll(); selected = null" aria-label="Agent for failures">
@@ -8842,6 +9109,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </template>
             </select>
             <button type="button" class="btn btn-primary btn-sm" @click="refreshAll()" :disabled="loading">Refresh</button>
+          </div>
+        </div>
+        <div class="card sessions-intro-card" style="margin-bottom:14px">
+          <div class="sessions-intro-accent"></div>
+          <div class="sessions-intro-body">
+            <div class="sessions-intro-title">How failures work</div>
+            <p class="text-sm text-dim sessions-intro-copy">Typed <code class="text-xs">failure</code> nodes: <code class="text-xs">GET /api/graph-memory/failures/recent</code> / <code class="text-xs">search</code>. Live: <strong>FailureLearned</strong>, <strong>GraphMemoryWrite</strong> (<code class="text-xs">failure</code>) on <code class="text-xs">armaraos-kernel-event</code>. Trajectories: <a style="color:var(--accent)" href="#trajectories">Trajectories</a>.</p>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch">
@@ -8910,7 +9184,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
           <div>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Improvement proposals</h2>
-            <p class="text-xs text-dim" style="margin:0;max-width:52rem;line-height:1.5">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (default on; 503 if opted out with <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="loadProposals(); selected = null" aria-label="Agent for proposals">
@@ -8919,6 +9192,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </template>
             </select>
             <button type="button" class="btn btn-primary btn-sm" @click="loadProposals()" :disabled="loading">Refresh</button>
+          </div>
+        </div>
+        <div class="card sessions-intro-card" style="margin-bottom:14px">
+          <div class="sessions-intro-accent"></div>
+          <div class="sessions-intro-body">
+            <div class="sessions-intro-title">How proposals work</div>
+            <p class="text-sm text-dim sessions-intro-copy">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (default on; 503 if opted out with <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:stretch">
@@ -8983,8 +9263,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <p class="dashboard-page-header-sub">Observe orchestration in one place: <strong style="font-weight:600">multi-agent delegation</strong> (spawn/delegate tools) and <strong style="font-weight:600">deterministic planner</strong> runs (native infer plan steps). Delegation shows in the tree/Gantt; planner emits <code class="text-xs">plan_*</code> events. Traces are held in a ring buffer (not persisted). Matching events also appear on the event stream as <code class="text-xs">OrchestrationTrace</code>.</p>
         </div>
         <div class="page-body dashboard-page-body-polish" style="padding:0 20px 32px">
-          <div class="card orch-intro-card" style="margin-top:16px">
-            <p class="text-sm text-dim" style="margin:0;line-height:1.55"><strong style="font-weight:600;color:var(--text)">How to use this page.</strong> Refresh the list, filter by trace id or time range (<code class="text-xs">last_event_at</code>), then select a trace. Use <strong>Event type filter</strong> presets to show only delegation-related types vs planner (<code class="text-xs">plan_*</code>) events. Use <strong>Quota tree</strong> with an agent UUID to inspect inherited limits without selecting a trace.</p>
+          <div class="card sessions-intro-card mb-4" style="margin-top:16px">
+            <div class="sessions-intro-accent"></div>
+            <div class="sessions-intro-body">
+              <div class="sessions-intro-title">How orchestration traces work</div>
+              <p class="text-sm text-dim sessions-intro-copy">Each trace captures one orchestration run with timestamped events. Refresh, filter, and select a trace to inspect delegation flow, timeline, and planner steps in one view.</p>
+            </div>
           </div>
 
           <div class="dashboard-inline-filters orch-filter-bar">

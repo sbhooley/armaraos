@@ -48,7 +48,13 @@ use tracing::{debug, info, trace, warn};
 const AINL_DEFAULT_HOST_ADAPTER_ALLOWLIST: &str = "core,ext,http,bridge,sqlite,postgres,mysql,redis,dynamodb,airtable,supabase,fs,tools,db,api,cache,queue,txn,auth,wasm,memory,vector_memory,embedding_memory,code_context,tool_registry,langchain_tool,llm,llm_query,fanout,web,tiktok";
 
 /// Default "just works" tools that are always merged into non-empty per-agent
-/// tool allowlists so users don't need to manually add core AINL MCP utilities.
+/// tool allowlists so users don't need to manually add core AINL MCP utilities
+/// or a glob for **other** connected MCP servers (e.g. `google-workspace-mcp`).
+///
+/// Dashboard allowlists historically listed only `mcp_ainl_*`; without `mcp_*`,
+/// Workspace / GitHub / etc. tools are filtered out even when the host has them
+/// connected. Use per-agent `mcp_servers` or `tool_blocklist` (e.g. `mcp_*`) to
+/// tighten access when needed.
 const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "file_write",
     "file_read",
@@ -64,6 +70,7 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "mcp_ainl_ainl_compile",
     "mcp_ainl_ainl_run",
     "mcp_ainl_*",
+    "mcp_*",
     // ArmaraOS kernel scheduler — so agents with a custom allowlist can still
     // register recurring work (e.g. agent_turn / ainl_run) without hand-editing
     // manifests. Block via tool_blocklist if a sandbox should not schedule.
@@ -97,6 +104,26 @@ fn merge_scheduling_builtins_into_declared_tools(declared: &mut Vec<String>) {
     }
 }
 
+/// Glob merged into a **restricted** `capabilities.tools` list (non-empty, no full `*`) so
+/// every **connected** MCP tool (`mcp_<server>_<tool>`) is offered to the model. Installing
+/// or enabling an MCP is the trust boundary; use per-agent `mcp_servers` allowlist to
+/// restrict which servers apply when this glob is present.
+const DEFAULT_MCP_GLOB_IN_CAPABILITIES: &[&str] = &["mcp_*"];
+
+fn merge_mcp_glob_declarations_into_declared_tools(declared: &mut Vec<String>) {
+    if declared.is_empty() {
+        return;
+    }
+    if declared.iter().any(|t| t == "*") {
+        return;
+    }
+    for name in DEFAULT_MCP_GLOB_IN_CAPABILITIES {
+        if !declared.iter().any(|d| d == *name) {
+            declared.push((*name).to_string());
+        }
+    }
+}
+
 fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
     if allowlist.is_empty() {
         return;
@@ -110,7 +137,7 @@ fn merge_default_agent_allowlist_tools(allowlist: &mut Vec<String>) {
 
 /// Default MCP servers that should be retained when a non-empty per-agent
 /// server allowlist is configured.
-const DEFAULT_AGENT_MCP_SERVERS: &[&str] = &["ainl"];
+const DEFAULT_AGENT_MCP_SERVERS: &[&str] = &["ainl", "google-workspace-mcp"];
 
 fn merge_default_agent_mcp_servers(servers: &mut Vec<String>) {
     if servers.is_empty() {
@@ -4941,23 +4968,24 @@ impl OpenFangKernel {
         mut servers: Vec<String>,
     ) -> KernelResult<()> {
         merge_default_agent_mcp_servers(&mut servers);
-        // Validate server names if allowlist is non-empty
+        // Validate server names against the host's configured MCP list (not tool-name
+        // heuristics — `google-workspace-mcp` tools would parse incorrectly as `google`).
         if !servers.is_empty() {
-            if let Ok(mcp_tools) = self.mcp_tools.lock() {
-                let mut known_servers: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
-                for tool in mcp_tools.iter() {
-                    if let Some(s) = openfang_runtime::mcp::extract_mcp_server(&tool.name) {
-                        known_servers.insert(s.to_string());
-                    }
-                }
-                for name in &servers {
-                    let normalized = openfang_runtime::mcp::normalize_name(name);
-                    if !known_servers.contains(&normalized) {
-                        return Err(KernelError::OpenFang(OpenFangError::Internal(format!(
-                            "Unknown MCP server: {name}"
-                        ))));
-                    }
+            let configured: std::collections::HashSet<String> = self
+                .effective_mcp_servers
+                .read()
+                .map(|g| {
+                    g.iter()
+                        .map(|e| openfang_runtime::mcp::normalize_name(&e.name))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for name in &servers {
+                let n = openfang_runtime::mcp::normalize_name(name);
+                if !configured.contains(&n) {
+                    return Err(KernelError::OpenFang(OpenFangError::Internal(format!(
+                        "Unknown MCP server: {name} (not in host MCP config)"
+                    ))));
                 }
             }
         }
@@ -8007,6 +8035,35 @@ impl OpenFangKernel {
         self.available_tools_with_registry(agent_id, None)
     }
 
+    /// Tools actually passed to the LLM for this agent: workspace-aware skills,
+    /// `capabilities.tools` / allowlists / blocklists, MCP filtering, then
+    /// [`AgentMode`] (`assist` / `observe` strip most tools including all MCP).
+    ///
+    /// Compare to [`Self::mcp_tools`] + [`builtin_tool_definitions`] / `GET /api/tools`,
+    /// which do **not** apply per-agent filters.
+    pub fn effective_llm_tool_definitions(&self, agent_id: AgentId) -> Option<Vec<ToolDefinition>> {
+        let entry = self.registry.get(agent_id)?;
+        let mut skill_snapshot = self
+            .skill_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot();
+        if let Some(ref workspace) = entry.manifest.workspace {
+            let ws_skills = workspace.join("skills");
+            if ws_skills.exists() {
+                if let Err(e) = skill_snapshot.load_workspace_skills(&ws_skills) {
+                    warn!(
+                        agent_id = %agent_id,
+                        error = %e,
+                        "effective_llm_tool_definitions: failed to load workspace skills"
+                    );
+                }
+            }
+        }
+        let tools = self.available_tools_with_registry(agent_id, Some(&skill_snapshot));
+        Some(entry.mode.filter_tools(tools))
+    }
+
     /// Build the list of tools available to an agent, optionally using a
     /// workspace-aware skill registry snapshot instead of the global registry.
     ///
@@ -8059,10 +8116,13 @@ impl OpenFangKernel {
 
         // For builtin selection only: include kernel scheduling tools so a
         // restricted `capabilities.tools` list does not block self-serve cron.
-        // Skill/MCP steps still use `declared_tools` — scheduling is builtin-only.
+        // We also append `mcp_*` so any connected MCP tool name matches (including
+        // google-workspace-mcp); skill/MCP filtering uses the same `declared_builtins`
+        // with glob matching.
         let mut declared_builtins = declared_tools.clone();
         if !tools_unrestricted {
             merge_scheduling_builtins_into_declared_tools(&mut declared_builtins);
+            merge_mcp_glob_declarations_into_declared_tools(&mut declared_builtins);
         }
 
         // Step 1: Filter builtin tools.
@@ -8073,10 +8133,15 @@ impl OpenFangKernel {
         });
 
         let mut all_tools: Vec<ToolDefinition> = if !tools_unrestricted {
-            // Agent declares specific tools — only include matching builtins
+            // Agent declares specific tools (supports `*` / prefix globs like `mcp_ainl_*`) —
+            // only include matching builtins
             all_builtins
                 .into_iter()
-                .filter(|t| declared_builtins.iter().any(|d| d == &t.name))
+                .filter(|t| {
+                    declared_builtins
+                        .iter()
+                        .any(|d| tool_name_matches_filter(d, &t.name))
+                })
                 .collect()
         } else {
             // No specific tools declared — fall back to profile or all builtins
@@ -8118,7 +8183,11 @@ impl OpenFangKernel {
         };
         for skill_tool in skill_tools {
             // If agent declares specific tools, only include matching skill tools
-            if !tools_unrestricted && !declared_tools.iter().any(|d| d == &skill_tool.name) {
+            if !tools_unrestricted
+                && !declared_builtins
+                    .iter()
+                    .any(|d| tool_name_matches_filter(d, &skill_tool.name))
+            {
                 continue;
             }
             all_tools.push(ToolDefinition {
@@ -8134,23 +8203,27 @@ impl OpenFangKernel {
             let mcp_candidates: Vec<ToolDefinition> = if mcp_allowlist.is_empty() {
                 mcp_tools.iter().cloned().collect()
             } else {
-                let normalized: Vec<String> = mcp_allowlist
-                    .iter()
-                    .map(|s| openfang_runtime::mcp::normalize_name(s))
-                    .collect();
+                // Must use `extract_mcp_server_from_known`: hyphenated servers like
+                // `google-workspace-mcp` become `mcp_google_workspace_mcp_<tool>` — the naive
+                // `extract_mcp_server` heuristic stops at the first `_` and yields `google`.
+                let server_refs: Vec<&str> = mcp_allowlist.iter().map(|s| s.as_str()).collect();
                 mcp_tools
                     .iter()
                     .filter(|t| {
-                        openfang_runtime::mcp::extract_mcp_server(&t.name)
-                            .map(|s| normalized.iter().any(|n| n == s))
-                            .unwrap_or(false)
+                        openfang_runtime::mcp::extract_mcp_server_from_known(&t.name, &server_refs)
+                            .is_some()
                     })
                     .cloned()
                     .collect()
             };
             for t in mcp_candidates {
                 // If agent declares specific tools, only include matching MCP tools
-                if !tools_unrestricted && !declared_tools.iter().any(|d| d == &t.name) {
+                // (exact name or glob such as `mcp_google_workspace_mcp_*` / `mcp_ainl_*`)
+                if !tools_unrestricted
+                    && !declared_builtins
+                        .iter()
+                        .any(|d| tool_name_matches_filter(d, &t.name))
+                {
                     continue;
                 }
                 all_tools.push(t);
@@ -8288,29 +8361,73 @@ impl OpenFangKernel {
             return String::new();
         }
 
-        // Normalize allowlist for matching
-        let normalized: Vec<String> = mcp_allowlist
+        let allowlist_normalized: Vec<String> = mcp_allowlist
             .iter()
             .map(|s| openfang_runtime::mcp::normalize_name(s))
             .collect();
 
-        // Group tools by MCP server prefix (mcp_{server}_{tool})
+        let server_name_list: Vec<String> = if !mcp_allowlist.is_empty() {
+            mcp_allowlist.to_vec()
+        } else {
+            self.effective_mcp_servers
+                .read()
+                .map(|g| g.iter().map(|e| e.name.clone()).collect())
+                .unwrap_or_default()
+        };
+        let refs: Vec<&str> = server_name_list.iter().map(|s| s.as_str()).collect();
+
+        // Group by configured server names (`extract_mcp_server_from_known`); `splitn(3,'_')`
+        // breaks names like `mcp_google_workspace_mcp_search`.
         let mut servers: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         let mut tool_count = 0usize;
         for tool in &tools {
-            let parts: Vec<&str> = tool.name.splitn(3, '_').collect();
-            if parts.len() >= 3 && parts[0] == "mcp" {
-                let server = parts[1].to_string();
-                // Filter by MCP allowlist if set
-                if !mcp_allowlist.is_empty() && !normalized.iter().any(|n| n == &server) {
-                    continue;
+            if openfang_runtime::mcp::is_mcp_tool(&tool.name) {
+                if let Some(srv) =
+                    openfang_runtime::mcp::extract_mcp_server_from_known(&tool.name, &refs)
+                {
+                    let srv_n = openfang_runtime::mcp::normalize_name(srv);
+                    if !mcp_allowlist.is_empty()
+                        && !allowlist_normalized.iter().any(|n| n == &srv_n)
+                    {
+                        continue;
+                    }
+                    let prefix = format!("mcp_{}_", srv_n);
+                    let suffix = tool
+                        .name
+                        .strip_prefix(&prefix)
+                        .map(String::from)
+                        .unwrap_or_else(|| tool.name.clone());
+                    servers.entry(srv_n).or_default().push(suffix);
+                    tool_count += 1;
+                } else if refs.is_empty() {
+                    let parts: Vec<&str> = tool.name.splitn(3, '_').collect();
+                    if parts.len() >= 3 && parts[0] == "mcp" {
+                        let server = parts[1].to_string();
+                        if !mcp_allowlist.is_empty()
+                            && !allowlist_normalized.iter().any(|n| n == &server)
+                        {
+                            continue;
+                        }
+                        servers
+                            .entry(server)
+                            .or_default()
+                            .push(parts[2..].join("_"));
+                        tool_count += 1;
+                    } else {
+                        servers
+                            .entry("unknown".to_string())
+                            .or_default()
+                            .push(tool.name.clone());
+                        tool_count += 1;
+                    }
+                } else if mcp_allowlist.is_empty() {
+                    servers
+                        .entry("unknown".to_string())
+                        .or_default()
+                        .push(tool.name.clone());
+                    tool_count += 1;
                 }
-                servers
-                    .entry(server)
-                    .or_default()
-                    .push(parts[2..].join("_"));
-                tool_count += 1;
             } else {
                 servers
                     .entry("unknown".to_string())
@@ -11246,6 +11363,16 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_mcp_glob_declarations_adds_mcp_wildcard() {
+        let mut d = vec!["web_search".to_string()];
+        merge_mcp_glob_declarations_into_declared_tools(&mut d);
+        assert!(
+            d.iter().any(|x| x == "mcp_*"),
+            "restricted tool lists get mcp_* so any connected MCP tools reach the model"
+        );
+    }
+
+    #[test]
     fn test_merge_default_agent_mcp_servers_noop_for_empty_allowlist() {
         let mut servers: Vec<String> = vec![];
         merge_default_agent_mcp_servers(&mut servers);
@@ -11262,6 +11389,12 @@ mod tests {
         assert!(
             servers.iter().any(|s| s.eq_ignore_ascii_case("ainl")),
             "ainl MCP server should be preserved for non-empty allowlists"
+        );
+        assert!(
+            servers
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case("google-workspace-mcp")),
+            "google-workspace-mcp should be merged for non-empty allowlists (parity with default AINL server)"
         );
     }
 

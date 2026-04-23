@@ -354,7 +354,7 @@ Returns the agent’s explicit tool **allowlist** and **blocklist** (manifest fi
 
 **Glob-style filters:** For both allowlist and blocklist, entries are matched **case-insensitively**. A pattern may include **`*`** as a wildcard (for example **`mcp_github_*`** or **`mcp_ainl_*`**). This matches how the kernel filters tools sent to the LLM and how delegation maps tools to agents.
 
-**Non-empty MCP server allowlists (kernel merge):** When **`mcp_servers`** on the agent is **non-empty** (restricting which MCP servers apply), the kernel merges **`ainl`** into that list if missing, so the **AINL** MCP toolchain remains available unless the operator explicitly removes it after connect. Empty **`mcp_servers`** still means “all connected servers” (unchanged).
+**Non-empty MCP server allowlists (kernel merge):** When **`mcp_servers`** on the agent is **non-empty** (restricting which MCP servers apply), the kernel merges **`ainl`** and **`google-workspace-mcp`** into that list if missing (same “just works” idea as a restricted **`capabilities.tools`** list and the **`mcp_*`** tool glob). **AINL** / **Google Workspace** MCPs remain available unless the operator removes them after connect. Empty **`mcp_servers`** still means “all connected servers” (unchanged).
 
 **Response** `200 OK`:
 

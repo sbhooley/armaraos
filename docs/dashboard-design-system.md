@@ -169,6 +169,12 @@ Do not introduce irregular spacing jumps (for example 3, 5, 7, 11, 13, 15) unles
 - **Focus (`:focus-within`):** a **subtle** affordance only — e.g. **`color-mix`** of border with a **small** accent share, plus **`--accent-subtle`** (or a 1px ring), **not** a thick solid **`--accent`** border and **not** a large multi-stop gold glow. Avoid aggressive **`translateY`** on focus; keyboard users should still get clear focus.
 - **States:** **`.is-active`** (user has text or attachments) and **`.is-sending`** (streaming) should stay **quiet**—slightly stronger neutral or a **low** accent mix only.
 
+### Chat tool cards (agent loop output)
+- Use **summary-first headers**: tool name + concise status + one-line summary in the collapsed state.
+- Keep default card chrome **quiet** (tokenized surface + subtle border/shadow). Avoid stacking heavy gradients and thick accent rails.
+- Long raw payloads should be **collapsed by default**; expand only when needed. Prioritize readability over always-open debug dumps.
+- Auth-required tool output should prefer a compact **action callout** (single clear authorization link) before raw text blobs.
+
 ## Required Workflow for Design Changes
 
 1. Read this file and related page docs before editing.

@@ -101,6 +101,9 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     if granted_ainl_mcp_tools(&ctx.granted_tools) {
         sections.push(AINL_MCP_TOOLS_GRANTED_NOTE.to_string());
     }
+    if granted_google_workspace_mcp_tools(&ctx.granted_tools) {
+        sections.push(GOOGLE_WORKSPACE_MCP_TOOLS_GRANTED_NOTE.to_string());
+    }
 
     // Section 1.7 — Disambiguate ArmaraOS from OpenClaw (models often conflate the two)
     sections.push(ARMARAOS_NOT_OPENCLAW_SECTION.to_string());
@@ -126,8 +129,8 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     }
     if ctx.is_subagent {
         sections.push(SUBAGENT_KERNEL_SCHEDULING_NOTE.to_string());
-    } else if granted_kernel_scheduling_tools(&ctx.granted_tools) {
-        sections.push(TOP_LEVEL_KERNEL_SCHEDULING_DISCRETION.to_string());
+    } else {
+        sections.push(ARMARAOS_KERNEL_SCHEDULER_TOP_LEVEL.to_string());
     }
 
     // Section 4 — Memory Protocol (always present)
@@ -274,6 +277,7 @@ For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or simi
 - **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, fix the graph using fields in the tool response (e.g. **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`**) — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
 - **Tool-call shape matters:** for `mcp_ainl_*` tools, pass the graph text in the `code` field (legacy `ainl` may work but `code` is canonical), and call the MCP tool directly — do not wrap MCP tool names inside `shell_exec`.
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
+- **Do not use `mcp_ainl_ainl_capabilities` to infer other MCP servers:** its payload is **AINL adapter verbs only** (the `http` / `web` / `calendar` / … blocks you see there). It is **not** a catalog of every connected MCP server. **Google Workspace** (Gmail, Drive, Docs, …) is a **separate** MCP server. When connected, names follow **`mcp_{server_id}_*`** (hyphens in the server id become underscores); the bundled integration id is **`google-workspace-mcp`** → tools like **`mcp_google_workspace_mcp_*`**. **Use only the exact MCP tool names listed under “Your Tools”** — never invent prefixes. If Workspace is supposedly set up but none of those names appear, the Workspace MCP is not in your current tool list (subprocess did not register tools): tell the user to check **Skills → MCP** / reconnect **google-workspace-mcp**, **`GOOGLE_OAUTH_CLIENT_ID`**, that **`uvx`** is installed, and **restart the ArmaraOS app** so the daemon picks up a normal `PATH` — do not infer “no Google” from `ainl_capabilities` alone.
 - **Starters:** for new graphs, consider **`mcp_ainl_ainl_list_ecosystem`** and **`mcp_ainl_ainl_import_*`** before writing large graphs from scratch.
 - **`ainl_run` adapters:** graphs that use `http`, `fs`, `cache`, or `sqlite` must pass an **`adapters`** object in the run payload — the MCP server does not register those adapters by default (see tool schema / server instructions).";
 
@@ -282,12 +286,32 @@ const AINL_MCP_TOOLS_GRANTED_NOTE: &str = "\
 ## AINL MCP tools (granted)
 You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters.";
 
+/// Short reminder when this agent has Google Workspace MCP tools (`mcp_google_workspace_mcp_*`).
+///
+/// Models often fixate on AINL-specific sections and **`mcp_ainl_ainl_capabilities`**; without an
+/// explicit Workspace note they may incorrectly claim Google tools are unavailable even when the
+/// native tool list includes them.
+const GOOGLE_WORKSPACE_MCP_TOOLS_GRANTED_NOTE: &str = "\
+## Google Workspace MCP tools (granted)
+You have **`mcp_google_workspace_mcp_*`** in your **native tool list** (Gmail, Calendar, Drive, Docs, Sheets, Slides, Chat, Tasks, People, Apps Script, …). **Do not use `mcp_ainl_ainl_capabilities` to reason about Workspace** — that payload is **AINL adapter verbs only**, not Google APIs.
+
+- Most Workspace tools require **`user_google_email`** (which Google account to act on).
+- If the user has not completed OAuth on this host yet, the first tool call may prompt them to sign in via the browser; say so briefly if a tool response indicates auth is needed.
+- Prefer the narrowest tool for the job (e.g. search Gmail before listing entire Drive).";
+
 /// True when `granted_tools` includes at least one tool for MCP server `ainl` (`mcp_ainl_*`).
 fn granted_ainl_mcp_tools(granted: &[String]) -> bool {
     granted.iter().any(|t| {
         let p: Vec<&str> = t.splitn(3, '_').collect();
         p.len() >= 3 && p[0] == "mcp" && p[1] == "ainl"
     })
+}
+
+/// True when `granted_tools` includes Google Workspace MCP tools (`google-workspace-mcp` server).
+fn granted_google_workspace_mcp_tools(granted: &[String]) -> bool {
+    granted
+        .iter()
+        .any(|t| t.starts_with("mcp_google_workspace_mcp_"))
 }
 
 /// Clarifies that this host is ArmaraOS, not the OpenClaw CLI/npm product (reduces spurious install attempts).
@@ -325,22 +349,14 @@ You are a **subagent**. Recurring ArmaraOS kernel jobs (`agent_turn` / `ainl_run
 - If a recurring job is needed, message your **orchestrator / parent** with a concrete request: cadence, `program_path` or turn message, deliverables, and why it is safe. They must call `schedule_create` or `cron_create` for you.
 - If the user asked you to set a schedule yourself, explain this rule briefly and return the same structured request for the top-level agent to act on.";
 
-/// Shown to **top-level** agents that were granted kernel scheduling tools.
-const TOP_LEVEL_KERNEL_SCHEDULING_DISCRETION: &str = "\
-## Kernel scheduling (top-level)
-You can register kernel jobs with `schedule_*` / `cron_*` (persisted under `~/.armaraos/cron_jobs.json`). **Only top-level** agents may do this.
-- When you **orchestrate** subagents, you own whether recurring work gets registered, unless the user said otherwise. Subagents cannot create these jobs; they will ask you to.
-- **Discretion:** Grant a subagent’s scheduling request when it is clear, aligned with the user’s goals, and reasonable on cost, rate, and safety. Refuse or trim cadence when it is vague, duplicative, abusive of resources, or out of scope — state why.";
-
-fn granted_kernel_scheduling_tools(tools: &[String]) -> bool {
-    tools.iter().any(|t| {
-        matches!(
-            t.as_str(),
-            "schedule_create" | "schedule_list" | "schedule_delete" | "cron_create"
-                | "cron_list" | "cron_cancel"
-        )
-    })
-}
+/// Shown to all **top-level** agents: kernel scheduler is first-class, same as the dashboard
+/// **Scheduler** tab. Models otherwise reach for `shell`/`crontab` and miss `schedule_create`.
+const ARMARAOS_KERNEL_SCHEDULER_TOP_LEVEL: &str = "\
+## ArmaraOS kernel scheduler (recurring / timed work)
+- This host has a first-class **kernel job scheduler** (dashboard **Scheduler**, `~/.armaraos/cron_jobs.json`). It runs **timed `ainl run` graphs**, **scheduled `agent_turn` messages**, and optional **channel** delivery. Prefer **`schedule_create`** / **`schedule_list`** / **`schedule_delete`** (or `cron_*`) for “every 15 minutes”, “daily at…”, or any recurring automation — not ad-hoc `sleep` loops, and **not** the OS `crontab` unless the user explicitly asked for a *system* user crontab.
+- If **`schedule_create`** and friends appear in **Your Tools** above, use them: pass a **cron** expression and **`program_path`** to an `.ainl` under `~/.armaraos/ainl-library` (or a workspace path the daemon resolves) for AINL on a timer, or a text **`message`** for a wake-up **agent** turn, per the tool schema. Check **`schedule_list`** to avoid duplicating jobs.
+- If the user wants a schedule but you **do not** see `schedule_create` in **Your Tools**, your allowlist is restricted. Say that briefly; ask the operator to add `schedule_create` / `schedule_list` in **Settings → Config** (capabilities) or set **Tool profile** to **Full** / `*` so scheduling tools are exposed.
+- **Orchestrating other agents:** only a **top-level** agent with scheduler tools can register kernel jobs. If a sub-agent needs a schedule, you register it (when clear, safe, and proportionate) or hand the user a structured request for another top-level agent.";
 
 /// Static tool-call behavior directives.
 const TOOL_CALL_BEHAVIOR: &str = "\
@@ -354,9 +370,33 @@ const TOOL_CALL_BEHAVIOR: &str = "\
 Quote specific facts, numbers, or passages from the fetched content. Never say you fetched something \
 without sharing what you found.
 - Start with the answer, not meta-commentary about how you'll help.
+- **Native tools vs prompt text:** The host attaches the **full** tool list for native tool-calling. If the **Your Tools** section above summarizes MCP tools to save tokens, that summary is **not** exhaustive — do **not** claim Google Workspace or other MCP tools are unavailable based only on a short list. When you need Gmail, Drive, Calendar, etc., use the `mcp_google_workspace_mcp_*` tools from the native tool set when present.
 - IMPORTANT: If your instructions or persona mention a shell command, script path, or code snippet, \
 execute it via the appropriate tool call (shell_exec, file_write, etc.). Never output commands as \
 code blocks — always call the tool instead.";
+
+/// One-line digest when many MCP tools would make "## Your Tools" unreadable.
+fn mcp_tools_digest_lines(mcp_rows: &[(&str, &str)]) -> String {
+    let names: Vec<&str> = mcp_rows.iter().map(|(n, _)| *n).collect();
+    let total = names.len();
+    let ainl = names.iter().filter(|n| n.starts_with("mcp_ainl_")).count();
+    let gws = names
+        .iter()
+        .filter(|n| n.starts_with("mcp_google_workspace_mcp_"))
+        .count();
+    let other = total.saturating_sub(ainl + gws);
+    let samples = names.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+    let mut s = format!(
+        "{total} MCP tool(s) — **full definitions are attached for native tool calling**.\n\
+         - AINL (`mcp_ainl_*`): {ainl}\n\
+         - Google Workspace (`mcp_google_workspace_mcp_*`): {gws}\n"
+    );
+    if other > 0 {
+        s.push_str(&format!("- Other `mcp_*` namespaces: {other}\n"));
+    }
+    s.push_str(&format!("Examples: {samples} …"));
+    s
+}
 
 /// Build the grouped tools section (Section 3).
 pub fn build_tools_section(granted_tools: &[String]) -> String {
@@ -373,20 +413,31 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
         groups.entry(cat).or_default().push((name.as_str(), hint));
     }
 
+    const MCP_DIGEST_THRESHOLD: usize = 24;
+    let mcp_digest = groups.get("MCP").is_some_and(|rows| rows.len() > MCP_DIGEST_THRESHOLD);
+
     let mut out = String::from("## Your Tools\nYou have access to these capabilities:\n");
     for (category, tools) in &groups {
         out.push_str(&format!("\n**{}**: ", capitalize(category)));
-        let descs: Vec<String> = tools
-            .iter()
-            .map(|(name, hint)| {
-                if hint.is_empty() {
-                    (*name).to_string()
-                } else {
-                    format!("{name} ({hint})")
-                }
-            })
-            .collect();
-        out.push_str(&descs.join(", "));
+        let descs: Vec<String> = if mcp_digest && *category == "MCP" {
+            vec![mcp_tools_digest_lines(tools)]
+        } else {
+            tools
+                .iter()
+                .map(|(name, hint)| {
+                    if hint.is_empty() {
+                        (*name).to_string()
+                    } else {
+                        format!("{name} ({hint})")
+                    }
+                })
+                .collect()
+        };
+        out.push_str(&descs.join(if mcp_digest && *category == "MCP" {
+            "\n"
+        } else {
+            ", "
+        }));
     }
     out
 }
@@ -832,9 +883,9 @@ pub fn tool_hint(name: &str) -> &'static str {
         "cron_create" => "create a kernel cron job (ArmaraOS scheduler)",
         "cron_list" => "list kernel cron jobs for this agent",
         "cron_cancel" => "remove a kernel cron job by id",
-        "schedule_create" => "create a cron job (friendly alias of cron_create)",
-        "schedule_list" => "list cron jobs for this agent",
-        "schedule_delete" => "delete a cron job by id",
+        "schedule_create" => "register ArmaraOS kernel recurring job (AINL program_path or agent_turn; not OS crontab)",
+        "schedule_list" => "list this agent’s kernel scheduler jobs",
+        "schedule_delete" => "remove a kernel scheduler job by id",
         "channels_list" => "list registered channel adapters for alerts",
 
         // Processes
@@ -938,6 +989,7 @@ mod tests {
         assert!(prompt.contains("https://github.com/sbhooley/ainativelang"));
         assert!(prompt.contains("## Tool Call Behavior"));
         assert!(prompt.contains("## Your Tools"));
+        assert!(prompt.contains("## ArmaraOS kernel scheduler (recurring / timed work)"));
         assert!(prompt.contains("## Memory"));
         assert!(prompt.contains("## User Profile"));
         assert!(prompt.contains("## Safety"));
@@ -949,12 +1001,16 @@ mod tests {
         let prompt = build_system_prompt(&basic_ctx());
         let tool_behavior_pos = prompt.find("## Tool Call Behavior").unwrap();
         let tools_pos = prompt.find("## Your Tools").unwrap();
+        let scheduler_pos = prompt
+            .find("## ArmaraOS kernel scheduler (recurring / timed work)")
+            .unwrap();
         let memory_pos = prompt.find("## Memory").unwrap();
         let safety_pos = prompt.find("## Safety").unwrap();
         let guidelines_pos = prompt.find("## Operational Guidelines").unwrap();
 
         assert!(tool_behavior_pos < tools_pos);
-        assert!(tools_pos < memory_pos);
+        assert!(tools_pos < scheduler_pos);
+        assert!(scheduler_pos < memory_pos);
         assert!(memory_pos < safety_pos);
         assert!(safety_pos < guidelines_pos);
     }
@@ -977,22 +1033,24 @@ mod tests {
         assert!(prompt.contains("## Operational Guidelines"));
         assert!(prompt.contains("## Memory"));
         assert!(prompt.contains("## Kernel scheduling (subagent)"));
-        assert!(!prompt.contains("## Kernel scheduling (top-level)"));
+        assert!(!prompt.contains("## ArmaraOS kernel scheduler (recurring / timed work)"));
     }
 
     #[test]
-    fn test_top_level_with_schedule_tools_gets_discretion() {
-        let mut ctx = basic_ctx();
-        ctx.granted_tools.push("schedule_create".to_string());
-        let prompt = build_system_prompt(&ctx);
-        assert!(prompt.contains("## Kernel scheduling (top-level)"));
+    fn test_top_level_always_gets_kernel_scheduler_section() {
+        let prompt = build_system_prompt(&basic_ctx());
+        assert!(prompt.contains("## ArmaraOS kernel scheduler (recurring / timed work)"));
+        assert!(prompt.contains("schedule_create"));
         assert!(!prompt.contains("## Kernel scheduling (subagent)"));
     }
 
     #[test]
-    fn test_top_level_without_schedule_tools_omits_discretion() {
-        let prompt = build_system_prompt(&basic_ctx());
-        assert!(!prompt.contains("## Kernel scheduling (top-level)"));
+    fn test_top_level_with_schedule_create_still_one_scheduler_section() {
+        let mut ctx = basic_ctx();
+        ctx.granted_tools.push("schedule_create".to_string());
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## ArmaraOS kernel scheduler (recurring / timed work)"));
+        assert!(!prompt.contains("## Kernel scheduling (subagent)"));
     }
 
     #[test]
@@ -1017,6 +1075,19 @@ mod tests {
         assert!(section.contains("**Browser**"));
         assert!(section.contains("**Files**"));
         assert!(section.contains("**Web**"));
+    }
+
+    #[test]
+    fn test_mcp_tools_digest_when_list_is_long() {
+        let mut tools: Vec<String> = (0..30)
+            .map(|i| format!("mcp_ainl_placeholder_{i}"))
+            .collect();
+        tools.push("file_read".to_string());
+        let section = build_tools_section(&tools);
+        assert!(section.contains("## Your Tools"));
+        assert!(section.contains("30 MCP tool"));
+        assert!(section.contains("Examples:"));
+        assert!(section.contains("**Files**"));
     }
 
     #[test]
@@ -1053,6 +1124,17 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("## AINL MCP tools (granted)"));
         assert!(prompt.contains("Golden path"));
+    }
+
+    #[test]
+    fn test_granted_google_workspace_mcp_adds_connected_note() {
+        let mut ctx = basic_ctx();
+        ctx.granted_tools
+            .push("mcp_google_workspace_mcp_search_gmail_messages".to_string());
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## Google Workspace MCP tools (granted)"));
+        assert!(prompt.contains("user_google_email"));
+        assert!(prompt.contains("mcp_ainl_ainl_capabilities"));
     }
 
     #[test]

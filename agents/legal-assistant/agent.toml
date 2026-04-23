@@ -7,7 +7,7 @@ tags = ["legal", "contracts", "compliance", "research", "review", "documents"]
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 max_tokens = 8192
 temperature = 0.2
@@ -85,7 +85,7 @@ ARMARAOS PLATFORM (ground truth — use tools to read specifics, do not ask the 
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
@@ -93,7 +93,7 @@ max_llm_tokens_per_hour = 200000
 max_concurrent_tools = 5
 
 [capabilities]
-tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "knowledge_add_entity", "knowledge_add_relation", "knowledge_query", "web_search", "document_extract", "web_fetch", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["file_read", "file_write", "file_list", "memory_store", "memory_recall", "memory_list", "knowledge_add_entity", "knowledge_add_relation", "knowledge_query", "web_search", "document_extract", "web_fetch", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time", "mcp_*"]
 network = ["*"]
 memory_read = ["*"]
 memory_write = ["self.*", "shared.*"]

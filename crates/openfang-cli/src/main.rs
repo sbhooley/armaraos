@@ -18,6 +18,7 @@ use colored::Colorize;
 use openfang_api::server::read_daemon_info;
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
+use openfang_types::config::DEFAULT_OPENROUTER_MODEL_ID;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Read, Write};
@@ -2041,6 +2042,12 @@ fn detect_best_provider() -> (&'static str, &'static str, &'static str) {
 /// Static list of supported providers: (id, env_var, default_model, display_name).
 fn provider_list() -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
     vec![
+        (
+            "openrouter",
+            "OPENROUTER_API_KEY",
+            DEFAULT_OPENROUTER_MODEL_ID,
+            "OpenRouter",
+        ),
         ("groq", "GROQ_API_KEY", "llama-3.3-70b-versatile", "Groq"),
         ("gemini", "GEMINI_API_KEY", "gemini-2.5-flash", "Gemini"),
         ("deepseek", "DEEPSEEK_API_KEY", "deepseek-chat", "DeepSeek"),
@@ -2051,12 +2058,6 @@ fn provider_list() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Anthropic",
         ),
         ("openai", "OPENAI_API_KEY", "gpt-4o", "OpenAI"),
-        (
-            "openrouter",
-            "OPENROUTER_API_KEY",
-            "elephant-alpha",
-            "OpenRouter",
-        ),
     ]
 }
 

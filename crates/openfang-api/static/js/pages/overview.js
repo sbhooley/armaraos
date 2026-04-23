@@ -20,7 +20,13 @@ function overviewShouldRefreshOnKernelEvent(ev) {
 }
 
 function overviewPage() {
-  return {
+  return Object.assign(armaraosFleetVitalsCore(), {
+    /** For fleet vitals + agent cards; always null on Command Center (no inline chat). */
+    activeChatAgent: null,
+    filterState: 'all',
+    /** Guard so fleet periodic refresh starts once per overview mount. */
+    _ccFleetStarted: false,
+
     health: {},
     status: {},
     usageSummary: {},
@@ -53,7 +59,7 @@ function overviewPage() {
 
     /** `localStorage` openfang-onboarded — finished setup wizard (or dismissed onboarding). */
     onboarded: false,
-    /** When false (onboarded users), Setup Wizard is hidden until they click "Get started". */
+    /** When false (onboarded users), Setup Wizard is hidden until they click "Command Center". */
     overviewWizardCtaVisible: true,
 
     initOverviewWizardCta() {
@@ -70,7 +76,7 @@ function overviewPage() {
       this.overviewWizardCtaVisible = true;
     },
 
-    /** Sidebar "Get started" clicked while already on this page — reveal wizard for onboarded users. */
+    /** Sidebar "Command Center" clicked while already on this page — reveal wizard for onboarded users. */
     onOverviewNavSamePage() {
       try {
         if (localStorage.getItem('openfang-onboarded') === 'true') {
@@ -121,6 +127,10 @@ function overviewPage() {
           this.loadSkills(),
           this.loadObservability()
         ]);
+        try {
+          var a = Alpine.store('app');
+          if (a && typeof a.refreshAgents === 'function') await a.refreshAgents();
+        } catch (e) { /* ignore */ }
         this.lastRefresh = Date.now();
         this.refreshOnboardingFlags();
       } catch(e) {
@@ -131,6 +141,12 @@ function overviewPage() {
 
     copyOverviewErrorDebug() {
       copyPageLoadErrorDebug(this, 'ArmaraOS overview load error');
+    },
+
+    /** Command Center quick action: Settings → Providers (via session key read on settings load). */
+    goConfigureProviders() {
+      try { sessionStorage.setItem('armaraos-settings-tab', 'providers'); } catch (e) { /* ignore */ }
+      if (typeof location !== 'undefined') location.hash = 'settings';
     },
 
     async loadData() { return this.loadOverview(); },
@@ -151,6 +167,10 @@ function overviewPage() {
           this.loadSkills(),
           this.loadObservability()
         ]);
+        try {
+          var a2 = Alpine.store('app');
+          if (a2 && typeof a2.refreshAgents === 'function') await a2.refreshAgents();
+        } catch (e) { /* ignore */ }
         this.lastRefresh = Date.now();
         this.refreshOnboardingFlags();
       } catch(e) { /* silent */ }
@@ -168,6 +188,52 @@ function overviewPage() {
         this.refreshTimer = null;
       }
       this.unbindKernelEventRefresh();
+    },
+
+    /** Tears down Command Center fleet timers and refresh state when leaving #overview. */
+    onOverviewPageLeave() {
+      this.stopAutoRefresh();
+      this._ccFleetStarted = false;
+      try { if (typeof this.fleetTeardown === 'function') this.fleetTeardown(); } catch (e) { /* ignore */ }
+    },
+
+    startCommandCenterFleet: function() {
+      if (this._ccFleetStarted) return;
+      this._ccFleetStarted = true;
+      var self = this;
+      this.demoProfile = this.readFleetDemoProfileFromEnv();
+      this.demoMode = this.readFleetDemoFromEnv();
+      this.applyDemoThemeIfNeeded();
+      this.loadPersistedAgentHourly();
+      this.pruneAgentHourlyMaps();
+      this.loadPersistedHourlyUiPrefs();
+      this.$nextTick(function() {
+        self.syncAgentActivityFeeds();
+        self.fleetStartPeriodic();
+        if (self._activitySyncInt) { try { clearInterval(self._activitySyncInt); } catch (eA) { /* ignore */ } self._activitySyncInt = null; }
+        self._activitySyncInt = setInterval(function() { self.syncAgentActivityFeeds(); }, 650);
+        if (self._idlePulseInt) { try { clearInterval(self._idlePulseInt); } catch (eB) { /* ignore */ } self._idlePulseInt = null; }
+        self._idlePulseInt = setInterval(function() {
+          self._idlePulseTick = (self._idlePulseTick + 1) % 10000;
+        }, 1200);
+        if (self._activePulseInt) { try { clearInterval(self._activePulseInt); } catch (eC) { /* ignore */ } self._activePulseInt = null; }
+        self._activePulseInt = setInterval(function() {
+          self.tickActivePhaseMicroActivity();
+        }, 1100);
+        if (self.demoMode) self.fleetStartDemo();
+      });
+    },
+
+    /** Open agent settings on All Agents; used by vitals card gear. */
+    showDetail: function(agent) {
+      if (!agent) return;
+      try { Alpine.store('app').openAgentSettings(agent); } catch (e) { try { if (location && location.hash !== undefined) { location.hash = 'agents'; } } catch (e2) { /* ignore */ } }
+    },
+
+    /** When opened from a template that expects the Agents inline chat. */
+    chatWithAgent: function(agent) {
+      if (!agent) return;
+      try { Alpine.store('app').openAgentChat(agent); } catch (e) { try { if (location) { location.hash = 'agents'; } } catch (e2) { /* ignore */ } }
     },
 
     /** Debounced refresh when kernel SSE emits lifecycle/system events (same tab). */
@@ -282,18 +348,23 @@ function overviewPage() {
         var data = await OpenFangAPI.get('/api/mcp/servers');
         var configured = Array.isArray(data.configured) ? data.configured : [];
         var connected = Array.isArray(data.connected) ? data.connected : [];
-        var connectedSet = new Set(connected.map(function(s) { return String(s.name || ''); }));
-        var merged = configured.map(function(s) {
-          var n = String((s && s.name) || '');
-          return { name: n, status: connectedSet.has(n) ? 'connected' : 'configured' };
+        var mergedByName = {};
+        configured.forEach(function(s) {
+          var n = String((s && s.name) || '').trim();
+          if (!n) return;
+          if (!mergedByName[n]) mergedByName[n] = { name: n, status: 'configured' };
         });
         connected.forEach(function(s) {
-          var n = String((s && s.name) || '');
-          if (!merged.some(function(m) { return m.name === n; })) {
-            merged.push({ name: n, status: 'connected' });
-          }
+          var n = String((s && s.name) || '').trim();
+          if (!n) return;
+          var row = mergedByName[n] || { name: n, status: 'configured' };
+          row.status = 'connected';
+          if (s && s.tool_count != null) row.tool_count = s.tool_count;
+          mergedByName[n] = row;
         });
-        this.mcpServers = merged;
+        this.mcpServers = Object.keys(mergedByName).sort().map(function(name) {
+          return mergedByName[name];
+        });
         this.mcpReadiness = data.readiness || null;
         this.mcpCalendarReadiness = data.calendar_readiness || null;
       } catch(e) { this.mcpServers = []; this.mcpReadiness = null; }
@@ -322,8 +393,12 @@ function overviewPage() {
       return this.providers.filter(function(p) { return p.auth_status === 'not_set' || p.auth_status === 'missing'; });
     },
 
+    get availableMcp() {
+      return this.mcpServers.filter(function(s) { return s && s.name; });
+    },
+
     get connectedMcp() {
-      return this.mcpServers.filter(function(s) { return s.status === 'connected'; });
+      return this.availableMcp.filter(function(s) { return s.status === 'connected'; });
     },
 
     get graphMemoryMetrics() {
@@ -704,5 +779,5 @@ function overviewPage() {
       var agent = agents.find(function(a) { return a.id === agentId; });
       return agent ? agent.name : agentId.substring(0, 8) + '\u2026';
     }
-  };
+  });
 }

@@ -29,6 +29,22 @@ struct ProviderInfo {
 
 const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
+        name: "openrouter",
+        display: "OpenRouter",
+        env_var: "OPENROUTER_API_KEY",
+        default_model: "nvidia/nemotron-3-super-120b-a12b:free",
+        needs_key: true,
+        hint: "free tier",
+    },
+    ProviderInfo {
+        name: "standardcompute",
+        display: "Standard Compute",
+        env_var: "STANDARDCOMPUTE_API_KEY",
+        default_model: "StandardCompute",
+        needs_key: true,
+        hint: "",
+    },
+    ProviderInfo {
         name: "groq",
         display: "Groq",
         env_var: "GROQ_API_KEY",
@@ -67,14 +83,6 @@ const PROVIDERS: &[ProviderInfo] = &[
         default_model: "gpt-4o",
         needs_key: true,
         hint: "",
-    },
-    ProviderInfo {
-        name: "openrouter",
-        display: "OpenRouter",
-        env_var: "OPENROUTER_API_KEY",
-        default_model: "elephant-alpha",
-        needs_key: true,
-        hint: "free tier",
     },
     ProviderInfo {
         name: "together",

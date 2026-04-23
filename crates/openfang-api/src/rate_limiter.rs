@@ -21,6 +21,7 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("GET", "/api/version/github-latest") => NonZeroU32::new(8).unwrap(),
         ("GET", "/api/ainl/runtime-version") => NonZeroU32::new(8).unwrap(),
         ("GET", "/api/tools") => NonZeroU32::new(1).unwrap(),
+        ("GET", p) if p.ends_with("/llm-tools") => NonZeroU32::new(2).unwrap(),
         ("GET", "/api/agents") => NonZeroU32::new(2).unwrap(),
         ("GET", "/api/skills") => NonZeroU32::new(2).unwrap(),
         ("GET", "/api/peers") => NonZeroU32::new(2).unwrap(),
@@ -112,6 +113,11 @@ mod tests {
             1
         );
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
+        assert_eq!(
+            operation_cost("GET", "/api/agents/00000000-0000-4000-8000-000000000001/llm-tools")
+                .get(),
+            2
+        );
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);
         assert_eq!(operation_cost("POST", "/api/agents").get(), 50);
         assert_eq!(operation_cost("POST", "/api/workflows/1/run").get(), 100);

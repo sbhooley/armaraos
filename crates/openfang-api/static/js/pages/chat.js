@@ -216,6 +216,8 @@ function chatPage() {
       if (s === '0') return false;
       return false;
     }()),
+    /** Persistent hint under the input when Piper is unavailable or prefs were reset (not only toast). */
+    voiceReplyHint: '',
     // Model autocomplete state
     showModelPicker: false,
     modelPickerList: [],
@@ -670,6 +672,8 @@ function chatPage() {
           self._applyAgentEcoMode(self.currentAgent);
         }
       });
+
+      this._syncVoiceReplyWithServer();
 
       // Watch for slash commands + model autocomplete
       this.$watch('inputText', function(val) {
@@ -1565,7 +1569,7 @@ function chatPage() {
                   id: toolMatch[1] + '-txt-' + Date.now(),
                   name: toolMatch[1],
                   running: true,
-                  expanded: true,
+                  expanded: false,
                   input: inputMatch ? inputMatch[1].replace(/<\/function>?\s*$/, '').trim() : '',
                   result: '',
                   is_error: false
@@ -1590,7 +1594,7 @@ function chatPage() {
           var lastMsg = tsIdx >= 0 ? this.messages[tsIdx] : null;
           if (lastMsg && lastMsg.streaming) {
             if (!lastMsg.tools) lastMsg.tools = [];
-            lastMsg.tools.push({ id: data.tool + '-' + Date.now(), name: data.tool, running: true, expanded: true, input: '', result: '', is_error: false });
+            lastMsg.tools.push({ id: data.tool + '-' + Date.now(), name: data.tool, running: true, expanded: false, input: '', result: '', is_error: false });
             this.messages.splice(tsIdx, 1, lastMsg);
           }
           this.scrollToBottom();
@@ -1623,6 +1627,7 @@ function chatPage() {
                 lastMsg3.tools[ri].running = false;
                 lastMsg3.tools[ri].result = data.result || '';
                 lastMsg3.tools[ri].is_error = !!data.is_error;
+                lastMsg3.tools[ri].expanded = this.shouldAutoExpandTool(lastMsg3.tools[ri]);
                 // Extract image URLs from image_generate or browser_screenshot results
                 if ((data.tool === 'image_generate' || data.tool === 'browser_screenshot') && !data.is_error) {
                   try {
@@ -2220,11 +2225,12 @@ function chatPage() {
               id: (ht.name || 'tool') + '-http-' + hti + '-' + httpNow,
               name: ht.name || '',
               running: false,
-              expanded: true,
+              expanded: false,
               input: typeof ht.input === 'string' ? ht.input : JSON.stringify(ht.input != null ? ht.input : {}),
               result: ht.result || '',
               is_error: !!ht.is_error
             });
+            httpTools[httpTools.length - 1].expanded = this.shouldAutoExpandTool(httpTools[httpTools.length - 1]);
           }
         }
         this.messages.push({ id: ++msgId, role: 'agent', text: res.response, meta: httpMeta, tools: httpTools, ts: Date.now(),
@@ -2448,6 +2454,63 @@ function chatPage() {
       catch(e) { return text; }
     },
 
+    toolResultText: function(tool) {
+      if (!tool || tool.result == null) return '';
+      if (typeof tool.result === 'string') return tool.result;
+      try { return JSON.stringify(tool.result, null, 2); } catch (e) { return String(tool.result); }
+    },
+
+    toolResultChars: function(tool) {
+      return this.toolResultText(tool).length;
+    },
+
+    toolAuthUrl: function(tool) {
+      var text = this.toolResultText(tool);
+      if (!text) return '';
+      var low = text.toLowerCase();
+      var looksAuth = /action required|authorization needed|authentication needed|oauth|authorize|consent|grant access|requires authorization/.test(low);
+      if (!looksAuth) return '';
+      var urls = text.match(/https?:\/\/[^\s<>"')]+/g) || [];
+      for (var i = 0; i < urls.length; i++) {
+        var u = String(urls[i] || '');
+        var ul = u.toLowerCase();
+        if (/oauth|authorize|accounts\.google\.com|consent|client_id|scope=/.test(ul)) return u;
+      }
+      return urls.length ? urls[0] : '';
+    },
+
+    toolStatusText: function(tool) {
+      if (!tool) return '';
+      if (tool.running) return 'running...';
+      if (this.toolAuthUrl(tool)) return 'auth needed';
+      if (tool.is_error) return 'error';
+      var chars = this.toolResultChars(tool);
+      if (chars > 500) return Math.max(1, Math.round(chars / 1024)) + 'KB';
+      return 'done';
+    },
+
+    toolSummaryText: function(tool) {
+      if (!tool) return '';
+      if (tool.running) return 'Waiting for tool response...';
+      if (this.toolAuthUrl(tool)) return 'Authorization required. Open the link below, then retry.';
+      var text = this.toolResultText(tool);
+      if (!text) return tool.is_error ? 'Tool returned an error.' : 'Tool completed.';
+      var oneLine = text
+        .replace(/^Error calling tool[^:]*:\s*/i, '')
+        .replace(/https?:\/\/[^\s<>"')]+/g, '[link]')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!oneLine) return tool.is_error ? 'Tool returned an error.' : 'Tool completed.';
+      return oneLine.length > 150 ? (oneLine.slice(0, 147) + '...') : oneLine;
+    },
+
+    shouldAutoExpandTool: function(tool) {
+      if (!tool || tool.running) return false;
+      if (this.toolAuthUrl(tool)) return true;
+      if (tool.is_error) return true;
+      return false;
+    },
+
     // Prefer codecs whisper.cpp accepts natively (ogg/mp3/wav/flac) to avoid server-side ffmpeg;
     // fall back to WebM Opus (Chrome), then audio/mp4 (Safari often). See MediaRecorder MIME support per browser/OS.
     chooseVoiceRecordingMimeType: function() {
@@ -2600,10 +2663,32 @@ function chatPage() {
      * When turning on, preflight `GET /api/system/local-voice` so the UI only enables if Piper
      * is actually ready; otherwise a toast explains typical fixes (first online launch, config).
      */
+    /** If localStorage had spoken-reply on but Piper is gone, turn off and explain (toast + footer). */
+    _syncVoiceReplyWithServer: async function() {
+      if (!this.voiceReplyEnabled) return;
+      if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) return;
+      try {
+        var s = await OpenFangAPI.get('/api/system/local-voice');
+        if (s && s.piper_ready) return;
+        this.voiceReplyEnabled = false;
+        try { localStorage.setItem('armaraos-voice-reply', '0'); } catch (e) { /* non-fatal */ }
+        this.voiceReplyHint = 'Spoken replies were saved as on, but Piper is not ready — tap the speaker again for setup tips.';
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.warn(this.voiceReplyHint);
+        }
+      } catch (err) {
+        this.voiceReplyHint = '';
+      }
+    },
+
     toggleVoiceReply: async function() {
       if (this.voiceReplyEnabled) {
         this.voiceReplyEnabled = false;
+        this.voiceReplyHint = '';
         try { localStorage.setItem('armaraos-voice-reply', '0'); } catch (e) { /* non-fatal */ }
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.info('Spoken replies off — assistant answers stay text-only unless you use cloud TTS tools.');
+        }
         return;
       }
       if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) {
@@ -2617,7 +2702,11 @@ function chatPage() {
         var s = await OpenFangAPI.get('/api/system/local-voice');
         if (s && s.piper_ready) {
           self.voiceReplyEnabled = true;
+          self.voiceReplyHint = '';
           try { localStorage.setItem('armaraos-voice-reply', '1'); } catch (e2) { /* non-fatal */ }
+          if (typeof OpenFangToast !== 'undefined') {
+            OpenFangToast.success('Spoken replies on — after you send a message, the assistant reply may auto-play (Piper) when the server returns audio.');
+          }
         } else {
           var notEnabled = s && s.enabled === false;
           var msg = notEnabled
@@ -2625,10 +2714,12 @@ function chatPage() {
             : (s && s.auto_download === false
               ? 'Spoken reply needs Piper (TTS) but auto-download is off. Go online to place binaries under ~/.armaraos/voice/, or set [local_voice] paths in config.toml. See "Local voice" in the docs.'
               : 'Spoken reply is not available yet: Piper (local TTS) is not ready. The first daemon run on a working network usually auto-downloads it; if you were fully offline, connect, restart the daemon, and try again. See "Local voice" (Whisper + Piper) in the docs.');
+          self.voiceReplyHint = 'Piper not ready — spoken reply cannot turn on. See docs/local-voice.md or GET /api/system/local-voice.';
           if (typeof OpenFangToast !== 'undefined') OpenFangToast.warn(msg);
         }
       } catch (err) {
         var m = (err && err.message) ? err.message : 'request failed';
+        self.voiceReplyHint = 'Could not verify Piper — check connection to the daemon.';
         if (typeof OpenFangToast !== 'undefined') {
           OpenFangToast.error('Could not verify local voice / Piper: ' + m);
         }

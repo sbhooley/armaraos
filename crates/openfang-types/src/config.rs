@@ -1879,16 +1879,19 @@ pub fn openfang_home_dir() -> PathBuf {
     home.join(".openfang")
 }
 
-/// Default OpenRouter model id for fresh installs (no `openrouter/` prefix; drivers add the provider).
-/// Kept in sync with desktop `apply_desktop_bundled_llm_defaults` and the model catalog.
-pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "elephant-alpha";
+/// Default OpenRouter model id when OpenRouter is selected (no `openrouter/` prefix in config).
+/// Kept in sync with the model catalog, desktop bundled defaults, and OpenRouter-specific migrations.
+pub const DEFAULT_OPENROUTER_MODEL_ID: &str = "nvidia/nemotron-3-super-120b-a12b:free";
+
+/// Default Standard Compute model id when that provider is selected (no `standardcompute/` prefix in config).
+/// Kept in sync with the model catalog.
+pub const DEFAULT_STANDARDCOMPUTE_MODEL_ID: &str = "StandardCompute";
 
 /// OpenRouter `:free` models tried in order when the primary hits rate limit / overload after
 /// built-in retries. Entries equal to the **primary** `request.model` are skipped to avoid a
 /// duplicate call. IDs change as OpenRouter rotates free endpoints — confirm on openrouter.ai
 /// (models search `free`, or the free-models collection).
 pub const OPENROUTER_FREE_FALLBACK_MODELS: &[&str] = &[
-    "nvidia/nemotron-3-super-120b-a12b:free",
     "meta-llama/llama-3.1-8b-instruct:free",
 ];
 

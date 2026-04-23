@@ -48,8 +48,8 @@ function skillsPage() {
     mcpHostReadiness: null,
     mcpUvBootstrapBusy: false,
 
-    // Custom MCP (primary flow)
-    mcpShowPresets: false,
+    // Custom MCP (primary flow) — show preset installer first (incl. Google Workspace)
+    mcpShowPresets: true,
     customMcpTransport: 'stdio',
     customMcpForm: {
       id: '',
@@ -493,7 +493,8 @@ function skillsPage() {
         var inst = await OpenFangAPI.get('/api/integrations');
         this.mcpInstalledIntegrations = inst.installed || [];
         if (!this.mcpPresetId && this.mcpPresets.length) {
-          this.mcpPresetId = this.mcpPresets[0].preset_id;
+          var gw = this.mcpPresets.find(function(p) { return p.preset_id === 'google-workspace-mcp'; });
+          this.mcpPresetId = gw ? gw.preset_id : this.mcpPresets[0].preset_id;
         }
         this.applyMcpPresetSelection();
         try {

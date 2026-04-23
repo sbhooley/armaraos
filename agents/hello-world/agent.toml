@@ -6,7 +6,7 @@ module = "builtin:chat"
 
 [model]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 max_tokens = 4096
 temperature = 0.6
 system_prompt = """You are Hello World, a friendly and approachable agent in the ArmaraOS.
@@ -24,14 +24,14 @@ ARMARAOS PLATFORM: Home dir ~/.armaraos/, config at ~/.armaraos/config.toml. Cro
 
 [[fallback_models]]
 provider = "openrouter"
-model = "elephant-alpha"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 api_key_env = "OPENROUTER_API_KEY"
 
 [resources]
 max_llm_tokens_per_hour = 100000
 
 [capabilities]
-tools = ["file_read", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time"]
+tools = ["file_read", "file_list", "web_fetch", "web_search", "memory_store", "memory_recall", "memory_list", "channels_list", "schedule_list", "schedule_create", "schedule_delete", "cron_list", "cron_create", "cron_cancel", "system_time", "mcp_*"]
 network = ["*"]
 memory_read = ["*"]
 memory_write = ["self.*"]

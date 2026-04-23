@@ -46,6 +46,81 @@ fn default_timeout() -> u64 {
     60
 }
 
+/// When the parent process has a minimal `PATH` (typical for macOS `.app`
+/// bundles launched from Finder), MCP shims like `uvx` / `npx` are not found.
+/// Append common install locations so `Command::new("uvx")` can resolve.
+#[cfg(unix)]
+fn augment_unix_path_for_mcp(parent_path: &str) -> String {
+    use std::path::Path;
+    let mut extra: Vec<String> = Vec::new();
+    if let Some(h) = std::env::var_os("HOME") {
+        let local_bin = Path::new(&h).join(".local/bin");
+        if local_bin.is_dir() {
+            let s = local_bin.to_string_lossy().into_owned();
+            if !parent_path.split(':').any(|p| p == s.as_str()) {
+                extra.push(s);
+            }
+        }
+    }
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        if Path::new(dir).is_dir() && !parent_path.split(':').any(|p| p == dir) {
+            extra.push(dir.to_string());
+        }
+    }
+    if extra.is_empty() {
+        return parent_path.to_string();
+    }
+    if parent_path.is_empty() {
+        extra.join(":")
+    } else {
+        format!("{parent_path}:{}", extra.join(":"))
+    }
+}
+
+#[cfg(not(unix))]
+fn augment_unix_path_for_mcp(parent_path: &str) -> String {
+    parent_path.to_string()
+}
+
+/// Resolve bare `uvx` / `npx` to an absolute path when present under `PATH` or
+/// well-known install dirs (mirrors kernel `first_uvx_command` behavior).
+fn resolve_stdio_executable(command: &str) -> String {
+    use std::path::Path;
+    let cmd = command.trim();
+    if cmd.contains('/') || (cfg!(windows) && cmd.contains('\\')) {
+        return cmd.to_string();
+    }
+    if cmd != "uvx" && cmd != "npx" {
+        return cmd.to_string();
+    }
+
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for d in p.split(sep) {
+            if !d.is_empty() {
+                dirs.push(Path::new(d).to_path_buf());
+            }
+        }
+    }
+    if let Some(h) = std::env::var_os("HOME") {
+        dirs.push(Path::new(&h).join(".local/bin"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(Path::new("/opt/homebrew/bin").to_path_buf());
+        dirs.push(Path::new("/usr/local/bin").to_path_buf());
+    }
+
+    for dir in dirs {
+        let full = dir.join(cmd);
+        if full.is_file() {
+            return full.to_string_lossy().into_owned();
+        }
+    }
+    cmd.to_string()
+}
+
 /// Transport type for MCP server connections.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -230,7 +305,7 @@ impl McpConnection {
             return Err("MCP command path contains '..': rejected".to_string());
         }
 
-        let cmd_str = command.to_string();
+        let cmd_str = resolve_stdio_executable(command);
         let args_vec: Vec<String> = args.to_vec();
         let env_list: Vec<String> = env_whitelist.to_vec();
         let server_name = server_name.to_string();
@@ -255,9 +330,25 @@ impl McpConnection {
             if server_name == "ainl" && std::env::var("AINL_MCP_PROFILE").is_err() {
                 cmd.env("AINL_MCP_PROFILE", "consumer_secure_default");
             }
-            // Always pass PATH for binary resolution
-            if let Ok(path) = std::env::var("PATH") {
-                cmd.env("PATH", path);
+            // PATH: widen on Unix so `uvx` subprocesses can find Python / tooling
+            // even when the ArmaraOS host inherited a minimal GUI `PATH`.
+            let mut path_val = std::env::var("PATH").unwrap_or_default();
+            #[cfg(unix)]
+            {
+                path_val = augment_unix_path_for_mcp(&path_val);
+            }
+            if !path_val.is_empty() {
+                cmd.env("PATH", path_val);
+            }
+            // OAuth / cache dirs (e.g. workspace-mcp) expect a normal user home;
+            // these are not integration-specific secrets.
+            #[cfg(unix)]
+            {
+                for extra in ["HOME", "USER", "TMPDIR", "LANG"] {
+                    if let Ok(val) = std::env::var(extra) {
+                        cmd.env(extra, val);
+                    }
+                }
             }
             // On Windows, npm/node need extra vars
             if cfg!(windows) {
@@ -477,6 +568,17 @@ mod tests {
             extract_mcp_server_from_known("mcp_my_api_list_items", &servers),
             Some("my-api")
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_augment_unix_path_keeps_base_and_maybe_extends() {
+        let base = "/usr/bin:/bin";
+        let aug = super::augment_unix_path_for_mcp(base);
+        assert!(aug.starts_with(base));
+        if std::path::Path::new("/opt/homebrew/bin").is_dir() {
+            assert!(aug.contains("/opt/homebrew/bin"));
+        }
     }
 
     #[test]

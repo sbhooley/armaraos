@@ -341,6 +341,10 @@ impl ToolProfile {
                 "channel_send",
                 "event_publish",
                 "media_transcribe",
+                "schedule_create",
+                "schedule_list",
+                "schedule_delete",
+                "channels_list",
             ],
             Self::Research => vec![
                 "web_fetch",
@@ -351,6 +355,12 @@ impl ToolProfile {
                 "channel_send",
                 "event_publish",
                 "media_transcribe",
+                // ArmaraOS kernel scheduler (see openfang-runtime system prompt) — same merge as
+                // `merge_scheduling_builtins_into_declared_tools` in the kernel
+                "schedule_create",
+                "schedule_list",
+                "schedule_delete",
+                "channels_list",
             ],
             Self::Messaging => vec![
                 "agent_send",
@@ -360,6 +370,10 @@ impl ToolProfile {
                 "channel_send",
                 "event_publish",
                 "media_transcribe",
+                "schedule_create",
+                "schedule_list",
+                "schedule_delete",
+                "channels_list",
             ],
             Self::Automation => vec![
                 "file_read",
@@ -377,6 +391,10 @@ impl ToolProfile {
                 "channel_send",
                 "event_publish",
                 "media_transcribe",
+                "schedule_create",
+                "schedule_list",
+                "schedule_delete",
+                "channels_list",
             ],
             Self::Full | Self::Custom => vec!["*"],
         }
@@ -894,6 +912,8 @@ mod tests {
     fn test_tool_profile_coding() {
         let tools = ToolProfile::Coding.tools();
         assert!(tools.contains(&"file_read".to_string()));
+        assert!(tools.contains(&"file_write".to_string()));
+        assert!(tools.contains(&"file_list".to_string()));
         assert!(tools.contains(&"document_extract".to_string()));
         assert!(tools.contains(&"spreadsheet_build".to_string()));
         assert!(tools.contains(&"shell_exec".to_string()));
@@ -901,7 +921,11 @@ mod tests {
         assert!(tools.contains(&"channel_send".to_string()));
         assert!(tools.contains(&"event_publish".to_string()));
         assert!(tools.contains(&"media_transcribe".to_string()));
-        assert_eq!(tools.len(), 10);
+        assert!(tools.contains(&"schedule_create".to_string()));
+        assert!(tools.contains(&"schedule_list".to_string()));
+        assert!(tools.contains(&"schedule_delete".to_string()));
+        assert!(tools.contains(&"channels_list".to_string()));
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]
@@ -909,26 +933,45 @@ mod tests {
         let tools = ToolProfile::Research.tools();
         assert!(tools.contains(&"web_fetch".to_string()));
         assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"file_read".to_string()));
+        assert!(tools.contains(&"file_write".to_string()));
         assert!(tools.contains(&"document_extract".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
+        assert!(tools.contains(&"event_publish".to_string()));
         assert!(tools.contains(&"media_transcribe".to_string()));
-        assert_eq!(tools.len(), 8);
+        assert!(tools.contains(&"schedule_create".to_string()));
+        assert!(tools.contains(&"schedule_list".to_string()));
+        assert!(tools.contains(&"schedule_delete".to_string()));
+        assert!(tools.contains(&"channels_list".to_string()));
+        assert_eq!(tools.len(), 12);
     }
 
     #[test]
     fn test_tool_profile_messaging() {
         let tools = ToolProfile::Messaging.tools();
         assert!(tools.contains(&"agent_send".to_string()));
+        assert!(tools.contains(&"agent_list".to_string()));
+        assert!(tools.contains(&"memory_store".to_string()));
         assert!(tools.contains(&"memory_recall".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
+        assert!(tools.contains(&"event_publish".to_string()));
         assert!(tools.contains(&"media_transcribe".to_string()));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&"schedule_create".to_string()));
+        assert!(tools.contains(&"schedule_list".to_string()));
+        assert!(tools.contains(&"schedule_delete".to_string()));
+        assert!(tools.contains(&"channels_list".to_string()));
+        assert_eq!(tools.len(), 11);
     }
 
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 15);
+        assert!(tools.contains(&"shell_exec".to_string()));
+        assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"agent_send".to_string()));
+        assert!(tools.contains(&"schedule_create".to_string()));
+        assert!(tools.contains(&"channels_list".to_string()));
+        assert_eq!(tools.len(), 19);
     }
 
     #[test]

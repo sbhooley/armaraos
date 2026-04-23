@@ -525,6 +525,9 @@ async fn handle_text_message(
                 if !audio_hint.is_empty() {
                     content.push_str(&audio_hint);
                 }
+                if let Some(policy) = crate::routes::voice_transcript_policy_suffix(&attachment_refs) {
+                    content.push_str(policy);
+                }
             }
 
             // Resolve file attachments into image content blocks
