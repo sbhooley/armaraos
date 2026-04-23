@@ -1,6 +1,6 @@
 [package]
 name = "ainl-memory"
-version = "0.1.9-alpha"
+version = "0.1.10-alpha"
 description = "AINL graph-memory substrate - agent memory as execution graph"
 authors = ["Steven Hooley"]
 readme = "README.md"
@@ -12,7 +12,7 @@ keywords = ["ai", "agent", "memory", "graph", "ainl"]
 categories = ["development-tools", "database"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
 ainl-trajectory = { path = "../ainl-trajectory", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }

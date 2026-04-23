@@ -1,6 +1,6 @@
 [package]
 name = "ainl-compression"
-version = "0.1.0-alpha"
+version = "0.1.1-alpha"
 description = "Embedding-free input/output compression primitives for AINL hosts"
 edition.workspace = true
 license.workspace = true

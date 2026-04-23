@@ -7,5 +7,5 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
 serde = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "ainl-runtime"
-version = "0.3.7-alpha"
+version = "0.3.8-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors = ["Steven Hooley"]
@@ -52,7 +52,7 @@ default = []
 async = ["dep:async-trait", "dep:tokio"]
 
 [dependencies]
-ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.0" }
+ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -60,10 +60,10 @@ tracing = { workspace = true }
 scopeguard = { workspace = true }
 chrono = { workspace = true }
 ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.9-alpha" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.6" }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.6" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.6" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.7" }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.7" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.7" }
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = [
     "rt",

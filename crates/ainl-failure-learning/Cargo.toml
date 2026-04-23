@@ -10,8 +10,8 @@ keywords = ["ainl", "agent", "memory", "learning"]
 categories = ["development-tools"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts" }
-ainl-memory = { path = "../ainl-memory" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
