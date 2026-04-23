@@ -60,3 +60,5 @@ Thumbs.db
 **/*.bak*
 
 FEATURE_GAP_ANALYSIS_CORRECTED.md
+
+docs/kernel-vision.md
