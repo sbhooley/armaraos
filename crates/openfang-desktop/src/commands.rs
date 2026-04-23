@@ -533,6 +533,13 @@ pub fn set_dashboard_bookmarks(app: tauri::AppHandle, json: String) -> Result<()
     crate::ui_prefs::save_dashboard_bookmarks_json(&app, &json)
 }
 
+/// Open the local Premium verification page in the system browser (Phantom injects there).
+#[tauri::command]
+pub fn open_premium_ainl_verify_browser(port: tauri::State<'_, PortState>) -> Result<(), String> {
+    let url = format!("http://127.0.0.1:{}/premium-ainl-verify.html", port.0);
+    open::that(&url).map_err(|e| e.to_string())
+}
+
 /// Open a whitelisted HTTPS URL in the system default browser (Tauri webview `target=_blank` is unreliable).
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {

@@ -21,6 +21,7 @@
     "global-shortcut:allow-is-registered",
     "autostart:default",
     "updater:default",
+    "deep-link:default",
     "allow-ainl-bootstrap",
     "allow-dashboard-ui-prefs"
   ]

@@ -25,13 +25,37 @@ use openfang_kernel::OpenFangKernel;
 use openfang_types::event::{EventPayload, LifecycleEvent, SystemEvent};
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
 
 /// Curated AINL cron monitors: **success** should not post native OS notifications.
 /// `test-ainl-*` job names match integration tests and are quiet too.
 /// Keep in sync with `armaraosRoutineMonitorCronJobName` in `openfang-api/static/js/app.js`
 /// and `cron_success_suppresses_session_append` in `openfang-kernel`.
+fn extract_premium_ainl_ticket_from_argv(argv: &[String]) -> Option<String> {
+    for raw in argv {
+        let arg = raw.trim();
+        if !arg.contains("armaraos://premium-ainl") {
+            continue;
+        }
+        let Ok(parsed) = url::Url::parse(arg) else {
+            continue;
+        };
+        if parsed.scheme() != "armaraos" {
+            continue;
+        }
+        for (k, v) in parsed.query_pairs() {
+            if k == "ticket" {
+                let t = v.into_owned();
+                if !t.trim().is_empty() {
+                    return Some(t.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn routine_monitor_cron_quiet_success(job_name: &str) -> bool {
     if job_name.starts_with("test-ainl-") {
         return true;
@@ -134,7 +158,10 @@ pub fn run() {
     // Desktop-only plugins
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(ticket) = extract_premium_ainl_ticket_from_argv(&argv) {
+                let _ = app.emit("premium-ainl-ticket", ticket);
+            }
             // Another instance tried to launch — focus the existing window
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -142,6 +169,8 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }));
+
+        builder = builder.plugin(tauri_plugin_deep_link::init());
 
         builder = builder.plugin(
             tauri_plugin_autostart::Builder::new()
@@ -196,6 +225,7 @@ pub fn run() {
             commands::get_dashboard_bookmarks,
             commands::set_dashboard_bookmarks,
             commands::open_external_url,
+            commands::open_premium_ainl_verify_browser,
             commands::open_ainl_library_dir,
             commands::ainl_try_library_file,
             commands::open_notification_settings,

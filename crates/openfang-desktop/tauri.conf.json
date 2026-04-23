@@ -12,6 +12,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["armaraos"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDOTE5MDhCRDNGMTUyMEQKUldRTlV2SFRpNUNSdkZRZDcvektwZkN6bUsyM0NJZC9OeXhHRU5id1FnZWllQmNlZGRoSGRQOHkK",
       "endpoints": [

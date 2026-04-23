@@ -6,6 +6,7 @@ commands.allow = [
   "get_dashboard_bookmarks",
   "set_dashboard_bookmarks",
   "open_external_url",
+  "open_premium_ainl_verify_browser",
   "open_ainl_library_dir",
   "check_for_updates",
   "install_update",
