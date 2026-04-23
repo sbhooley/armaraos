@@ -1,17 +1,20 @@
 [package]
 name = "ainl-improvement-proposals"
-version = "0.1.0"
+version = "0.1.1"
 description = "Closed-loop AINL improvement proposal ledger (validate -> adopt) for self-learning"
 authors = ["Steven Hooley"]
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-improvement-proposals"
 rust-version.workspace = true
 keywords = ["ainl", "agent", "learning", "proposals"]
 categories = ["development-tools"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
 chrono = { workspace = true }
 hex = "0.4"
 rusqlite = { workspace = true }

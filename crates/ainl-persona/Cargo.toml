@@ -1,14 +1,16 @@
 [package]
 name = "ainl-persona"
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-persona"
 rust-version.workspace = true
 description = "Persona evolution engine over AINL graph memory (soft axes, metadata signals)"
 
 [dependencies]
-ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

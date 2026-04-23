@@ -1,10 +1,13 @@
 [package]
 name = "ainl-compression"
-version = "0.1.1-alpha"
+version = "0.1.2-alpha"
 description = "Embedding-free input/output compression primitives for AINL hosts"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-compression"
 rust-version.workspace = true
 
 [features]

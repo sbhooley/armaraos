@@ -28,8 +28,8 @@ toml = { workspace = true }
 dirs = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 openfang-runtime = { path = "../openfang-runtime" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
-ainl-compression = { path = "../ainl-compression", version = "0.1.1-alpha" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
+ainl-compression = { path = "../ainl-compression", version = "0.1.2-alpha" }
 openfang-hands = { path = "../openfang-hands" }
 uuid = { workspace = true }
 ratatui = { workspace = true }

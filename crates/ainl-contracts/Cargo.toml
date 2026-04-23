@@ -1,10 +1,13 @@
 [package]
 name = "ainl-contracts"
 description = "Shared policy contracts for repo intelligence, context freshness, and impact-first tooling (no OpenFang deps)"
-version = "0.1.0"
+version = "0.1.1"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-contracts"
 rust-version.workspace = true
 
 [dependencies]

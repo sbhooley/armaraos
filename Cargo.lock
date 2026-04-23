@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-agent-snapshot"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "ainl-memory",
  "chrono",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-compression"
-version = "0.1.1-alpha"
+version = "0.1.2-alpha"
 dependencies = [
  "serde",
  "serde_json",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-context-compiler"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-compression",
  "ainl-context-freshness",
@@ -124,14 +124,14 @@ dependencies = [
 
 [[package]]
 name = "ainl-context-freshness"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
 ]
 
 [[package]]
 name = "ainl-contracts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-failure-learning"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
  "ainl-memory",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-graph-extractor"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ainl-memory",
  "ainl-persona",
@@ -163,14 +163,14 @@ dependencies = [
 
 [[package]]
 name = "ainl-impact-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
 ]
 
 [[package]]
 name = "ainl-improvement-proposals"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
  "chrono",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-memory"
-version = "0.1.10-alpha"
+version = "0.1.11-alpha"
 dependencies = [
  "ainl-contracts",
  "ainl-trajectory",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-persona"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ainl-memory",
  "chrono",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-repo-intel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
  "serde",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-runtime"
-version = "0.3.8-alpha"
+version = "0.3.9-alpha"
 dependencies = [
  "ainl-agent-snapshot",
  "ainl-contracts",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-semantic-tagger"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "regex-lite",
  "serde",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "ainl-trajectory"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ainl-contracts",
  "chrono",
@@ -323,7 +323,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -334,7 +334,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2217,7 +2217,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3247,7 +3247,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.57.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -5949,7 +5949,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6589,7 +6589,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6684,7 +6684,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7304,7 +7304,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8099,7 +8099,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8702,7 +8702,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

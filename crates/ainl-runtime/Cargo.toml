@@ -1,12 +1,14 @@
 [package]
 name = "ainl-runtime"
-version = "0.3.8-alpha"
+version = "0.3.9-alpha"
 edition.workspace = true
 rust-version.workspace = true
 authors = ["Steven Hooley"]
 description = "AINL unified-graph orchestration: load/validate memory artifacts, compile turn context, minimal graph walk, extraction scheduling, host TurnHooks, and optional Tokio run_turn_async (feature async; spawn_blocking + Arc<std::sync::Mutex<GraphMemory>>)."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sbhooley/armaraos"
+homepage = "https://github.com/sbhooley/armaraos"
+documentation = "https://docs.rs/ainl-runtime"
 readme = "README.md"
 keywords = ["ai", "agent", "ainl", "programming-language", "graph-memory"]
 categories = ["development-tools"]
@@ -52,18 +54,18 @@ default = []
 async = ["dep:async-trait", "dep:tokio"]
 
 [dependencies]
-ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.1" }
+ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.2" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 scopeguard = { workspace = true }
 chrono = { workspace = true }
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
-ainl-persona = { path = "../ainl-persona", version = "0.1.7" }
-ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.7" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.7" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
+ainl-persona = { path = "../ainl-persona", version = "0.1.8" }
+ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.8" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", version = "0.1.8" }
 async-trait = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = [
     "rt",

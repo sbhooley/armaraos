@@ -1,5 +1,8 @@
 # ainl-contracts
 
+- **Repository:** <https://github.com/sbhooley/armaraos>
+- **API reference:** <https://docs.rs/ainl-contracts>
+
 Serde-stable types shared by **`ainl-repo-intel`**, **`ainl-context-freshness`**, **`ainl-impact-policy`**, AINL MCP (`tooling/ainl_policy_contract.json` in the AI_Native_Lang repo), and optional ArmaraOS / inference telemetry.
 
 No `openfang_*` dependencies.

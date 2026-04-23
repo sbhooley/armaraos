@@ -1,11 +1,15 @@
 [package]
 name = "ainl-repo-intel"
 description = "Classify MCP tool inventories into repo-intelligence capability profiles"
-version = "0.1.0"
+version = "0.1.1"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-repo-intel"
 rust-version.workspace = true
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
 serde = { workspace = true }

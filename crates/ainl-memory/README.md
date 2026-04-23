@@ -1,5 +1,8 @@
 # ainl-memory
 
+- **Repository:** <https://github.com/sbhooley/armaraos>
+- **API reference:** <https://docs.rs/ainl-memory>
+
 > ⚠️ Alpha — API subject to change
 
 **The unified graph substrate for AINL agents.**  

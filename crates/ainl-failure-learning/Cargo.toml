@@ -1,17 +1,20 @@
 [package]
 name = "ainl-failure-learning"
 description = "Failure recall, FTS-backed search, and prevention prompt snippets for AINL (only ainl-* + contracts at boundaries)"
-version = "0.1.0"
+version = "0.1.1"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-failure-learning"
 rust-version.workspace = true
 keywords = ["ainl", "agent", "memory", "learning"]
 categories = ["development-tools"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
-ainl-memory = { path = "../ainl-memory", version = "0.1.10-alpha" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

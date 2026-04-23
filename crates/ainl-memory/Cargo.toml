@@ -1,19 +1,21 @@
 [package]
 name = "ainl-memory"
-version = "0.1.10-alpha"
+version = "0.1.11-alpha"
 description = "AINL graph-memory substrate - agent memory as execution graph"
 authors = ["Steven Hooley"]
 readme = "README.md"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-memory"
 rust-version.workspace = true
 keywords = ["ai", "agent", "memory", "graph", "ainl"]
 categories = ["development-tools", "database"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
-ainl-trajectory = { path = "../ainl-trajectory", version = "0.1.0" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-trajectory = { path = "../ainl-trajectory", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

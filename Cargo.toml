@@ -37,6 +37,7 @@ version = "0.7.5"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/sbhooley/armaraos"
+homepage = "https://github.com/sbhooley/armaraos"
 rust-version = "1.75"
 
 [workspace.dependencies]

@@ -1,23 +1,27 @@
 [package]
 name = "ainl-context-compiler"
 description = "LLM context-window assembly: multi-segment, role-aware, question-aware prompt orchestration for AINL hosts. Phase 6 of SELF_LEARNING_INTEGRATION_MAP. Distinct from `ainl-context-freshness` which gates tool execution based on repo-knowledge currency."
-version = "0.1.0"
+version = "0.1.1"
+readme = "README.md"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-context-compiler"
 rust-version.workspace = true
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.0" }
-ainl-compression = { path = "../ainl-compression", version = "0.1.1-alpha" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-compression = { path = "../ainl-compression", version = "0.1.2-alpha" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
-ainl-context-freshness = { path = "../ainl-context-freshness", optional = true, version = "0.1.0" }
-ainl-semantic-tagger = { path = "../ainl-semantic-tagger", optional = true, version = "0.1.7" }
-ainl-memory = { path = "../ainl-memory", optional = true, version = "0.1.10-alpha" }
-ainl-trajectory = { path = "../ainl-trajectory", optional = true, version = "0.1.0" }
-ainl-failure-learning = { path = "../ainl-failure-learning", optional = true, version = "0.1.0" }
+ainl-context-freshness = { path = "../ainl-context-freshness", optional = true, version = "0.1.1" }
+ainl-semantic-tagger = { path = "../ainl-semantic-tagger", optional = true, version = "0.1.8" }
+ainl-memory = { path = "../ainl-memory", optional = true, version = "0.1.11-alpha" }
+ainl-trajectory = { path = "../ainl-trajectory", optional = true, version = "0.1.1" }
+ainl-failure-learning = { path = "../ainl-failure-learning", optional = true, version = "0.1.1" }
 uuid = { workspace = true }
 
 [features]
