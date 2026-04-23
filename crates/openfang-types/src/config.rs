@@ -553,7 +553,32 @@ pub struct LocalVoiceConfig {
     /// Piper executable (e.g. `piper` release binary).
     pub piper_binary: Option<PathBuf>,
     /// Piper voice model path (e.g. `en_US-lessac-medium.onnx`).
+    /// When `custom_voices_dir` contains a user-uploaded `.onnx` selected via
+    /// [`Self::active_piper_voice`], that path is preferred at synthesis time.
     pub piper_voice: Option<PathBuf>,
+    /// Directory the dashboard upload endpoint writes user `.onnx` + `.onnx.json`
+    /// pairs into. Defaults to `~/.armaraos/voice/voices_user/` (populated by
+    /// `ensure_local_voice_dirs`). Files here appear in `/api/system/local-voice/voices`.
+    pub custom_voices_dir: Option<PathBuf>,
+    /// File **stem** (no `.onnx` suffix) the user picked from `custom_voices_dir`
+    /// in the Settings → Voice picker. When set and the matching `<stem>.onnx`
+    /// exists, [`Self::active_piper_voice`] returns that path instead of `piper_voice`.
+    pub custom_piper_voice: Option<String>,
+    /// Preferred macOS `say` voice for the dashboard speaker reply (e.g. "Susan",
+    /// "Susan (Enhanced)", "Ava (Premium)"). Resolved against `say -v ?`. Empty/None
+    /// uses the system default voice.
+    pub preferred_say_voice: Option<String>,
+    /// When true on macOS, WebChat spoken replies try `/usr/bin/say` **before** Piper so
+    /// System Settings voices win while Piper remains a fallback (and still used for STT paths).
+    #[serde(default)]
+    pub prefer_macos_say: bool,
+    /// Kokoro-82M (MIT-licensed multi-voice neural TTS) settings — optional, gated by
+    /// [`KokoroConfig::enabled`]. The runtime auto-downloads the ONNX model + voice
+    /// embeddings into `~/.armaraos/voice/kokoro/`; inference is **scaffolding only**
+    /// in this build and reports a "not yet wired" error in `synthesize_local_tts` so
+    /// the dashboard can show download progress without falsely advertising a working
+    /// engine.
+    pub kokoro: KokoroConfig,
 }
 
 impl LocalVoiceConfig {
@@ -570,6 +595,121 @@ impl LocalVoiceConfig {
             && self.piper_binary.as_ref().is_some_and(|p| p.is_file())
             && self.piper_voice.as_ref().is_some_and(|p| p.is_file())
     }
+
+    /// True when the macOS `say` binary is present. **Does not** gate on `[local_voice].enabled`:
+    /// the WebChat speaker path uses `/usr/bin/say` as a host capability (Apple voices from
+    /// System Settings) even when Whisper/Piper auto-download is turned off or still installing.
+    #[cfg(target_os = "macos")]
+    pub fn macos_say_binary_present(&self) -> bool {
+        std::path::Path::new("/usr/bin/say").is_file()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn macos_say_binary_present(&self) -> bool {
+        false
+    }
+
+    /// macOS ships `/usr/bin/say` with every install; used as a deterministic local TTS
+    /// fallback when the upstream Piper bundle is broken (e.g. rhasspy/piper 2023.11.14-2's
+    /// macOS aarch64 archive ships `.dSYM` debug symbols but omits the dylibs the binary needs).
+    pub fn macos_say_ready(&self) -> bool {
+        self.macos_say_binary_present()
+    }
+
+    /// True when **any** local TTS path can produce audio for the WebChat speaker reply.
+    /// Cascade order matches [`crate::config::LocalVoiceConfig::tts_provider_label`] and the
+    /// runtime's `synthesize_local_tts`: prefer Piper (cross-platform, neural), then macOS `say`.
+    pub fn local_tts_ready(&self) -> bool {
+        self.kokoro.assets_ready()
+            || self.piper_ready_with_active_voice()
+            || self.macos_say_binary_present()
+    }
+
+    /// Stable provider label for the dashboard speaker toggle / `/api/system/local-voice`
+    /// (see `synthesize_local_tts` for the matching synthesis cascade).
+    ///
+    /// Note: Kokoro is intentionally *not* reported as the active provider yet — its
+    /// inference is scaffolding only, so the cascade falls through to Piper / `say`.
+    pub fn tts_provider_label(&self) -> Option<&'static str> {
+        #[cfg(target_os = "macos")]
+        if self.prefer_macos_say && self.macos_say_binary_present() {
+            return Some("macos_say");
+        }
+        if self.piper_ready_with_active_voice() {
+            Some("piper")
+        } else if self.macos_say_ready() {
+            Some("macos_say")
+        } else {
+            None
+        }
+    }
+
+    /// Resolve the active Piper `.onnx` voice path. If the user picked a
+    /// `custom_piper_voice` in Settings and the matching file exists under
+    /// `custom_voices_dir`, prefer it; otherwise fall back to `piper_voice`.
+    pub fn active_piper_voice(&self) -> Option<PathBuf> {
+        if let (Some(stem), Some(dir)) = (self.custom_piper_voice.as_deref(), self.custom_voices_dir.as_ref()) {
+            let candidate = dir.join(format!("{stem}.onnx"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        self.piper_voice.clone()
+    }
+
+    /// True when local Piper TTS can run using either the default voice or the
+    /// user-selected custom voice.
+    pub fn piper_ready_with_active_voice(&self) -> bool {
+        self.enabled
+            && self.piper_binary.as_ref().is_some_and(|p| p.is_file())
+            && self.active_piper_voice().is_some_and(|p| p.is_file())
+    }
+}
+
+/// Kokoro-82M neural TTS settings. The model + voice embeddings are auto-downloaded
+/// into `~/.armaraos/voice/kokoro/` on first launch when [`Self::enabled`] is true and
+/// [`Self::auto_download`] is true. Inference itself is **not yet implemented** in
+/// this build — the runtime will report a clear "scaffolding only" error so the
+/// dashboard can surface download progress without producing fake audio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KokoroConfig {
+    /// Master switch. When false, Kokoro is invisible to the dashboard / cascade.
+    pub enabled: bool,
+    /// Auto-download the model + embeddings to `~/.armaraos/voice/kokoro/` if missing.
+    pub auto_download: bool,
+    /// Path to `kokoro-v1.0.onnx`. Set automatically by the bootstrap when None.
+    pub model_path: Option<PathBuf>,
+    /// Directory containing `voices/*.bin` voice embedding files.
+    pub voices_dir: Option<PathBuf>,
+    /// Default voice id (e.g. `af_heart`, `af_bella`, `am_adam`). Resolved against
+    /// `<voices_dir>/<voice>.bin` at synthesis time.
+    pub voice: String,
+}
+
+impl Default for KokoroConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_download: true,
+            model_path: None,
+            voices_dir: None,
+            voice: "af_heart".to_string(),
+        }
+    }
+}
+
+impl KokoroConfig {
+    /// True when Kokoro **assets** are present on disk. Inference itself is gated
+    /// separately (currently always returns "not yet implemented").
+    pub fn assets_ready(&self) -> bool {
+        self.enabled
+            && self.model_path.as_ref().is_some_and(|p| p.is_file())
+            && self
+                .voices_dir
+                .as_ref()
+                .is_some_and(|d| d.join(format!("{}.bin", self.voice)).is_file())
+    }
 }
 
 impl Default for LocalVoiceConfig {
@@ -581,6 +721,11 @@ impl Default for LocalVoiceConfig {
             whisper_model: None,
             piper_binary: None,
             piper_voice: None,
+            custom_voices_dir: None,
+            custom_piper_voice: None,
+            preferred_say_voice: None,
+            prefer_macos_say: false,
+            kokoro: KokoroConfig::default(),
         }
     }
 }
