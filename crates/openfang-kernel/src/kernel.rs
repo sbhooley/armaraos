@@ -701,6 +701,10 @@ impl Drop for AgentTurnInflightGuard<'_> {
 pub struct OpenFangKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
+    /// Live `[local_voice]` snapshot — includes bootstrap-resolved Whisper/Piper paths plus
+    /// user voice picks from Settings. Updated when `config.toml` is rewritten for voice prefs
+    /// so WebChat TTS reflects changes without a full daemon restart.
+    local_voice_live: std::sync::RwLock<openfang_types::config::LocalVoiceConfig>,
     /// Live `[adaptive_eco]` policy — updated on successful [`OpenFangKernel::reload_config`].
     adaptive_eco_live: std::sync::RwLock<openfang_types::adaptive_eco::AdaptiveEcoConfig>,
     /// Live `[runtime_limits]` (hot-reloaded); in-flight agent loops keep the snapshot from turn start.
@@ -1191,7 +1195,69 @@ fn gethostname() -> Option<String> {
     }
 }
 
+/// Merge on-disk `[local_voice]` over the running snapshot.
+///
+/// Voice auto-bootstrap (`ensure_local_voice`) mutates paths **in memory only** — those paths
+/// are preserved here whenever the config file still omits them (`None` on disk).
+fn merge_local_voice_runtime_from_disk(
+    cur: &mut openfang_types::config::LocalVoiceConfig,
+    disk: &openfang_types::config::LocalVoiceConfig,
+) {
+    cur.preferred_say_voice = disk.preferred_say_voice.clone();
+    cur.prefer_macos_say = disk.prefer_macos_say;
+    cur.custom_piper_voice = disk.custom_piper_voice.clone();
+    cur.custom_voices_dir = disk
+        .custom_voices_dir
+        .clone()
+        .or_else(|| cur.custom_voices_dir.clone());
+    cur.enabled = disk.enabled;
+    cur.auto_download = disk.auto_download;
+
+    if disk.whisper_cli.is_some() {
+        cur.whisper_cli = disk.whisper_cli.clone();
+    }
+    if disk.whisper_model.is_some() {
+        cur.whisper_model = disk.whisper_model.clone();
+    }
+    if disk.piper_binary.is_some() {
+        cur.piper_binary = disk.piper_binary.clone();
+    }
+    if disk.piper_voice.is_some() {
+        cur.piper_voice = disk.piper_voice.clone();
+    }
+
+    cur.kokoro.voice = disk.kokoro.voice.clone();
+    cur.kokoro.enabled = disk.kokoro.enabled;
+    cur.kokoro.auto_download = disk.kokoro.auto_download;
+    if disk.kokoro.model_path.is_some() {
+        cur.kokoro.model_path = disk.kokoro.model_path.clone();
+    }
+    if disk.kokoro.voices_dir.is_some() {
+        cur.kokoro.voices_dir = disk.kokoro.voices_dir.clone();
+    }
+}
+
 impl OpenFangKernel {
+    /// Effective `[local_voice]` for WebChat diagnostics + local TTS/STT.
+    pub fn local_voice_effective(&self) -> openfang_types::config::LocalVoiceConfig {
+        self.local_voice_live
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Reload `[local_voice]` from `config.toml` and merge into the live snapshot.
+    pub fn sync_local_voice_from_config_file(&self) -> Result<(), String> {
+        let path = self.config.home_dir.join("config.toml");
+        let disk = crate::config::load_config(Some(&path));
+        let mut cur = self
+            .local_voice_live
+            .write()
+            .map_err(|_| "local_voice_live lock poisoned".to_string())?;
+        merge_local_voice_runtime_from_disk(&mut cur, &disk.local_voice);
+        Ok(())
+    }
+
     /// Inject `efficient_mode` and optional adaptive eco policy (circuit breaker, resolver, hysteresis).
     fn apply_efficient_mode_and_adaptive_eco(
         &self,
@@ -2097,9 +2163,11 @@ impl OpenFangKernel {
         let runtime_limits_live =
             std::sync::Arc::new(std::sync::RwLock::new(config.runtime_limits.clone()));
         let adaptive_eco_live = std::sync::RwLock::new(config.adaptive_eco.clone());
+        let local_voice_live = std::sync::RwLock::new(config.local_voice.clone());
         let agent_home = config.home_dir.clone();
         let kernel = Self {
             config,
+            local_voice_live,
             adaptive_eco_live,
             runtime_limits_live,
             registry: AgentRegistry::with_agent_home(agent_home),
@@ -2799,6 +2867,7 @@ impl OpenFangKernel {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -2819,6 +2888,7 @@ impl OpenFangKernel {
             None,
             sender_id,
             sender_name,
+            None,
             None,
             None,
         )
@@ -2845,6 +2915,7 @@ impl OpenFangKernel {
         sender_name: Option<String>,
         orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
         workflow_adaptive: Option<crate::workflow::AdaptiveWorkflowOverrides>,
+        turn_constraints: Option<openfang_types::turn_constraints::TurnConstraints>,
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-agent lock to serialize concurrent messages for the same agent.
         // This prevents session corruption when multiple messages arrive in quick
@@ -2903,6 +2974,7 @@ impl OpenFangKernel {
                 sender_name,
                 orchestration_ctx,
                 workflow_adaptive,
+                turn_constraints,
             )
             .await
         };
@@ -2981,6 +3053,7 @@ impl OpenFangKernel {
         sender_name: Option<String>,
         content_blocks: Option<Vec<openfang_types::message::ContentBlock>>,
         orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
+        turn_constraints: Option<openfang_types::turn_constraints::TurnConstraints>,
     ) -> KernelResult<(
         tokio::sync::mpsc::Receiver<StreamEvent>,
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
@@ -3196,6 +3269,7 @@ impl OpenFangKernel {
         // and workspace skill tools are visible to the LLM.
         let tools = self.available_tools_with_registry(agent_id, Some(&skill_snapshot));
         let tools = entry.mode.filter_tools(tools);
+        let tools = Self::apply_voice_stt_tool_clamp(tools, turn_constraints.as_ref());
 
         // Build the structured system prompt via prompt_builder
         {
@@ -3892,6 +3966,28 @@ impl OpenFangKernel {
         loop_result
     }
 
+    /// Builtin / MCP tool names removed from the LLM for one turn when
+    /// [`openfang_types::turn_constraints::TurnConstraints::voice_stt_tool_clamp`] is set
+    /// (dashboard voice STT turns — deterministic guardrail vs prompt-only policy).
+    #[inline]
+    fn tool_name_dropped_for_voice_stt_clamp(name: &str) -> bool {
+        matches!(
+            name,
+            "web_search" | "shell_exec" | "channel_send" | "channel_stream"
+        ) || name.starts_with("mcp_ainl_")
+            || name.starts_with("mcp_google_workspace_mcp_")
+    }
+
+    fn apply_voice_stt_tool_clamp(
+        mut tools: Vec<openfang_types::tool::ToolDefinition>,
+        constraints: Option<&openfang_types::turn_constraints::TurnConstraints>,
+    ) -> Vec<openfang_types::tool::ToolDefinition> {
+        if constraints.is_some_and(|c| c.voice_stt_tool_clamp) {
+            tools.retain(|t| !Self::tool_name_dropped_for_voice_stt_clamp(t.name.as_str()));
+        }
+        tools
+    }
+
     /// Execute the default LLM-based agent loop.
     #[allow(clippy::too_many_arguments)]
     async fn execute_llm_agent(
@@ -3905,6 +4001,7 @@ impl OpenFangKernel {
         sender_name: Option<String>,
         orchestration_incoming: Option<openfang_types::orchestration::OrchestrationContext>,
         workflow_adaptive: Option<crate::workflow::AdaptiveWorkflowOverrides>,
+        turn_constraints: Option<openfang_types::turn_constraints::TurnConstraints>,
     ) -> KernelResult<AgentLoopResult> {
         // Resolve orchestration context for this turn (from parameter or pending queue)
         let mut orchestration_for_turn = orchestration_incoming;
@@ -4110,6 +4207,7 @@ impl OpenFangKernel {
                 tools.retain(|t| !ORCH_TOOLS.contains(&t.name.as_str()));
             }
         }
+        tools = Self::apply_voice_stt_tool_clamp(tools, turn_constraints.as_ref());
 
         info!(
             agent = %entry.name,
@@ -6109,7 +6207,7 @@ impl OpenFangKernel {
                     tokio::spawn(async move {
                         if let Err(e) = kernel
                             .send_message_with_handle_and_blocks(
-                                aid, &msg, handle, None, None, None, orch, None,
+                                aid, &msg, handle, None, None, None, orch, None, None,
                             )
                             .await
                         {
@@ -6276,6 +6374,7 @@ impl OpenFangKernel {
                     None,
                     Some(orch),
                     adaptive,
+                    None,
                 )
                 .await
                 .map(|r| {
@@ -9737,6 +9836,7 @@ impl KernelHandle for OpenFangKernel {
                 None,
                 None,
                 orchestration_ctx,
+                None,
                 None,
             )
             .await
