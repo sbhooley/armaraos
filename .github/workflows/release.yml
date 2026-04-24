@@ -69,6 +69,10 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
+      - name: Ensure ainl-inference-server sibling (path dep)
+        shell: bash
+        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
+
       - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
         shell: bash
         run: bash scripts/vendor-posthog-js.sh
@@ -261,6 +265,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Ensure ainl-inference-server sibling (path dep)
+        shell: bash
+        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -578,6 +586,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Ensure ainl-inference-server sibling (path dep)
+        shell: bash
+        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -637,6 +650,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Ensure ainl-inference-server sibling (path dep)
+        shell: bash
+        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
+
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
