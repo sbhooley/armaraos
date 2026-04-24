@@ -203,7 +203,10 @@ impl PromptMemoryContext {
         if !self.pattern_candidate_lines.is_empty() {
             out.push(Segment::memory_block(
                 "graph_suggested_pattern_candidates",
-                memory_section_str("## SuggestedPatternCandidates", &self.pattern_candidate_lines),
+                memory_section_str(
+                    "## SuggestedPatternCandidates",
+                    &self.pattern_candidate_lines,
+                ),
             ));
         }
         if !self.procedural_lines.is_empty() {
@@ -340,7 +343,11 @@ impl MemoryContextPolicy {
         let mut policy = MemoryContextPolicy {
             enabled: metadata_bool(&manifest.metadata, "memory_enabled", true),
             temporary_mode: metadata_bool(&manifest.metadata, "memory_temporary_mode", false),
-            include_provenance: metadata_bool(&manifest.metadata, "memory_include_provenance", true),
+            include_provenance: metadata_bool(
+                &manifest.metadata,
+                "memory_include_provenance",
+                true,
+            ),
             include_episodic_hints: metadata_bool(
                 &manifest.metadata,
                 "memory_include_episodic_hints",
@@ -382,8 +389,10 @@ impl MemoryContextPolicy {
                 parse_bool_with_default(Some(v.as_str()), policy.include_procedural_hints);
         }
         if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_SUGGESTED_PATTERN_CANDIDATES") {
-            policy.include_suggested_pattern_candidates =
-                parse_bool_with_default(Some(v.as_str()), policy.include_suggested_pattern_candidates);
+            policy.include_suggested_pattern_candidates = parse_bool_with_default(
+                Some(v.as_str()),
+                policy.include_suggested_pattern_candidates,
+            );
         }
         if let Ok(v) = std::env::var("AINL_MEMORY_INCLUDE_EPISODIC_HINTS") {
             policy.include_episodic_hints =
@@ -994,8 +1003,9 @@ pub async fn build_prompt_memory_context(
         };
         if let Ok(records) = records {
             if !records.is_empty() {
-                let lines =
-                    ainl_context_compiler::format_trajectory_recap_lines(&records, max_rows, max_ops);
+                let lines = ainl_context_compiler::format_trajectory_recap_lines(
+                    &records, max_rows, max_ops,
+                );
                 if !lines.is_empty() {
                     for line in &lines {
                         ctx.selection_debug.push(serde_json::json!({
@@ -1011,12 +1021,12 @@ pub async fn build_prompt_memory_context(
 
     if memory_include_suggested_next_env() {
         if let Some(line) = ctx.procedural_lines.first() {
-            ctx
-                .suggested_next_lines
+            ctx.suggested_next_lines
                 .push(format!("Try the promoted tool flow: {line}"));
         } else if let Some(line) = ctx.pattern_candidate_lines.first() {
-            ctx.suggested_next_lines
-                .push(format!("Next: practice or promote this tool sequence: {line}"));
+            ctx.suggested_next_lines.push(format!(
+                "Next: practice or promote this tool sequence: {line}"
+            ));
         } else if let Some(line) = ctx.semantic_lines.first() {
             ctx.suggested_next_lines
                 .push(format!("Anchor on a high-confidence fact: {line}"));
@@ -1261,7 +1271,10 @@ mod tests {
     }
 
     /// Ineligible (pre-promotion) tool-sequence row for SuggestedPatternCandidates.
-    async fn write_pattern_candidate(writer: &crate::graph_memory_writer::GraphMemoryWriter, name: &str) {
+    async fn write_pattern_candidate(
+        writer: &crate::graph_memory_writer::GraphMemoryWriter,
+        name: &str,
+    ) {
         let mut node = AinlMemoryNode::new_procedural_tools(
             name.to_string(),
             vec!["file_read".to_string(), "shell_exec".to_string()],
@@ -1280,8 +1293,7 @@ mod tests {
         tool_name: &str,
         message: &str,
     ) {
-        let mut node =
-            AinlMemoryNode::new_tool_execution_failure(tool_name, message, None::<&str>);
+        let mut node = AinlMemoryNode::new_tool_execution_failure(tool_name, message, None::<&str>);
         node.agent_id = writer.agent_id().to_string();
         let inner = writer.inner.lock().await;
         inner.write_node(&node).expect("write failure");
@@ -1416,9 +1428,14 @@ mod tests {
         write_procedure(&writer, "good_proc", 0.9, Some(0.95), false).await;
         write_procedure(&writer, "retired_proc", 0.99, Some(0.99), true).await;
 
-        let ctx =
-            build_prompt_memory_context(&writer, &MemoryContextPolicy::default(), None, false, None)
-                .await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            None,
+            false,
+            None,
+        )
+        .await;
         assert!(ctx
             .procedural_lines
             .iter()
@@ -1452,7 +1469,10 @@ mod tests {
         let p_s = block
             .find("## SuggestedProcedure")
             .expect("suggested block");
-        assert!(p_c < p_s, "candidates should precede suggested procedure, got {block}");
+        assert!(
+            p_c < p_s,
+            "candidates should precede suggested procedure, got {block}"
+        );
         assert!(block.contains("emerging_pat"), "{block}");
         assert!(block.contains("ready_proc"), "{block}");
     }
@@ -1549,10 +1569,7 @@ mod tests {
         let segs = ctx.to_memory_block_segments();
         assert_eq!(segs.len(), 4);
         assert!(segs.iter().all(|s| s.kind == SegmentKind::MemoryBlock));
-        assert_eq!(
-            segs[0].tool_name.as_deref(),
-            Some("graph_recent_attempts")
-        );
+        assert_eq!(segs[0].tool_name.as_deref(), Some("graph_recent_attempts"));
         assert_eq!(segs[1].tool_name.as_deref(), Some("graph_failure_recall"));
         assert_eq!(segs[2].tool_name.as_deref(), Some("graph_trajectory_recap"));
         assert_eq!(segs[3].tool_name.as_deref(), Some("graph_known_facts"));

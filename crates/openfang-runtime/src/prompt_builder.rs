@@ -414,7 +414,9 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
     }
 
     const MCP_DIGEST_THRESHOLD: usize = 24;
-    let mcp_digest = groups.get("MCP").is_some_and(|rows| rows.len() > MCP_DIGEST_THRESHOLD);
+    let mcp_digest = groups
+        .get("MCP")
+        .is_some_and(|rows| rows.len() > MCP_DIGEST_THRESHOLD);
 
     let mut out = String::from("## Your Tools\nYou have access to these capabilities:\n");
     for (category, tools) in &groups {

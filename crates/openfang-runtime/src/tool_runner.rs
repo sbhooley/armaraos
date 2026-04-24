@@ -293,7 +293,10 @@ pub async fn execute_tool_with_trajectory(
     docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
     orchestration_live: Option<&OrchestrationLive>,
-    trajectory_capture: Option<(std::sync::Arc<crate::trajectory_turn::TrajectoryTurnBuffer>, usize)>,
+    trajectory_capture: Option<(
+        std::sync::Arc<crate::trajectory_turn::TrajectoryTurnBuffer>,
+        usize,
+    )>,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
@@ -4163,8 +4166,14 @@ async fn tool_media_transcribe(
     use std::path::PathBuf;
     let engine = media_engine.ok_or("Media engine not available. Check media configuration.")?;
 
-    let file_id = input["file_id"].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let path_str = input["path"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let file_id = input["file_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let path_str = input["path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let (resolved, mime): (PathBuf, String) = match (file_id, path_str) {
         (Some(fid), _) => {
@@ -5120,7 +5129,9 @@ pub async fn dispatch_planned_tool_call(
     match tokio::time::timeout(timeout, fut).await {
         Ok(tr) => {
             if tr.is_error {
-                Err(ainl_agent_snapshot::PlanStepError::Deterministic(tr.content))
+                Err(ainl_agent_snapshot::PlanStepError::Deterministic(
+                    tr.content,
+                ))
             } else {
                 Ok(serde_json::json!({ "output": tr.content }))
             }

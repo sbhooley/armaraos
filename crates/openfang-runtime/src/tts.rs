@@ -250,10 +250,7 @@ pub async fn synthesize_piper_local(
         .active_piper_voice()
         .ok_or("Piper voice path missing after readiness check")?;
     let model = &model_owned;
-    let out = std::env::temp_dir().join(format!(
-        "openfang_piper_{}.wav",
-        uuid::Uuid::new_v4()
-    ));
+    let out = std::env::temp_dir().join(format!("openfang_piper_{}.wav", uuid::Uuid::new_v4()));
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("--model")
         .arg(model.as_os_str())
@@ -327,10 +324,7 @@ pub async fn synthesize_macos_say(text: &str, voice: Option<&str>) -> Result<Tts
     if text.trim().is_empty() {
         return Err("Text cannot be empty".into());
     }
-    let out = std::env::temp_dir().join(format!(
-        "openfang_say_{}.wav",
-        uuid::Uuid::new_v4()
-    ));
+    let out = std::env::temp_dir().join(format!("openfang_say_{}.wav", uuid::Uuid::new_v4()));
     let mut cmd = tokio::process::Command::new("/usr/bin/say");
     if let Some(v) = voice.map(str::trim).filter(|v| !v.is_empty()) {
         cmd.arg("-v").arg(v);
@@ -603,7 +597,10 @@ mod tests {
         match r {
             Ok(out) => {
                 assert_eq!(out.provider, "macos_say");
-                assert!(out.audio_data.len() > 44, "expected wav bytes when say falls back");
+                assert!(
+                    out.audio_data.len() > 44,
+                    "expected wav bytes when say falls back"
+                );
             }
             Err(msg) => {
                 assert!(!msg.is_empty(), "error message should be informative");

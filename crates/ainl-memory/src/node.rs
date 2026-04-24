@@ -470,14 +470,10 @@ pub enum AinlNodeType {
     RuntimeState { runtime_state: RuntimeStateNode },
 
     /// Step-level execution trace linked to an episode (self-learning substrate).
-    Trajectory {
-        trajectory: TrajectoryNode,
-    },
+    Trajectory { trajectory: TrajectoryNode },
 
     /// Failure / guard outcome stored for recall (Phase 2 failure learning).
-    Failure {
-        failure: FailureNode,
-    },
+    Failure { failure: FailureNode },
 }
 
 /// A node in the AINL memory graph
@@ -936,13 +932,7 @@ mod trajectory_tests {
         };
         let json = serde_json::to_string(&node).expect("serialize");
         let back: AinlMemoryNode = serde_json::from_str(&json).expect("deserialize");
-        assert!(matches!(
-            back.node_type,
-            AinlNodeType::Trajectory { .. }
-        ));
-        assert_eq!(
-            back.trajectory().map(|t| t.episode_id),
-            Some(Uuid::nil())
-        );
+        assert!(matches!(back.node_type, AinlNodeType::Trajectory { .. }));
+        assert_eq!(back.trajectory().map(|t| t.episode_id), Some(Uuid::nil()));
     }
 }

@@ -1,7 +1,7 @@
 //! Bounded snapshot construction — never calls `export_graph()`.
 
 use crate::{AgentSnapshot, PolicyCaps, SnapshotPolicy, SNAPSHOT_SCHEMA_VERSION};
-use ainl_memory::{AinlNodeKind, AinlMemoryNode, GraphMemory};
+use ainl_memory::{AinlMemoryNode, AinlNodeKind, GraphMemory};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
@@ -88,8 +88,8 @@ mod tests {
 
         let policy = SnapshotPolicy::default();
         let caps = PolicyCaps::default();
-        let snap = build_snapshot(&gm, ag, &policy, vec!["file_read".into()], caps.clone())
-            .expect("snap");
+        let snap =
+            build_snapshot(&gm, ag, &policy, vec!["file_read".into()], caps.clone()).expect("snap");
         assert_eq!(snap.snapshot_version, SNAPSHOT_SCHEMA_VERSION);
         assert_eq!(snap.agent_id, ag);
         assert_eq!(snap.tool_allowlist, vec!["file_read"]);

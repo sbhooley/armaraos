@@ -108,41 +108,44 @@ async fn usage_summary_includes_dashboard_contract_fields_and_updates() {
     let before_tools = u64_field(&before, "total_tool_calls");
 
     let usage = server.state.kernel.memory.usage();
-    usage.record(&UsageRecord {
-        agent_id,
-        model: "dashboard-fleet-model".to_string(),
-        input_tokens: 300,
-        output_tokens: 120,
-        cost_usd: 0.1234,
-        tool_calls: 2,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 40,
-    })
-    .expect("record usage");
-    usage.record_quota_block(&QuotaBlockRecord {
-        agent_id,
-        reason: "dashboard_fleet_test_reason".to_string(),
-        est_input_tokens: 222,
-        est_output_tokens: 111,
-        est_cost_usd: 0.02,
-    })
-    .expect("record quota block");
-    usage.record_compression(&CompressionUsageRecord {
-        agent_id,
-        mode: "balanced".to_string(),
-        model: "dashboard-fleet-model".to_string(),
-        provider: "dashboard-provider".to_string(),
-        original_tokens_est: 200,
-        compressed_tokens_est: 140,
-        input_tokens_saved: 60,
-        input_price_per_million_usd: 2.0,
-        est_input_cost_saved_usd: 60.0 * 2.0 / 1_000_000.0,
-        billed_input_tokens: 140,
-        billed_input_cost_usd: 140.0 * 2.0 / 1_000_000.0,
-        savings_pct: 30,
-        semantic_preservation_score: Some(0.91),
-    })
-    .expect("record compression");
+    usage
+        .record(&UsageRecord {
+            agent_id,
+            model: "dashboard-fleet-model".to_string(),
+            input_tokens: 300,
+            output_tokens: 120,
+            cost_usd: 0.1234,
+            tool_calls: 2,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 40,
+        })
+        .expect("record usage");
+    usage
+        .record_quota_block(&QuotaBlockRecord {
+            agent_id,
+            reason: "dashboard_fleet_test_reason".to_string(),
+            est_input_tokens: 222,
+            est_output_tokens: 111,
+            est_cost_usd: 0.02,
+        })
+        .expect("record quota block");
+    usage
+        .record_compression(&CompressionUsageRecord {
+            agent_id,
+            mode: "balanced".to_string(),
+            model: "dashboard-fleet-model".to_string(),
+            provider: "dashboard-provider".to_string(),
+            original_tokens_est: 200,
+            compressed_tokens_est: 140,
+            input_tokens_saved: 60,
+            input_price_per_million_usd: 2.0,
+            est_input_cost_saved_usd: 60.0 * 2.0 / 1_000_000.0,
+            billed_input_tokens: 140,
+            billed_input_cost_usd: 140.0 * 2.0 / 1_000_000.0,
+            savings_pct: 30,
+            semantic_preservation_score: Some(0.91),
+        })
+        .expect("record compression");
 
     let after = usage_summary_json(&server).await;
 
@@ -224,9 +227,10 @@ async fn usage_summary_includes_dashboard_contract_fields_and_updates() {
         })
         .expect("dashboard provider/model row");
     assert!(row.get("turns").and_then(Value::as_u64).unwrap_or_default() >= 1);
-    assert!(row
-        .get("input_tokens_saved")
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
-        >= 60);
+    assert!(
+        row.get("input_tokens_saved")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            >= 60
+    );
 }

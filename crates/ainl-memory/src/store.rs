@@ -256,7 +256,11 @@ fn fts5_prefix_match_query(raw: &str) -> String {
         .join(" AND ")
 }
 
-fn sync_failure_fts_insert(conn: &rusqlite::Connection, node_id: &str, body: &str) -> Result<(), String> {
+fn sync_failure_fts_insert(
+    conn: &rusqlite::Connection,
+    node_id: &str,
+    body: &str,
+) -> Result<(), String> {
     conn.execute(
         "DELETE FROM ainl_failures_fts WHERE node_id = ?1",
         [node_id],
@@ -425,11 +429,11 @@ fn try_insert_node_ignore(
         .filter(|s| !s.is_empty());
     let n = conn
         .execute(
-        "INSERT OR IGNORE INTO ainl_graph_nodes (id, node_type, payload, timestamp, project_id)
+            "INSERT OR IGNORE INTO ainl_graph_nodes (id, node_type, payload, timestamp, project_id)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![node.id.to_string(), type_name, payload, timestamp, proj,],
-    )
-    .map_err(|e| e.to_string())?;
+            rusqlite::params![node.id.to_string(), type_name, payload, timestamp, proj,],
+        )
+        .map_err(|e| e.to_string())?;
     if n > 0 {
         if !node.agent_id.trim().is_empty() {
             let body_all = graph_node_fts_body_from_payload_json(&payload);
@@ -480,7 +484,9 @@ fn migrate_failures_fts_v1(conn: &rusqlite::Connection) -> Result<(), rusqlite::
     Ok(())
 }
 
-fn migrate_ainl_graph_nodes_add_project_id(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+fn migrate_ainl_graph_nodes_add_project_id(
+    conn: &rusqlite::Connection,
+) -> Result<(), rusqlite::Error> {
     let mut stmt = conn.prepare("PRAGMA table_info(ainl_graph_nodes)")?;
     let cols = stmt
         .query_map([], |row| row.get::<_, String>(1))?
@@ -607,7 +613,9 @@ fn migrate_trajectories_v1(conn: &rusqlite::Connection) -> Result<(), rusqlite::
     Ok(())
 }
 
-fn migrate_ainl_trajectories_add_depth_v1(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+fn migrate_ainl_trajectories_add_depth_v1(
+    conn: &rusqlite::Connection,
+) -> Result<(), rusqlite::Error> {
     let mut stmt = conn.prepare("PRAGMA table_info(ainl_trajectories)")?;
     let cols: Vec<String> = stmt
         .query_map([], |row| row.get::<_, String>(1))?
@@ -619,7 +627,10 @@ fn migrate_ainl_trajectories_add_depth_v1(conn: &rusqlite::Connection) -> Result
         )?;
     }
     if !cols.iter().any(|c| c == "fitness_delta") {
-        conn.execute("ALTER TABLE ainl_trajectories ADD COLUMN fitness_delta REAL", [])?;
+        conn.execute(
+            "ALTER TABLE ainl_trajectories ADD COLUMN fitness_delta REAL",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -1293,9 +1304,7 @@ impl SqliteGraphStore {
             return Ok(Vec::new());
         }
         let cap = limit.clamp(1, 200) as i64;
-        let project_filter = project_id
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let project_filter = project_id.map(str::trim).filter(|s| !s.is_empty());
         let mut out = Vec::new();
         if let Some(p) = project_filter {
             let mut stmt = self
@@ -1372,16 +1381,18 @@ fn map_trajectory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrajectoryDet
         .map(|s| Uuid::parse_str(&s))
         .transpose()
         .map_err(|_| {
-            rusqlite::Error::InvalidColumnType(2, "graph_trajectory_node_id".into(), rusqlite::types::Type::Text)
+            rusqlite::Error::InvalidColumnType(
+                2,
+                "graph_trajectory_node_id".into(),
+                rusqlite::types::Type::Text,
+            )
         })?;
-    let outcome: TrajectoryOutcome =
-        serde_json::from_str(&outcome_json).map_err(|_| {
-            rusqlite::Error::InvalidColumnType(7, "outcome_json".into(), rusqlite::types::Type::Text)
-        })?;
-    let steps: Vec<TrajectoryStep> = serde_json::from_str(&steps_json)
-        .map_err(|_| {
-            rusqlite::Error::InvalidColumnType(10, "steps_json".into(), rusqlite::types::Type::Text)
-        })?;
+    let outcome: TrajectoryOutcome = serde_json::from_str(&outcome_json).map_err(|_| {
+        rusqlite::Error::InvalidColumnType(7, "outcome_json".into(), rusqlite::types::Type::Text)
+    })?;
+    let steps: Vec<TrajectoryStep> = serde_json::from_str(&steps_json).map_err(|_| {
+        rusqlite::Error::InvalidColumnType(10, "steps_json".into(), rusqlite::types::Type::Text)
+    })?;
     let frame_vars = frame_vars_json
         .filter(|s| !s.trim().is_empty())
         .and_then(|s| serde_json::from_str(&s).ok());

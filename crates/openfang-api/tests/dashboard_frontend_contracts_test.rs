@@ -38,7 +38,9 @@ fn get_started_saved_metrics_contract_uses_usage_summary_plus_quota_and_compress
     );
 
     // Contracted fallback: when `compression_savings` is not populated yet, fallback to status eco.
-    assert!(overview.contains("Falls back to `/api/status` 7d eco when summary has no `compression_savings` yet."));
+    assert!(overview.contains(
+        "Falls back to `/api/status` 7d eco when summary has no `compression_savings` yet."
+    ));
 }
 
 #[test]

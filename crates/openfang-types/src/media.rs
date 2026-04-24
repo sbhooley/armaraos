@@ -435,7 +435,10 @@ mod tests {
     #[test]
     fn test_normalize_mime_type_strips_codecs() {
         assert_eq!(normalize_mime_type("audio/webm; codecs=opus"), "audio/webm");
-        assert_eq!(normalize_mime_type("  AUDIO/WEBM ; codecs=opus "), "audio/webm");
+        assert_eq!(
+            normalize_mime_type("  AUDIO/WEBM ; codecs=opus "),
+            "audio/webm"
+        );
     }
 
     #[test]

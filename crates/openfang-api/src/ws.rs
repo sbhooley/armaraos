@@ -234,10 +234,7 @@ pub async fn agent_ws(
         crate::premium_ainl::premium_token_from_headers_or_query(&headers, Some(&uri))
     {
         if let Ok(val) = HeaderValue::from_str(&tok) {
-            premium_headers.insert(
-                HeaderName::from_static("x-armaraos-premium-ainl"),
-                val,
-            );
+            premium_headers.insert(HeaderName::from_static("x-armaraos-premium-ainl"), val);
         }
     }
     let rid = RequestId("ws".to_string());
@@ -551,7 +548,9 @@ async fn handle_text_message(
                 if !audio_hint.is_empty() {
                     content.push_str(&audio_hint);
                 }
-                if let Some(policy) = crate::routes::voice_transcript_policy_suffix(&attachment_refs) {
+                if let Some(policy) =
+                    crate::routes::voice_transcript_policy_suffix(&attachment_refs)
+                {
                     content.push_str(policy);
                 }
             }
@@ -615,8 +614,7 @@ async fn handle_text_message(
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
-            let turn_constraints =
-                crate::routes::voice_stt_turn_tool_constraints(&attachment_refs);
+            let turn_constraints = crate::routes::voice_stt_turn_tool_constraints(&attachment_refs);
             match state.kernel.send_message_streaming(
                 agent_id,
                 &content,
@@ -1028,10 +1026,9 @@ async fn handle_text_message(
                                                         error = %e,
                                                         "WS: voice reply upload failed"
                                                     );
-                                                    response_payload["voice_reply_error"] =
-                                                        serde_json::json!(format!(
-                                                            "voice upload failed: {e}"
-                                                        ));
+                                                    response_payload["voice_reply_error"] = serde_json::json!(
+                                                        format!("voice upload failed: {e}")
+                                                    );
                                                 }
                                             }
                                         }

@@ -24,16 +24,26 @@ use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::{CompletionRequest, DriverConfig, LlmDriver, LlmError, StreamEvent};
-use crate::plan_executor::{PlanEpisodeRecorder, PlanExecutionTrace, PlanExecutor, PlanStepDispatch};
+use crate::llm_errors;
+use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
+use crate::mcp::McpConnection;
+use crate::plan_executor::{
+    PlanEpisodeRecorder, PlanExecutionTrace, PlanExecutor, PlanStepDispatch,
+};
 use crate::planner_mode::{
     effective_native_infer_base_url, native_infer_base_url, provider_is_ainl_inference_server,
     resolve_planner_mode,
 };
-use crate::llm_errors;
-use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
-use crate::mcp::McpConnection;
 use crate::tool_runner;
 use crate::web_search::WebToolsContext;
+use ainl_agent_snapshot::{
+    self, PolicyCaps, SnapshotPolicy, STRUCTURED_KIND_DETERMINISTIC_PLAN,
+    STRUCTURED_KIND_PLANNER_INVALID_PLAN,
+};
+use armara_provider_api::{
+    ChatMessage as InferChatMessage, InferRequest, ModelHint, Policy as InferPolicy, SessionRef,
+};
+use async_trait::async_trait;
 use openfang_memory::session::Session;
 use openfang_memory::MemorySubstrate;
 use openfang_skills::registry::SkillRegistry;
@@ -46,22 +56,14 @@ use openfang_types::message::{
 };
 use openfang_types::runtime_limits::EffectiveRuntimeLimits;
 use openfang_types::tool::{ToolCall, ToolDefinition};
-use ainl_agent_snapshot::{
-    self, PolicyCaps, SnapshotPolicy, STRUCTURED_KIND_DETERMINISTIC_PLAN,
-    STRUCTURED_KIND_PLANNER_INVALID_PLAN,
-};
-use armara_provider_api::{
-    ChatMessage as InferChatMessage, InferRequest, ModelHint, Policy as InferPolicy, SessionRef,
-};
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::graph_memory_writer::{GraphMemoryWriteNotifyFn, GraphMemoryWriter};
 
@@ -208,13 +210,7 @@ async fn append_mcp_readiness_context(
                     tags.push(format!("readiness:{id}"));
                 }
                 let mem = crate::memory_project_scope::effective_memory_project_id(manifest);
-                gm.record_fact_with_tags(
-                    fact,
-                    0.95,
-                    uuid::Uuid::new_v4(),
-                    &tags,
-                    mem.as_deref(),
-                )
+                gm.record_fact_with_tags(fact, 0.95, uuid::Uuid::new_v4(), &tags, mem.as_deref())
                     .await;
             }
         }
@@ -3388,7 +3384,10 @@ async fn call_with_retry(
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<LlmFallbackUsed>)> {
+) -> OpenFangResult<(
+    crate::llm_driver::CompletionResponse,
+    Option<LlmFallbackUsed>,
+)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     const OR_PROVIDER: &str = "openrouter";
     // Check circuit breaker before calling
@@ -3657,7 +3656,10 @@ async fn stream_with_retry(
     cooldown: Option<&ProviderCooldown>,
     fallback_models: &[FallbackModel],
     llm_fb: &LlmFallbackContext<'_>,
-) -> OpenFangResult<(crate::llm_driver::CompletionResponse, Option<LlmFallbackUsed>)> {
+) -> OpenFangResult<(
+    crate::llm_driver::CompletionResponse,
+    Option<LlmFallbackUsed>,
+)> {
     const OR_NOTE: &str = "OpenRouter free-tier model (primary rate limited or overloaded)";
     const OR_PROVIDER: &str = "openrouter";
     // Check circuit breaker before calling

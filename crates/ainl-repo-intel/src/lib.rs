@@ -23,16 +23,20 @@ pub fn tool_class_matches(tool_name: &str, description: &str, class: RepoIntelTo
     let n = format!("{} {}", tool_name, description).to_ascii_lowercase();
     match class {
         RepoIntelToolClass::Query => {
-            n.contains("query") && (n.contains("search") || n.contains("hybrid") || n.contains("bm25"))
-                || n.contains("gitnexus")
-                    && n.contains("query")
+            n.contains("query")
+                && (n.contains("search") || n.contains("hybrid") || n.contains("bm25"))
+                || n.contains("gitnexus") && n.contains("query")
                 || n.ends_with("query")
         }
         RepoIntelToolClass::Context => {
-            n.contains("context") && n.contains("symbol") || n.contains("360") || n.contains("callee")
+            n.contains("context") && n.contains("symbol")
+                || n.contains("360")
+                || n.contains("callee")
                 || n.contains("caller")
         }
-        RepoIntelToolClass::Impact => n.contains("impact") || n.contains("blast") || n.contains("radius"),
+        RepoIntelToolClass::Impact => {
+            n.contains("impact") || n.contains("blast") || n.contains("radius")
+        }
         RepoIntelToolClass::DetectChanges => {
             n.contains("detect_changes")
                 || n.contains("detectchanges")

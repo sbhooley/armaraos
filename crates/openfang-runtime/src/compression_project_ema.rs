@@ -96,8 +96,8 @@ fn write_file_atomic(path: &Path, data: &CompressionProjectProfilesFile) -> Resu
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(data)
-        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+    let json =
+        serde_json::to_string_pretty(data).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, json)?;
     fs::rename(&tmp, path)?;
@@ -276,10 +276,7 @@ pub fn maybe_record_cache_from_adaptive_snapshot(
     }
     let ttl = snap.cache_effective_ttl_secs.unwrap_or(0);
     let streak = snap.cache_prompt_streak.unwrap_or(0);
-    let cr = snap
-        .content_recommendation
-        .as_deref()
-        .unwrap_or("");
+    let cr = snap.content_recommendation.as_deref().unwrap_or("");
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

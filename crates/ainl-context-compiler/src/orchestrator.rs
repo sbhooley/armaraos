@@ -202,9 +202,7 @@ impl ContextCompiler {
                         .embed(&segments[*ib].content)
                         .map(|v| cosine(&v, &qv))
                         .unwrap_or(0.0);
-                    b_sim
-                        .partial_cmp(&a_sim)
-                        .unwrap_or(Ordering::Equal)
+                    b_sim.partial_cmp(&a_sim).unwrap_or(Ordering::Equal)
                 });
                 scored = pinned_order;
                 scored.extend(unpin);
@@ -298,9 +296,8 @@ impl ContextCompiler {
                 summarizer_calls += 1;
                 match summ.summarize(&dropped_for_summarization, Some(&anchored)) {
                     Ok(new_summary) => {
-                        let summary_tokens = ainl_compression::tokenize_estimate(
-                            &new_summary.to_prompt_text(),
-                        );
+                        let summary_tokens =
+                            ainl_compression::tokenize_estimate(&new_summary.to_prompt_text());
                         anchored = new_summary;
                         anchored.token_estimate = summary_tokens;
                         anchored.iteration = anchored.iteration.saturating_add(1);
@@ -345,10 +342,7 @@ impl ContextCompiler {
             let insert_at = composed
                 .iter()
                 .position(|s| {
-                    !matches!(
-                        s.kind,
-                        SegmentKind::SystemPrompt | SegmentKind::MemoryBlock
-                    )
+                    !matches!(s.kind, SegmentKind::SystemPrompt | SegmentKind::MemoryBlock)
                 })
                 .unwrap_or(composed.len());
             composed.insert(insert_at, recall);
@@ -422,8 +416,14 @@ mod tests {
         ];
         let out = compiler.compose("Help me debug a tokio runtime issue.", segments, None, None);
         assert_eq!(out.segments.len(), 2);
-        assert!(out.segments.iter().any(|s| s.kind == SegmentKind::SystemPrompt));
-        assert!(out.segments.iter().any(|s| s.kind == SegmentKind::UserPrompt));
+        assert!(out
+            .segments
+            .iter()
+            .any(|s| s.kind == SegmentKind::SystemPrompt));
+        assert!(out
+            .segments
+            .iter()
+            .any(|s| s.kind == SegmentKind::UserPrompt));
         assert_eq!(out.telemetry.tier, "heuristic");
         assert_eq!(out.telemetry.summarizer_calls, 0);
     }
@@ -435,13 +435,23 @@ mod tests {
         let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget);
         let segments = vec![
             Segment::system_prompt("system"),
-            Segment::older_turn(Role::Assistant, long_text("rust borrow checker tokio", 200), 10),
+            Segment::older_turn(
+                Role::Assistant,
+                long_text("rust borrow checker tokio", 200),
+                10,
+            ),
             Segment::user_prompt("rust tokio"),
         ];
         let out = compiler.compose("rust tokio", segments, None, None);
         // System + user always survive.
-        assert!(out.segments.iter().any(|s| s.kind == SegmentKind::SystemPrompt));
-        assert!(out.segments.iter().any(|s| s.kind == SegmentKind::UserPrompt));
+        assert!(out
+            .segments
+            .iter()
+            .any(|s| s.kind == SegmentKind::SystemPrompt));
+        assert!(out
+            .segments
+            .iter()
+            .any(|s| s.kind == SegmentKind::UserPrompt));
         // Older turn either compressed or dropped; metrics show non-zero original.
         assert!(out.telemetry.total_original_tokens > 0);
     }
@@ -450,15 +460,18 @@ mod tests {
     fn sink_receives_tier_and_block_events() {
         let sink = Arc::new(CapturingSink::default());
         let compiler = ContextCompiler::with_defaults().with_sink(sink.clone());
-        let segments = vec![
-            Segment::system_prompt("sys"),
-            Segment::user_prompt("hi"),
-        ];
+        let segments = vec![Segment::system_prompt("sys"), Segment::user_prompt("hi")];
         let _ = compiler.compose("hi", segments, None, None);
         let events = sink.events.lock().unwrap();
-        assert!(events.iter().any(|e| matches!(e, ContextCompilerEvent::TierSelected { .. })));
-        assert!(events.iter().any(|e| matches!(e, ContextCompilerEvent::BlockEmitted { .. })));
-        assert!(events.iter().any(|e| matches!(e, ContextCompilerEvent::BudgetAllocated { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ContextCompilerEvent::TierSelected { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ContextCompilerEvent::BlockEmitted { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ContextCompilerEvent::BudgetAllocated { .. })));
     }
 
     #[test]
@@ -506,20 +519,13 @@ mod tests {
         // Two older turns with different text; user prompt matches the second.
         let segments = vec![
             Segment::system_prompt("sys"),
-            Segment::older_turn(
-                Role::User,
-                "unrelated zzz",
-                4,
-            ),
+            Segment::older_turn(Role::User, "unrelated zzz", 4),
             Segment::older_turn(Role::Assistant, "the answer is forty two", 3),
             Segment::user_prompt("forty two"),
         ];
         let out = compiler.compose("forty two", segments, None, None);
         assert!(!out.segments.is_empty());
-        assert_eq!(
-            out.telemetry.tier,
-            "heuristic_summarization_embedding"
-        );
+        assert_eq!(out.telemetry.tier, "heuristic_summarization_embedding");
     }
 
     #[test]

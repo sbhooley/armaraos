@@ -34,8 +34,7 @@ pub(crate) fn repair_stale_mcp_env_continuations(raw: &str) -> String {
 }
 
 fn bracket_depth_delta(s: &str) -> i32 {
-    s.chars().filter(|c| *c == '[').count() as i32
-        - s.chars().filter(|c| *c == ']').count() as i32
+    s.chars().filter(|c| *c == '[').count() as i32 - s.chars().filter(|c| *c == ']').count() as i32
 }
 
 /// First line index *after* the `env = ...` value (possibly multiline) for bracket balance.

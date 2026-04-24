@@ -119,8 +119,10 @@ pub async fn spawn_agent(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -650,7 +652,11 @@ pub async fn prepare_user_message_for_audio_turn(
         } else {
             att.content_type.clone()
         };
-        if !content_type.to_ascii_lowercase().trim().starts_with("audio/") {
+        if !content_type
+            .to_ascii_lowercase()
+            .trim()
+            .starts_with("audio/")
+        {
             continue;
         }
         let ct_norm = normalize_mime_type(content_type.as_str());
@@ -803,7 +809,9 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
 
 /// When server STT already produced transcripts, append hard guidance so models do not treat
 /// transcribed proper nouns as implicit Google Workspace queries or confuse WebChat Piper with Telegram.
-pub(crate) fn voice_transcript_policy_suffix(attachments: &[AttachmentRef]) -> Option<&'static str> {
+pub(crate) fn voice_transcript_policy_suffix(
+    attachments: &[AttachmentRef],
+) -> Option<&'static str> {
     if !all_audio_fully_transcribed(attachments) {
         return None;
     }
@@ -878,8 +886,10 @@ pub async fn send_message(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     let msg_path = "/api/agents/:id/message";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, msg_path).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, msg_path,
+    )
+    .await
     {
         return resp;
     }
@@ -936,12 +946,9 @@ pub async fn send_message(
         None
     };
 
-    let base_message = prepare_user_message_for_audio_turn(
-        state.kernel.as_ref(),
-        &req.message,
-        &req.attachments,
-    )
-    .await;
+    let base_message =
+        prepare_user_message_for_audio_turn(state.kernel.as_ref(), &req.message, &req.attachments)
+            .await;
     let mut message_for_agent = base_message;
     let lead = audio_upload_ingress_lead(&req.attachments);
     if !lead.is_empty() {
@@ -1058,36 +1065,31 @@ pub async fn send_message(
                 })
             });
 
-            let (voice_reply_audio_url, voice_reply_provider, voice_reply_error) = if req
-                .voice_reply
-                && !response.trim().is_empty()
-            {
-                let local_voice = state.kernel.local_voice_effective();
-                if local_voice.local_tts_ready() {
-                    match openfang_runtime::tts::synthesize_local_tts(
-                        &response,
-                        &local_voice,
-                    )
-                    .await
-                    {
-                        Ok(tts) => match register_generated_upload(
-                            "audio/wav",
-                            "voice_reply.wav",
-                            tts.audio_data,
-                        ) {
-                            Ok(url) => (Some(url), Some(tts.provider), None),
+            let (voice_reply_audio_url, voice_reply_provider, voice_reply_error) =
+                if req.voice_reply && !response.trim().is_empty() {
+                    let local_voice = state.kernel.local_voice_effective();
+                    if local_voice.local_tts_ready() {
+                        match openfang_runtime::tts::synthesize_local_tts(&response, &local_voice)
+                            .await
+                        {
+                            Ok(tts) => match register_generated_upload(
+                                "audio/wav",
+                                "voice_reply.wav",
+                                tts.audio_data,
+                            ) {
+                                Ok(url) => (Some(url), Some(tts.provider), None),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "voice reply upload failed");
+                                    (None, None, Some(format!("voice upload failed: {e}")))
+                                }
+                            },
                             Err(e) => {
-                                tracing::warn!(error = %e, "voice reply upload failed");
-                                (None, None, Some(format!("voice upload failed: {e}")))
+                                tracing::warn!(error = %e, "local TTS voice reply failed");
+                                (None, None, Some(e))
                             }
-                        },
-                        Err(e) => {
-                            tracing::warn!(error = %e, "local TTS voice reply failed");
-                            (None, None, Some(e))
                         }
-                    }
-                } else {
-                    (
+                    } else {
+                        (
                         None,
                         None,
                         Some(
@@ -1096,10 +1098,10 @@ pub async fn send_message(
                                 .to_string(),
                         ),
                     )
-                }
-            } else {
-                (None, None, None)
-            };
+                    }
+                } else {
+                    (None, None, None)
+                };
 
             (
                 StatusCode::OK,
@@ -1167,8 +1169,10 @@ pub async fn get_agent_session(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/session";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -1502,8 +1506,10 @@ pub async fn restart_agent(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/restart";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -1615,7 +1621,12 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .and_then(Result::ok)
         .unwrap_or_else(|| serde_json::json!({"window":"7d","modes":{},"agents":[]}));
 
-    let quota_enforcement = match state.kernel.memory.usage().query_quota_block_summary(Some(7)) {
+    let quota_enforcement = match state
+        .kernel
+        .memory
+        .usage()
+        .query_quota_block_summary(Some(7))
+    {
         Ok(q) => {
             let by_reason: serde_json::Map<String, serde_json::Value> = q
                 .by_reason
@@ -2383,8 +2394,10 @@ pub async fn set_agent_mode(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/mode";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -2565,8 +2578,10 @@ pub async fn get_agent(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -2705,8 +2720,10 @@ pub async fn send_message_stream(
 
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/message/stream";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp.into_response();
     }
@@ -2752,12 +2769,9 @@ pub async fn send_message_stream(
         .into_response();
     }
 
-    let base_message = prepare_user_message_for_audio_turn(
-        state.kernel.as_ref(),
-        &req.message,
-        &req.attachments,
-    )
-    .await;
+    let base_message =
+        prepare_user_message_for_audio_turn(state.kernel.as_ref(), &req.message, &req.attachments)
+            .await;
     let mut message_for_agent = base_message;
     let lead = audio_upload_ingress_lead(&req.attachments);
     if !lead.is_empty() {
@@ -6540,14 +6554,14 @@ pub async fn update_hand_settings(
                     );
                 }
                 (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "status": "ok",
-                    "hand_id": hand_id,
-                    "instance_id": id,
-                    "config": config,
-                })),
-            )
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "status": "ok",
+                        "hand_id": hand_id,
+                        "instance_id": id,
+                        "config": config,
+                    })),
+                )
             }
             Err(e) => api_json_error(
                 StatusCode::BAD_REQUEST,
@@ -7671,7 +7685,12 @@ pub async fn system_local_voice_voices(State(state): State<Arc<AppState>>) -> im
     let lv = state.kernel.local_voice_effective();
     let dir = match lv.custom_voices_dir.as_ref() {
         Some(d) => d.clone(),
-        None => state.kernel.config.home_dir.join("voice").join("voices_user"),
+        None => state
+            .kernel
+            .config
+            .home_dir
+            .join("voice")
+            .join("voices_user"),
     };
     let mut voices: Vec<serde_json::Value> = Vec::new();
     if let Ok(read) = std::fs::read_dir(&dir) {
@@ -7693,7 +7712,12 @@ pub async fn system_local_voice_voices(State(state): State<Arc<AppState>>) -> im
             }));
         }
     }
-    voices.sort_by(|a, b| a["id"].as_str().unwrap_or("").cmp(b["id"].as_str().unwrap_or("")));
+    voices.sort_by(|a, b| {
+        a["id"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["id"].as_str().unwrap_or(""))
+    });
     Json(serde_json::json!({
         "voices_dir": dir.display().to_string(),
         "voices": voices,
@@ -7715,14 +7739,20 @@ pub async fn system_local_voice_upload_voice(
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let lv = state.kernel.local_voice_effective();
-    let dir = lv
-        .custom_voices_dir
-        .clone()
-        .unwrap_or_else(|| state.kernel.config.home_dir.join("voice").join("voices_user"));
+    let dir = lv.custom_voices_dir.clone().unwrap_or_else(|| {
+        state
+            .kernel
+            .config
+            .home_dir
+            .join("voice")
+            .join("voices_user")
+    });
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "ok": false, "error": format!("mkdir {}: {e}", dir.display()) })),
+            Json(
+                serde_json::json!({ "ok": false, "error": format!("mkdir {}: {e}", dir.display()) }),
+            ),
         );
     }
 
@@ -7742,7 +7772,12 @@ pub async fn system_local_voice_upload_voice(
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "id" => {
-                id_override = field.text().await.ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                id_override = field
+                    .text()
+                    .await
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
             }
             "voice" => {
                 let filename = field.file_name().unwrap_or("voice.onnx").to_string();
@@ -7751,7 +7786,9 @@ pub async fn system_local_voice_upload_voice(
                     Err(e) => {
                         return (
                             StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({ "ok": false, "error": format!("read voice: {e}") })),
+                            Json(
+                                serde_json::json!({ "ok": false, "error": format!("read voice: {e}") }),
+                            ),
                         );
                     }
                 };
@@ -7759,7 +7796,12 @@ pub async fn system_local_voice_upload_voice(
             }
             "metadata" => {
                 let filename = field.file_name().unwrap_or("voice.onnx.json").to_string();
-                let bytes = field.bytes().await.ok().map(|b| b.to_vec()).unwrap_or_default();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .ok()
+                    .map(|b| b.to_vec())
+                    .unwrap_or_default();
                 json_bytes = Some((filename, bytes));
             }
             _ => {
@@ -7787,7 +7829,9 @@ pub async fn system_local_voice_upload_voice(
     if !looks_like_onnx_file(&bytes) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "ok": false, "error": "File does not look like a valid ONNX model (missing magic header)" })),
+            Json(
+                serde_json::json!({ "ok": false, "error": "File does not look like a valid ONNX model (missing magic header)" }),
+            ),
         );
     }
 
@@ -7807,7 +7851,9 @@ pub async fn system_local_voice_upload_voice(
     if let Err(e) = std::fs::write(&onnx_path, &bytes) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "ok": false, "error": format!("write {}: {e}", onnx_path.display()) })),
+            Json(
+                serde_json::json!({ "ok": false, "error": format!("write {}: {e}", onnx_path.display()) }),
+            ),
         );
     }
     if let Some((_, jb)) = json_bytes {
@@ -7842,7 +7888,13 @@ fn looks_like_onnx_file(bytes: &[u8]) -> bool {
 fn sanitize_voice_id(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = cleaned.trim_matches('_').to_string();
     if trimmed.is_empty() {
@@ -7858,10 +7910,14 @@ pub async fn system_local_voice_delete_voice(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let lv = state.kernel.local_voice_effective();
-    let dir = lv
-        .custom_voices_dir
-        .clone()
-        .unwrap_or_else(|| state.kernel.config.home_dir.join("voice").join("voices_user"));
+    let dir = lv.custom_voices_dir.clone().unwrap_or_else(|| {
+        state
+            .kernel
+            .config
+            .home_dir
+            .join("voice")
+            .join("voices_user")
+    });
     let id = sanitize_voice_id(&id);
     let onnx = dir.join(format!("{id}.onnx"));
     let json = dir.join(format!("{id}.onnx.json"));
@@ -7966,10 +8022,7 @@ fn upsert_local_voice_preference(
     if let Some(v) = payload.get("prefer_macos_say") {
         match v {
             serde_json::Value::Bool(b) => {
-                lv.insert(
-                    "prefer_macos_say".to_string(),
-                    toml::Value::Boolean(*b),
-                );
+                lv.insert("prefer_macos_say".to_string(), toml::Value::Boolean(*b));
             }
             serde_json::Value::Null => {
                 lv.remove("prefer_macos_say");
@@ -7985,7 +8038,10 @@ fn upsert_local_voice_preference(
         if let Some(kt) = kokoro_entry.as_table_mut() {
             match kv {
                 serde_json::Value::String(s) if !s.trim().is_empty() => {
-                    kt.insert("voice".to_string(), toml::Value::String(s.trim().to_string()));
+                    kt.insert(
+                        "voice".to_string(),
+                        toml::Value::String(s.trim().to_string()),
+                    );
                 }
                 serde_json::Value::String(_) | serde_json::Value::Null => {
                     kt.remove("voice");
@@ -8124,11 +8180,7 @@ pub async fn post_google_workspace_oauth(
     std::env::set_var("GOOGLE_OAUTH_CLIENT_ID", &id_str);
 
     if !sec_str.is_empty() {
-        if let Err(e) = write_secret_env(
-            &secrets_path,
-            "GOOGLE_OAUTH_CLIENT_SECRET",
-            &sec_str,
-        ) {
+        if let Err(e) = write_secret_env(&secrets_path, "GOOGLE_OAUTH_CLIENT_SECRET", &sec_str) {
             return api_json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &rid,
@@ -8146,9 +8198,7 @@ pub async fn post_google_workspace_oauth(
         // Allow PKCE / public clients without a secret: remove stale secret from env
         // so workspace-mcp does not pick up an old value.
         let _ = remove_secret_env(&secrets_path, "GOOGLE_OAUTH_CLIENT_SECRET");
-        let _ = state
-            .kernel
-            .remove_credential("GOOGLE_OAUTH_CLIENT_SECRET");
+        let _ = state.kernel.remove_credential("GOOGLE_OAUTH_CLIENT_SECRET");
         std::env::remove_var("GOOGLE_OAUTH_CLIENT_SECRET");
     }
 
@@ -9787,8 +9837,10 @@ pub async fn update_agent(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/update";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -9889,8 +9941,10 @@ pub async fn patch_agent(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -15029,8 +15083,10 @@ pub async fn update_agent_identity(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/identity";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -15158,8 +15214,10 @@ pub async fn patch_agent_config(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/config";
-    if let Err(resp) =
-        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state, &headers, &rid, PATH,
+    )
+    .await
     {
         return resp;
     }
@@ -16469,7 +16527,9 @@ fn extension_for_generated_upload(content_type: &str, suggested_filename: &str) 
         _ if ct.starts_with("audio/") => "bin".into(),
         _ => {
             if let Some(ext) = upload_extension_lower(suggested_filename) {
-                if ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.is_empty() && ext.len() <= 12
+                if ext.chars().all(|c| c.is_ascii_alphanumeric())
+                    && !ext.is_empty()
+                    && ext.len() <= 12
                 {
                     return ext;
                 }
@@ -19428,9 +19488,7 @@ pub async fn auth_logout() -> impl IntoResponse {
             "set-cookie",
             crate::premium_ainl::clear_premium_wallet_bind_set_cookie_value(),
         )
-        .body(Body::from(
-            serde_json::json!({"status": "ok"}).to_string(),
-        ))
+        .body(Body::from(serde_json::json!({"status": "ok"}).to_string()))
         .unwrap()
 }
 
@@ -20057,8 +20115,9 @@ mod voice_message_tests {
     #[test]
     #[serial]
     fn test_register_generated_upload_includes_extension_in_path() {
-        let url = super::register_generated_upload("audio/wav", "voice_reply.wav", vec![0x52, 0x49])
-            .expect("register");
+        let url =
+            super::register_generated_upload("audio/wav", "voice_reply.wav", vec![0x52, 0x49])
+                .expect("register");
         assert!(
             url.contains(".wav"),
             "expected /api/uploads/{{uuid}}.wav, got {url}"

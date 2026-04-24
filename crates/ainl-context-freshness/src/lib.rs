@@ -68,11 +68,7 @@ pub fn impact_decision_balanced(f: ContextFreshness, repo_intel_ready: bool) -> 
 
 /// Combine with compile/run gate for AINL MCP.
 #[must_use]
-pub fn can_execute_with_context(
-    f: ContextFreshness,
-    strict: bool,
-    repo_intel_ready: bool,
-) -> bool {
+pub fn can_execute_with_context(f: ContextFreshness, strict: bool, repo_intel_ready: bool) -> bool {
     let d = if strict {
         impact_decision_strict(f, repo_intel_ready)
     } else {

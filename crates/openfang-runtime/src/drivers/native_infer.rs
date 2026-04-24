@@ -45,10 +45,7 @@ impl NativeInferDriver {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let t = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Api {
-                status,
-                message: t,
-            });
+            return Err(LlmError::Api { status, message: t });
         }
         resp.json::<InferResponse>()
             .await
@@ -150,5 +147,4 @@ impl LlmDriver for NativeInferDriver {
             vitals: None,
         })
     }
-
 }

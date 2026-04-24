@@ -303,9 +303,7 @@ pub fn apply_graph_writes(
                     if let ainl_memory::AinlNodeType::Procedural { ref mut procedural } =
                         node.node_type
                     {
-                        procedural.fitness = Some(
-                            procedural.fitness.unwrap_or(0.5) + fd,
-                        );
+                        procedural.fitness = Some(procedural.fitness.unwrap_or(0.5) + fd);
                     }
                 }
                 let _ = now_ms;

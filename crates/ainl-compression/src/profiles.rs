@@ -61,7 +61,8 @@ pub fn suggest_profile_id_for_project(project_id: &str) -> &'static str {
         || p.contains("release")
     {
         "quality_preserve"
-    } else if p.contains("batch") || p.contains("ci") || p.contains("cron") || p.contains("scaled") {
+    } else if p.contains("batch") || p.contains("ci") || p.contains("cron") || p.contains("scaled")
+    {
         "cost_sensitive"
     } else {
         "default"
@@ -89,6 +90,9 @@ mod tests {
 
     #[test]
     fn suggest_ci_leans_cost() {
-        assert_eq!(suggest_profile_id_for_project("nightly-ci-batch"), "cost_sensitive");
+        assert_eq!(
+            suggest_profile_id_for_project("nightly-ci-batch"),
+            "cost_sensitive"
+        );
     }
 }

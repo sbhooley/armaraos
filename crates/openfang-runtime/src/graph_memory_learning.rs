@@ -73,7 +73,11 @@ pub fn master_learning_stack_disabled(manifest: &AgentManifest) -> bool {
             return master_learning_disabled_token(t);
         }
     }
-    if let Some(raw) = manifest.metadata.get("ainl_learning").and_then(|x| x.as_str()) {
+    if let Some(raw) = manifest
+        .metadata
+        .get("ainl_learning")
+        .and_then(|x| x.as_str())
+    {
         let t = raw.trim();
         if !t.is_empty() {
             return master_learning_disabled_token(t);
@@ -94,8 +98,10 @@ impl LearningStackPolicy {
     #[must_use]
     pub fn resolve(manifest: &AgentManifest) -> Self {
         let master_stack_disabled = master_learning_stack_disabled(manifest);
-        let trajectories = !master_stack_disabled && crate::graph_memory_writer::trajectory_env_enabled();
-        let failures = !master_stack_disabled && crate::graph_memory_writer::failure_learning_env_enabled();
+        let trajectories =
+            !master_stack_disabled && crate::graph_memory_writer::trajectory_env_enabled();
+        let failures =
+            !master_stack_disabled && crate::graph_memory_writer::failure_learning_env_enabled();
         Self {
             master_stack_disabled,
             trajectories,
@@ -126,12 +132,12 @@ pub fn sanitize_failure_message(input: &str) -> String {
 #[must_use]
 pub fn failure_recall_fts_query(user_message: &str) -> Option<String> {
     const STOPWORDS: &[&str] = &[
-        "the", "and", "for", "not", "you", "all", "can", "her", "was", "one", "our", "out",
-        "are", "but", "has", "have", "had", "how", "what", "when", "where", "who", "why", "with",
-        "from", "your", "this", "that", "into", "than", "then", "them", "they", "their", "there",
-        "these", "those", "will", "would", "could", "should", "about", "after", "before", "also",
-        "just", "like", "some", "such", "very", "more", "most", "other", "only", "same", "each",
-        "both", "been", "being", "here", "help", "please", "want", "need", "make", "sure",
+        "the", "and", "for", "not", "you", "all", "can", "her", "was", "one", "our", "out", "are",
+        "but", "has", "have", "had", "how", "what", "when", "where", "who", "why", "with", "from",
+        "your", "this", "that", "into", "than", "then", "them", "they", "their", "there", "these",
+        "those", "will", "would", "could", "should", "about", "after", "before", "also", "just",
+        "like", "some", "such", "very", "more", "most", "other", "only", "same", "each", "both",
+        "been", "being", "here", "help", "please", "want", "need", "make", "sure",
     ];
     // Keep `_` inside identifiers (`shell_exec`, `tool_runner`) — `char::is_alphanumeric` is false for `_`.
     let mut raw: Vec<String> = Vec::new();
@@ -290,7 +296,11 @@ impl LearningRecorder {
     }
 
     /// Graph validation failure from **`ainl-runtime`** before `run_turn` proceeds (dangling edges, etc.).
-    pub async fn record_ainl_runtime_graph_validation_failure(&self, session: &Session, message: &str) {
+    pub async fn record_ainl_runtime_graph_validation_failure(
+        &self,
+        session: &Session,
+        message: &str,
+    ) {
         let Ok(gm) = self.failures_record_gate() else {
             return;
         };
@@ -323,8 +333,7 @@ mod tests {
         let old = std::env::var(key).ok();
         std::env::set_var(key, "off");
         let mut m = AgentManifest::default();
-        m.metadata
-            .insert("ainl_learning".into(), json!("on"));
+        m.metadata.insert("ainl_learning".into(), json!("on"));
         assert!(master_learning_stack_disabled(&m));
         match old {
             None => std::env::remove_var(key),

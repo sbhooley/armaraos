@@ -82,7 +82,10 @@ fn cache_key(wallet: &str, mint: &str, min_ui: u128) -> String {
 /// (within the cache TTL) can short-circuit the Solana RPC round-trip.
 fn record_meets_min(wallet: &str, mint: &str, min_ui: u128, ok: bool) {
     let now = now_unix();
-    meets_min_cache().insert(cache_key(wallet, mint, min_ui), (now + MEETS_MIN_CACHE_TTL_SECS, ok));
+    meets_min_cache().insert(
+        cache_key(wallet, mint, min_ui),
+        (now + MEETS_MIN_CACHE_TTL_SECS, ok),
+    );
 }
 
 fn now_unix() -> i64 {
@@ -112,8 +115,7 @@ pub fn premium_hmac_secret(kernel: &OpenFangKernel) -> String {
         let api_key = kernel.config.api_key.trim().to_string();
         if !api_key.is_empty() {
             api_key
-        } else if kernel.config.auth.enabled
-            && !kernel.config.auth.password_hash.trim().is_empty()
+        } else if kernel.config.auth.enabled && !kernel.config.auth.password_hash.trim().is_empty()
         {
             kernel.config.auth.password_hash.clone()
         } else {
@@ -215,13 +217,13 @@ pub async fn verify_page() -> impl IntoResponse {
     // Override the API default CSP (`default-src 'none'`) so wallet connect works.
     let csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
     (
-        [(
-            header::CACHE_CONTROL,
-            "no-store, no-cache, must-revalidate, max-age=0",
-        ), (
-            header::CONTENT_SECURITY_POLICY,
-            csp,
-        )],
+        [
+            (
+                header::CACHE_CONTROL,
+                "no-store, no-cache, must-revalidate, max-age=0",
+            ),
+            (header::CONTENT_SECURITY_POLICY, csp),
+        ],
         Html(html.to_string()),
     )
 }
@@ -311,20 +313,20 @@ pub async fn post_verify(
         );
     }
 
-    let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(body.signature_b64.trim())
-    {
-        Ok(b) if b.len() == 64 => b,
-        _ => {
-            return api_json_error(
-                StatusCode::BAD_REQUEST,
-                &rid,
-                PATH,
-                "Invalid signature",
-                "signature_b64 must be standard base64 of 64 raw bytes.".to_string(),
-                None,
-            );
-        }
-    };
+    let sig_bytes =
+        match base64::engine::general_purpose::STANDARD.decode(body.signature_b64.trim()) {
+            Ok(b) if b.len() == 64 => b,
+            _ => {
+                return api_json_error(
+                    StatusCode::BAD_REQUEST,
+                    &rid,
+                    PATH,
+                    "Invalid signature",
+                    "signature_b64 must be standard base64 of 64 raw bytes.".to_string(),
+                    None,
+                );
+            }
+        };
 
     let pk_bytes = match bs58::decode(&pk).into_vec() {
         Ok(v) if v.len() == 32 => v,
@@ -429,10 +431,7 @@ pub async fn post_verify(
 
     let ticket = uuid::Uuid::new_v4().to_string();
     prune_expired_tickets(tickets(), now);
-    tickets().insert(
-        ticket.clone(),
-        (now + TICKET_TTL_SECS, pk.clone()),
-    );
+    tickets().insert(ticket.clone(), (now + TICKET_TTL_SECS, pk.clone()));
 
     (
         StatusCode::OK,
@@ -613,11 +612,7 @@ pub async fn require_premium_wallet_holdings_when_wallet_session(
     Ok(())
 }
 
-async fn assert_wallet_meets_min(
-    wallet: &str,
-    mint: &str,
-    min_ui: u128,
-) -> Result<(), String> {
+async fn assert_wallet_meets_min(wallet: &str, mint: &str, min_ui: u128) -> Result<(), String> {
     let key = cache_key(wallet, mint, min_ui);
     let now = now_unix();
     if let Some(entry) = meets_min_cache().get(&key) {

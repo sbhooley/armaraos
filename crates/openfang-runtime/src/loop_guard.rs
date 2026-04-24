@@ -277,7 +277,10 @@ impl LoopGuard {
         let mut outcome_warn_th = self.config.outcome_warn_threshold;
         let mut outcome_block_th = self.config.outcome_block_threshold;
         if is_mcp_ainl_tool(tool_name) {
-            outcome_block_th = self.config.outcome_block_threshold.saturating_mul(self.config.poll_multiplier);
+            outcome_block_th = self
+                .config
+                .outcome_block_threshold
+                .saturating_mul(self.config.poll_multiplier);
             // One warning just before block (avoid spamming from outcome_warn_threshold=2)
             outcome_warn_th = outcome_block_th.saturating_sub(1).max(1);
         }
@@ -691,10 +694,16 @@ mod tests {
         let result = "same error";
         // outcome_block 3 * 3 = 9; outcome_warn 8 — first Some on 8th repeat
         for _ in 0..7 {
-            assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_none());
+            assert!(guard
+                .record_outcome("mcp_ainl_ainl_run", &params, result)
+                .is_none());
         }
-        assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_some());
-        assert!(guard.record_outcome("mcp_ainl_ainl_run", &params, result).is_some());
+        assert!(guard
+            .record_outcome("mcp_ainl_ainl_run", &params, result)
+            .is_some());
+        assert!(guard
+            .record_outcome("mcp_ainl_ainl_run", &params, result)
+            .is_some());
     }
 
     // ========================================================================

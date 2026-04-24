@@ -161,7 +161,11 @@ impl Segment {
 
     /// Construct a tool-result segment.
     #[must_use]
-    pub fn tool_result(tool_name: impl Into<String>, content: impl Into<String>, age_index: u32) -> Self {
+    pub fn tool_result(
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+        age_index: u32,
+    ) -> Self {
         Self {
             kind: SegmentKind::ToolResult,
             role: Role::Tool,

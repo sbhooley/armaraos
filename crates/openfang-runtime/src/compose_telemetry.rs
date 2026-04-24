@@ -303,10 +303,7 @@ fn build_segments(
 }
 
 /// History + current user, without a leading system segment.
-fn build_history_user_segments(
-    messages: &[Message],
-    latest_user_query: &str,
-) -> Vec<Segment> {
+fn build_history_user_segments(messages: &[Message], latest_user_query: &str) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::with_capacity(messages.len() + 1);
     history_core_segments(messages, latest_user_query, &mut segments);
     segments
@@ -314,11 +311,7 @@ fn build_history_user_segments(
 
 /// The last message is almost always the current user turn; it is dropped from `history` and
 /// re-added as [`SegmentKind::UserPrompt`] with `latest_user_query` when set.
-fn history_core_segments(
-    messages: &[Message],
-    latest_user_query: &str,
-    out: &mut Vec<Segment>,
-) {
+fn history_core_segments(messages: &[Message], latest_user_query: &str, out: &mut Vec<Segment>) {
     let trailing_is_user = messages
         .last()
         .map(|m| m.role == MsgRole::User)
@@ -333,13 +326,7 @@ fn history_core_segments(
     let recent_start = history.len().saturating_sub(RECENT_TURN_THRESHOLD);
 
     for (idx, msg) in history.iter().enumerate() {
-        push_message_segments_for_history(
-            msg,
-            idx,
-            history.len(),
-            recent_start,
-            out,
-        );
+        push_message_segments_for_history(msg, idx, history.len(), recent_start, out);
     }
 
     if !latest_user_query.is_empty() {
@@ -404,9 +391,7 @@ fn push_message_segments_for_history(
                         }
                     }
                     ContentBlock::ToolResult {
-                        content,
-                        tool_name,
-                        ..
+                        content, tool_name, ..
                     } => {
                         flush_text(&mut text_run, out);
                         let name = if tool_name.is_empty() {
@@ -419,7 +404,11 @@ fn push_message_segments_for_history(
                     ContentBlock::ToolUse { name, input, .. } => {
                         flush_text(&mut text_run, out);
                         out.push(Segment::tool_result(
-                            if name.is_empty() { "tool_use" } else { name.as_str() },
+                            if name.is_empty() {
+                                "tool_use"
+                            } else {
+                                name.as_str()
+                            },
                             input.to_string(),
                             age_index,
                         ));
@@ -445,11 +434,7 @@ fn push_message_segments_for_history(
                                 age_index,
                             )
                         } else {
-                            Segment::older_turn(
-                                map_role(msg.role),
-                                "[image attachment]",
-                                age_index,
-                            )
+                            Segment::older_turn(map_role(msg.role), "[image attachment]", age_index)
                         });
                     }
                     ContentBlock::Unknown => {
@@ -471,7 +456,8 @@ fn build_segments_compiler_root(
     latest_user_query: &str,
     failure_recall: Option<Segment>,
 ) -> Vec<Segment> {
-    let mut segments: Vec<Segment> = Vec::with_capacity(2 + graph_memory_blocks.len() + messages.len());
+    let mut segments: Vec<Segment> =
+        Vec::with_capacity(2 + graph_memory_blocks.len() + messages.len());
     if !system_base.is_empty() {
         segments.push(Segment::system_prompt(system_base));
     }
@@ -545,7 +531,10 @@ pub fn process_compose_telemetry_for_turn(
 
     if original == 0 {
         // Pathological — segments produced no token estimate. Don't record a misleading row.
-        warn!(agent_id, "compose_telemetry: original token estimate was zero, skipping record");
+        warn!(
+            agent_id,
+            "compose_telemetry: original token estimate was zero, skipping record"
+        );
         return;
     }
 
@@ -574,7 +563,10 @@ pub fn process_compose_telemetry_for_turn(
         return;
     };
     if m.is_empty() {
-        debug!(agent_id, "compose M2: no messages in composed output, keeping host prompt");
+        debug!(
+            agent_id,
+            "compose M2: no messages in composed output, keeping host prompt"
+        );
         return;
     }
     *system_prompt = s;
@@ -718,10 +710,7 @@ mod tests {
             segs.last().expect("user seg").kind,
             ainl_context_compiler::SegmentKind::UserPrompt
         );
-        assert_eq!(
-            segs.last().expect("user seg").content,
-            "current user query"
-        );
+        assert_eq!(segs.last().expect("user seg").content, "current user query");
 
         // Skip system + 2 oldest, then check recent classification.
         let middle = &segs[1..segs.len() - 1];
@@ -763,10 +752,12 @@ mod tests {
             .iter()
             .filter(|s| s.kind == ainl_context_compiler::SegmentKind::ToolResult)
             .collect();
-        assert!(!tool_segs.is_empty(), "expected a ToolResult segment, got {segs:?}");
         assert!(
-            segs
-                .iter()
+            !tool_segs.is_empty(),
+            "expected a ToolResult segment, got {segs:?}"
+        );
+        assert!(
+            segs.iter()
                 .any(|s| s.content.contains("Calling tool") || s.content.contains("bash")),
             "expected text + tool, got {segs:?}"
         );

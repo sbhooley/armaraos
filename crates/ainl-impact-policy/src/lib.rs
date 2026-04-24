@@ -68,6 +68,9 @@ mod tests {
     #[test]
     fn after_edit_requests_validate() {
         let r = recommend_next_tools(AuthoringPhase::AfterEdit, false);
-        assert_eq!(r.steps.first().map(|s| s.tool.as_str()), Some("ainl_validate"));
+        assert_eq!(
+            r.steps.first().map(|s| s.tool.as_str()),
+            Some("ainl_validate")
+        );
     }
 }

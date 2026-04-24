@@ -4,10 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ainl_contracts::ProposalEnvelope;
 use ainl_contracts::telemetry;
+use ainl_contracts::ProposalEnvelope;
 use ainl_improvement_proposals::{
-    AdoptResult, ImprovementProposalId, ImprovementProposalListItem, ProposalLedger, ProposalLedgerError,
+    AdoptResult, ImprovementProposalId, ImprovementProposalListItem, ProposalLedger,
+    ProposalLedgerError,
 };
 use ainl_memory::{AinlMemoryNode, AinlNodeKind, AinlNodeType, GraphMemory, ProcedureType};
 
@@ -286,18 +287,19 @@ pub fn adopt_validated_proposal(
         ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
         e
     })?;
-    let payload = match ledger
-        .get_for_graph_adopt(proposal_id)
-        .map_err(|e: ProposalLedgerError| {
-            ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
-            e.to_string()
-        })? {
-        Some(p) => p,
-        None => {
-            ADOPT_NOT_ADOPTABLE.fetch_add(1, Ordering::Relaxed);
-            return Err("proposal not found in ledger".to_string());
-        }
-    };
+    let payload =
+        match ledger
+            .get_for_graph_adopt(proposal_id)
+            .map_err(|e: ProposalLedgerError| {
+                ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
+                e.to_string()
+            })? {
+            Some(p) => p,
+            None => {
+                ADOPT_NOT_ADOPTABLE.fetch_add(1, Ordering::Relaxed);
+                return Err("proposal not found in ledger".to_string());
+            }
+        };
     if payload.row.agent_id != agent_id {
         ADOPT_NOT_ADOPTABLE.fetch_add(1, Ordering::Relaxed);
         return Err("proposal agent_id does not match request".to_string());
@@ -310,11 +312,10 @@ pub fn adopt_validated_proposal(
     if let Some(p) = gm_path.parent() {
         let _ = std::fs::create_dir_all(p);
     }
-    let gm = GraphMemory::new(&gm_path)
-        .map_err(|e| {
-            ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
-            e.to_string()
-        })?;
+    let gm = GraphMemory::new(&gm_path).map_err(|e| {
+        ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+        e.to_string()
+    })?;
 
     // Idempotent: already adopted in ledger and node still present
     if payload.row.adopted_at.is_some() {
@@ -364,10 +365,8 @@ pub fn adopt_validated_proposal(
         if pbytes.len() > MAX_PROC_PATTERN_BYTES {
             pbytes.truncate(MAX_PROC_PATTERN_BYTES);
         }
-        let mut n = AinlMemoryNode::new_pattern(
-            format!("improvement_proposal/{}", &proposal_id),
-            pbytes,
-        );
+        let mut n =
+            AinlMemoryNode::new_pattern(format!("improvement_proposal/{}", &proposal_id), pbytes);
         n.agent_id = agent_id.to_string();
         if let AinlNodeType::Procedural { ref mut procedural } = n.node_type {
             procedural.trace_id = Some(proposal_id.to_string());
@@ -388,10 +387,10 @@ pub fn adopt_validated_proposal(
         let mut n = AinlMemoryNode::new_fact(fact, 0.95, source_turn);
         n.agent_id = agent_id.to_string();
         if let AinlNodeType::Semantic { ref mut semantic } = n.node_type {
+            semantic.tags.push("scope:agent_private".to_string());
             semantic
                 .tags
-                .push("scope:agent_private".to_string());
-            semantic.tags.push("improvement_proposal_adopted".to_string());
+                .push("improvement_proposal_adopted".to_string());
             semantic.tags.push(format!("proposal:{proposal_id}"));
             let rsum = payload
                 .envelope
@@ -425,11 +424,10 @@ pub fn adopt_validated_proposal(
         n
     };
 
-    gm.write_node(&node)
-        .map_err(|e| {
-            ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
-            e.to_string()
-        })?;
+    gm.write_node(&node).map_err(|e| {
+        ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+        e.to_string()
+    })?;
     let nid = node.id;
     ledger
         .mark_adopted(proposal_id, &nid.to_string())
@@ -461,11 +459,9 @@ mod tests {
             .lock()
             .expect("lock");
         let prev = std::env::var(K).ok();
-        let restore = || {
-            match &prev {
-                Some(s) => std::env::set_var(K, s),
-                None => std::env::remove_var(K),
-            }
+        let restore = || match &prev {
+            Some(s) => std::env::set_var(K, s),
+            None => std::env::remove_var(K),
         };
         std::env::remove_var(K);
         assert!(env_enabled());

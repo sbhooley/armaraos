@@ -41,10 +41,7 @@ static STEP_ERROR: std::sync::OnceLock<RwLock<HashMap<String, AtomicU64>>> =
 static STEP_OPTIONAL_SKIPPED: std::sync::OnceLock<RwLock<HashMap<String, AtomicU64>>> =
     std::sync::OnceLock::new();
 
-fn inc_tool_counter(
-    cell: &std::sync::OnceLock<RwLock<HashMap<String, AtomicU64>>>,
-    tool: &str,
-) {
+fn inc_tool_counter(cell: &std::sync::OnceLock<RwLock<HashMap<String, AtomicU64>>>, tool: &str) {
     let map = cell.get_or_init(|| RwLock::new(HashMap::new()));
     let key = tool_key(tool);
     // Fast path: counter already exists.
@@ -56,7 +53,9 @@ fn inc_tool_counter(
     }
     // Slow path: insert then increment.
     if let Ok(mut w) = map.write() {
-        w.entry(key).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
+        w.entry(key)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 

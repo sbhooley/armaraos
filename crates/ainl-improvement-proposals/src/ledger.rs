@@ -166,7 +166,10 @@ impl ProposalLedger {
         }
     }
 
-    pub fn get(&self, id: ImprovementProposalId) -> Result<Option<ImprovementProposalRow>, ProposalLedgerError> {
+    pub fn get(
+        &self,
+        id: ImprovementProposalId,
+    ) -> Result<Option<ImprovementProposalRow>, ProposalLedgerError> {
         self.conn
             .query_row(
                 "SELECT id, agent_id, kind, original_hash, proposed_hash, accepted, validation_error, created_at, adopted_at, adopted_graph_node_id
@@ -295,8 +298,7 @@ impl ProposalLedger {
             .query_map(rusqlite::params![agent_id, cap as i64], |r| {
                 let id_s: String = r.get(0)?;
                 Ok(ImprovementProposalListItem {
-                    id: Uuid::parse_str(&id_s)
-                        .expect("improvement_proposals.id is a UUID string"),
+                    id: Uuid::parse_str(&id_s).expect("improvement_proposals.id is a UUID string"),
                     kind: r.get(1)?,
                     original_hash: r.get(2)?,
                     proposed_hash: r.get(3)?,

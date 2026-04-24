@@ -59,14 +59,14 @@ pub mod trajectory_recap;
 
 pub use budget::BudgetPolicy;
 pub use capability::{CapabilityProbe, Tier};
+pub use embedder::{cosine, Embedder, EmbedderError, PlaceholderEmbedder};
+#[cfg(feature = "sources-failure-warnings")]
+pub use failure_recall::memory_block_for_user_query;
 pub use metrics::{ContextCompilerMetrics, SegmentMetrics};
 pub use orchestrator::{ComposedPrompt, ContextCompiler};
 pub use relevance::{HeuristicScorer, RelevanceScore, RelevanceScorer};
 pub use segment::{Role, Segment, SegmentKind};
-pub use embedder::{cosine, Embedder, EmbedderError, PlaceholderEmbedder};
 pub use summarizer::{AnchoredSummary, AnchoredSummarySection, Summarizer, SummarizerError};
-#[cfg(feature = "sources-failure-warnings")]
-pub use failure_recall::memory_block_for_user_query;
 #[cfg(feature = "sources-trajectory-recap")]
 pub use trajectory_recap::format_trajectory_recap_lines;
 

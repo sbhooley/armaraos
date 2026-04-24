@@ -89,11 +89,10 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
         .get_session(entry.session_id)
         .expect("get session")
         .expect("session exists");
-    let scheduler_in_session = session.messages.iter().any(|m| {
-        m.content
-            .text_content()
-            .contains("ARMARAOS_SCHEDULER_V2")
-    });
+    let scheduler_in_session = session
+        .messages
+        .iter()
+        .any(|m| m.content.text_content().contains("ARMARAOS_SCHEDULER_V2"));
     assert!(
         !scheduler_in_session,
         "test-ainl-stub must not append scheduler output to agent session"

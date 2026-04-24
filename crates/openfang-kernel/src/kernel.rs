@@ -1344,8 +1344,7 @@ impl OpenFangKernel {
         drop(catalog);
 
         if user_wants_adaptive {
-            snap
-                .reason_codes
+            snap.reason_codes
                 .push("user_mode:efficient_mode_adaptive".to_string());
         }
 
@@ -1803,7 +1802,9 @@ impl OpenFangKernel {
                 Ok((0, 0)) => {}
                 Ok((u, c)) => {
                     if u > 0 {
-                        info!("Backfilled marginal-free: zeroed cost_usd on {u} usage_events row(s)");
+                        info!(
+                            "Backfilled marginal-free: zeroed cost_usd on {u} usage_events row(s)"
+                        );
                     }
                     if c > 0 {
                         info!(
@@ -3619,13 +3620,15 @@ impl OpenFangKernel {
                     // This is the change that lifts dashboard "TOKENS USED" / "USD NOT SPENT"
                     // out of the near-zero range — the user-message-only numbers were a
                     // tiny fraction (~0.006 %) of actual billed input tokens.
-                    let compose_snapshot =
-                        openfang_runtime::compose_telemetry::take_compose_turn(
-                            &agent_id.to_string(),
-                        );
+                    let compose_snapshot = openfang_runtime::compose_telemetry::take_compose_turn(
+                        &agent_id.to_string(),
+                    );
                     let (original_tokens_est, compressed_tokens_est) =
                         if let Some(snap) = compose_snapshot.as_ref() {
-                            (snap.snapshot.original_tokens, snap.snapshot.compressed_tokens)
+                            (
+                                snap.snapshot.original_tokens,
+                                snap.snapshot.compressed_tokens,
+                            )
                         } else {
                             let orig = (message_owned.len() / 4 + 1) as u64;
                             let comp = result
@@ -3635,8 +3638,8 @@ impl OpenFangKernel {
                                 .unwrap_or(orig);
                             (orig, comp)
                         };
-                    let input_tokens_saved = original_tokens_est
-                        .saturating_sub(compressed_tokens_est);
+                    let input_tokens_saved =
+                        original_tokens_est.saturating_sub(compressed_tokens_est);
                     let _ = compose_snapshot; // Tier label is captured but not yet persisted in M1; M2 surfaces it on the dashboard.
                     let (input_price, est_input_usd) = {
                         let catalog = kernel_clone
@@ -4096,7 +4099,10 @@ impl OpenFangKernel {
         }
 
         // Cost / global budget gates (after compaction) — estimates include session + this turn.
-        match self.metering.check_quota(llm_billing_id, &billing_resources) {
+        match self
+            .metering
+            .check_quota(llm_billing_id, &billing_resources)
+        {
             Ok(()) => {}
             Err(OpenFangError::QuotaExceeded(ref msg)) => {
                 let reason = Self::map_quota_block_reason(msg);
@@ -4113,7 +4119,9 @@ impl OpenFangKernel {
                     est_in,
                     est_out,
                 );
-                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(msg.clone())));
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(
+                    msg.clone(),
+                )));
             }
             Err(e) => return Err(KernelError::OpenFang(e)),
         }
@@ -4134,7 +4142,9 @@ impl OpenFangKernel {
                     est_in,
                     est_out,
                 );
-                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(msg.clone())));
+                return Err(KernelError::OpenFang(OpenFangError::QuotaExceeded(
+                    msg.clone(),
+                )));
             }
             Err(e) => return Err(KernelError::OpenFang(e)),
         }
@@ -4566,26 +4576,25 @@ impl OpenFangKernel {
         // `openfang_runtime::compose_telemetry` + `run_agent_loop` (M1 measurement).
         let compose_snapshot =
             openfang_runtime::compose_telemetry::take_compose_turn(&agent_id.to_string());
-        let (original_tokens_est, compressed_tokens_est) = if let Some(snap) =
-            compose_snapshot.as_ref()
-        {
-            (snap.snapshot.original_tokens, snap.snapshot.compressed_tokens)
-        } else {
-            let orig = (message_with_links.len() / 4 + 1) as u64;
-            let comp = result
-                .compressed_input
-                .as_ref()
-                .map(|s| (s.len() / 4 + 1) as u64)
-                .unwrap_or(orig);
-            (orig, comp)
-        };
+        let (original_tokens_est, compressed_tokens_est) =
+            if let Some(snap) = compose_snapshot.as_ref() {
+                (
+                    snap.snapshot.original_tokens,
+                    snap.snapshot.compressed_tokens,
+                )
+            } else {
+                let orig = (message_with_links.len() / 4 + 1) as u64;
+                let comp = result
+                    .compressed_input
+                    .as_ref()
+                    .map(|s| (s.len() / 4 + 1) as u64)
+                    .unwrap_or(orig);
+                (orig, comp)
+            };
         let input_tokens_saved = original_tokens_est.saturating_sub(compressed_tokens_est);
         let _ = compose_snapshot;
         let (input_price, est_input_usd) = {
-            let catalog = self
-                .model_catalog
-                .read()
-                .unwrap_or_else(|e| e.into_inner());
+            let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
             let input_price =
                 MeteringEngine::catalog_input_price_per_million(&*catalog, &billing_model);
             let est_input_usd = MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
@@ -5613,14 +5622,11 @@ impl OpenFangKernel {
         hand_id: &str,
         instance_id: uuid::Uuid,
     ) -> KernelResult<()> {
-        let def = self
-            .hand_registry
-            .get_definition(hand_id)
-            .ok_or_else(|| {
-                KernelError::OpenFang(OpenFangError::AgentNotFound(format!(
-                    "Hand not found: {hand_id}"
-                )))
-            })?;
+        let def = self.hand_registry.get_definition(hand_id).ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::AgentNotFound(format!(
+                "Hand not found: {hand_id}"
+            )))
+        })?;
         let inst = self
             .hand_registry
             .get_instance(instance_id)
@@ -5683,11 +5689,7 @@ impl OpenFangKernel {
             name: def.agent.name.clone(),
             description: def.agent.description.clone(),
             module: def.agent.module.clone(),
-            model: Self::resolve_hand_instance_model_config(
-                &self.config,
-                &def,
-                &instance.config,
-            ),
+            model: Self::resolve_hand_instance_model_config(&self.config, &def, &instance.config),
             capabilities: ManifestCapabilities {
                 tools: def.tools.clone(),
                 ..Default::default()
@@ -5741,7 +5743,8 @@ impl OpenFangKernel {
         // Resolve hand settings → prompt + env; single pass matches hot-reload
         // [`Self::apply_hand_instance_config_to_running_agent`].
         let resolved = openfang_hands::resolve_settings(&def.settings, &instance.config);
-        manifest.model.system_prompt = Self::hand_effective_system_prompt_from_resolved(&def, &resolved);
+        manifest.model.system_prompt =
+            Self::hand_effective_system_prompt_from_resolved(&def, &resolved);
         // Collect env vars from settings + from requires (api_key/env_var requirements)
         let mut allowed_env = resolved.env_vars;
         for req in &def.requires {
@@ -6515,19 +6518,17 @@ impl OpenFangKernel {
     ) {
         let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
         let model = model_hint.unwrap_or("unknown");
-        let cost = MeteringEngine::estimate_cost_with_catalog(
-            &catalog,
-            model,
-            est_input,
-            est_output,
-        );
-        let _ = self.metering.record_quota_block(&openfang_memory::usage::QuotaBlockRecord {
-            agent_id: billing_agent,
-            reason: reason.to_string(),
-            est_input_tokens: est_input,
-            est_output_tokens: est_output,
-            est_cost_usd: cost,
-        });
+        let cost =
+            MeteringEngine::estimate_cost_with_catalog(&catalog, model, est_input, est_output);
+        let _ = self
+            .metering
+            .record_quota_block(&openfang_memory::usage::QuotaBlockRecord {
+                agent_id: billing_agent,
+                reason: reason.to_string(),
+                est_input_tokens: est_input,
+                est_output_tokens: est_output,
+                est_cost_usd: cost,
+            });
     }
 
     fn record_openfang_quota_exceeded_best_effort(
@@ -6563,12 +6564,11 @@ impl OpenFangKernel {
         content_blocks: Option<&[openfang_types::message::ContentBlock]>,
     ) -> (u64, u64) {
         use openfang_runtime::compactor::estimate_token_count;
-        let sess_est =
-            estimate_token_count(
-                &session.messages,
-                Some(entry.manifest.model.system_prompt.as_str()),
-                None,
-            ) as u64;
+        let sess_est = estimate_token_count(
+            &session.messages,
+            Some(entry.manifest.model.system_prompt.as_str()),
+            None,
+        ) as u64;
         let (incoming_in, default_out) =
             Self::rough_quota_block_tokens_from_incoming(message, content_blocks);
         (sess_est.saturating_add(incoming_in), default_out)
@@ -9037,7 +9037,8 @@ impl OpenFangKernel {
                         // Append scheduler output into the agent session (inbox-style), without
                         // triggering an LLM turn. Routine health/budget monitors are skipped on
                         // success so the chat is not bloated; failures do not hit this path.
-                        if !cron_success_suppresses_session_append(&job_name, program_path.as_str()) {
+                        if !cron_success_suppresses_session_append(&job_name, program_path.as_str())
+                        {
                             append_cron_output_to_agent_session(
                                 self,
                                 agent_id,
@@ -11511,7 +11512,11 @@ mod tests {
             }
             other => panic!("expected stdio transport, got {other:?}"),
         }
-        for required in &["AINL_MCP_PROFILE", "AINL_MCP_EXPOSURE_PROFILE", "AINL_CONFIG"] {
+        for required in &[
+            "AINL_MCP_PROFILE",
+            "AINL_MCP_EXPOSURE_PROFILE",
+            "AINL_CONFIG",
+        ] {
             assert!(
                 entry.env.iter().any(|e| e == required),
                 "default AINL MCP entry should pass through {required}"
@@ -11537,8 +11542,7 @@ mod tests {
         // Use a unique override command so that `resolve_default_ainl_mcp_command`
         // would otherwise definitely return Some(...) — this isolates the test
         // from whatever's on the developer's PATH.
-        let _override =
-            EnvGuard::set("ARMARAOS_AINL_MCP_COMMAND", "/path/to/fake-ainl-mcp --flag");
+        let _override = EnvGuard::set("ARMARAOS_AINL_MCP_COMMAND", "/path/to/fake-ainl-mcp --flag");
         let _disable = EnvGuard::set("ARMARAOS_DISABLE_DEFAULT_AINL_MCP", "1");
         let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
         let injected = maybe_inject_default_ainl_mcp_server(&mut servers);
@@ -11579,15 +11583,15 @@ mod tests {
     #[serial_test::serial(google_workspace_mcp_env)]
     fn maybe_inject_default_google_workspace_mcp_server_skips_without_client_id() {
         let _id = EnvGuard::clear("GOOGLE_OAUTH_CLIENT_ID");
-        let _cmd = EnvGuard::set(
-            "ARMARAOS_WORKSPACE_MCP_COMMAND",
-            "/fake/uvx workspace-mcp",
-        );
+        let _cmd = EnvGuard::set("ARMARAOS_WORKSPACE_MCP_COMMAND", "/fake/uvx workspace-mcp");
         let _dis = EnvGuard::clear("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP");
         let resolver = CredentialResolver::new(None, None);
         let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
         let injected = maybe_inject_default_google_workspace_mcp_server(&mut servers, &resolver);
-        assert!(injected.is_none(), "no auto-inject without GOOGLE_OAUTH_CLIENT_ID");
+        assert!(
+            injected.is_none(),
+            "no auto-inject without GOOGLE_OAUTH_CLIENT_ID"
+        );
         assert!(servers.is_empty());
     }
 
@@ -11595,10 +11599,7 @@ mod tests {
     #[serial_test::serial(google_workspace_mcp_env)]
     fn maybe_inject_default_google_workspace_mcp_server_respects_disable_env() {
         let _id = EnvGuard::set("GOOGLE_OAUTH_CLIENT_ID", "cid");
-        let _cmd = EnvGuard::set(
-            "ARMARAOS_WORKSPACE_MCP_COMMAND",
-            "/fake/uvx workspace-mcp",
-        );
+        let _cmd = EnvGuard::set("ARMARAOS_WORKSPACE_MCP_COMMAND", "/fake/uvx workspace-mcp");
         let _dis = EnvGuard::set("ARMARAOS_DISABLE_DEFAULT_GOOGLE_WORKSPACE_MCP", "1");
         let resolver = CredentialResolver::new(None, None);
         let mut servers: Vec<openfang_types::config::McpServerConfigEntry> = vec![];
@@ -11630,7 +11631,9 @@ mod tests {
         assert_eq!(servers[0].name, "google-workspace-mcp");
         assert_eq!(servers[0].timeout_secs, 120);
         assert!(
-            servers[0].env.contains(&"GOOGLE_OAUTH_CLIENT_ID".to_string())
+            servers[0]
+                .env
+                .contains(&"GOOGLE_OAUTH_CLIENT_ID".to_string())
                 && servers[0]
                     .env
                     .contains(&"GOOGLE_OAUTH_CLIENT_SECRET".to_string())

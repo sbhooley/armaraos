@@ -4,7 +4,9 @@
 //! a [`Segment::memory_block`](crate::segment::Segment::memory_block) for the context compiler.
 
 use crate::segment::Segment;
-use ainl_failure_learning::{format_failure_prevention_block, search_failures_for_agent, FailureRecallHit};
+use ainl_failure_learning::{
+    format_failure_prevention_block, search_failures_for_agent, FailureRecallHit,
+};
 use ainl_memory::GraphMemory;
 use std::cmp::min;
 

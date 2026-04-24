@@ -112,8 +112,7 @@ mod tests {
     #[test]
     fn default_reserves_sum_below_total() {
         let p = BudgetPolicy::default();
-        let reserves =
-            p.system_budget() + p.tool_def_budget() + p.user_prompt_budget();
+        let reserves = p.system_budget() + p.tool_def_budget() + p.user_prompt_budget();
         assert!(reserves < p.total_window);
         assert!(p.flexible_budget() > 0);
     }

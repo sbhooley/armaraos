@@ -498,18 +498,9 @@ fn migrate_v13(conn: &Connection) -> Result<(), rusqlite::Error> {
 fn migrate_v14(conn: &Connection) -> Result<(), rusqlite::Error> {
     for (name, typedef) in &[
         ("model", "TEXT NOT NULL DEFAULT ''"),
-        (
-            "input_tokens_saved",
-            "INTEGER NOT NULL DEFAULT 0",
-        ),
-        (
-            "input_price_per_million_usd",
-            "REAL NOT NULL DEFAULT 0.0",
-        ),
-        (
-            "est_input_cost_saved_usd",
-            "REAL NOT NULL DEFAULT 0.0",
-        ),
+        ("input_tokens_saved", "INTEGER NOT NULL DEFAULT 0"),
+        ("input_price_per_million_usd", "REAL NOT NULL DEFAULT 0.0"),
+        ("est_input_cost_saved_usd", "REAL NOT NULL DEFAULT 0.0"),
     ] {
         if !column_exists(conn, "eco_compression_events", name) {
             conn.execute(

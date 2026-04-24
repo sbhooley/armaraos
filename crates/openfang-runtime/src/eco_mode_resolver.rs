@@ -184,10 +184,7 @@ pub fn resolve_adaptive_eco_turn(
     );
     let base_tier = compression_tier_rank(base);
 
-    let project_id = manifest
-        .metadata
-        .get("project_id")
-        .and_then(|v| v.as_str());
+    let project_id = manifest.metadata.get("project_id").and_then(|v| v.as_str());
     let compression_profile_id: Option<String> = project_id.map(|p| {
         let id = suggest_profile_id_for_project(p);
         id.to_string()
@@ -238,13 +235,11 @@ pub fn resolve_adaptive_eco_turn(
         reason_codes.push(format!("ainl_cache_stretch:{}", cttl.effective_ttl_secs));
     }
 
-    let content_tier = r_content
-        .as_ref()
-        .map(|r| match r.mode {
-            EfficientMode::Off => 0u8,
-            EfficientMode::Balanced => 1u8,
-            EfficientMode::Aggressive => 2u8,
-        });
+    let content_tier = r_content.as_ref().map(|r| match r.mode {
+        EfficientMode::Off => 0u8,
+        EfficientMode::Balanced => 1u8,
+        EfficientMode::Aggressive => 2u8,
+    });
     let mut recommended = if let Some(ct) = content_tier {
         let rec_t = if base_tier == 0 {
             0u8
@@ -434,7 +429,10 @@ mod tests {
             serde_json::json!("acme-customer-prod"),
         );
         let snap = resolve_adaptive_eco_turn(&cfg, &m, "hi", &cat);
-        assert_eq!(snap.compression_profile_id.as_deref(), Some("quality_preserve"));
+        assert_eq!(
+            snap.compression_profile_id.as_deref(),
+            Some("quality_preserve")
+        );
     }
 
     #[test]

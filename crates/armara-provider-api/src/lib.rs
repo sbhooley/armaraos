@@ -526,9 +526,7 @@ pub fn extract_embedded_tool_calls(input: &str) -> EmbeddedToolCallsExtraction {
         for marker in ["```json", "```"] {
             if s >= cursor + marker.len() && &input[s - marker.len()..s] == marker {
                 s -= marker.len();
-                while s > cursor
-                    && matches!(bytes[s - 1], b' ' | b'\t' | b'\n' | b'\r')
-                {
+                while s > cursor && matches!(bytes[s - 1], b' ' | b'\t' | b'\n' | b'\r') {
                     s -= 1;
                 }
                 break;
@@ -536,16 +534,12 @@ pub fn extract_embedded_tool_calls(input: &str) -> EmbeddedToolCallsExtraction {
         }
         // Walk forward from `end` over whitespace + an optional closing ```.
         let mut e = *end;
-        while e < bytes.len()
-            && matches!(bytes[e], b' ' | b'\t' | b'\n' | b'\r')
-        {
+        while e < bytes.len() && matches!(bytes[e], b' ' | b'\t' | b'\n' | b'\r') {
             e += 1;
         }
         if e + 3 <= bytes.len() && &input[e..e + 3] == "```" {
             e += 3;
-            while e < bytes.len()
-                && matches!(bytes[e], b' ' | b'\t' | b'\n' | b'\r')
-            {
+            while e < bytes.len() && matches!(bytes[e], b' ' | b'\t' | b'\n' | b'\r') {
                 e += 1;
             }
         }
@@ -682,7 +676,8 @@ mod embedded_tool_call_tests {
     #[test]
     fn openai_assistant_message_lifts_text_embedded_tool_calls() {
         let output = InferOutput {
-            text: "{\"tool_calls\":[{\"name\":\"web_search\",\"args\":{\"query\":\"x\"}}]}\nDone.".into(),
+            text: "{\"tool_calls\":[{\"name\":\"web_search\",\"args\":{\"query\":\"x\"}}]}\nDone."
+                .into(),
             tool_calls: vec![],
             structured: None,
         };

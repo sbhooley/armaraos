@@ -220,26 +220,25 @@ mod tests {
 
         // 2. No env, ainl-inference provider with URL → strip /v1, return base.
         assert_eq!(
-            effective_native_infer_base_url(
-                "ainl-inference",
-                Some("http://127.0.0.1:8787/v1")
-            ),
+            effective_native_infer_base_url("ainl-inference", Some("http://127.0.0.1:8787/v1")),
             Some("http://127.0.0.1:8787".to_string())
         );
 
         // 3. Env override always wins.
         std::env::set_var("ARMARA_NATIVE_INFER_URL", "http://override:9000");
         assert_eq!(
-            effective_native_infer_base_url(
-                "ainl-inference",
-                Some("http://127.0.0.1:8787/v1")
-            ),
+            effective_native_infer_base_url("ainl-inference", Some("http://127.0.0.1:8787/v1")),
             Some("http://override:9000".to_string())
         );
         std::env::remove_var("ARMARA_NATIVE_INFER_URL");
 
         // 4. Unknown tier + inference-server hint → planner ON; without the hint → OFF.
-        assert!(!resolve_planner_mode(&empty_meta(), "qwen-0.5b", None, false));
+        assert!(!resolve_planner_mode(
+            &empty_meta(),
+            "qwen-0.5b",
+            None,
+            false
+        ));
         assert!(resolve_planner_mode(&empty_meta(), "qwen-0.5b", None, true));
 
         // 5. Explicit metadata still wins over the autowire hint.
@@ -249,7 +248,12 @@ mod tests {
 
         // 6. Global env kill-switch overrides everything.
         std::env::set_var("ARMARA_PLANNER_MODE", "off");
-        assert!(!resolve_planner_mode(&empty_meta(), "qwen-0.5b", None, true));
+        assert!(!resolve_planner_mode(
+            &empty_meta(),
+            "qwen-0.5b",
+            None,
+            true
+        ));
 
         match prev_url {
             Some(v) => std::env::set_var("ARMARA_NATIVE_INFER_URL", v),

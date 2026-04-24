@@ -3,11 +3,11 @@
 //! [`ainl_impact_policy`] (no OpenFang policy logic inline).
 
 use crate::mcp::McpConnection;
-use ainl_contracts::{
-    ContextFreshness, ImpactDecision, RepoIntelCapabilityProfile, RepoIntelCapabilityState,
-    RecommendedNextTools,
-};
 use ainl_context_freshness::{impact_decision_balanced, impact_decision_strict, FreshnessInputs};
+use ainl_contracts::{
+    ContextFreshness, ImpactDecision, RecommendedNextTools, RepoIntelCapabilityProfile,
+    RepoIntelCapabilityState,
+};
 use ainl_repo_intel::{self, McpToolRow, ServerRepoIntelSummary};
 use serde::Serialize;
 
@@ -58,7 +58,9 @@ pub fn format_workspace_policy_user_hint(connections: &[McpConnection]) -> Strin
 
 /// Build per-connection [`RepoIntelCapabilityProfile`] for API consumers.
 #[must_use]
-pub fn repo_intel_profiles_for_connections(connections: &[McpConnection]) -> Vec<ServerRepoIntelSummary> {
+pub fn repo_intel_profiles_for_connections(
+    connections: &[McpConnection],
+) -> Vec<ServerRepoIntelSummary> {
     let rows = mcp_rows(connections);
     ainl_repo_intel::summarize_per_server(&rows)
 }

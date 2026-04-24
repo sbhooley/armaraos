@@ -28,8 +28,7 @@ mod tests {
     fn second_turn_has_delta() {
         let id = "a1";
         assert!(vitals_trust_fitness_delta(id, Some(0.5)).is_none());
-        let d = vitals_trust_fitness_delta(id, Some(0.6))
-            .expect("delta on second call");
+        let d = vitals_trust_fitness_delta(id, Some(0.6)).expect("delta on second call");
         assert!((d - 0.1f32).abs() < 1e-4);
     }
 }

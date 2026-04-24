@@ -39,11 +39,7 @@ mod tests {
     #[test]
     fn heuristic_fills_current_state() {
         let s = HeuristicAnchorSummarizer;
-        let segs = [Segment::older_turn(
-            CRole::Assistant,
-            "dropped",
-            2,
-        )];
+        let segs = [Segment::older_turn(CRole::Assistant, "dropped", 2)];
         let out = s.summarize(&segs, None).expect("ok");
         let st = out
             .sections

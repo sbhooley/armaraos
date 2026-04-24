@@ -19,13 +19,19 @@ mod tests {
 
     #[test]
     fn stale_blocks_suggestion() {
-        assert!(!should_emit_failure_suggestion(Some(ContextFreshness::Stale)));
+        assert!(!should_emit_failure_suggestion(Some(
+            ContextFreshness::Stale
+        )));
     }
 
     #[test]
     fn fresh_or_unknown_allows() {
-        assert!(should_emit_failure_suggestion(Some(ContextFreshness::Fresh)));
-        assert!(should_emit_failure_suggestion(Some(ContextFreshness::Unknown)));
+        assert!(should_emit_failure_suggestion(Some(
+            ContextFreshness::Fresh
+        )));
+        assert!(should_emit_failure_suggestion(Some(
+            ContextFreshness::Unknown
+        )));
         assert!(should_emit_failure_suggestion(None));
     }
 }

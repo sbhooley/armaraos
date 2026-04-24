@@ -544,7 +544,9 @@ async fn test_integrations_mcp_presets_endpoint() {
     );
     assert!(presets.iter().any(|p| p["integration_id"] == "filesystem"));
     assert!(
-        presets.iter().any(|p| p["integration_id"] == "google-workspace-mcp"),
+        presets
+            .iter()
+            .any(|p| p["integration_id"] == "google-workspace-mcp"),
         "unified Google Workspace (workspace-mcp) preset should be present"
     );
 }

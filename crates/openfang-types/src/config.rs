@@ -648,7 +648,10 @@ impl LocalVoiceConfig {
     /// `custom_piper_voice` in Settings and the matching file exists under
     /// `custom_voices_dir`, prefer it; otherwise fall back to `piper_voice`.
     pub fn active_piper_voice(&self) -> Option<PathBuf> {
-        if let (Some(stem), Some(dir)) = (self.custom_piper_voice.as_deref(), self.custom_voices_dir.as_ref()) {
+        if let (Some(stem), Some(dir)) = (
+            self.custom_piper_voice.as_deref(),
+            self.custom_voices_dir.as_ref(),
+        ) {
             let candidate = dir.join(format!("{stem}.onnx"));
             if candidate.is_file() {
                 return Some(candidate);
@@ -2036,9 +2039,7 @@ pub const DEFAULT_STANDARDCOMPUTE_MODEL_ID: &str = "StandardCompute";
 /// built-in retries. Entries equal to the **primary** `request.model` are skipped to avoid a
 /// duplicate call. IDs change as OpenRouter rotates free endpoints — confirm on openrouter.ai
 /// (models search `free`, or the free-models collection).
-pub const OPENROUTER_FREE_FALLBACK_MODELS: &[&str] = &[
-    "meta-llama/llama-3.1-8b-instruct:free",
-];
+pub const OPENROUTER_FREE_FALLBACK_MODELS: &[&str] = &["meta-llama/llama-3.1-8b-instruct:free"];
 
 /// Default LLM model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -148,9 +148,9 @@ fn build_output_text(r: &AinlTurnResult) -> String {
 fn map_ainl_turn_status(s: TurnStatus) -> AinlBridgeTurnStatus {
     match s {
         TurnStatus::Ok => AinlBridgeTurnStatus::Ok,
-        TurnStatus::StepLimitExceeded { steps_executed } => AinlBridgeTurnStatus::StepLimitExceeded {
-            steps_executed,
-        },
+        TurnStatus::StepLimitExceeded { steps_executed } => {
+            AinlBridgeTurnStatus::StepLimitExceeded { steps_executed }
+        }
         TurnStatus::GraphMemoryDisabled => AinlBridgeTurnStatus::GraphMemoryDisabled,
     }
 }
@@ -230,11 +230,12 @@ impl GraphPatchHostDispatch for GraphPatchWriteHost {
                         e.to_string()
                     })?;
                 let now_ms = chrono::Utc::now().timestamp_millis();
-                let nodes = ainl_agent_snapshot::apply_graph_writes(&writes, &self.agent_id, now_ms)
-                    .map_err(|e| {
-                        crate::planner_metrics::record_graph_patch_adapter_error();
-                        e.to_string()
-                    })?;
+                let nodes =
+                    ainl_agent_snapshot::apply_graph_writes(&writes, &self.agent_id, now_ms)
+                        .map_err(|e| {
+                            crate::planner_metrics::record_graph_patch_adapter_error();
+                            e.to_string()
+                        })?;
                 GraphMemoryWriter::write_snapshot_nodes_sync_for_agent(&self.agent_id, &nodes)
                     .inspect_err(|_| {
                         crate::planner_metrics::record_graph_patch_adapter_error();
@@ -313,9 +314,9 @@ impl AinlRuntimeBridge {
         if runtime.evolution_writes_enabled() {
             return Err(AinlRuntimeBridgeInitError::EvolutionWriteInvariant);
         }
-        runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(GraphPatchWriteHost {
-            agent_id,
-        })));
+        runtime.register_adapter(GraphPatchAdapter::with_host(Arc::new(
+            GraphPatchWriteHost { agent_id },
+        )));
 
         Ok(Self {
             runtime: Arc::new(std::sync::Mutex::new(runtime)),

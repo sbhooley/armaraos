@@ -1261,10 +1261,7 @@ pub(crate) fn trajectory_steps_for_runtime_turn(
             if r.adapter_output.is_some() {
                 (true, None)
             } else if r.adapter_name.is_some() {
-                (
-                    false,
-                    Some("adapter_execute_patch_failed".to_string()),
-                )
+                (false, Some("adapter_execute_patch_failed".to_string()))
             } else {
                 (true, None)
             }
@@ -1436,12 +1433,7 @@ mod trajectory_step_builder_tests {
 
     #[test]
     fn adapter_failure_marks_step_failed() {
-        let patches = vec![sample_patch(
-            true,
-            Some("graph".into()),
-            None,
-            5,
-        )];
+        let patches = vec![sample_patch(true, Some("graph".into()), None, 5)];
         let steps = trajectory_steps_for_runtime_turn(&patches, &[]);
         assert_eq!(steps.len(), 1);
         assert!(!steps[0].success);

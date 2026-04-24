@@ -7,9 +7,7 @@
 
 pub mod replay;
 
-pub use ainl_contracts::{
-    TrajectoryOutcome, TrajectoryStep,
-};
+pub use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 pub use replay::{
     parse_jsonl, trajectory_replay_line, TrajectoryReplayLine, TRAJECTORY_REPLAY_SCHEMA_VERSION,
 };

@@ -99,8 +99,14 @@ mod tests {
     #[test]
     fn skip_persist_only_on_fail_gate() {
         assert!(!should_skip_pattern_persist_for_vitals(None));
-        assert!(!should_skip_pattern_persist_for_vitals(Some(VitalsGate::Pass)));
-        assert!(!should_skip_pattern_persist_for_vitals(Some(VitalsGate::Warn)));
-        assert!(should_skip_pattern_persist_for_vitals(Some(VitalsGate::Fail)));
+        assert!(!should_skip_pattern_persist_for_vitals(Some(
+            VitalsGate::Pass
+        )));
+        assert!(!should_skip_pattern_persist_for_vitals(Some(
+            VitalsGate::Warn
+        )));
+        assert!(should_skip_pattern_persist_for_vitals(Some(
+            VitalsGate::Fail
+        )));
     }
 }

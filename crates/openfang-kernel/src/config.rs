@@ -24,9 +24,7 @@ pub fn repair_config_toml_stale_mcp_env(raw: &str) -> String {
 ///
 /// Use this before **partial** rewrites (provider URLs, channels, etc.) so corrupted on-disk
 /// TOML from older AINL bootstrap merges does not block saves or yield opaque parse errors.
-pub fn parse_config_toml_file(
-    path: &Path,
-) -> Result<toml::Value, Box<dyn std::error::Error>> {
+pub fn parse_config_toml_file(path: &Path) -> Result<toml::Value, Box<dyn std::error::Error>> {
     if !path.exists() {
         return Ok(toml::Value::Table(toml::map::Map::new()));
     }
@@ -73,7 +71,8 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
     if config_path.exists() {
         match std::fs::read_to_string(&config_path) {
             Ok(contents) => {
-                let repaired = crate::config_toml_repair::repair_stale_mcp_env_continuations(&contents);
+                let repaired =
+                    crate::config_toml_repair::repair_stale_mcp_env_continuations(&contents);
                 let to_parse = if repaired != contents {
                     match atomic_write(&config_path, &repaired) {
                         Ok(()) => {
@@ -95,74 +94,74 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
                     contents
                 };
                 match toml::from_str::<toml::Value>(&to_parse) {
-                Ok(mut root_value) => {
-                    // Process includes before deserializing
-                    let config_dir = config_path
-                        .parent()
-                        .unwrap_or_else(|| Path::new("."))
-                        .to_path_buf();
-                    let mut visited = HashSet::new();
-                    if let Ok(canonical) = std::fs::canonicalize(&config_path) {
-                        visited.insert(canonical);
-                    } else {
-                        visited.insert(config_path.clone());
-                    }
+                    Ok(mut root_value) => {
+                        // Process includes before deserializing
+                        let config_dir = config_path
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .to_path_buf();
+                        let mut visited = HashSet::new();
+                        if let Ok(canonical) = std::fs::canonicalize(&config_path) {
+                            visited.insert(canonical);
+                        } else {
+                            visited.insert(config_path.clone());
+                        }
 
-                    if let Err(e) =
-                        resolve_config_includes(&mut root_value, &config_dir, &mut visited, 0)
-                    {
-                        tracing::warn!(
-                            error = %e,
-                            "Config include resolution failed, using root config only"
-                        );
-                    }
+                        if let Err(e) =
+                            resolve_config_includes(&mut root_value, &config_dir, &mut visited, 0)
+                        {
+                            tracing::warn!(
+                                error = %e,
+                                "Config include resolution failed, using root config only"
+                            );
+                        }
 
-                    // Remove the `include` field before deserializing to avoid confusion
-                    if let toml::Value::Table(ref mut tbl) = root_value {
-                        tbl.remove("include");
-                    }
+                        // Remove the `include` field before deserializing to avoid confusion
+                        if let toml::Value::Table(ref mut tbl) = root_value {
+                            tbl.remove("include");
+                        }
 
-                    // Migrate misplaced api_key/api_listen from [api] section to root level.
-                    // The old config schema incorrectly grouped these under [api], so many
-                    // users have them in the wrong place. Move them up if not already at root.
-                    if let toml::Value::Table(ref mut tbl) = root_value {
-                        if let Some(toml::Value::Table(api_section)) = tbl.get("api").cloned() {
-                            for key in &["api_key", "api_listen", "log_level"] {
-                                if !tbl.contains_key(*key) {
-                                    if let Some(val) = api_section.get(*key) {
-                                        tracing::info!(
+                        // Migrate misplaced api_key/api_listen from [api] section to root level.
+                        // The old config schema incorrectly grouped these under [api], so many
+                        // users have them in the wrong place. Move them up if not already at root.
+                        if let toml::Value::Table(ref mut tbl) = root_value {
+                            if let Some(toml::Value::Table(api_section)) = tbl.get("api").cloned() {
+                                for key in &["api_key", "api_listen", "log_level"] {
+                                    if !tbl.contains_key(*key) {
+                                        if let Some(val) = api_section.get(*key) {
+                                            tracing::info!(
                                             key,
                                             "Migrating misplaced config field from [api] to root level"
                                         );
-                                        tbl.insert(key.to_string(), val.clone());
+                                            tbl.insert(key.to_string(), val.clone());
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    match root_value.try_into::<KernelConfig>() {
-                        Ok(mut config) => {
-                            apply_config_schema_migrations(&mut config, &config_path);
-                            info!(path = %config_path.display(), "Loaded configuration");
-                            return config;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                path = %config_path.display(),
-                                "Failed to deserialize merged config, using defaults"
-                            );
+                        match root_value.try_into::<KernelConfig>() {
+                            Ok(mut config) => {
+                                apply_config_schema_migrations(&mut config, &config_path);
+                                info!(path = %config_path.display(), "Loaded configuration");
+                                return config;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    path = %config_path.display(),
+                                    "Failed to deserialize merged config, using defaults"
+                                );
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        path = %config_path.display(),
-                        "Failed to parse config, using defaults"
-                    );
-                }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            path = %config_path.display(),
+                            "Failed to parse config, using defaults"
+                        );
+                    }
                 }
             }
             Err(e) => {

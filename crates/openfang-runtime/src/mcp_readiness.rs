@@ -249,7 +249,9 @@ fn evaluate_repo_intelligence_check(
     }
     for (snap, flags) in tool_flags.iter_mut() {
         if tool_matches_repo_intelligence(snap) {
-            flags.check_ids.insert(CHECK_ID_REPO_INTELLIGENCE.to_string());
+            flags
+                .check_ids
+                .insert(CHECK_ID_REPO_INTELLIGENCE.to_string());
         }
     }
 
@@ -273,7 +275,12 @@ fn evaluate_repo_intelligence_check(
     let missing_reason = if ready {
         None
     } else {
-        Some(profile.note.clone().unwrap_or_else(|| default_missing.to_string()))
+        Some(
+            profile
+                .note
+                .clone()
+                .unwrap_or_else(|| default_missing.to_string()),
+        )
     };
 
     let remediation = if ready {
@@ -463,7 +470,11 @@ mod tests {
             },
         ];
         let ev = evaluate_from_snapshots(&snaps);
-        let ri = ev.report.checks.get(CHECK_ID_REPO_INTELLIGENCE).expect("ri check");
+        let ri = ev
+            .report
+            .checks
+            .get(CHECK_ID_REPO_INTELLIGENCE)
+            .expect("ri check");
         assert!(ri.ready);
         assert_eq!(ri.id, CHECK_ID_REPO_INTELLIGENCE);
     }

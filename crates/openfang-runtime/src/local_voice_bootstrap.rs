@@ -84,8 +84,7 @@ fn run_bootstrap(
     cfg: &mut openfang_types::config::LocalVoiceConfig,
 ) -> Result<(), String> {
     let models_dir = voice_root.join("models");
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("create models dir: {e}"))?;
+    std::fs::create_dir_all(&models_dir).map_err(|e| format!("create models dir: {e}"))?;
 
     if cfg.whisper_model.is_none() {
         let model_path = models_dir.join("ggml-base.bin");
@@ -101,39 +100,40 @@ fn run_bootstrap(
         cfg.whisper_model = Some(model_path);
     }
 
-        if cfg.whisper_cli.is_none() {
-            #[cfg(windows)]
-            {
-                ensure_whisper_windows(client, voice_root, cfg)?;
-            }
-            #[cfg(not(windows))]
-            {
-                let mut found = probe_whisper_cli_unix();
-                #[cfg(target_os = "macos")]
-                if found.is_none() {
-                    match brew_install_whisper_cpp_macos() {
-                        Ok(()) => {
-                            found = probe_whisper_cli_unix();
-                            if found.is_some() {
-                                info!("local_voice: whisper-cli available after Homebrew install");
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "local_voice: automatic `brew install whisper-cpp` skipped or failed");
+    if cfg.whisper_cli.is_none() {
+        #[cfg(windows)]
+        {
+            ensure_whisper_windows(client, voice_root, cfg)?;
+        }
+        #[cfg(not(windows))]
+        {
+            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+            let mut found = probe_whisper_cli_unix();
+            #[cfg(target_os = "macos")]
+            if found.is_none() {
+                match brew_install_whisper_cpp_macos() {
+                    Ok(()) => {
+                        found = probe_whisper_cli_unix();
+                        if found.is_some() {
+                            info!("local_voice: whisper-cli available after Homebrew install");
                         }
                     }
+                    Err(e) => {
+                        warn!(error = %e, "local_voice: automatic `brew install whisper-cpp` skipped or failed");
+                    }
                 }
-                if let Some(p) = found {
-                    info!(path = %p.display(), "local_voice: using whisper-cli (Homebrew cellar or PATH)");
-                    cfg.whisper_cli = Some(p);
-                } else {
-                    warn!(
+            }
+            if let Some(p) = found {
+                info!(path = %p.display(), "local_voice: using whisper-cli (Homebrew cellar or PATH)");
+                cfg.whisper_cli = Some(p);
+            } else {
+                warn!(
                         "local_voice: whisper-cli not found. Install `whisper-cpp` (e.g. `brew install whisper-cpp` on macOS or your distro package) \
                          or set [local_voice] whisper_cli in config.toml. The ggml-base.bin model is auto-downloaded to ~/.armaraos/voice/models/ when missing."
                     );
-                }
             }
         }
+    }
 
     #[cfg(windows)]
     {
@@ -151,7 +151,9 @@ fn run_bootstrap(
         if !probe_ffmpeg_unix() {
             match brew_install_ffmpeg_macos() {
                 Ok(()) => info!("local_voice: ffmpeg available (WebM voice → WAV for whisper)"),
-                Err(e) => warn!(error = %e, "local_voice: automatic `brew install ffmpeg` skipped or failed"),
+                Err(e) => {
+                    warn!(error = %e, "local_voice: automatic `brew install ffmpeg` skipped or failed")
+                }
             }
         }
     }
@@ -233,7 +235,12 @@ fn ensure_kokoro_assets(
     if cfg.model_path.is_none() {
         if !model_path.is_file() || file_len(&model_path).unwrap_or(0) < 50_000_000 {
             info!("local_voice: downloading Kokoro-82M ONNX model (~310 MiB)…");
-            download_to_file(client, KOKORO_MODEL_URL, &model_path, "application/octet-stream")?;
+            download_to_file(
+                client,
+                KOKORO_MODEL_URL,
+                &model_path,
+                "application/octet-stream",
+            )?;
         }
         cfg.model_path = Some(model_path);
     }
@@ -273,12 +280,7 @@ fn file_len(p: &Path) -> Result<u64, String> {
         .len())
 }
 
-fn download_to_file(
-    client: &Client,
-    url: &str,
-    dest: &Path,
-    _kind: &str,
-) -> Result<(), String> {
+fn download_to_file(client: &Client, url: &str, dest: &Path, _kind: &str) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
     }
@@ -335,7 +337,8 @@ fn ensure_whisper_windows(
             if let Some(p) = out_path.parent() {
                 std::fs::create_dir_all(p).map_err(|e| format!("mkdir {:?}: {e}", p))?;
             }
-            let mut out = std::fs::File::create(&out_path).map_err(|e| format!("create file: {e}"))?;
+            let mut out =
+                std::fs::File::create(&out_path).map_err(|e| format!("create file: {e}"))?;
             std::io::copy(&mut file, &mut out).map_err(|e| format!("write {:?}: {e}", out_path))?;
         }
     }
@@ -488,7 +491,7 @@ fn brew_install_whisper_cpp_macos() -> Result<(), String> {
 }
 
 /// True when `ffmpeg` exists on PATH or at common Homebrew paths (used before WebM→WAV transcode).
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn probe_ffmpeg_unix() -> bool {
     for p in [
         "/opt/homebrew/bin/ffmpeg",
@@ -570,7 +573,11 @@ fn probe_whisper_via_homebrew_prefix() -> Option<PathBuf> {
     }
 }
 
-fn ensure_piper_bundle(client: &Client, voice_root: &Path, piper_root: &Path) -> Result<(), String> {
+fn ensure_piper_bundle(
+    client: &Client,
+    voice_root: &Path,
+    piper_root: &Path,
+) -> Result<(), String> {
     let marker = piper_root.join(".extracted_ok");
     if marker.is_file() {
         return Ok(());
@@ -632,7 +639,9 @@ fn piper_archive_name() -> Result<&'static str, String> {
         ("linux", "x86_64") => Ok("piper_linux_x86_64.tar.gz"),
         ("linux", "aarch64") => Ok("piper_linux_aarch64.tar.gz"),
         ("linux", "arm") => Ok("piper_linux_armv7l.tar.gz"),
-        _ => Err(format!("Piper auto-download: unsupported OS/arch: {os}-{arch}")),
+        _ => Err(format!(
+            "Piper auto-download: unsupported OS/arch: {os}-{arch}"
+        )),
     }
 }
 

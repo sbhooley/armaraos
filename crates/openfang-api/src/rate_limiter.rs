@@ -114,8 +114,11 @@ mod tests {
         );
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
         assert_eq!(
-            operation_cost("GET", "/api/agents/00000000-0000-4000-8000-000000000001/llm-tools")
-                .get(),
+            operation_cost(
+                "GET",
+                "/api/agents/00000000-0000-4000-8000-000000000001/llm-tools"
+            )
+            .get(),
             2
         );
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);

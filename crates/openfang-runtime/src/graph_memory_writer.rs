@@ -14,9 +14,9 @@
 //! via [`armaraos_graph_memory_export_json_path`] / `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (see **ainativelang**
 //! `docs/adapters/AINL_GRAPH_MEMORY.md`).
 
+use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 #[cfg(feature = "ainl-extractor")]
 use ainl_graph_extractor::GraphExtractorTask;
-use ainl_contracts::{TrajectoryOutcome, TrajectoryStep};
 use ainl_memory::pattern_promotion;
 use ainl_memory::{AinlMemoryNode, AinlNodeType, GraphMemory};
 #[cfg(all(feature = "ainl-extractor", feature = "ainl-persona-evolution"))]
@@ -577,9 +577,7 @@ impl GraphMemoryWriter {
                         node_ids: vec![id.to_string()],
                         node_kind: Some("failure".to_string()),
                         reason: Some("tool_runner:error".to_string()),
-                        summary: Some(
-                            openfang_types::truncate_str(message, 200).to_string(),
-                        ),
+                        summary: Some(openfang_types::truncate_str(message, 200).to_string()),
                         trace_id: None,
                         tool_name: Some(tool_name.to_string()),
                     }),
@@ -639,9 +637,7 @@ impl GraphMemoryWriter {
                         node_ids: vec![id.to_string()],
                         node_kind: Some("failure".to_string()),
                         reason: Some(source),
-                        summary: Some(
-                            openfang_types::truncate_str(message, 200).to_string(),
-                        ),
+                        summary: Some(openfang_types::truncate_str(message, 200).to_string()),
                         trace_id: None,
                         tool_name: Some(tool_name.to_string()),
                     }),
@@ -672,7 +668,8 @@ impl GraphMemoryWriter {
         let msg = openfang_types::truncate_str(message, 8000);
         let res = {
             let inner = self.inner.lock().await;
-            let mut node = AinlMemoryNode::new_ainl_runtime_graph_validation_failure(msg, session_id);
+            let mut node =
+                AinlMemoryNode::new_ainl_runtime_graph_validation_failure(msg, session_id);
             node.agent_id = self.agent_id.clone();
             crate::memory_project_scope::apply_memory_project_id_to_node(
                 &mut node,
@@ -694,9 +691,7 @@ impl GraphMemoryWriter {
                         node_ids: vec![id.to_string()],
                         node_kind: Some("failure".to_string()),
                         reason: Some("ainl_runtime:graph_validation".to_string()),
-                        summary: Some(
-                            openfang_types::truncate_str(message, 200).to_string(),
-                        ),
+                        summary: Some(openfang_types::truncate_str(message, 200).to_string()),
                         trace_id: None,
                         tool_name: None,
                     }),
@@ -744,10 +739,8 @@ impl GraphMemoryWriter {
                 if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
                     procedural.pattern_observation_count =
                         procedural.pattern_observation_count.saturating_add(1);
-                    let new_ema = pattern_promotion::ema_fitness_update(
-                        procedural.fitness,
-                        confidence,
-                    );
+                    let new_ema =
+                        pattern_promotion::ema_fitness_update(procedural.fitness, confidence);
                     procedural.fitness = Some(new_ema);
                     procedural.confidence = Some(confidence.clamp(0.0, 1.0));
                     if !name.is_empty() {
@@ -1190,10 +1183,10 @@ fn merge_persona_err(slot: &mut Option<String>, e: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "ainl-persona-evolution")]
-    use ainl_persona::EVOLUTION_TRAIT_NAME;
     use ainl_contracts::TrajectoryOutcome;
     use ainl_memory::AinlNodeType;
+    #[cfg(feature = "ainl-persona-evolution")]
+    use ainl_persona::EVOLUTION_TRAIT_NAME;
     use openfang_types::agent::AgentManifest;
     use serde_json::json;
     use std::sync::Mutex as StdMutex;
@@ -1528,11 +1521,29 @@ mod tests {
         };
 
         let id1 = writer
-            .record_turn(vec!["a".to_string()], None, None, &[], None, None, None, None)
+            .record_turn(
+                vec!["a".to_string()],
+                None,
+                None,
+                &[],
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("ep1");
         let id2 = writer
-            .record_turn(vec!["b".to_string()], None, None, &[], None, None, None, None)
+            .record_turn(
+                vec!["b".to_string()],
+                None,
+                None,
+                &[],
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .expect("ep2");
 
@@ -1626,7 +1637,11 @@ mod tests {
             .iter()
             .filter(|n| n["node_type"]["type"] == "procedural")
             .collect();
-        assert_eq!(procedurals.len(), 1, "expected merged single procedural row");
+        assert_eq!(
+            procedurals.len(),
+            1,
+            "expected merged single procedural row"
+        );
         assert_eq!(procedurals[0]["node_type"]["prompt_eligible"], true);
         assert_eq!(procedurals[0]["node_type"]["pattern_observation_count"], 3);
 
@@ -1768,7 +1783,11 @@ mod tests {
         assert!(out.is_none());
 
         let gm = GraphMemory::new(&db_path).expect("reopen");
-        assert!(gm.store().find_by_type("trajectory").expect("query").is_empty());
+        assert!(gm
+            .store()
+            .find_by_type("trajectory")
+            .expect("query")
+            .is_empty());
 
         restore_trajectory_env(prev);
     }

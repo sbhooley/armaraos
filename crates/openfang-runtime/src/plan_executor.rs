@@ -31,15 +31,16 @@ pub struct PlanExecutionTrace<'a> {
 
 impl PlanExecutionTrace<'_> {
     pub fn emit(&self, event_type: TraceEventType) {
-        self.kernel.record_orchestration_trace(OrchestrationTraceEvent {
-            trace_id: self.trace_id.clone(),
-            orchestrator_id: self.orchestrator_id,
-            agent_id: self.agent_id,
-            parent_agent_id: self.parent_agent_id,
-            event_type,
-            timestamp: chrono::Utc::now(),
-            metadata: std::collections::HashMap::new(),
-        });
+        self.kernel
+            .record_orchestration_trace(OrchestrationTraceEvent {
+                trace_id: self.trace_id.clone(),
+                orchestrator_id: self.orchestrator_id,
+                agent_id: self.agent_id,
+                parent_agent_id: self.parent_agent_id,
+                event_type,
+                timestamp: chrono::Utc::now(),
+                metadata: std::collections::HashMap::new(),
+            });
     }
 
     /// Fire a lightweight `planner_step_progress` event on the SSE kernel event bus so
@@ -56,9 +57,7 @@ impl PlanExecutionTrace<'_> {
             "status": status,
         });
         tokio::spawn(async move {
-            let _ = kernel
-                .publish_event("planner_step_progress", payload)
-                .await;
+            let _ = kernel.publish_event("planner_step_progress", payload).await;
         });
     }
 }
@@ -202,8 +201,7 @@ fn validate_against_schema(value: &Value, schema: &Value) -> Result<(), String> 
             return Err("expected JSON object".into());
         }
     }
-    let compiled =
-        jsonschema::validator_for(schema).map_err(|e| format!("invalid schema: {e}"))?;
+    let compiled = jsonschema::validator_for(schema).map_err(|e| format!("invalid schema: {e}"))?;
     if let Err(err) = compiled.validate(value) {
         return Err(err.to_string());
     }
@@ -461,15 +459,14 @@ impl PlanExecutor {
                             }
                         }
 
-                        let replacement =
-                            parse_repair_step(&resp.output.text).map_err(|e| {
-                                if let Some(t) = trace {
-                                    t.emit(TraceEventType::PlanFallback {
-                                        reason: format!("parse_repair_step: {e}"),
-                                    });
-                                }
-                                PlanExecutionError::RepairInfer(e)
-                            })?;
+                        let replacement = parse_repair_step(&resp.output.text).map_err(|e| {
+                            if let Some(t) = trace {
+                                t.emit(TraceEventType::PlanFallback {
+                                    reason: format!("parse_repair_step: {e}"),
+                                });
+                            }
+                            PlanExecutionError::RepairInfer(e)
+                        })?;
                         let merged_args = resolve_output_templates(&replacement.args, &outputs)
                             .map_err(|msg| {
                                 PlanExecutionError::StepFailed(
@@ -591,10 +588,9 @@ impl PlanExecutor {
             _ => PlanStepError::Deterministic(e.to_string()),
         })?;
         let txt = resp.text();
-        let parsed: serde_json::Value =
-            serde_json::from_str(&txt).map_err(|_| {
-                PlanStepError::Deterministic(format!("reasoning JSON parse failed: {txt}"))
-            })?;
+        let parsed: serde_json::Value = serde_json::from_str(&txt).map_err(|_| {
+            PlanStepError::Deterministic(format!("reasoning JSON parse failed: {txt}"))
+        })?;
 
         // Validate the parsed value against expected_output_schema if one was declared.
         // Only `required` fields and type checks are enforced (jsonschema); additional
@@ -682,7 +678,9 @@ mod tests {
             let remaining = counts.get(step_id).copied().unwrap_or(0);
             if remaining > 0 {
                 counts.insert(step_id.to_string(), remaining - 1);
-                return Err(PlanStepError::Transient(format!("forced failure for {step_id}")));
+                return Err(PlanStepError::Transient(format!(
+                    "forced failure for {step_id}"
+                )));
             }
             Ok(serde_json::json!({
                 "step_id": step_id,

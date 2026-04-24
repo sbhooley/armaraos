@@ -384,7 +384,8 @@ impl UsageStore {
             })
             .map_err(|e| OpenFangError::Memory(e.to_string()))?;
         for r in rows {
-            let (reason, count, tin, tout, cost) = r.map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            let (reason, count, tin, tout, cost) =
+                r.map_err(|e| OpenFangError::Memory(e.to_string()))?;
             by_reason.insert(
                 reason,
                 QuotaBlockReasonRollup {
@@ -1076,9 +1077,7 @@ impl UsageStore {
     /// `eco_compression_events` for matching models.
     ///
     /// Return `(usage_events rows updated, eco_compression_events rows updated)`.
-    pub fn backfill_marginal_free_tier_costs(
-        &self,
-    ) -> OpenFangResult<(u64, u64)> {
+    pub fn backfill_marginal_free_tier_costs(&self) -> OpenFangResult<(u64, u64)> {
         let conn = self
             .pool
             .get()
@@ -2365,7 +2364,10 @@ mod tests {
         drop(conn);
 
         let copied = store.backfill_compression_billed_tokens().unwrap();
-        assert_eq!(copied, 1, "one row should have billed_input_tokens copied in");
+        assert_eq!(
+            copied, 1,
+            "one row should have billed_input_tokens copied in"
+        );
 
         let after = store.query_compression_summary(None).unwrap();
         assert_eq!(
@@ -2429,7 +2431,10 @@ mod tests {
         assert_eq!(n_c, 1);
 
         let s = store.query_summary(None).unwrap();
-        assert!((s.total_cost_usd - 0.10).abs() < 1e-6, "free route cost should be zeroed");
+        assert!(
+            (s.total_cost_usd - 0.10).abs() < 1e-6,
+            "free route cost should be zeroed"
+        );
         let conn = store.pool.get().unwrap();
         let c: f64 = conn
             .query_row(

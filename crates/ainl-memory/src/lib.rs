@@ -63,8 +63,8 @@ pub mod pattern_promotion;
 pub mod query;
 pub mod snapshot;
 pub mod store;
-pub mod trajectory_table;
 mod trajectory_persist;
+pub mod trajectory_table;
 
 pub use anchored_summary::{anchored_summary_id, ANCHORED_SUMMARY_TAG};
 
@@ -73,9 +73,9 @@ pub use trajectory_persist::{
 };
 
 pub use node::{
-    AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, FailureNode, MemoryCategory,
-    PersonaLayer, PersonaNode, PersonaSource, ProceduralNode, ProcedureType, RuntimeStateNode,
-    SemanticNode, Sentiment, StrengthEvent, TrajectoryNode,
+    AinlEdge, AinlMemoryNode, AinlNodeKind, AinlNodeType, EpisodicNode, FailureNode,
+    MemoryCategory, PersonaLayer, PersonaNode, PersonaSource, ProceduralNode, ProcedureType,
+    RuntimeStateNode, SemanticNode, Sentiment, StrengthEvent, TrajectoryNode,
 };
 pub use query::{
     count_by_topic_cluster, find_high_confidence_facts, find_patterns, find_strong_traits,
@@ -204,10 +204,9 @@ impl GraphMemory {
             confidence,
         );
         if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
-            procedural.pattern_observation_count =
-                procedural
-                    .pattern_observation_count
-                    .max(crate::pattern_promotion::DEFAULT_MIN_OBSERVATIONS);
+            procedural.pattern_observation_count = procedural
+                .pattern_observation_count
+                .max(crate::pattern_promotion::DEFAULT_MIN_OBSERVATIONS);
             let floor = crate::pattern_promotion::DEFAULT_FITNESS_FLOOR;
             if let Some(f) = procedural.fitness {
                 procedural.fitness = Some(f.max(floor));
@@ -544,7 +543,8 @@ mod tests {
         let db_path = dir.path().join("ainl_all_nodes_fts.db");
         let memory = GraphMemory::new(&db_path).expect("graph memory");
         let agent_id = "agent-fts-all";
-        let mut node = AinlMemoryNode::new_fact("unique-fts-violet-cat-42".into(), 0.8, Uuid::new_v4());
+        let mut node =
+            AinlMemoryNode::new_fact("unique-fts-violet-cat-42".into(), 0.8, Uuid::new_v4());
         node.agent_id = agent_id.to_string();
         let nid = node.id;
         memory.write_node(&node).expect("write fact");
@@ -627,7 +627,9 @@ mod tests {
         );
         node.agent_id = agent_id.to_string();
         let nid = node.id;
-        memory.write_node(&node).expect("write graph validation failure");
+        memory
+            .write_node(&node)
+            .expect("write graph validation failure");
 
         let hits = memory
             .search_failures_for_agent(agent_id, "graph_validation", 10)

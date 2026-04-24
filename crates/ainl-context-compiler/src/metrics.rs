@@ -65,7 +65,13 @@ impl ContextCompilerMetrics {
     }
 
     /// Append per-segment accounting and update aggregate totals.
-    pub fn record_segment(&mut self, kind: SegmentKind, original: usize, compressed: usize, dropped: bool) {
+    pub fn record_segment(
+        &mut self,
+        kind: SegmentKind,
+        original: usize,
+        compressed: usize,
+        dropped: bool,
+    ) {
         self.per_segment.push(SegmentMetrics {
             kind: kind.as_str().to_string(),
             original_tokens: original,

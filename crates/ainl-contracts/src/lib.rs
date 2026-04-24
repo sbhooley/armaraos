@@ -246,19 +246,16 @@ mod tests {
         p.push("tests/fixtures/contract_v1.json");
         let raw = std::fs::read_to_string(&p).expect("fixture");
         let v: serde_json::Value = serde_json::from_str(&raw).expect("json");
-        let steps = v["RecommendedNextTools"]["steps"].as_array().expect("steps");
+        let steps = v["RecommendedNextTools"]["steps"]
+            .as_array()
+            .expect("steps");
         let tools: Vec<String> = steps
             .iter()
             .filter_map(|s| s.get("tool").and_then(|t| t.as_str().map(String::from)))
             .collect();
         assert_eq!(
             tools,
-            vec![
-                "ainl_validate",
-                "ainl_compile",
-                "ainl_ir_diff",
-                "ainl_run"
-            ]
+            vec!["ainl_validate", "ainl_compile", "ainl_ir_diff", "ainl_run"]
         );
     }
 

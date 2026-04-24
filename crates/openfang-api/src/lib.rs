@@ -54,8 +54,11 @@ mod dashboard_learning_panels_js_guard {
             env!("CARGO_MANIFEST_DIR"),
             "/static/js/pages/graph-failures.js"
         ));
-        for needle in ["FailureLearned", "GraphMemoryWrite", "/api/graph-memory/failures/recent"]
-        {
+        for needle in [
+            "FailureLearned",
+            "GraphMemoryWrite",
+            "/api/graph-memory/failures/recent",
+        ] {
             assert_contains(&s, needle, "graph-failures.js");
         }
     }
@@ -66,8 +69,11 @@ mod dashboard_learning_panels_js_guard {
             env!("CARGO_MANIFEST_DIR"),
             "/static/js/pages/graph-proposals.js"
         ));
-        for needle in ["ImprovementProposalAdopted", "improvement_proposal", "/improvement-proposals"]
-        {
+        for needle in [
+            "ImprovementProposalAdopted",
+            "improvement_proposal",
+            "/improvement-proposals",
+        ] {
             assert_contains(&s, needle, "graph-proposals.js");
         }
     }

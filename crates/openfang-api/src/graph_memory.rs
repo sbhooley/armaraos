@@ -322,7 +322,11 @@ struct GraphLoadOptions {
     synthetic_provenance: bool,
 }
 
-fn graph_load_options(edge_mode: &str, ego_expand_1hop: bool, synthetic_provenance: bool) -> GraphLoadOptions {
+fn graph_load_options(
+    edge_mode: &str,
+    ego_expand_1hop: bool,
+    synthetic_provenance: bool,
+) -> GraphLoadOptions {
     let augmented = edge_mode.trim().eq_ignore_ascii_case("augmented");
     GraphLoadOptions {
         ego_expand_1hop: ego_expand_1hop || augmented,
@@ -906,7 +910,12 @@ fn explainability_for_node(
     }
 }
 
-fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64, options: GraphLoadOptions) -> Value {
+fn load_graph_from_db(
+    path: &Path,
+    limit: usize,
+    since_seconds: i64,
+    options: GraphLoadOptions,
+) -> Value {
     const EGO_EXPAND_NODE_CAP: usize = 240;
     const PROVENANCE_EXPAND_NODE_CAP: usize = 240;
     let limit = limit.clamp(1, 2000);
@@ -1085,12 +1094,7 @@ fn load_graph_from_db(path: &Path, limit: usize, since_seconds: i64, options: Gr
     if !id_set.is_empty() {
         for (from_id, to_id, label) in &raw_edges {
             if id_set.contains(from_id) && id_set.contains(to_id) {
-                push_edge(
-                    from_id.clone(),
-                    to_id.clone(),
-                    normalize_rel(label),
-                    false,
-                );
+                push_edge(from_id.clone(), to_id.clone(), normalize_rel(label), false);
             }
         }
         if options.synthetic_provenance {
@@ -1192,7 +1196,9 @@ pub async fn get_compression_project_profiles(
     let path = openfang_runtime::compression_project_ema::profiles_path_for_agent(&agent_id);
     match openfang_runtime::compression_project_ema::load_file(&agent_id) {
         Ok(f) => Json(json!({ "ok": true, "path": path, "profiles": f })),
-        Err(e) => Json(json!({ "ok": false, "error": e.to_string(), "path": path, "profiles": null })),
+        Err(e) => {
+            Json(json!({ "ok": false, "error": e.to_string(), "path": path, "profiles": null }))
+        }
     }
 }
 
@@ -1235,12 +1241,7 @@ pub async fn get_graph_memory_nodes_search(
         .as_ref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    match gm.search_all_nodes_fts(
-        &agent_id,
-        q.q.trim(),
-        pid.as_deref(),
-        q.limit,
-    ) {
+    match gm.search_all_nodes_fts(&agent_id, q.q.trim(), pid.as_deref(), q.limit) {
         Ok(nodes) => Json(json!({ "nodes": nodes })),
         Err(_) => Json(json!({ "nodes": [] })),
     }
@@ -2269,7 +2270,10 @@ pub async fn get_improvement_proposals(
         &agent_id,
         q.limit,
     ) {
-        Ok(rows) => (StatusCode::OK, Json(json!({ "ok": true, "proposals": rows }))),
+        Ok(rows) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "proposals": rows })),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e, "proposals": [] })),
@@ -2338,11 +2342,7 @@ pub async fn post_improvement_proposal_adopt(
             };
             let n = state
                 .kernel
-                .notify_graph_memory_write(
-                    &agent_id,
-                    "improvement_proposal",
-                    Some(prov),
-                )
+                .notify_graph_memory_write(&agent_id, "improvement_proposal", Some(prov))
                 .await;
             if let Err(e) = n {
                 tracing::warn!(target: "openfang_api", "improvement proposal kernel notify: {e}");
@@ -2385,7 +2385,10 @@ pub async fn post_improvement_proposal_adopt(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e })),
         ),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "ok": false, "error": e }))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e })),
+        ),
     }
 }
 

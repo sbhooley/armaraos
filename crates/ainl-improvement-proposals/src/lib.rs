@@ -33,7 +33,9 @@ pub fn proposed_hash_matches(envelope: &ProposalEnvelope, proposed_ainl_text: &s
 mod tests {
     use super::*;
     use crate::{ProposalLedger, ProposalLedgerError};
-    use ainl_contracts::{ContextFreshness, ImpactDecision, LEARNER_SCHEMA_VERSION, ProposalEnvelope};
+    use ainl_contracts::{
+        ContextFreshness, ImpactDecision, ProposalEnvelope, LEARNER_SCHEMA_VERSION,
+    };
     use uuid::Uuid;
 
     fn sample_envelope(ainl: &str) -> ProposalEnvelope {
@@ -71,13 +73,7 @@ mod tests {
         let id = p.submit("a1", &env, text).expect("insert");
 
         let r_ok = p
-            .validate_and_record(id, |s: &str| {
-                if s == text {
-                    Ok(())
-                } else {
-                    Err("bad")
-                }
-            })
+            .validate_and_record(id, |s: &str| if s == text { Ok(()) } else { Err("bad") })
             .expect("validate");
         assert!(r_ok.accepted, "{r_ok:?}");
         let row = p.get(id).unwrap().expect("row");
@@ -106,10 +102,8 @@ mod tests {
         let text = "graph\nt1\n";
         let env = sample_envelope(text);
         let id = p.submit("a1", &env, text).expect("insert");
-        p.validate_and_record(id, |s: &str| {
-            if s == text { Ok(()) } else { Err("bad") }
-        })
-        .expect("validate");
+        p.validate_and_record(id, |s: &str| if s == text { Ok(()) } else { Err("bad") })
+            .expect("validate");
         p.mark_adopted(id, "node-1").expect("adopted");
         let r = p.get(id).unwrap().expect("row");
         assert!(r.adopted_at.is_some());

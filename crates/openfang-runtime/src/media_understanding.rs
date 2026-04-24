@@ -398,10 +398,7 @@ print(json.dumps({"text": result.text, "model": "mlx-community/parakeet-tdt-0.6b
 
 /// whisper.cpp (Homebrew build) documents: flac, mp3, ogg, wav — not webm/m4a.
 fn whisper_cli_supported_extension(ext: &str) -> bool {
-    matches!(
-        ext.to_lowercase().as_str(),
-        "wav" | "flac" | "mp3" | "ogg"
-    )
+    matches!(ext.to_lowercase().as_str(), "wav" | "flac" | "mp3" | "ogg")
 }
 
 fn resolve_ffmpeg() -> Option<PathBuf> {
@@ -413,7 +410,8 @@ fn resolve_ffmpeg() -> Option<PathBuf> {
     }
     #[cfg(windows)]
     {
-        let bundled = openfang_types::config::openfang_home_dir().join("voice/ffmpeg_win/bin/ffmpeg.exe");
+        let bundled =
+            openfang_types::config::openfang_home_dir().join("voice/ffmpeg_win/bin/ffmpeg.exe");
         if bundled.is_file() {
             return Some(bundled);
         }
@@ -485,16 +483,7 @@ async fn transcode_audio_to_wav_for_whisper(
         .arg("error")
         .args(["-y", "-i"])
         .arg(input)
-        .args([
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-c:a",
-            "pcm_s16le",
-            "-f",
-            "wav",
-        ])
+        .args(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav"])
         .arg(&out)
         .status()
         .await
