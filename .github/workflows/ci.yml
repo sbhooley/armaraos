@@ -24,9 +24,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -55,9 +52,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -85,9 +79,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -114,9 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -140,9 +128,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -167,9 +152,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -188,9 +170,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -203,9 +182,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -230,9 +206,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Ensure ainl-inference-server sibling (path dep)
-        shell: bash
-        run: bash scripts/ci/ensure-sibling-ainl-inference-server.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit

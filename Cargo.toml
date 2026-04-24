@@ -29,6 +29,7 @@ members = [
     "crates/ainl-trajectory",
     "crates/ainl-failure-learning",
     "crates/ainl-improvement-proposals",
+    "crates/armara-provider-api",
     "xtask",
 ]
 

@@ -1,0 +1,21 @@
+[package]
+name = "armara-provider-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Typed Armara Provider API schemas (vendored in armaraos)"
+
+# Vendored copy of the wire-format types used to talk to any Armara Provider
+# implementation (e.g. ainl-inference-server). Kept in armaraos so the workspace
+# builds standalone in CI and does not require a sibling repo checkout. Source
+# of truth is intentionally the wire contract; both producer and consumer keep
+# matching copies and are exercised by integration tests.
+
+[dependencies]
+ainl-agent-snapshot = { path = "../ainl-agent-snapshot" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
