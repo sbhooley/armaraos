@@ -1,9 +1,18 @@
 name: Release
 
+# Tag push: normal releases. `workflow_dispatch`: re-run after a force-moved tag
+# (GitHub often skips `push` workflows when `refs/tags/v*` is updated in place) or
+# if a release job failed and the tag already exists.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.7.7)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -53,8 +62,12 @@ jobs:
             rust_target: aarch64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform.os }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
       - name: Vendor PostHog JS (pin from tooling/posthog-js.version)
         shell: bash
@@ -198,8 +211,8 @@ jobs:
           AINL_POSTHOG_KEY: ${{ secrets.ARMARAOS_POSTHOG_KEY || secrets.AINL_POSTHOG_KEY }}
           AINL_POSTHOG_HOST: ${{ secrets.ARMARAOS_POSTHOG_HOST || secrets.AINL_POSTHOG_HOST }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "ArmaraOS ${{ github.ref_name }}"
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "ArmaraOS ${{ env.RELEASE_TAG }}"
           releaseBody: |
             ## What's New
 
@@ -238,12 +251,16 @@ jobs:
   publish-updater-latest-json:
     name: Publish latest.json (signed)
     needs: [desktop]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -271,8 +288,10 @@ jobs:
     # even if updater signing is temporarily unavailable.
     needs: [desktop]
     # Require a successful desktop matrix (all platforms). `always()` caused this job to run after a Linux failure and error on missing `latest.json`.
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Check deploy token
         env:
@@ -290,13 +309,13 @@ jobs:
         id: tagkind
         run: |
           set -euo pipefail
-          T="${GITHUB_REF_NAME#v}"
+          T="${RELEASE_TAG#v}"
           if [[ "$T" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${GITHUB_REF_NAME} is a prerelease (beta channel only; stable latest.json unchanged on the website)."
+            echo "Tag ${RELEASE_TAG} is a prerelease (beta channel only; stable latest.json unchanged on the website)."
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "Tag ${GITHUB_REF_NAME} is stable (latest.json + beta.json on the website)."
+            echo "Tag ${RELEASE_TAG} is stable (latest.json + beta.json on the website)."
           fi
 
       - name: Fetch release metadata (asset list + published_at)
@@ -305,7 +324,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/armaraos-release
-          gh api "repos/${{ github.repository }}/releases/tags/${GITHUB_REF_NAME}" > /tmp/armaraos-release/release.json
+          gh api "repos/${{ github.repository }}/releases/tags/${RELEASE_TAG}" > /tmp/armaraos-release/release.json
           test -s /tmp/armaraos-release/release.json
 
       - name: Download installers (desktop artifacts) from release
@@ -326,7 +345,7 @@ jobs:
             ] | unique[]' /tmp/armaraos-release/release.json)
 
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "::error::No ArmaraOS desktop installer assets found on release ${GITHUB_REF_NAME}."
+            echo "::error::No ArmaraOS desktop installer assets found on release ${RELEASE_TAG}."
             echo "::error::Expected assets like ArmaraOS_<ver>_x64-setup.exe / .dmg / .deb."
             exit 1
           fi
@@ -336,7 +355,7 @@ jobs:
             args+=(-p "$f")
           done
 
-          gh release download "${GITHUB_REF_NAME}" \
+          gh release download "${RELEASE_TAG}" \
             --repo "${{ github.repository }}" \
             --dir /tmp/armaraos-release \
             "${args[@]}"
@@ -349,7 +368,7 @@ jobs:
           # If the release already has a signed latest.json (tauri-action or post-process),
           # prefer it. Otherwise, we'll generate a lightweight website-only latest.json.
           if jq -e '.assets[].name | select(. == "latest.json")' /tmp/armaraos-release/release.json >/dev/null; then
-            gh release download "${GITHUB_REF_NAME}" \
+            gh release download "${RELEASE_TAG}" \
               --repo "${{ github.repository }}" \
               --dir /tmp/armaraos-release \
               -p "latest.json"
@@ -367,7 +386,7 @@ jobs:
           BASE="https://ainativelang.com/downloads/armaraos"
 
           PUB_DATE="$(jq -r '.published_at // empty' /tmp/armaraos-release/release.json)"
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
 
           # Stage mirrored binaries.
           for f in /tmp/armaraos-release/*; do
@@ -413,7 +432,7 @@ jobs:
 
             jq -n \
               --arg v "$VERSION" \
-              --arg notes "ArmaraOS ${GITHUB_REF_NAME} — see https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}" \
+              --arg notes "ArmaraOS ${RELEASE_TAG} — see https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}" \
               --arg pub "$PUB_DATE" \
               --arg base "$BASE" \
               --arg dmg_aarch "$DMG_AARCH" \
@@ -491,8 +510,8 @@ jobs:
             exit 0
           fi
           # Replace the latestArmaraosReleaseTag value in-place.
-          sed -i "s|latestArmaraosReleaseTag: \"v[^\"]*\"|latestArmaraosReleaseTag: \"${GITHUB_REF_NAME}\"|g" "$SITE_TS"
-          echo "Set latestArmaraosReleaseTag to ${GITHUB_REF_NAME} in $SITE_TS"
+          sed -i "s|latestArmaraosReleaseTag: \"v[^\"]*\"|latestArmaraosReleaseTag: \"${RELEASE_TAG}\"|g" "$SITE_TS"
+          echo "Set latestArmaraosReleaseTag to ${RELEASE_TAG} in $SITE_TS"
 
       - name: Commit and push
         run: |
@@ -505,7 +524,7 @@ jobs:
             echo "No file changes; skipping push."
             exit 0
           fi
-          git commit -m "chore: ArmaraOS desktop updater ${{ github.ref_name }}"
+          git commit -m "chore: ArmaraOS desktop updater ${{ env.RELEASE_TAG }}"
           git push origin HEAD:main
 
       - name: Ping ainativelangweb sync workflow
@@ -524,12 +543,14 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${TOK}" \
             https://api.github.com/repos/sbhooley/ainativelangweb/dispatches \
-            -d "{\"event_type\":\"armaraos-released\",\"client_payload\":{\"tag\":\"${GITHUB_REF_NAME}\"}}"
+            -d "{\"event_type\":\"armaraos-released\",\"client_payload\":{\"tag\":\"${RELEASE_TAG}\"}}"
 
   # ── CLI Binary (5 platforms) ──────────────────────────────────────────────
   cli:
     name: CLI / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -555,6 +576,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -595,6 +618,7 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: openfang-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -607,8 +631,12 @@ jobs:
     name: Docker Image
     if: ${{ vars.ENABLE_ARMARAOS_DOCKER_RELEASE == 'true' }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -621,7 +649,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
       - name: Extract version
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v7
         with:

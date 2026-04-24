@@ -4,7 +4,8 @@
 # Used when tauri-action skips latest.json (no matching .sig artifacts during matrix upload).
 set -euo pipefail
 
-TAG="${GITHUB_REF_NAME:?}"
+# RELEASE_TAG is set by release.yml for tag + manual dispatch; fall back to GITHUB_REF_NAME.
+TAG="${RELEASE_TAG:-${GITHUB_REF_NAME:?}}"
 REPO="${GITHUB_REPOSITORY:?}"
 
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
