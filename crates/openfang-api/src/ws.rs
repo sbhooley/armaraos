@@ -12,9 +12,11 @@
 //! Server → Client: `{"type":"silent_complete",...,"skill_draft_path":?}` (agent chose NO_REPLY; optional skill draft from `[learn]`)
 //! Server → Client: `{"type":"canvas","canvas_id":"...","html":"...","title":"..."}`
 
+use crate::middleware::RequestId;
 use crate::routes::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
+use axum::http::{HeaderName, HeaderValue};
 use axum::response::IntoResponse;
 use dashmap::DashMap;
 use futures::stream::SplitSink;
@@ -224,6 +226,30 @@ pub async fn agent_ws(
     if !ws_upgrade_api_key_allowed(api_key, &headers, &uri) {
         warn!("WebSocket upgrade rejected: invalid auth");
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    // Wallet Premium: same SPL minimum as HTTP when a premium session token is present (header or `?premium_ainl=`).
+    let mut premium_headers = headers.clone();
+    if let Some(tok) =
+        crate::premium_ainl::premium_token_from_headers_or_query(&headers, Some(&uri))
+    {
+        if let Ok(val) = HeaderValue::from_str(&tok) {
+            premium_headers.insert(
+                HeaderName::from_static("x-armaraos-premium-ainl"),
+                val,
+            );
+        }
+    }
+    let rid = RequestId("ws".to_string());
+    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+        &state,
+        &premium_headers,
+        &rid,
+        "/api/agents/:id/ws",
+    )
+    .await
+    {
+        return resp.into_response();
     }
 
     // SECURITY: Enforce per-IP WebSocket connection limit

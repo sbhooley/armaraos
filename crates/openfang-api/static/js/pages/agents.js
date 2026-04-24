@@ -385,6 +385,13 @@ function agentsPage() {
     },
 
     chatWithAgent(agent) {
+      try {
+        var st = Alpine.store('app');
+        if (st && st.premiumWalletInteractionsBlocked && st.premiumWalletInteractionsBlocked()) {
+          if (st.premiumWalletHoldingsToast) st.premiumWalletHoldingsToast();
+          return;
+        }
+      } catch (ePw) { /* ignore */ }
       Alpine.store('app').pendingAgent = agent;
       this.activeChatAgent = agent;
     },

@@ -217,7 +217,7 @@ var OpenFangAPI = (function() {
 
   function loadPremiumAinlTokenFromStorage() {
     try {
-      var t = localStorage.getItem('armaraos-premium-ainl-token');
+      var t = sessionStorage.getItem('armaraos-premium-ainl-token');
       _premiumAinlToken = t ? String(t) : '';
     } catch (e) {
       _premiumAinlToken = '';
@@ -228,9 +228,9 @@ var OpenFangAPI = (function() {
     _premiumAinlToken = token ? String(token) : '';
     try {
       if (_premiumAinlToken) {
-        localStorage.setItem('armaraos-premium-ainl-token', _premiumAinlToken);
+        sessionStorage.setItem('armaraos-premium-ainl-token', _premiumAinlToken);
       } else {
-        localStorage.removeItem('armaraos-premium-ainl-token');
+        sessionStorage.removeItem('armaraos-premium-ainl-token');
       }
     } catch (e) { /* ignore */ }
   }
@@ -402,7 +402,10 @@ var OpenFangAPI = (function() {
   function _doConnect(agentId) {
     try {
       var url = WS_BASE + '/api/agents/' + agentId + '/ws';
-      if (_authToken) url += '?token=' + encodeURIComponent(_authToken);
+      var q = [];
+      if (_authToken) q.push('token=' + encodeURIComponent(_authToken));
+      if (_premiumAinlToken) q.push('premium_ainl=' + encodeURIComponent(_premiumAinlToken));
+      if (q.length) url += '?' + q.join('&');
       var socket = new WebSocket(url);
       _ws = socket;
 

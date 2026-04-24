@@ -257,6 +257,46 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             crate::macos_app_icon::apply_tahoe_icon_image();
 
+            // Premium $AINL deep link: register a Rust-side listener that
+            // forwards `armaraos://premium-ainl?ticket=…` URLs to the
+            // dashboard as a normalized `premium-ainl-ticket` event. This
+            // path runs on macOS/iOS via tauri-plugin-deep-link's
+            // `RunEvent::Opened`. On Windows/Linux the single-instance
+            // handler covers the same emit (subsequent launches forward
+            // argv).
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let app_handle_for_deep = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        let raw = url.to_string();
+                        if !raw.starts_with("armaraos://premium-ainl") {
+                            continue;
+                        }
+                        let ticket_opt = url
+                            .query_pairs()
+                            .find(|(k, _)| k == "ticket")
+                            .map(|(_, v)| v.into_owned())
+                            .filter(|t| !t.trim().is_empty());
+                        let Some(ticket) = ticket_opt else { continue };
+                        info!("premium deep link received, forwarding ticket to dashboard");
+                        if let Err(e) =
+                            app_handle_for_deep.emit("premium-ainl-ticket", ticket.trim())
+                        {
+                            warn!("failed to emit premium-ainl-ticket event: {e}");
+                        }
+                        // Bring the main window forward so users see the
+                        // dashboard react to the redeem immediately.
+                        if let Some(w) = app_handle_for_deep.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                        }
+                    }
+                });
+            }
+
             // Set up system tray (desktop only)
             #[cfg(desktop)]
             tray::setup_tray(app)?;

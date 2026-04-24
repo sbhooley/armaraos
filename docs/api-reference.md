@@ -1130,7 +1130,7 @@ Detailed kernel status including all agents. Includes `config_schema_version` (e
 ```json
 {
   "status": "running",
-  "version": "0.7.5",
+  "version": "0.7.7",
   "agent_count": 2,
   "default_provider": "groq",
   "default_model": "llama-3.3-70b-versatile",
@@ -1188,8 +1188,8 @@ Build and version information.
 
 ```json
 {
-  "tag_name": "v0.7.5",
-  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.7.5",
+  "tag_name": "v0.7.7",
+  "html_url": "https://github.com/sbhooley/armaraos/releases/tag/v0.7.7",
   "published_at": "2026-01-01T12:00:00Z"
 }
 ```

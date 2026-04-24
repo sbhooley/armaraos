@@ -96,7 +96,7 @@ async function armaraosRedeemPremiumAinlTicket(ticket) {
   if (!j || !j.token) throw new Error('Redeem failed: missing token');
   OpenFangAPI.setPremiumAinlToken(j.token);
   try {
-    localStorage.setItem('armaraos-premium-unlocked', '1');
+    sessionStorage.setItem('armaraos-premium-unlocked', '1');
   } catch (e0) { /* ignore */ }
   try {
     window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
@@ -686,6 +686,8 @@ document.addEventListener('alpine:init', function() {
     booting: true,
     wsConnected: false,
     connectionState: 'connected',
+    /** When a wallet Premium token is present, false means SPL minimum is not met (chat/config/spawn blocked). */
+    premiumWalletHoldingsOk: true,
     lastError: '',
     /** Longer recovery hint when the daemon is unreachable or returns an error */
     lastErrorHint: '',
@@ -1178,9 +1180,34 @@ document.addEventListener('alpine:init', function() {
       });
     },
 
+    async refreshPremiumWalletHoldingsGate() {
+      try {
+        var st = await OpenFangAPI.get('/api/premium/ainl/status');
+        if (st && st.reason === 'no_session') {
+          this.premiumWalletHoldingsOk = true;
+          return;
+        }
+        this.premiumWalletHoldingsOk = !!(st && st.ok);
+      } catch (e) { /* keep last */ }
+    },
+
+    premiumWalletInteractionsBlocked() {
+      return this.premiumWalletHoldingsOk === false;
+    },
+
+    premiumWalletHoldingsToast() {
+      if (typeof OpenFangToast !== 'undefined' && OpenFangToast.warn) {
+        OpenFangToast.warn('Premium $AINL holdings required — verify on the Premium screen.');
+      }
+    },
+
     /** Open inline chat for this agent (Agents page) from anywhere (e.g. sidebar). */
     openAgentChat(agent) {
       if (!agent) return;
+      if (this.premiumWalletInteractionsBlocked()) {
+        this.premiumWalletHoldingsToast();
+        return;
+      }
       this.recordRecentAgent(agent);
       this.pendingAgent = agent;
       var h = (window.location.hash || '').replace(/^#/, '');
@@ -1192,6 +1219,10 @@ document.addEventListener('alpine:init', function() {
     /** Open the agent settings/detail modal (Agents page) from Command Center or other routes. */
     openAgentSettings(agent) {
       if (!agent) return;
+      if (this.premiumWalletInteractionsBlocked()) {
+        this.premiumWalletHoldingsToast();
+        return;
+      }
       this.recordRecentAgent(agent);
       this.pendingOpenAgentDetail = agent;
       var h = (window.location.hash || '').replace(/^#/, '');
@@ -1202,6 +1233,10 @@ document.addEventListener('alpine:init', function() {
 
     /** Open the multi-step New Agent wizard (same as + New Agent on All Agents). */
     openNewAgentWizard() {
+      if (this.premiumWalletInteractionsBlocked()) {
+        this.premiumWalletHoldingsToast();
+        return;
+      }
       var p = (window.location.hash || '').replace(/^#/, '') || 'overview';
       if (p !== 'agents') {
         this.pendingOpenSpawnWizard = true;
@@ -2328,6 +2363,25 @@ function app() {
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       Alpine.store('app').loadUiPrefs();
+      try {
+        void Alpine.store('app').refreshPremiumWalletHoldingsGate();
+      } catch (ePrem0) { /* ignore */ }
+      if (!window.__armaraosPremiumHoldingsPoll) {
+        window.__armaraosPremiumHoldingsPoll = true;
+        setInterval(function() {
+          try {
+            void Alpine.store('app').refreshPremiumWalletHoldingsGate();
+          } catch (ePremI) { /* ignore */ }
+        }, 50 * 1000);
+      }
+      if (!window.__armaraosPremiumHoldingsEv) {
+        window.__armaraosPremiumHoldingsEv = true;
+        window.addEventListener('armaraos-premium-ainl-updated', function() {
+          try {
+            void Alpine.store('app').refreshPremiumWalletHoldingsGate();
+          } catch (ePremE) { /* ignore */ }
+        });
+      }
       try {
         Alpine.store('notifyCenter').syncChatUnreadRows();
       } catch (eUnr) { /* ignore */ }

@@ -114,9 +114,16 @@ pub fn api_json_error(
 pub async fn spawn_agent(
     State(state): State<Arc<AppState>>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<SpawnRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
+    const PATH: &str = "/api/agents";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     // Resolve template name → manifest_toml if template is provided and manifest_toml is empty
     let manifest_toml = if req.manifest_toml.trim().is_empty() {
         if let Some(ref tmpl_name) = req.template {
@@ -866,10 +873,16 @@ pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     let msg_path = "/api/agents/:id/message";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, msg_path).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -1150,9 +1163,15 @@ pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/session";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -1479,9 +1498,15 @@ pub async fn restart_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/restart";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -2353,10 +2378,16 @@ pub async fn set_agent_mode(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SetModeRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/mode";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -2530,9 +2561,15 @@ pub async fn get_agent(
     Path(id): Path<String>,
     Query(query): Query<GetAgentQuery>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -2659,6 +2696,7 @@ pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
     use axum::response::sse::{Event, Sse};
@@ -2667,6 +2705,11 @@ pub async fn send_message_stream(
 
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/message/stream";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp.into_response();
+    }
 
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
     const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
@@ -9739,10 +9782,16 @@ pub async fn update_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<AgentUpdateRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/update";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -9835,10 +9884,16 @@ pub async fn patch_agent(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -14969,10 +15024,16 @@ pub async fn update_agent_identity(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<UpdateIdentityRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/identity";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -15092,10 +15153,16 @@ pub async fn patch_agent_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     ext: Option<Extension<RequestId>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<PatchAgentConfigRequest>,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/config";
+    if let Err(resp) =
+        crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(&state, &headers, &rid, PATH).await
+    {
+        return resp;
+    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -19346,14 +19413,25 @@ pub async fn auth_login(
         .unwrap()
 }
 
-/// POST /api/auth/logout — Clear the session cookie.
+/// POST /api/auth/logout — Clear the session cookie and Premium wallet bind cookie.
 pub async fn auth_logout() -> impl IntoResponse {
-    let cookie = "openfang_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0";
-    (
-        StatusCode::OK,
-        [("content-type", "application/json"), ("set-cookie", cookie)],
-        serde_json::json!({"status": "ok"}).to_string(),
-    )
+    use axum::body::Body;
+    use axum::http::Response;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/json")
+        .header(
+            "set-cookie",
+            "openfang_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+        )
+        .header(
+            "set-cookie",
+            crate::premium_ainl::clear_premium_wallet_bind_set_cookie_value(),
+        )
+        .body(Body::from(
+            serde_json::json!({"status": "ok"}).to_string(),
+        ))
+        .unwrap()
 }
 
 /// GET /api/auth/check — Check current authentication state.

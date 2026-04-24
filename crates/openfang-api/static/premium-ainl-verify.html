@@ -3,41 +3,305 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ArmaraOS — Verify $AINL</title>
+  <title>ArmaraOS Premium Verification</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 560px; }
-    h1 { font-size: 1.25rem; margin: 0 0 12px; }
-    p { color: #444; line-height: 1.5; }
-    button { padding: 10px 16px; font-size: 1rem; cursor: pointer; border-radius: 8px; border: 1px solid #ccc; background: #111; color: #fff; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .err { color: #b00020; margin-top: 12px; white-space: pre-wrap; }
-    .ok { color: #0a6; margin-top: 12px; }
-    code { font-size: 0.85rem; word-break: break-all; }
-    .fallback { margin-top: 14px; padding: 12px; border: 1px solid #d8d8d8; border-radius: 8px; background: #fafafa; display: none; }
-    .fallback .row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-    .fallback input { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.84rem; padding: 8px; border-radius: 8px; border: 1px solid #c8c8c8; }
-    .btn-secondary { background: #fff; color: #111; }
-    .hint { color: #666; font-size: 0.92rem; }
+    :root {
+      --bg: #000000;
+      --bg-primary: #050505;
+      --surface: rgba(14, 14, 14, 0.76);
+      --surface2: rgba(20, 20, 20, 0.68);
+      --border: #272727;
+      --border-light: #353535;
+      --border-subtle: #1b1b1b;
+      --text: #f1f1f1;
+      --text-secondary: #c8c8c8;
+      --text-dim: #949494;
+      --accent: #f59e0b;
+      --accent-light: #fbbf24;
+      --accent-dim: #d97706;
+      --success: #4ade80;
+      --error: #ef4444;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.48), 0 1px 2px rgba(0, 0, 0, 0.34);
+      --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.52), 0 2px 5px rgba(0, 0, 0, 0.36);
+      --shadow-lg: 0 14px 30px rgba(0, 0, 0, 0.56), 0 4px 10px rgba(0, 0, 0, 0.4);
+      --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.42);
+      --font-sans: "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --font-mono: "Geist Mono", "SF Mono", "Fira Code", "Cascadia Code", "JetBrains Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font-sans);
+      color: var(--text);
+      background:
+        radial-gradient(980px 560px at -4% -10%, rgba(245, 158, 11, 0.15), transparent 50%),
+        radial-gradient(860px 480px at 100% -8%, rgba(245, 158, 11, 0.08), transparent 48%),
+        linear-gradient(180deg, #080808 0%, #000000 72%);
+      padding: 18px;
+      display: grid;
+      place-items: center;
+      line-height: 1.5;
+    }
+
+    .shell {
+      width: min(860px, 100%);
+      border-radius: var(--radius-xl);
+      border: 1px solid var(--border);
+      background: linear-gradient(166deg, var(--surface) 0%, var(--surface2) 100%);
+      box-shadow: var(--shadow-lg), var(--shadow-inset);
+      overflow: hidden;
+      backdrop-filter: blur(10px) saturate(115%);
+      -webkit-backdrop-filter: blur(10px) saturate(115%);
+    }
+
+    .page-header {
+      border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.015));
+      padding: 18px 20px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      padding: 6px;
+      object-fit: contain;
+      background: rgba(13, 13, 13, 0.94);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      box-shadow: var(--shadow-sm);
+    }
+    .page-header h1 {
+      margin: 0;
+      font-size: 1.1rem;
+      letter-spacing: -0.02em;
+      font-weight: 700;
+    }
+    .page-header p {
+      margin: 3px 0 0;
+      color: var(--text-dim);
+      font-size: 0.92rem;
+    }
+
+    .page-body { padding: 16px 20px 20px; }
+
+    .info-card {
+      background: linear-gradient(168deg, var(--surface) 0%, color-mix(in srgb, var(--surface2) 70%, var(--surface)) 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      box-shadow: var(--shadow-sm), var(--shadow-inset);
+      margin-bottom: 12px;
+    }
+    .info-card h4 {
+      margin: 0 0 7px;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      font-weight: 700;
+    }
+    .info-card p {
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .verify-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .badge {
+      font-size: 12px;
+      border: 1px solid var(--border-light);
+      border-radius: 999px;
+      color: var(--text-secondary);
+      background: rgba(245, 158, 11, 0.06);
+      padding: 4px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge code {
+      font-family: var(--font-mono);
+      color: var(--text);
+      font-size: 11px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .btn {
+      padding: 9px 15px;
+      border: none;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 650;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      line-height: 1.2;
+      letter-spacing: -0.01em;
+    }
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .btn-primary {
+      background: linear-gradient(180deg, color-mix(in srgb, var(--accent-light) 62%, var(--accent)) 0%, color-mix(in srgb, var(--accent) 88%, var(--accent-dim)) 100%);
+      color: #100b04;
+      border: 1px solid color-mix(in srgb, var(--accent-dim) 60%, #7a4a06);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.16) inset, 0 3px 10px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 6px 14px color-mix(in srgb, var(--accent) 24%, transparent);
+    }
+    .btn-ghost {
+      background: color-mix(in srgb, var(--surface2) 38%, transparent);
+      color: var(--text);
+      border: 1px solid var(--border-subtle);
+    }
+    .btn-ghost:hover {
+      transform: translateY(-1px);
+      border-color: color-mix(in srgb, var(--accent) 24%, var(--border-light));
+      background: color-mix(in srgb, var(--surface2) 82%, var(--surface));
+    }
+
+    .status {
+      border-radius: var(--radius-md);
+      padding: 10px 11px;
+      display: none;
+      white-space: pre-wrap;
+      font-size: 0.93rem;
+      margin-top: 8px;
+    }
+    .status.ok {
+      display: block;
+      color: #ddffe9;
+      background: rgba(74, 222, 128, 0.11);
+      border: 1px solid rgba(74, 222, 128, 0.24);
+    }
+    .status.err {
+      display: block;
+      color: #ffe2e2;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .fallback {
+      margin-top: 12px;
+      border: 1px dashed rgba(245, 158, 11, 0.36);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      background: rgba(245, 158, 11, 0.06);
+      display: none;
+    }
+    .fallback-title {
+      margin: 0;
+      color: #ffe8b2;
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+    .hint {
+      margin: 5px 0 0;
+      color: var(--text-secondary);
+      font-size: 0.88rem;
+      line-height: 1.46;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+      align-items: center;
+    }
+    .ticket {
+      width: 100%;
+      background: rgba(7, 7, 7, 0.82);
+      color: var(--text);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: 9px 10px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .footer {
+      margin-top: 12px;
+      color: var(--text-dim);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 700px) {
+      body { padding: 10px; }
+      .page-header { padding: 14px; }
+      .page-body { padding: 14px; }
+      .actions, .row { align-items: stretch; }
+      .actions .btn, .row .btn { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <h1>Verify $AINL for ArmaraOS Premium</h1>
-  <p>This page runs in your <strong>desktop browser</strong> so Phantom (or another Solana wallet) can sign. ArmaraOS will open again via a deep link when verification succeeds.</p>
-  <p>Required: at least <strong>1,000,000</strong> <code>$AINL</code> in the connected wallet on Solana mainnet.</p>
-  <p><button id="go" type="button">1. Connect wallet &amp; verify</button></p>
-  <div id="msg" class="err" style="display:none"></div>
-  <div id="done" class="ok" style="display:none"></div>
-  <div id="fallback" class="fallback">
-    <div><strong>Deep link fallback</strong></div>
-    <div class="hint">If ArmaraOS did not open automatically, copy this code and paste it into Premium → “Use fallback code”.</div>
-    <div class="row">
-      <input id="ticket" type="text" readonly value="" />
-    </div>
-    <div class="row">
-      <button id="copyTicket" type="button" class="btn-secondary">Copy code</button>
-      <button id="openApp" type="button">Open ArmaraOS again</button>
-    </div>
-  </div>
+  <main class="shell">
+    <header class="page-header">
+      <img class="logo" src="/assets/armaraos-logo.png" alt="ArmaraOS logo" />
+      <div>
+        <h1>Premium Verification</h1>
+        <p>Verify $AINL holdings to unlock Hands in ArmaraOS.</p>
+      </div>
+    </header>
+
+    <section class="page-body">
+      <div class="info-card">
+        <h4>Wallet Verification</h4>
+        <p>Runs in your desktop browser so Phantom can sign a one-time nonce and prove wallet ownership.</p>
+      </div>
+
+      <div class="verify-meta">
+        <span class="badge">Minimum <code>1,000,000+ $AINL</code></span>
+        <span class="badge">Network <code>Solana mainnet</code></span>
+      </div>
+
+      <div class="actions">
+        <button id="go" type="button" class="btn btn-primary">Connect wallet and verify</button>
+      </div>
+
+      <div id="msg" class="status err"></div>
+      <div id="done" class="status ok"></div>
+
+      <div id="fallback" class="fallback">
+        <p class="fallback-title">Deep link fallback</p>
+        <p class="hint">If ArmaraOS does not open automatically, copy this code and paste it into Premium > Use fallback code.</p>
+        <div class="row">
+          <input id="ticket" class="ticket" type="text" readonly value="" />
+        </div>
+        <div class="row">
+          <button id="copyTicket" type="button" class="btn btn-ghost">Copy code</button>
+          <button id="openApp" type="button" class="btn btn-primary">Open ArmaraOS again</button>
+        </div>
+      </div>
+
+      <p class="footer">You sign only a one-time verification message; private keys never leave your wallet.</p>
+    </section>
+  </main>
+
   <script>
 (function () {
   var btn = document.getElementById('go');
@@ -48,6 +312,14 @@
   var copyBtn = document.getElementById('copyTicket');
   var openBtn = document.getElementById('openApp');
   var lastDeepLink = '';
+  var redeemToken = '';
+  var returnUrl = '';
+  try {
+    var q = new URLSearchParams(window.location.search || '');
+    returnUrl = String(q.get('return') || '').trim();
+  } catch (eQ) {
+    returnUrl = '';
+  }
 
   function showErr(t) {
     msg.style.display = 'block';
@@ -59,7 +331,6 @@
     done.textContent = t || 'Done';
     msg.style.display = 'none';
   }
-
   function showFallback(ticket, deepLink) {
     if (!ticket || !deepLink) return;
     lastDeepLink = deepLink;
@@ -67,6 +338,35 @@
     fallback.style.display = 'block';
   }
 
+  async function redeemTicketForBrowser(ticket) {
+    var code = String(ticket || '').trim();
+    if (!code) return '';
+    try {
+      var r = await fetch('/api/premium/ainl/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket: code })
+      });
+      if (!r.ok) return '';
+      var j = await r.json();
+      var tok = j && j.token ? String(j.token) : '';
+      if (!tok) return '';
+      redeemToken = tok;
+      try {
+        sessionStorage.setItem('armaraos-premium-ainl-token', tok);
+        sessionStorage.setItem('armaraos-premium-unlocked', '1');
+      } catch (e0) { /* ignore */ }
+      // Notify opener dashboard tab (browser mode) so it can immediately unlock.
+      try {
+        if (window.opener && typeof window.opener.postMessage === 'function') {
+          window.opener.postMessage({ type: 'armaraos-premium-verified', token: tok }, window.location.origin);
+        }
+      } catch (e1) { /* ignore */ }
+      return tok;
+    } catch (e2) {
+      return '';
+    }
+  }
   function b64FromBytes(u8) {
     var bin = '';
     for (var i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
@@ -153,12 +453,28 @@
         btn.disabled = false;
         return;
       }
-      showOk('Verification complete. Opening ArmaraOS...');
+      var browserTok = '';
+      // Browser dashboard flow includes ?return=... and can redeem directly.
+      // Desktop (Tauri) flow must keep ticket unused for deep-link redemption.
+      if (returnUrl) {
+        browserTok = await redeemTicketForBrowser(ticket);
+      }
+      if (browserTok) {
+        showOk('Verification complete. Premium unlocked for this browser session.');
+      } else {
+        showOk('Verification complete. Opening ArmaraOS...');
+      }
       showFallback(ticket, link);
       setTimeout(function() {
         if (lastDeepLink) window.location.href = lastDeepLink;
       }, 250);
       window.location.href = link;
+      // Browser fallback: if deep link is ignored, return the user to dashboard.
+      if (returnUrl) {
+        setTimeout(function() {
+          try { window.location.href = returnUrl; } catch (eR) { /* ignore */ }
+        }, 1200);
+      }
     } catch (e) {
       showErr((e && e.message) ? e.message : String(e));
     }

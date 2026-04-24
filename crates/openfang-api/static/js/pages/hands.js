@@ -94,25 +94,49 @@ function handsPage() {
           self.premiumUnlocked = true;
           self.refreshPremiumAinlStatus();
         });
+        // Browser verify page posts this message after redeeming the ticket.
+        window.addEventListener('message', function(ev) {
+          try {
+            if (!ev || !ev.data || ev.data.type !== 'armaraos-premium-verified') return;
+            if (typeof window !== 'undefined' && ev.origin !== window.location.origin) return;
+            var tok = ev.data.token ? String(ev.data.token) : '';
+            if (!tok) return;
+            if (OpenFangAPI && OpenFangAPI.setPremiumAinlToken) {
+              OpenFangAPI.setPremiumAinlToken(tok);
+            }
+            self.premiumUnlocked = true;
+            self.refreshPremiumAinlStatus();
+            self.showToast('Premium verification synced from browser.');
+          } catch (eMsg) { /* ignore */ }
+        });
       }
       void this.refreshPremiumAinlStatus();
     },
 
     async refreshPremiumAinlStatus() {
+      // Pick up tokens written by the browser verify page or the deep-link
+      // redeem handler that may have run after this module's first load.
+      try {
+        if (OpenFangAPI && OpenFangAPI.loadPremiumAinlTokenFromStorage) {
+          OpenFangAPI.loadPremiumAinlTokenFromStorage();
+        }
+      } catch (eLoad) { /* ignore */ }
       try {
         var st = await OpenFangAPI.get('/api/premium/ainl/status');
         if (st && st.ok) {
           this.premiumUnlocked = true;
           try {
-            localStorage.setItem('armaraos-premium-unlocked', '1');
+            sessionStorage.setItem('armaraos-premium-unlocked', '1');
           } catch (e1) { /* ignore */ }
           return;
         }
         this.premiumUnlocked = false;
         try {
-          localStorage.removeItem('armaraos-premium-unlocked');
+          sessionStorage.removeItem('armaraos-premium-unlocked');
         } catch (e2) { /* ignore */ }
-        if (st && (st.reason === 'insufficient_balance' || st.reason === 'invalid_token')) {
+        // Keep the wallet session token when balance drops so HTTP/WS can still attribute
+        // the session and return consistent 403s from gated routes (chat/config/spawn).
+        if (st && (st.reason === 'invalid_token' || st.reason === 'wallet_mismatch')) {
           try {
             if (OpenFangAPI.clearPremiumAinlToken) OpenFangAPI.clearPremiumAinlToken();
           } catch (e3) { /* ignore */ }
@@ -134,8 +158,15 @@ function handsPage() {
         if (typeof isArmaraosDesktopShell === 'function' && isArmaraosDesktopShell()) {
           await ArmaraosDesktopTauriInvoke('open_premium_ainl_verify_browser');
         } else {
+          var ret = '';
+          try {
+            ret = window.location.origin + window.location.pathname + '#hands';
+          } catch (eRet) {
+            ret = '';
+          }
           var u = OpenFangAPI.baseUrl + '/premium-ainl-verify.html';
-          if (typeof window !== 'undefined') window.open(u, '_blank', 'noopener,noreferrer');
+          if (ret) u += '?return=' + encodeURIComponent(ret);
+          if (typeof window !== 'undefined') window.open(u, '_blank');
         }
         if (typeof OpenFangToast !== 'undefined' && OpenFangToast.info) {
           OpenFangToast.info('Complete wallet signing in your browser, then return to ArmaraOS.');
@@ -167,7 +198,7 @@ function handsPage() {
         this.premiumUnlocked = true;
         this.premiumTicketCode = '';
         try {
-          localStorage.setItem('armaraos-premium-unlocked', '1');
+          sessionStorage.setItem('armaraos-premium-unlocked', '1');
         } catch (e0) {}
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
@@ -207,7 +238,7 @@ function handsPage() {
         this.premiumUnlocked = true;
         this.premiumUnlockPassword = '';
         try {
-          localStorage.setItem('armaraos-premium-unlocked', '1');
+          sessionStorage.setItem('armaraos-premium-unlocked', '1');
         } catch (e0) {}
         if (data && data.premium_token && OpenFangAPI.setPremiumAinlToken) {
           OpenFangAPI.setPremiumAinlToken(data.premium_token);

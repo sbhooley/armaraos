@@ -30,7 +30,7 @@ bash scripts/check-memory-ga-gates.sh --base "$BASE"
 
 See **[dashboard-testing.md](dashboard-testing.md)** for the full manual browser checklist (Get started, Quick actions including **Browse Skills/MCP**, notification bell, command palette, chat, diagnostics).
 
-## 0.7.5 release risks (CHANGELOG)
+## 0.7.7 release risks (CHANGELOG)
 
 These are **not** automatic CI gates; confirm before tagging or wide rollout.
 

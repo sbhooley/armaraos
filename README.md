@@ -26,7 +26,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/version-0.7.5-green?style=flat-square" alt="v0.7.5" />
+  <img src="https://img.shields.io/badge/version-0.7.7-green?style=flat-square" alt="v0.7.7" />
   <img src="https://img.shields.io/badge/tests-2%2C996%20passing-brightgreen?style=flat-square" 
 </p>
 

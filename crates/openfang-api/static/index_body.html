@@ -4423,10 +4423,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <!-- Tabs -->
             <div class="tabs dashboard-toolbar-tabs">
               <div class="tab" :class="{ active: tab === 'available' }" @click="tab = 'available'">
-                Available <span class="badge badge-dim" x-show="hands.length" x-text="hands.length" style="margin-left:4px"></span>
+                Available <span class="badge badge-dim" x-show="hands.length" x-text="hands.length"></span>
               </div>
               <div class="tab" :class="{ active: tab === 'active' }" @click="tab = 'active'; loadActive()">
-                Active <span class="badge badge-success" x-show="instances.length" x-text="instances.length" style="margin-left:4px"></span>
+                Active <span class="badge badge-success" x-show="instances.length" x-text="instances.length"></span>
               </div>
             </div>
 
@@ -4434,44 +4434,44 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div x-show="tab === 'available'">
               <div class="card-grid" x-show="hands.length">
                 <template x-for="hand in hands" :key="hand.id">
-                  <div class="card" :class="{ 'card-glow': hand.requirements_met }">
-                    <div class="flex justify-between items-center mb-2">
-                      <div class="flex items-center gap-2">
-                        <span style="font-size:1.4rem" x-text="hand.icon"></span>
-                        <div class="card-header" style="margin:0" x-text="hand.name"></div>
+                  <div class="card premium-hand-card" :class="{ 'card-glow': hand.requirements_met }">
+                    <div class="premium-hand-card__head">
+                      <div class="premium-hand-card__identity">
+                        <span class="premium-hand-card__icon" x-text="hand.icon"></span>
+                        <div class="card-header card-header--inline premium-hand-card__title" x-text="hand.name"></div>
                       </div>
-                      <span class="badge" :class="hand.requirements_met ? 'badge-success' : 'badge-dim'" x-text="hand.requirements_met ? 'Ready' : 'Setup needed'"></span>
+                      <span class="badge premium-hand-card__badge" :class="hand.requirements_met ? 'badge-success' : 'badge-dim'" x-text="hand.requirements_met ? 'Ready' : 'Setup needed'"></span>
                     </div>
-                    <div class="card-meta" x-text="hand.description"></div>
+                    <div class="card-meta premium-hand-card__description" x-text="hand.description"></div>
 
                     <!-- Schema warning badge -->
-                    <div class="mt-2" x-show="hand.schema_warning">
-                      <span class="badge badge-warn" style="font-size:0.65rem" x-show="hand.schema_warning === 'legacy'" title="This Hand was built before schema_version was required. Regenerate with `ainl emit --target armaraos` to remove this warning.">&#9888; Legacy format</span>
-                      <span class="badge badge-warn" style="font-size:0.65rem" x-show="hand.schema_warning === 'mismatch'" :title="'schema_version ' + hand.schema_version + ' does not match expected. Regenerate with `ainl emit --target armaraos`.'">&#9888; Schema mismatch</span>
+                    <div class="premium-hand-card__schema" x-show="hand.schema_warning">
+                      <span class="badge badge-warn premium-hand-card__schema-badge" x-show="hand.schema_warning === 'legacy'" title="This Hand was built before schema_version was required. Regenerate with `ainl emit --target armaraos` to remove this warning.">&#9888; Legacy format</span>
+                      <span class="badge badge-warn premium-hand-card__schema-badge" x-show="hand.schema_warning === 'mismatch'" :title="'schema_version ' + hand.schema_version + ' does not match expected. Regenerate with `ainl emit --target armaraos`.'">&#9888; Schema mismatch</span>
                     </div>
 
                     <!-- Requirements -->
-                    <div class="mt-3" x-show="hand.requirements && hand.requirements.length">
-                      <div class="text-xs text-dim mb-1" style="letter-spacing:0.5px">REQUIREMENTS</div>
+                    <div class="premium-hand-card__requirements" x-show="hand.requirements && hand.requirements.length">
+                      <div class="premium-hand-card__requirements-label">Requirements</div>
                       <template x-for="req in hand.requirements" :key="req.key">
-                        <div class="flex items-center gap-2 text-xs" style="padding:2px 0">
-                          <span :style="req.satisfied ? 'color:var(--success)' : 'color:var(--danger)'" x-text="req.satisfied ? '\u2713' : '\u2717'"></span>
+                        <div class="premium-hand-card__req-row">
+                          <span class="premium-hand-card__req-mark" :class="req.satisfied ? 'premium-hand-card__req-mark--ok' : 'premium-hand-card__req-mark--bad'" x-text="req.satisfied ? '\u2713' : '\u2717'"></span>
                           <span x-text="req.label"></span>
                         </div>
                       </template>
                     </div>
 
-                    <!-- Tools -->
-                    <div class="mt-2">
+                    <!-- Tools / metrics -->
+                    <div class="premium-hand-card__metrics">
                       <span class="text-xs text-dim" x-text="hand.tools.length + ' tool(s)'"></span>
-                      <span class="text-xs text-dim" style="margin-left:8px" x-text="hand.dashboard_metrics + ' metric(s)'"></span>
-                      <span class="category-badge" style="margin-left:8px;font-size:0.65rem" x-text="hand.category"></span>
+                      <span class="text-xs text-dim" x-text="hand.dashboard_metrics + ' metric(s)'"></span>
+                      <span class="category-badge" x-text="hand.category"></span>
                     </div>
 
                     <!-- Actions -->
-                    <div class="flex justify-between items-center mt-3">
-                      <button class="btn btn-ghost btn-sm" @click="showDetail(hand.id)">Details</button>
-                      <button class="btn btn-primary btn-sm" @click="openSetupWizard(hand.id)" :disabled="setupLoading || activatingId === hand.id" x-text="setupLoading ? 'Loading...' : 'Activate'"></button>
+                    <div class="premium-hand-card__actions premium-hand-card__actions--split">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="showDetail(hand.id)">Details</button>
+                      <button type="button" class="btn btn-primary btn-sm" @click="openSetupWizard(hand.id)" :disabled="setupLoading || activatingId === hand.id" x-text="setupLoading ? 'Loading...' : 'Activate'"></button>
                     </div>
                   </div>
                 </template>
@@ -4490,46 +4490,46 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div x-show="activeLoading" class="loading-state"><div class="spinner"></div><span>Loading active hands...</span></div>
               <div class="card-grid" x-show="instances.length && !activeLoading">
                 <template x-for="inst in instances" :key="inst.instance_id">
-                  <div class="card">
-                    <div class="flex justify-between items-center mb-2">
-                      <div class="flex items-center gap-2">
-                        <span style="font-size:1.4rem" x-text="getHandIcon(inst.hand_id)"></span>
-                        <div class="card-header" style="margin:0" x-text="inst.agent_name || inst.hand_id"></div>
+                  <div class="card premium-hand-card">
+                    <div class="premium-hand-card__head">
+                      <div class="premium-hand-card__identity">
+                        <span class="premium-hand-card__icon" x-text="getHandIcon(inst.hand_id)"></span>
+                        <div class="card-header card-header--inline premium-hand-card__title" x-text="inst.agent_name || inst.hand_id"></div>
                       </div>
-                      <span class="badge" :class="{ 'badge-success': inst.status === 'Active', 'badge-dim': inst.status === 'Paused', 'badge-warn': inst.status && inst.status.startsWith('Error'), 'badge-info': inst.status === 'Inactive' }" x-text="inst.status"></span>
+                      <span class="badge premium-hand-card__badge" :class="{ 'badge-success': inst.status === 'Active', 'badge-dim': inst.status === 'Paused', 'badge-warn': inst.status && inst.status.startsWith('Error'), 'badge-info': inst.status === 'Inactive' }" x-text="inst.status"></span>
                     </div>
-                    <div class="text-xs text-dim" x-text="'Activated: ' + new Date(inst.activated_at).toLocaleString()"></div>
-                    <div class="text-xs text-dim" x-show="inst.agent_id" x-text="'Agent: ' + inst.agent_id"></div>
+                    <div class="premium-hand-card__meta" x-text="'Activated: ' + new Date(inst.activated_at).toLocaleString()"></div>
+                    <div class="premium-hand-card__meta" x-show="inst.agent_id" x-text="'Agent: ' + inst.agent_id"></div>
 
                     <!-- Stats (loaded on demand) -->
-                    <div class="mt-3" x-show="inst._stats">
+                    <div class="premium-hand-card__stats" x-show="inst._stats">
                       <template x-for="(val, label) in (inst._stats || {})" :key="label">
-                        <div class="flex justify-between text-xs" style="padding:2px 0">
-                          <span class="text-dim" x-text="label"></span>
-                          <span x-text="formatMetric(val)"></span>
+                        <div class="premium-hand-card__stat-row">
+                          <span class="text-dim premium-hand-card__stat-label" x-text="label"></span>
+                          <span class="premium-hand-card__stat-value" x-text="formatMetric(val)"></span>
                         </div>
                       </template>
                     </div>
 
                     <!-- Actions -->
-                    <div class="flex gap-2 mt-3">
-                      <button class="btn btn-ghost btn-sm" @click="loadStats(inst)">Stats</button>
+                    <div class="premium-hand-card__actions">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="loadStats(inst)">Stats</button>
                       <template x-if="isTraderHand(inst)">
-                        <button class="btn btn-primary btn-sm" @click="openDashboard(inst)">Dashboard</button>
+                        <button type="button" class="btn btn-primary btn-sm" @click="openDashboard(inst)">Dashboard</button>
                       </template>
                       <template x-if="isBrowserHand(inst)">
-                        <button class="btn btn-ghost btn-sm" @click="openBrowserViewer(inst)">View Browser</button>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="openBrowserViewer(inst)">View Browser</button>
                       </template>
                       <template x-if="inst.status === 'Active'">
-                        <button class="btn btn-ghost btn-sm" @click="pauseHand(inst)">Pause</button>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="pauseHand(inst)">Pause</button>
                       </template>
                       <template x-if="inst.status === 'Paused'">
-                        <button class="btn btn-ghost btn-sm" @click="resumeHand(inst)">Resume</button>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="resumeHand(inst)">Resume</button>
                       </template>
                       <template x-if="inst.status && inst.status.startsWith('Error')">
-                        <span class="text-xs text-dim">Error — deactivate and reactivate</span>
+                        <span class="text-xs text-dim premium-hand-card__action-hint">Error — deactivate and reactivate</span>
                       </template>
-                      <button class="btn btn-danger btn-sm" @click="deactivate(inst)">Deactivate</button>
+                      <button type="button" class="btn btn-danger btn-sm" @click="deactivate(inst)">Deactivate</button>
                     </div>
                   </div>
                 </template>

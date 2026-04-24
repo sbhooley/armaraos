@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Reserve for **0.7.6+** after the **`v0.7.5`** Git tag is published. Entries below **[0.7.5]** describe the **0.7.5** release candidate on `main` as of the dated section header.
+Reserve for **0.7.8+** after the **`v0.7.7`** Git tag is published.
+
+## [0.7.7] - 2026-04-24
+
+Ships everything on `main` after **`v0.7.5`** through the **0.7.7** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). See **[Unreleased]**-promoted entries below for the functional delta since **0.7.5**.
 
 ### Added
 
@@ -607,6 +611,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.7
 [0.7.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.5
 [0.7.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.4
 [0.7.3]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.3
