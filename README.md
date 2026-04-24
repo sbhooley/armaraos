@@ -38,6 +38,42 @@
 
 ---
 
+## What's new in v0.7.7
+
+A focused drop bringing a refreshed UI, premium agents, swarm orchestration, a self-learning brain, and on-device voice into one install. **[Download installers →](https://github.com/sbhooley/armaraos/releases/tag/v0.7.7)**
+
+### Look & feel
+
+- **All-new UI/UX** — redesigned dashboard with first-class **light + dark themes** and consistent design tokens.
+- **Talk to Armara, Armara talks back** — local **STT + TTS** voice loop (Whisper + Piper) with optional cloud fallbacks; mic in / speaker out, no audio leaves the box by default.
+
+### Agents that do real work
+
+- **9 token-gated premium Hands** — bundled autonomous agents for **automated browsing, deep research, predictions, video clipping, lead generation, social media, trading**, and more — gated by the marketplace + admin unlock controls.
+- **Multi-agent + auto sub-agents + agent swarms (beta)** — in-process delegation, outbound A2A, workflows, and a scheduler, all surfaced in inspectable **orchestration traces** so swarms aren't a black box.
+- **40+ channel connectors** — talk to your agents from your phone over **Telegram, WhatsApp, Discord, Slack, Signal, Matrix, Email, Teams, LINE, Bluesky, Reddit, Mastodon, Webhooks**, and many more.
+
+### A brain that learns from every run
+
+- **Graph Memory** — typed graph (episodic / semantic / procedural / persona / failure / trajectory) with FTS-backed search, optional project scoping, and live SSE updates.
+- **Auto Zero-LLM Persona Evolution** — learns your preferences from **metadata signals** (no extra LLM calls, no questionnaires).
+- **Pattern Memory** — stores and recalls successful **AINL** workflows so they can be reused.
+- **Trajectory Capture** — full execution traces per turn for replay and pattern analysis.
+- **Pattern Promotion** — successful workflows are automatically promoted into **reusable procedural patterns**.
+- **Failure Learning** — remembers and prevents repeated errors across runs.
+- **Smart Suggestions** — context-aware recommendations grounded in the agent's own history.
+- **Closed-Loop Validation** — improvement proposals are **validated before adoption** (ledger + validate → adopt).
+- **Smart Detection** — automatically suggests AINL for recurring tasks, with **MCP tools, validation, and auto-correction** wired in.
+
+### Cost, control, and visibility
+
+- **Adaptive Compression** — **`adaptive` efficient_mode** combines heuristics with `ainl-compression` and per-project **EMA profiles** to learn the best token savings for your workload — **up to ~70 % token / API cost savings** on recurring jobs without losing critical context.
+- **Visual Analytics, Monitoring & Audit Logs** — dashboard for token / API spend, **budget limits + tracking**, system health, and a **Merkle hash-chain audit trail** so every action is tamper-evident.
+
+> **Read the deep links:** [`docs/SELF_LEARNING_INTEGRATION_MAP.md`](docs/SELF_LEARNING_INTEGRATION_MAP.md) · [`docs/persona-evolution.md`](docs/persona-evolution.md) · [`docs/graph-memory.md`](docs/graph-memory.md) · [`docs/prompt-compression-efficient-mode.md`](docs/prompt-compression-efficient-mode.md) · [`docs/local-voice.md`](docs/local-voice.md)
+
+---
+
 ## What is ArmaraOS?
 
 ArmaraOS is an **open-source Agent Operating System** — not a chatbot framework, not a Python wrapper around an LLM, not a "multi-agent orchestrator." It is a full operating system for autonomous agents, built from scratch in Rust.

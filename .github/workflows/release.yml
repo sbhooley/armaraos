@@ -27,8 +27,16 @@ env:
 
 jobs:
   # ── Tauri Desktop App (Windows + macOS + Linux) ───────────────────────────
-  # Produces: .msi, .exe (Windows) | .dmg, .app (macOS) | .deb, .rpm (Linux; AppImage skipped on CI — linuxdeploy is flaky on runners)
+  # Produces: .msi, .exe (Windows) | .dmg, .app (macOS) | .deb, .rpm, .AppImage (Linux)
   # Also generates and uploads latest.json (the auto-updater manifest)
+  #
+  # NOTE: AppImage is built via Tauri's `appimage` bundler, which downloads
+  # `linuxdeploy-x86_64.AppImage` at build time. Historical flakiness was
+  # mitigated by installing `libfuse2 + fuse3 + patchelf` (see "Install system
+  # deps (Linux)" below). If a release fails specifically in the AppImage
+  # bundle step, re-run via `workflow_dispatch` with the same tag — the deb
+  # and rpm bundles already produced will be re-emitted alongside AppImage,
+  # and the existing assets on the GitHub Release will be replaced.
   desktop:
     name: Desktop / ${{ matrix.platform.name }}
     strategy:
@@ -37,8 +45,8 @@ jobs:
         platform:
           - name: Linux x86_64
             os: ubuntu-22.04
-            # Omit AppImage: `linuxdeploy` often fails on GitHub-hosted runners (FUSE / tooling); deb+rpm are enough for Linux distribution + updater.
-            args: "--target x86_64-unknown-linux-gnu --bundles deb --bundles rpm"
+            # Linux: ship deb + rpm + AppImage so users on Debian/Ubuntu, Fedora/RHEL/openSUSE, and AppImage-friendly distros all have a one-click installer.
+            args: "--target x86_64-unknown-linux-gnu --bundles deb --bundles rpm --bundles appimage"
             rust_target: x86_64-unknown-linux-gnu
 
           - name: macOS x86_64

@@ -32,7 +32,13 @@ On each **tagged release**, the `sync-desktop-updates-to-website` job in `.githu
 2. Rewrites every `url` in the manifest to `https://ainativelang.com/downloads/armaraos/<filename>`.
 3. Commits into **`sbhooley/ainativelangweb`** at `public/downloads/armaraos/` so Amplify deploys static files.
 
-**Marketing site installers:** The **ainativelang.com** homepage (`/`) and **`/download`** page render an **ArmaraOS desktop** block that prefers `https://ainativelang.com/downloads/armaraos/latest.json` (same manifest as the Tauri updater). If that file is missing, the site falls back to **GitHub release** assets for the tag set in **`config/site.ts`** → `latestArmaraosReleaseTag` (keep in sync when you ship a new stable desktop tag). See **`lib/armaraos-desktop-downloads.ts`** and **`components/home/ArmaraosDesktopSection.tsx`** in **ainativelangweb**.
+**Marketing site installers:** The **ainativelang.com** homepage (`/`) and **`/download`** page render an **ArmaraOS desktop** block that prefers `https://ainativelang.com/downloads/armaraos/latest.json` (same manifest as the Tauri updater). The site also calls the **GitHub Releases API** for the tag set in **`config/site.ts`** → `latestArmaraosReleaseTag` (keep in sync when you ship a new stable desktop tag) and merges the asset list into the chooser, so any installer attached to the GitHub Release (`.dmg`, `.exe`, `.msi`, `.deb`, `.rpm`, `.AppImage`) shows up automatically without committing the binary to the website. See **`lib/armaraos-desktop-downloads.ts`** and **`components/home/ArmaraosDesktopSection.tsx`** in **ainativelangweb**.
+
+> **Storage rule (AWS Amplify):** Installer binaries are **never committed** to `sbhooley/ainativelangweb`. Amplify enforces a **~220 MiB** deploy-artifact cap and `amplify.yml` includes a sweep step (`find .next -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.AppImage' ... -delete`) that strips installers from the deploy bundle anyway. Always attach binaries to the **GitHub Release** and let the chooser link to them.
+
+### Linux bundles
+
+The Linux desktop matrix produces **`.deb`** (Debian/Ubuntu), **`.rpm`** (Fedora/RHEL/openSUSE), and **`.AppImage`** (portable, single-file) — see `release.yml` `--bundles deb --bundles rpm --bundles appimage`. AppImage bundling depends on `linuxdeploy-x86_64.AppImage`, which is downloaded by Tauri at build time; the runner pre-installs `libfuse2`, `fuse3`, and `patchelf` so the bundler can run. If a release fails specifically inside the AppImage step, re-run the workflow via `workflow_dispatch` with the same tag — the existing GitHub Release assets are replaced atomically when the job re-finishes.
 
 ### Stable vs prerelease tags
 
