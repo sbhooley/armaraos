@@ -91,13 +91,19 @@ jobs:
       # tcp connect / EOF (most recent: v0.7.7 release), which cascades into
       # publish jobs being skipped. Three attempts with backoff is enough to
       # absorb the flake without changing toolchain pinning.
+      # `shell: bash` is required so `&&` works on Windows runners (PowerShell
+      # rejects `&&` as a statement separator pre-PS7).
       - name: Install Rust toolchain (with retry)
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 30
-          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.rust_target }}
+          shell: bash
+          command: |
+            rustup toolchain install stable --profile minimal --no-self-update
+            rustup default stable
+            rustup target add ${{ matrix.platform.rust_target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -282,7 +288,10 @@ jobs:
           timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 30
-          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable
+          shell: bash
+          command: |
+            rustup toolchain install stable --profile minimal --no-self-update
+            rustup default stable
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
@@ -608,7 +617,11 @@ jobs:
           timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 30
-          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
+          shell: bash
+          command: |
+            rustup toolchain install stable --profile minimal --no-self-update
+            rustup default stable
+            rustup target add ${{ matrix.target }}
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
