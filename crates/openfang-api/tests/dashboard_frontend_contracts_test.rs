@@ -45,19 +45,24 @@ fn get_started_saved_metrics_contract_uses_usage_summary_plus_quota_and_compress
 
 #[test]
 fn fleet_activity_line_contract_has_phase_mapping_and_live_store_bridge() {
-    let agents = read_rel("crates/openfang-api/static/js/pages/agents.js");
+    // The phase-mapping helpers (`getAgentActivityEntry`, `agentCurrentPhaseClass`,
+    // `agentPhaseGlyph`) were extracted from `pages/agents.js` into the shared
+    // `fleet-vitals-mixin.js` so that any fleet view (Agents grid, Overview, Fleet
+    // card) gets identical glyphs for the same phase. The contract still applies —
+    // we just assert it on the new owner of the logic.
+    let mixin = read_rel("crates/openfang-api/static/js/fleet-vitals-mixin.js");
     let app = read_rel("crates/openfang-api/static/js/app.js");
     let html = read_rel("crates/openfang-api/static/index_body.html");
 
-    // Agents page consumes shared live activity entries from the app-level store.
-    assert!(agents.contains("Alpine.store('app').agentActivityLines"));
-    assert!(agents.contains("getAgentActivityEntry: function(agent)"));
-    assert!(agents.contains("agentCurrentPhaseClass: function(agent)"));
-    assert!(agents.contains("agentPhaseGlyph: function(agent)"));
-    assert!(agents.contains("if (ph === 'thinking') return '…';"));
-    assert!(agents.contains("if (ph === 'tool') return '⚙';"));
-    assert!(agents.contains("if (ph === 'streaming') return '▸';"));
-    assert!(agents.contains("if (ph === 'running') return '●';"));
+    // Fleet vitals mixin consumes shared live activity entries from the app-level store.
+    assert!(mixin.contains("Alpine.store('app').agentActivityLines"));
+    assert!(mixin.contains("getAgentActivityEntry: function(agent)"));
+    assert!(mixin.contains("agentCurrentPhaseClass: function(agent)"));
+    assert!(mixin.contains("agentPhaseGlyph: function(agent)"));
+    assert!(mixin.contains("if (ph === 'thinking') return '…';"));
+    assert!(mixin.contains("if (ph === 'tool') return '⚙';"));
+    assert!(mixin.contains("if (ph === 'streaming') return '▸';"));
+    assert!(mixin.contains("if (ph === 'running') return '●';"));
 
     // App-level SSE/system payload pipeline must continue to feed activity lines.
     assert!(app.contains("setAgentActivityLine(agentId, text)"));

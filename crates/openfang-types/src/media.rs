@@ -159,9 +159,9 @@ impl MediaAttachment {
         let ct = normalize_mime_type(&self.mime_type);
         // Check MIME type allowlist
         let allowed = match self.media_type {
-            MediaType::Image => ALLOWED_IMAGE_TYPES.iter().any(|a| *a == ct.as_str()),
-            MediaType::Audio => ALLOWED_AUDIO_TYPES.iter().any(|a| *a == ct.as_str()),
-            MediaType::Video => ALLOWED_VIDEO_TYPES.iter().any(|a| *a == ct.as_str()),
+            MediaType::Image => ALLOWED_IMAGE_TYPES.contains(&ct.as_str()),
+            MediaType::Audio => ALLOWED_AUDIO_TYPES.contains(&ct.as_str()),
+            MediaType::Video => ALLOWED_VIDEO_TYPES.contains(&ct.as_str()),
         };
         if !allowed {
             return Err(format!(

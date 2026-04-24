@@ -3225,10 +3225,20 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   border-color: color-mix(in srgb, var(--border-subtle) 90%, #60a5fa 10%);
   border-left-color: color-mix(in srgb, #60a5fa 50%, var(--border-light) 50%);
 }
+/* Connectors + user-visible surfaces (web, MCP, browser, media): quiet chrome — token-first */
+.message-tools-cluster .tool-card[data-tool^="mcp_"],
 .message-tools-cluster .tool-card[data-tool^="web_"],
-.message-tools-cluster .tool-card[data-tool^="link_"] {
-  border-color: color-mix(in srgb, var(--border-subtle) 90%, #34d399 10%);
-  border-left-color: color-mix(in srgb, #34d399 50%, var(--border-light) 50%);
+.message-tools-cluster .tool-card[data-tool^="link_"],
+.message-tools-cluster .tool-card[data-tool^="browser_"],
+.message-tools-cluster .tool-card[data-tool^="playwright_"],
+.message-tools-cluster .tool-card[data-tool^="image_"],
+.message-tools-cluster .tool-card[data-tool^="tts_"],
+.message-tools-cluster .tool-card[data-tool^="text_to_"],
+.message-tools-cluster .tool-card[data-tool^="canvas_"],
+.message-tools-cluster .tool-card[data-tool^="video_"],
+.message-tools-cluster .tool-card[data-tool^="voice_"] {
+  border-color: color-mix(in srgb, var(--border-subtle) 94%, var(--text-muted) 6%);
+  border-left-color: color-mix(in srgb, var(--text-muted) 26%, var(--border-light) 74%);
 }
 .message-tools-cluster .tool-card[data-tool^="shell"],
 .message-tools-cluster .tool-card[data-tool^="exec_"] {
@@ -3249,20 +3259,10 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   border-color: color-mix(in srgb, var(--border-subtle) 89%, #fb923c 11%);
   border-left-color: color-mix(in srgb, #fb923c 50%, var(--border-light) 50%);
 }
-.message-tools-cluster .tool-card[data-tool^="browser_"],
-.message-tools-cluster .tool-card[data-tool^="playwright_"] {
-  border-color: color-mix(in srgb, var(--border-subtle) 90%, #2dd4bf 10%);
-  border-left-color: color-mix(in srgb, #2dd4bf 50%, var(--border-light) 50%);
-}
 .message-tools-cluster .tool-card[data-tool^="container_"],
 .message-tools-cluster .tool-card[data-tool^="docker_"] {
   border-color: color-mix(in srgb, var(--border-subtle) 90%, #38bdf8 10%);
   border-left-color: color-mix(in srgb, #38bdf8 50%, var(--border-light) 50%);
-}
-.message-tools-cluster .tool-card[data-tool^="image_"],
-.message-tools-cluster .tool-card[data-tool^="tts_"] {
-  border-color: color-mix(in srgb, var(--border-subtle) 90%, #e879f9 10%);
-  border-left-color: color-mix(in srgb, #e879f9 50%, var(--border-light) 50%);
 }
 .message-tools-cluster .tool-card[data-tool^="hand_"] {
   border-color: color-mix(in srgb, var(--border-subtle) 88%, var(--accent) 12%);
@@ -3275,8 +3275,21 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   border-left-color: var(--error);
 }
 
+.message-tools-cluster .tool-card.tool-card-error--agent {
+  border-left-color: color-mix(in srgb, var(--error) 40%, var(--border-light) 60%);
+  background: color-mix(in srgb, var(--surface) 95%, var(--error-subtle) 5%);
+  border-color: color-mix(in srgb, var(--border-subtle) 82%, var(--error) 18%);
+}
+
+.message-tools-cluster .tool-card.tool-card-error--user-action {
+  border-left-color: color-mix(in srgb, var(--warning) 70%, var(--border-light) 30%);
+  background: color-mix(in srgb, var(--surface) 91%, var(--warning-subtle) 9%);
+  border-color: color-mix(in srgb, var(--border-subtle) 75%, var(--warning-muted) 25%);
+}
+
 .message-tools-cluster .tool-card-header {
-  padding: 9px 12px;
+  padding: 7px 10px;
+  gap: 6px;
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--surface2) 30%, transparent);
 }
@@ -3289,9 +3302,9 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 
 .message-tools-cluster .tool-card-icon-badge {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3299,8 +3312,8 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   color: var(--accent);
 }
 .message-tools-cluster .tool-card-icon-badge .tool-card-icon {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   opacity: 1;
 }
 
@@ -3309,10 +3322,19 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   background: rgba(96, 165, 250, 0.14);
   color: #60a5fa;
 }
+.message-tools-cluster .tool-card[data-tool^="mcp_"] .tool-card-icon-badge,
 .message-tools-cluster .tool-card[data-tool^="web_"] .tool-card-icon-badge,
-.message-tools-cluster .tool-card[data-tool^="link_"] .tool-card-icon-badge {
-  background: rgba(52, 211, 153, 0.14);
-  color: #34d399;
+.message-tools-cluster .tool-card[data-tool^="link_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="browser_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="playwright_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="image_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="tts_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="text_to_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="canvas_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="video_"] .tool-card-icon-badge,
+.message-tools-cluster .tool-card[data-tool^="voice_"] .tool-card-icon-badge {
+  background: color-mix(in srgb, var(--surface3) 52%, var(--surface2) 48%);
+  color: var(--text-dim);
 }
 .message-tools-cluster .tool-card[data-tool^="shell"] .tool-card-icon-badge,
 .message-tools-cluster .tool-card[data-tool^="exec_"] .tool-card-icon-badge {
@@ -3333,20 +3355,10 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   background: rgba(251, 146, 60, 0.14);
   color: #fb923c;
 }
-.message-tools-cluster .tool-card[data-tool^="browser_"] .tool-card-icon-badge,
-.message-tools-cluster .tool-card[data-tool^="playwright_"] .tool-card-icon-badge {
-  background: rgba(45, 212, 191, 0.14);
-  color: #2dd4bf;
-}
 .message-tools-cluster .tool-card[data-tool^="container_"] .tool-card-icon-badge,
 .message-tools-cluster .tool-card[data-tool^="docker_"] .tool-card-icon-badge {
   background: rgba(56, 189, 248, 0.14);
   color: #38bdf8;
-}
-.message-tools-cluster .tool-card[data-tool^="image_"] .tool-card-icon-badge,
-.message-tools-cluster .tool-card[data-tool^="tts_"] .tool-card-icon-badge {
-  background: rgba(232, 121, 249, 0.14);
-  color: #e879f9;
 }
 .message-tools-cluster .tool-card[data-tool^="hand_"] .tool-card-icon-badge {
   background: color-mix(in srgb, var(--accent-subtle) 68%, var(--surface2) 32%);
@@ -3359,17 +3371,27 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
 }
 
 .message-tools-cluster .tool-card-name {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   color: var(--text-secondary);
+}
+
+.message-tools-cluster .tool-card-summary {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-muted);
 }
 
 .message-tools-cluster .tool-card-body {
   border-top: none;
   background: color-mix(in srgb, var(--surface2) 78%, var(--surface) 22%);
   padding: 10px 12px;
+}
+
+.message-tools-cluster .tool-card-body .tool-user-action-callout {
+  margin-bottom: 10px;
 }
 
 .message-bubble {
@@ -3706,6 +3728,25 @@ tr:hover td { background: color-mix(in srgb, var(--accent-subtle) 58%, var(--sur
   font-size: 12px;
   border-radius: var(--radius-md);
 }
+
+.message.system.message-system--ambient .message-bubble:not(.message-scheduler-card) {
+  opacity: 0.97;
+  border-color: var(--border-subtle);
+}
+
+.message.system.message-system--diagnostic .message-bubble:not(.message-scheduler-card),
+.message.system.message-system--diagnostic .message-bubble.message-rich-reply {
+  border-left: 3px solid color-mix(in srgb, var(--text-muted) 45%, var(--border-strong) 55%);
+  background: color-mix(in srgb, var(--surface3) 92%, var(--surface2) 8%);
+}
+
+.message.system.message-system--action .message-bubble:not(.message-scheduler-card),
+.message.system.message-system--action .message-bubble.message-rich-reply {
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--surface3) 86%, var(--warning-subtle) 14%);
+  border-color: color-mix(in srgb, var(--border) 78%, var(--warning-muted) 22%);
+}
+
 .message.system {
   max-width: 600px;
 }
@@ -4211,6 +4252,36 @@ button.tool-card-header {
 .tool-auth-callout-link:hover {
   color: var(--accent-light);
   border-bottom-color: color-mix(in srgb, var(--accent-light) 45%, transparent);
+}
+
+.tool-user-action-callout {
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 65%, var(--warning-muted) 35%);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 88%, var(--warning-subtle) 12%);
+}
+
+.tool-user-action-callout-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--warning-dim);
+  margin-bottom: 6px;
+}
+
+.tool-user-action-line {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  padding-left: 10px;
+  margin-bottom: 5px;
+  border-left: 2px solid color-mix(in srgb, var(--warning) 55%, var(--border-light) 45%);
+}
+
+.tool-user-action-line:last-child {
+  margin-bottom: 0;
 }
 
 .tool-section-label {

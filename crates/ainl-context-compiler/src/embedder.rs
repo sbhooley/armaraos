@@ -70,8 +70,8 @@ impl Embedder for PlaceholderEmbedder {
         text.hash(&mut h);
         let x = h.finish();
         let mut v = vec![0f32; PLACEHOLDER_EMBED_DIM];
-        for i in 0..PLACEHOLDER_EMBED_DIM {
-            v[i] = (((x >> (i * 4)) & 0xF) as f32) / 15.0;
+        for (i, slot) in v.iter_mut().enumerate() {
+            *slot = (((x >> (i * 4)) & 0xF) as f32) / 15.0;
         }
         let n: f32 = v.iter().map(|e| e * e).sum::<f32>().sqrt();
         if n > 0.0 {

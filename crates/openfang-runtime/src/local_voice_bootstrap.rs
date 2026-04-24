@@ -207,7 +207,7 @@ fn run_bootstrap(
     }
 
     if cfg.kokoro.enabled && cfg.kokoro.auto_download {
-        if let Err(e) = ensure_kokoro_assets(client, &voice_root, &mut cfg.kokoro) {
+        if let Err(e) = ensure_kokoro_assets(client, voice_root, &mut cfg.kokoro) {
             warn!(error = %e, "local_voice: kokoro asset download incomplete");
         }
     }

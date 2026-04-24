@@ -2117,7 +2117,7 @@ fn is_pattern_promote_envelope(k: &str) -> bool {
     let t = k.trim();
     t.eq_ignore_ascii_case("pattern_promote")
         || t.eq_ignore_ascii_case("pattern-promote")
-        || t.to_ascii_lowercase() == "pattern promote"
+        || t.eq_ignore_ascii_case("pattern promote")
 }
 
 /// POST /api/graph-memory/improvement-proposals/submit

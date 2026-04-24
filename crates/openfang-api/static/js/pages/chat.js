@@ -1292,17 +1292,19 @@ function chatPage() {
             var text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
             // Sanitize any raw function-call text from history
             text = self.sanitizeToolText(text);
-            // Build tool cards from historical tool data (expanded by default so all activity is visible)
+            // Build tool cards from historical tool data — match live turns (collapsed unless error/auth)
             var tools = (m.tools || []).map(function(t, idx) {
-              return {
+              var card = {
                 id: (t.name || 'tool') + '-hist-' + idx,
                 name: t.name || 'unknown',
                 running: false,
-                expanded: true,
+                expanded: false,
                 input: t.input || '',
                 result: t.result || '',
                 is_error: !!t.is_error
               };
+              card.expanded = self.shouldAutoExpandTool(card);
+              return card;
             });
             var images = (m.images || []).map(function(img) {
               return { file_id: img.file_id, filename: img.filename || 'image' };
@@ -1665,6 +1667,7 @@ function chatPage() {
           break;
 
         case 'response':
+          var responseSelf = this;
           this._clearTypingTimeout();
           this._stopElapsed();
           this._wsInFlightMsg = null;  // response received — no retry needed
@@ -1688,6 +1691,7 @@ function chatPage() {
               t.result = 'Model attempted this call as text (not executed via tool system)';
               t.is_error = true;
             }
+            t.expanded = responseSelf.shouldAutoExpandTool(t);
           });
           this.messages = this.messages.filter(function(m) { return !m.thinking && !m.streaming; });
           if (data.cost_usd != null) this.sessionCostUsd += data.cost_usd;
@@ -1700,7 +1704,7 @@ function chatPage() {
           if (data.iterations) meta += ' | ' + data.iterations + ' iter';
           if (data.fallback_model) meta += ' | fallback: ' + data.fallback_model;
           if (data.skill_draft_path) meta += ' | skill draft: ' + data.skill_draft_path;
-          if (self.efficientMode && self.efficientMode !== 'off') {
+          if (responseSelf.efficientMode && responseSelf.efficientMode !== 'off') {
             var pct = data.compression_savings_pct;
             meta += pct > 0 ? ' | ⚡ eco ↓' + pct + '%' : ' | ⚡ eco';
           }
@@ -1725,7 +1729,7 @@ function chatPage() {
           var wsCompressedInput = (data.compressed_input && data.compression_savings_pct > 0) ? data.compressed_input : null;
           this._recordEcoSaving(data.compression_savings_pct);
           this.messages.push({ id: ++msgId, role: 'agent', text: finalText, meta: meta, tools: streamedTools, ts: Date.now(),
-            compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (self._lastSentOriginal || '') : null,
+            compressedInput: wsCompressedInput, originalInput: wsCompressedInput ? (responseSelf._lastSentOriginal || '') : null,
             savingsPct: data.compression_savings_pct || 0, ecoMetaTooltip: ecoTip || null });
           this._attachVoiceReply(this.messages[this.messages.length - 1], data);
           this._updateMemoryAppliedIndicatorForTurn();
@@ -2517,47 +2521,237 @@ function chatPage() {
     toolAuthUrl: function(tool) {
       var text = this.toolResultText(tool);
       if (!text) return '';
-      var low = text.toLowerCase();
-      var looksAuth = /action required|authorization needed|authentication needed|oauth|authorize|consent|grant access|requires authorization/.test(low);
-      if (!looksAuth) return '';
       var urls = text.match(/https?:\/\/[^\s<>"')]+/g) || [];
       for (var i = 0; i < urls.length; i++) {
         var u = String(urls[i] || '');
         var ul = u.toLowerCase();
-        if (/oauth|authorize|accounts\.google\.com|consent|client_id|scope=/.test(ul)) return u;
+        if (/\/oauth|\/authorize|oauth2|accounts\.google\.com|\/consent|client_id=|redirect_uri=|response_type=|scope=/.test(ul)) {
+          return u;
+        }
       }
-      return urls.length ? urls[0] : '';
+      var head = text.slice(0, 500).toLowerCase();
+      if (urls.length && /^(action required|authorization needed|authentication needed|requires authorization)\b/.test(head.trim())) {
+        return urls[0];
+      }
+      return '';
+    },
+
+    /**
+     * Errors the model cannot clear alone — expand tool + show user callout (UI only).
+     */
+    toolErrorNeedsUserAction: function(tool) {
+      if (!tool || !tool.is_error) return false;
+      if (this.toolAuthUrl(tool)) return true;
+      var r = this.toolResultText(tool);
+      var low = r.slice(0, 6000).toLowerCase();
+      if (/allowlist|capability denied|capability deny|not permitted by policy|policy blocks|denied by capability/i.test(low)) return true;
+      if (/permission denied|eacces|operation not permitted|requires elevation|must be run as|access denied\b/i.test(low)) return true;
+      if (/microphone|camera|screen recording|not allowed by user|user denied|blocked by user|grant.*permission/i.test(low)) return true;
+      if (/enable mcp|mcp server.*not|mcp.*disabled|no mcp connection|mcp.*unavailable|authenticate mcp|mcp.*oauth/i.test(low)) return true;
+      if (/invalid api key|api key not|authentication failed|bad api key|401 unauthorized|sign-?in failed/i.test(low)) return true;
+      if (/payment required|insufficient credits|billing|402|quota exceeded for|plan upgrade|subscription/i.test(low)) return true;
+      if (/human approval|approval required|pending approval|user must|settings.*required|configure.*in settings/i.test(low)) return true;
+      if (/blocked by|ssrf|forbidden host|not allowlisted url/i.test(low)) return true;
+      return false;
+    },
+
+    /** Short, static guidance lines (never echo raw tool output — avoids XSS). */
+    toolUserActionCalloutLines: function(tool) {
+      if (!tool || !tool.is_error || !this.toolErrorNeedsUserAction(tool)) return [];
+      if (this.toolAuthUrl(tool)) {
+        return [
+          'Complete authorization in your browser using the link in this card.',
+          'When finished, send your message again so the agent can continue.'
+        ];
+      }
+      var r = this.toolResultText(tool).slice(0, 4000).toLowerCase();
+      if (/allowlist|capability denied|capability deny|not permitted by policy/i.test(r)) {
+        return [
+          'Open the agent or workspace tool policy and add this tool to the allowlist (or widen the rule), save, then retry.',
+          'If you use profiles per agent, confirm the active profile includes this capability.'
+        ];
+      }
+      if (/permission denied|eacces|operation not permitted|requires elevation/i.test(r)) {
+        return [
+          'Grant the permission the tool asked for (macOS: System Settings → Privacy & Security).',
+          'Restart the agent if the kernel caches permissions, then retry the same step.'
+        ];
+      }
+      if (/microphone|camera|screen recording|user denied|not allowed by user/i.test(r)) {
+        return [
+          'Allow the capability in System Settings (Privacy & Security) for ArmaraOS / your terminal host.',
+          'Retry after granting access so the tool run can complete.'
+        ];
+      }
+      if (/enable mcp|mcp server|mcp.*disabled|no mcp connection|mcp.*unavailable|authenticate mcp/i.test(r)) {
+        return [
+          'Open Settings → MCP: enable the server, confirm it is reachable, and finish OAuth if prompted.',
+          'Save, wait for the green/connected state, then send your message again.'
+        ];
+      }
+      if (/invalid api key|api key not|authentication failed|401 unauthorized|bad api key/i.test(r)) {
+        return [
+          'Update the provider API key in Settings (and verify the model id is allowed for that key).',
+          'Retry after saving — the agent cannot fix an invalid key on its own.'
+        ];
+      }
+      if (/payment required|insufficient credits|billing|402|quota exceeded|plan upgrade|subscription/i.test(r)) {
+        return [
+          'Check your provider balance, plan limits, or subscription on the provider’s site.',
+          'Switch model or top up credits, then retry.'
+        ];
+      }
+      if (/human approval|approval required|pending approval|user must/i.test(r)) {
+        return [
+          'Complete the approval or confirmation step the workflow requested (dashboard, email, or VCS).',
+          'Then rerun the tool or resend your last message.'
+        ];
+      }
+      if (/blocked by|ssrf|forbidden host|not allowlisted url/i.test(r)) {
+        return [
+          'Adjust URL allowlists / SSRF policy in Settings or agent config if this host should be permitted.',
+          'Otherwise use a different URL that is already allowlisted.'
+        ];
+      }
+      return [
+        'This failure needs a change outside the chat (settings, permissions, or provider account).',
+        'Review the raw result below, fix the underlying issue, then retry.'
+      ];
+    },
+
+    /** Extra classes on tool cards (visual only). */
+    toolCardStatusClasses: function(tool) {
+      var o = {};
+      if (tool && tool.is_error) {
+        o['tool-card-error'] = true;
+        if (this.toolErrorNeedsUserAction(tool)) o['tool-card-error--user-action'] = true;
+        else o['tool-card-error--agent'] = true;
+      }
+      return o;
+    },
+
+    /** System message row — subtle surface tiers (visual only; same text to model/history). */
+    systemMessageSurfaceClass: function(msg) {
+      if (!msg || msg.role !== 'system') return '';
+      var t = (msg.text || '').toLowerCase();
+      if (/allowlist|capabilit|permission denied|oauth|authorize|settings|api key|billing|402|401|403|forbidden|enable mcp|mcp server|user must|human approval|grant.*access/i.test(t)) {
+        return ' message-system--action';
+      }
+      if (/tool|error|failed|warn|⚠|mcp|denied|timeout|unavailable/i.test(t)) {
+        return ' message-system--diagnostic';
+      }
+      return ' message-system--ambient';
     },
 
     toolStatusText: function(tool) {
       if (!tool) return '';
       if (tool.running) return 'running...';
       if (this.toolAuthUrl(tool)) return 'auth needed';
-      if (tool.is_error) return 'error';
+      if (tool.is_error && this.toolErrorNeedsUserAction(tool)) return 'needs you';
+      if (tool.is_error) return 'retry ok';
       var chars = this.toolResultChars(tool);
       if (chars > 500) return Math.max(1, Math.round(chars / 1024)) + 'KB';
       return 'done';
+    },
+
+    /** Parse tool `input` when the server stored JSON as a string. */
+    _toolInputObject: function(tool) {
+      if (!tool || tool.input == null) return null;
+      if (typeof tool.input === 'object') return tool.input;
+      var s = String(tool.input).trim();
+      if (!s) return null;
+      try {
+        return JSON.parse(s);
+      } catch (e) {
+        return null;
+      }
+    },
+
+    /** One-line summary for web tools from arguments (collapsed header; avoids dumping HTML/snippets). */
+    _compactWebToolSummary: function(tool) {
+      if (!tool || !tool.name) return '';
+      var io = this._toolInputObject(tool);
+      if (tool.name === 'web_fetch') {
+        var url = io && typeof io.url === 'string' ? io.url.trim() : '';
+        if (url) {
+          try {
+            var host = new URL(url).host || url;
+            return 'Fetched · ' + host;
+          } catch (e) {
+            return 'Fetched · ' + (url.length > 56 ? url.slice(0, 53) + '…' : url);
+          }
+        }
+        return 'Fetched page';
+      }
+      if (tool.name === 'web_search') {
+        var q = io && typeof io.query === 'string' ? io.query.trim() : '';
+        if (q) return 'Search · ' + (q.length > 64 ? q.slice(0, 61) + '…' : q);
+        return 'Web search';
+      }
+      return '';
+    },
+
+    /** Short MCP summary: server/tool segments, not raw JSON. */
+    _compactMcpToolSummary: function(tool) {
+      if (!tool || !tool.name || tool.name.indexOf('mcp_') !== 0) return '';
+      var rest = tool.name.slice(4);
+      var parts = rest.split('_');
+      if (parts.length >= 2) {
+        var tail = parts.slice(1).join(' ').replace(/\s+/g, ' ');
+        return parts[0] + ' · ' + (tail.length > 52 ? tail.slice(0, 49) + '…' : tail);
+      }
+      return rest.length > 64 ? rest.slice(0, 61) + '…' : rest;
+    },
+
+    /** Collapsed header for browser / Playwright tools from JSON input (no page dump). */
+    _compactBrowserToolSummary: function(tool) {
+      if (!tool || !tool.name) return '';
+      if (tool.name.indexOf('browser_') !== 0 && tool.name.indexOf('playwright_') !== 0) return '';
+      var io = this._toolInputObject(tool);
+      if (!io || typeof io !== 'object') return 'Browser';
+      var action = typeof io.action === 'string' ? io.action.trim() : '';
+      var url = typeof io.url === 'string' ? io.url.trim() : (typeof io.target_url === 'string' ? io.target_url.trim() : '');
+      if (url) {
+        try {
+          return (action ? action + ' · ' : 'Open · ') + (new URL(url).host || url);
+        } catch (e) {
+          return (action ? action + ' · ' : 'Open · ') + (url.length > 48 ? url.slice(0, 45) + '…' : url);
+        }
+      }
+      if (action) return 'Browser · ' + (action.length > 56 ? action.slice(0, 53) + '…' : action);
+      return 'Browser';
     },
 
     toolSummaryText: function(tool) {
       if (!tool) return '';
       if (tool.running) return 'Waiting for tool response...';
       if (this.toolAuthUrl(tool)) return 'Authorization required. Open the link below, then retry.';
+      if (tool.is_error) {
+        if (this.toolErrorNeedsUserAction(tool)) return 'Needs your attention';
+        return 'Tool error · model can retry';
+      }
+      var compactWeb = this._compactWebToolSummary(tool);
+      if (compactWeb) return compactWeb;
+      var compactMcp = this._compactMcpToolSummary(tool);
+      if (compactMcp) return compactMcp;
+      var compactBrowser = this._compactBrowserToolSummary(tool);
+      if (compactBrowser) return compactBrowser;
       var text = this.toolResultText(tool);
-      if (!text) return tool.is_error ? 'Tool returned an error.' : 'Tool completed.';
+      if (!text) return 'Tool completed.';
       var oneLine = text
         .replace(/^Error calling tool[^:]*:\s*/i, '')
         .replace(/https?:\/\/[^\s<>"')]+/g, '[link]')
         .replace(/\s+/g, ' ')
         .trim();
-      if (!oneLine) return tool.is_error ? 'Tool returned an error.' : 'Tool completed.';
-      return oneLine.length > 150 ? (oneLine.slice(0, 147) + '...') : oneLine;
+      if (!oneLine) return 'Tool completed.';
+      var max = (tool.name && tool.name.indexOf('mcp_') === 0) ? 72 : 120;
+      return oneLine.length > max ? (oneLine.slice(0, max - 1) + '…') : oneLine;
     },
 
     shouldAutoExpandTool: function(tool) {
       if (!tool || tool.running) return false;
       if (this.toolAuthUrl(tool)) return true;
-      if (tool.is_error) return true;
+      if (tool.is_error && this.toolErrorNeedsUserAction(tool)) return true;
       return false;
     },
 

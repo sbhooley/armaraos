@@ -693,7 +693,7 @@ impl SqliteGraphStore {
         migrate_ainl_trajectories_add_depth_v1(conn)?;
         migrate_failures_fts_v1(conn)?;
         migrate_ainl_nodes_fts_v1(conn)?;
-        if let Err(_) = backfill_ainl_nodes_fts_if_empty(conn) {
+        if backfill_ainl_nodes_fts_if_empty(conn).is_err() {
             // Non-fatal: new DBs may have empty graph; legacy rows can be re-synced on next write.
         }
         let _ = install_ainl_graph_node_delete_fts_triggers(conn);

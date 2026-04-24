@@ -86,9 +86,18 @@ jobs:
             fuse3 \
             patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Wrap the toolchain install in a retry: the `static.rust-lang.org`
+      # download intermittently fails on the Windows ARM64 runner with a
+      # tcp connect / EOF (most recent: v0.7.7 release), which cascades into
+      # publish jobs being skipped. Three attempts with backoff is enough to
+      # absorb the flake without changing toolchain pinning.
+      - name: Install Rust toolchain (with retry)
+        uses: nick-fields/retry@v3
         with:
-          targets: ${{ matrix.platform.rust_target }}
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.rust_target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -251,7 +260,12 @@ jobs:
   publish-updater-latest-json:
     name: Publish latest.json (signed)
     needs: [desktop]
-    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v') }}
+    # Run even when the desktop matrix has a partial failure (e.g. flaky
+    # Windows ARM64 toolchain install). `assemble-latest-json.sh` skips any
+    # missing platform with a warning, so the latest.json we ship reflects
+    # whatever bundles actually made it onto the release. Only skip if the
+    # workflow itself was cancelled or the trigger isn't a tag/dispatch.
+    if: ${{ always() && needs.desktop.result != 'cancelled' && (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -262,7 +276,13 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (with retry)
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
@@ -287,8 +307,11 @@ jobs:
     # TAURI_SIGNING_PRIVATE_KEY — so we can still keep the website download buttons fresh
     # even if updater signing is temporarily unavailable.
     needs: [desktop]
-    # Require a successful desktop matrix (all platforms). `always()` caused this job to run after a Linux failure and error on missing `latest.json`.
-    if: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v') }}
+    # Run even when one platform of the desktop matrix failed (e.g. Windows
+    # ARM64 toolchain flake). The downstream rewrite step conditionally adds
+    # only the platforms whose installers actually shipped, and our signed
+    # `latest.json` step warns rather than errors on missing platforms.
+    if: ${{ always() && needs.desktop.result != 'cancelled' && (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -579,9 +602,13 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (with retry)
+        uses: nick-fields/retry@v3
         with:
-          targets: ${{ matrix.target }}
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: rustup toolchain install stable --profile minimal --no-self-update && rustup default stable && rustup target add ${{ matrix.target }}
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev

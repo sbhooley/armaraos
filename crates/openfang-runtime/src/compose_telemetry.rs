@@ -89,7 +89,7 @@ pub async fn load_failure_recall_segment_for_compose(
     }
     let gm = graph_memory?;
     let mem = gm.inner.lock().await;
-    ainl_context_compiler::memory_block_for_user_query(&*mem, agent_id, user_message, 8)
+    ainl_context_compiler::memory_block_for_user_query(&mem, agent_id, user_message, 8)
 }
 
 /// When `1` / `true` / `yes` / `on`, replace the LLM-bound system + messages with the

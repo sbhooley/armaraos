@@ -4298,11 +4298,14 @@ mod tests {
     #[test]
     fn test_tools_for_profile() {
         let minimal = tools_for_profile("minimal");
-        assert_eq!(minimal.len(), 4);
+        // Minimal grew `media_transcribe` so dashboard/voice uploads work for every
+        // profile (matches the `ToolProfile::Minimal` definition in openfang-types).
+        assert_eq!(minimal.len(), 5);
         assert!(minimal.contains(&"file_read".to_string()));
         assert!(minimal.contains(&"file_list".to_string()));
         assert!(minimal.contains(&"channel_send".to_string()));
         assert!(minimal.contains(&"event_publish".to_string()));
+        assert!(minimal.contains(&"media_transcribe".to_string()));
 
         let coding = tools_for_profile("coding");
         assert!(coding.contains(&"shell_exec".to_string()));

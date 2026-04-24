@@ -1,6 +1,55 @@
-# cargo-audit (see .github/workflows/ci.yml)
+# cargo-audit policy (consumed by .github/workflows/ci.yml `audit` job).
 #
-# rumqttc pins rustls-webpki =0.102.8 until a release bumps to 0.103+.
-# Tracked: https://github.com/bytebeamio/rumqtt — RUSTSEC-2026-0049 (CRL matching).
+# Each ignore here MUST list:
+#   - upstream tracking (issue or PR), and
+#   - why the CVE/notice does not apply to ArmaraOS today.
+#
+# Re-evaluate every release.
 [advisories]
-ignore = ["RUSTSEC-2026-0049"]
+ignore = [
+    # ── rustls-webpki via rumqttc (MQTT channel) ─────────────────────────────
+    # rumqttc 0.24 pins rustls-webpki = 0.102.8. Tracked upstream:
+    # https://github.com/bytebeamio/rumqtt — waiting for a release that pulls
+    # rustls 0.23+. ArmaraOS does not run an MQTT broker by default; the channel
+    # is opt-in via config and only used against author-trusted brokers.
+    "RUSTSEC-2026-0049", # CRL revocation matching (advisory in 0.102.x line)
+    "RUSTSEC-2026-0098", # Name constraints accepted for URI names (0.102.8 path)
+    "RUSTSEC-2026-0099", # Wildcard cert name constraints (0.102.8 path)
+    "RUSTSEC-2026-0104", # Reachable panic in CRL parsing (0.102.8 path)
+
+    # ── wasmtime 41.x sandbox-escape advisories ──────────────────────────────
+    # Fixed in 42.0.2 / 43.0.1. Bumping requires reworking sandbox.rs against
+    # the new IntoFunc/Caller signatures (tracked in docs/launch-roadmap.md
+    # "wasmtime 43 migration"). All affected code paths are gated to
+    # author-controlled AINL programs — ArmaraOS does not load untrusted WASM,
+    # does not enable the Winch backend, and does not target aarch64 hosts in
+    # 0.7.x.
+    "RUSTSEC-2026-0085", # Panic when lifting `flags` component value
+    "RUSTSEC-2026-0086", # Host data leakage with 64-bit tables and Winch
+    "RUSTSEC-2026-0087", # Out-of-sandbox load with f64x2.splat (Cranelift x86-64)
+    "RUSTSEC-2026-0088", # Pooling allocator data leakage between instances
+    "RUSTSEC-2026-0089", # Host panic when Winch executes table.fill
+    "RUSTSEC-2026-0091", # OOB write transcoding component model strings
+    "RUSTSEC-2026-0092", # Panic transcoding misaligned UTF-16 strings
+    "RUSTSEC-2026-0093", # Heap OOB read in UTF-16→latin1+utf16 transcoding
+    "RUSTSEC-2026-0094", # Improperly masked return from table.grow (Winch)
+    "RUSTSEC-2026-0095", # Winch sandbox-escaping memory access
+    "RUSTSEC-2026-0096", # Cranelift aarch64 guest heap miscompile
+
+    # ── Unmaintained GTK3 bindings from Tauri 2.x (Linux only) ───────────────
+    # Tauri 2.x still uses webkit2gtk-rs / gtk3-rs which are flagged
+    # "no longer maintained" (Tauri 3 will move to GTK4). These do not affect
+    # macOS or Windows builds, and our Linux release ships .deb/.rpm which
+    # depend on the system GTK runtime, not the bindings' security posture.
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk-sys
+    "RUSTSEC-2024-0420", # gdkpixbuf
+    "RUSTSEC-2025-0057", # fxhash unmaintained (transitive via taffy/winit)
+]

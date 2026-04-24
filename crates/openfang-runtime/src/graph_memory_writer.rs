@@ -408,6 +408,7 @@ impl GraphMemoryWriter {
     ///
     /// When `detailed_steps` is `Some`, per-tool steps (from `execute_tool_with_trajectory`) are
     /// persisted; otherwise coarse steps are derived from `tools_fallback`.
+    #[allow(clippy::too_many_arguments)] // mirrors the trajectory schema columns
     pub async fn record_trajectory_for_episode(
         &self,
         episode_graph_id: Uuid,
@@ -429,7 +430,7 @@ impl GraphMemoryWriter {
         let res = {
             let inner = self.inner.lock().await;
             ainl_memory::persist_trajectory_for_episode(
-                &*inner,
+                &inner,
                 &self.agent_id,
                 episode_graph_id,
                 steps,

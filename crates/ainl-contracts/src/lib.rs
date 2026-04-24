@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn cognitive_phase_json_roundtrip() {
         let p = CognitivePhase::Retrieval;
-        let j = serde_json::to_value(&p).unwrap();
+        let j = serde_json::to_value(p).unwrap();
         let back: CognitivePhase = serde_json::from_value(j).unwrap();
         assert_eq!(p, back);
     }
@@ -275,7 +275,7 @@ mod tests {
             TrajectoryOutcome::Failure,
             TrajectoryOutcome::Aborted,
         ] {
-            let j = serde_json::to_value(&o).unwrap();
+            let j = serde_json::to_value(o).unwrap();
             let back: TrajectoryOutcome = serde_json::from_value(j).unwrap();
             assert_eq!(o, back);
         }

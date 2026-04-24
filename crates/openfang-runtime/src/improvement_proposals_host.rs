@@ -131,9 +131,8 @@ pub fn submit(
                 .to_string(),
         );
     }
-    let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
+    let ledger = open_ledger(home_dir, agent_id).inspect_err(|_| {
         SUBMIT_LEDGER_ERR.fetch_add(1, Ordering::Relaxed);
-        e
     })?;
     match ledger.submit(agent_id, envelope, proposed_ainl_text) {
         Ok(id) => {
@@ -167,9 +166,8 @@ pub fn validate_proposal(
         );
     }
     let mode = mode.unwrap_or_else(default_validate_mode);
-    let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
+    let ledger = open_ledger(home_dir, agent_id).inspect_err(|_| {
         VALIDATE_LEDGER_ERR.fetch_add(1, Ordering::Relaxed);
-        e
     })?;
     let res = ledger
         .validate_and_record(id, |text: &str| run_validate(mode, text))
@@ -235,7 +233,7 @@ fn is_pattern_promote_kind(k: &str) -> bool {
     let t = k.trim();
     t.eq_ignore_ascii_case("pattern_promote")
         || t.eq_ignore_ascii_case("pattern-promote")
-        || t.to_ascii_lowercase() == "pattern promote"
+        || t.eq_ignore_ascii_case("pattern promote")
 }
 
 fn find_existing_proposal_node(
@@ -283,9 +281,8 @@ pub fn adopt_validated_proposal(
                 .to_string(),
         );
     }
-    let ledger = open_ledger(home_dir, agent_id).map_err(|e| {
+    let ledger = open_ledger(home_dir, agent_id).inspect_err(|_| {
         ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
-        e
     })?;
     let payload =
         match ledger
@@ -321,16 +318,14 @@ pub fn adopt_validated_proposal(
     if payload.row.adopted_at.is_some() {
         if let Some(ref s) = payload.row.adopted_graph_node_id {
             if let Ok(nid) = Uuid::parse_str(s) {
-                if let Ok(opt) = gm.store().read_node(nid) {
-                    if let Some(n) = opt {
-                        if n.agent_id == agent_id {
-                            ADOPT_IDEMPOTENT.fetch_add(1, Ordering::Relaxed);
-                            return Ok(AdoptToGraphResult {
-                                graph_node_id: nid,
-                                proposal_kind: payload.envelope.kind,
-                                idempotent: true,
-                            });
-                        }
+                if let Ok(Some(n)) = gm.store().read_node(nid) {
+                    if n.agent_id == agent_id {
+                        ADOPT_IDEMPOTENT.fetch_add(1, Ordering::Relaxed);
+                        return Ok(AdoptToGraphResult {
+                            graph_node_id: nid,
+                            proposal_kind: payload.envelope.kind,
+                            idempotent: true,
+                        });
                     }
                 }
             }

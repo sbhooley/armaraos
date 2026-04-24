@@ -7300,7 +7300,7 @@ fn cmd_memory_graph_search(
         agent,
         limit.clamp(1, 2000)
     );
-    println!("{:<10}  {:<36}  {}", "KIND", "ID", "LABEL");
+    println!("{:<10}  {:<36}  LABEL", "KIND", "ID");
     println!("{}", "-".repeat(86));
     for n in matched {
         let kind = n["kind"].as_str().unwrap_or("?");
@@ -7347,7 +7347,7 @@ fn cmd_memory_graph_persona(agent: &str, limit: usize, since_seconds: Option<i64
         agent,
         limit.clamp(1, 2000)
     );
-    println!("{:<36}  {:<8}  {}", "ID", "STRENGTH", "LABEL");
+    println!("{:<36}  {:<8}  LABEL", "ID", "STRENGTH");
     println!("{}", "-".repeat(86));
     for n in matched {
         let id = n["id"].as_str().unwrap_or("?");
@@ -7484,7 +7484,7 @@ fn cmd_memory_graph_audit(agent: &str, limit: usize, json: bool) {
         return;
     }
     println!("Graph-memory audit for agent '{}' (limit={})", agent, lim);
-    println!("{:<22}  {}", "ACTION", "SUMMARY");
+    println!("{:<22}  SUMMARY", "ACTION");
     println!("{}", "-".repeat(86));
     for e in entries {
         let action = e["action"].as_str().unwrap_or("?");
@@ -7546,7 +7546,7 @@ fn cmd_memory_graph_inspect(agent: &str, scope: &str, limit: usize, json: bool) 
         "Graph-memory inspect for agent '{}' (scope={}, limit={})",
         agent, scope, lim
     );
-    println!("{:<38}  {:>6}  {}", "ID", "CONF", "FACT");
+    println!("{:<38}  {:>6}  FACT", "ID", "CONF");
     println!("{}", "-".repeat(86));
     for e in entries {
         let id = e["id"].as_str().unwrap_or("?");
@@ -7738,8 +7738,8 @@ fn cmd_trajectory_list(agent: &str, limit: usize, since_recorded_at: Option<i64>
         return;
     }
     println!(
-        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
-        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE", "SESSION"
+        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  SESSION",
+        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE"
     );
     println!("{}", "-".repeat(86));
     for r in &rows {
@@ -7858,8 +7858,8 @@ fn cmd_trajectory_search(
         query.trim()
     );
     println!(
-        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  {}",
-        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE", "SESSION"
+        "{:>14}  {:<14}  {:>8}  {:>5}  {:<14}  SESSION",
+        "RECORDED_AT", "OUTCOME", "DUR_MS", "STEPS", "EPISODE"
     );
     println!("{}", "-".repeat(86));
     for r in matched {
@@ -8285,7 +8285,7 @@ fn cmd_compression_profiles_list(json: bool) {
         );
         return;
     }
-    println!("{:<20}  {:<12}  {}", "ID", "MODE", "DESCRIPTION");
+    println!("{:<20}  {:<12}  DESCRIPTION", "ID", "MODE");
     println!("{}", "-".repeat(86));
     for p in ainl_compression::list_builtin_profiles() {
         println!(

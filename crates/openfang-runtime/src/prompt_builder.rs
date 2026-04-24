@@ -506,6 +506,12 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
 /// The caller is expected to pass pre-ranked/pre-truncated lines per block.
 /// `suggested_pattern_candidates` lists tool sequences not yet past the promotion gate; `suggested_procedure`
 /// lists promoted rows (`prompt_eligible`).
+//
+// Each &[String] argument maps 1:1 to a labeled prompt block we emit in a
+// fixed order. Bundling them into a struct would obscure the per-section
+// ranking/truncation contract the callers rely on, so the wide signature is
+// intentional.
+#[allow(clippy::too_many_arguments)]
 pub fn build_graph_memory_sections(
     recent_attempts: &[String],
     failure_recall: &[String],

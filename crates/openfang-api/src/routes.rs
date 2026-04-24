@@ -578,7 +578,7 @@ fn all_audio_fully_transcribed(attachments: &[AttachmentRef]) -> bool {
             .transcription
             .as_deref()
             .map(str::trim)
-            .map_or(false, |s| !s.is_empty());
+            .is_some_and(|s| !s.is_empty());
         if !t_ok {
             return false;
         }
@@ -789,7 +789,7 @@ pub fn audio_upload_tool_hints(attachments: &[AttachmentRef]) -> String {
             .as_ref()
             .map(|m| m.filename.as_str())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| att.filename.as_str());
+            .unwrap_or(att.filename.as_str());
 
         lines.push(format!(
             "- **file_id** `{}`, display name `{}`, MIME `{}` — call **media_transcribe** with `{{\"file_id\":\"{}\",\"content_type\":\"{}\"}}`. **Do not** put the display name (e.g. `voice_*.webm`) in `file_id`; only the UUID above is valid.",
@@ -8198,7 +8198,7 @@ pub async fn post_google_workspace_oauth(
         // Allow PKCE / public clients without a secret: remove stale secret from env
         // so workspace-mcp does not pick up an old value.
         let _ = remove_secret_env(&secrets_path, "GOOGLE_OAUTH_CLIENT_SECRET");
-        let _ = state.kernel.remove_credential("GOOGLE_OAUTH_CLIENT_SECRET");
+        state.kernel.remove_credential("GOOGLE_OAUTH_CLIENT_SECRET");
         std::env::remove_var("GOOGLE_OAUTH_CLIENT_SECRET");
     }
 
@@ -16549,7 +16549,7 @@ fn remove_stored_upload_file(file_id: &str) {
     let to_clear: Vec<AgentId> = AGENT_LAST_VOICE_FILE
         .iter()
         .filter(|e| e.value().as_str() == file_id)
-        .map(|e| e.key().clone())
+        .map(|e| *e.key())
         .collect();
     for a in to_clear {
         let _ = AGENT_LAST_VOICE_FILE.remove(&a);
@@ -20301,7 +20301,7 @@ mod voice_message_tests {
         let want = a.to_string();
         assert!(super::AGENT_LAST_VOICE_FILE
             .get(&aid)
-            .map_or(false, |e| e.value() == &want));
+            .is_some_and(|e| e.value() == &want));
         // Second upload: previous voice temp is removed
         std::fs::write(&path_b, b"b").expect("b");
         super::UPLOAD_REGISTRY.insert(

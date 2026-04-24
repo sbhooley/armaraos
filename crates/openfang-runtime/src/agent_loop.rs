@@ -325,6 +325,7 @@ fn get_or_create_ainl_runtime_bridge(
 /// Runs **ainl-runtime** graph-memory bookkeeping for this turn, then lets the normal OpenFang
 /// LLM loop produce the assistant reply. Does not append assistant messages or end the loop early.
 #[cfg(feature = "ainl-runtime-engine")]
+#[allow(clippy::too_many_arguments)] // assembles the full per-turn context required by the AINL runtime
 async fn run_ainl_runtime_engine_prelude(
     manifest: &AgentManifest,
     graph_memory: &Option<crate::graph_memory_writer::GraphMemoryWriter>,

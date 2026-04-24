@@ -1,0 +1,53 @@
+# Force LF line endings on text files so Windows-latest CI runners do not
+# auto-convert and break:
+#   * shell scripts (`autocrlf=true` on Windows would corrupt `#!/usr/bin/env bash`),
+#   * Rust source `include_str!` golden files (CRLF would change byte-exact tests),
+#   * AINL programs, JSON, and YAML manifests checked into the repo.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.bash text eol=lf
+*.rs   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.ainl text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+*.js   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+
+# Binary assets — never normalize.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.zip  binary
+*.gz   binary
+*.tar  binary
+*.tgz  binary
+*.dmg  binary
+*.exe  binary
+*.msi  binary
+*.deb  binary
+*.rpm  binary
+*.so   binary
+*.dylib binary
+*.dll  binary
+*.wasm binary
+*.bin  binary
+*.pdf  binary
+
+# Windows scripts should keep CRLF if any are added in the future.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf

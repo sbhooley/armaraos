@@ -72,6 +72,21 @@ pub fn workspace_repo_intel_profile(connections: &[McpConnection]) -> RepoIntelC
     ainl_repo_intel::classify_inventory(&rows)
 }
 
+fn mcp_rows(connections: &[McpConnection]) -> Vec<McpToolRow> {
+    let mut rows = Vec::new();
+    for c in connections {
+        let server = c.name().to_string();
+        for t in c.tools() {
+            rows.push(McpToolRow {
+                server_name: server.clone(),
+                tool_name: t.name.clone(),
+                description: t.description.clone(),
+            });
+        }
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,19 +101,4 @@ mod tests {
             ImpactDecision::RequireImpactFirst
         ));
     }
-}
-
-fn mcp_rows(connections: &[McpConnection]) -> Vec<McpToolRow> {
-    let mut rows = Vec::new();
-    for c in connections {
-        let server = c.name().to_string();
-        for t in c.tools() {
-            rows.push(McpToolRow {
-                server_name: server.clone(),
-                tool_name: t.name.clone(),
-                description: t.description.clone(),
-            });
-        }
-    }
-    rows
 }

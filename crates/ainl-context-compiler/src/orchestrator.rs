@@ -130,16 +130,10 @@ impl ContextCompiler {
 
         let mut metrics = ContextCompilerMetrics::new(tier, self.budget.total_window);
         // Default mode by vitals: low-trust caps at Balanced, otherwise Balanced default.
-        let default_mode = if self
-            .budget
-            .vitals_aware
-            .then(|| vitals.is_some_and(|v| v.trust < 0.5))
-            .unwrap_or(false)
-        {
-            EfficientMode::Balanced
-        } else {
-            EfficientMode::Balanced
-        };
+        // (Both branches resolve to Balanced today; placeholder while a tighter Aggressive
+        // tier is wired up — keep the conditional so the vitals signal stays observable.)
+        let _low_trust = self.budget.vitals_aware && vitals.is_some_and(|v| v.trust < 0.5);
+        let default_mode = EfficientMode::Balanced;
 
         // ── 1. Coarse selection ─────────────────────────────────────────────────────────
         // Score every segment, then split into always-keep and rankable.
@@ -430,8 +424,10 @@ mod tests {
 
     #[test]
     fn tier0_compresses_long_older_turns_within_budget() {
-        let mut budget = BudgetPolicy::default();
-        budget.total_window = 4_000; // tight to force compression
+        let budget = BudgetPolicy {
+            total_window: 4_000, // tight to force compression
+            ..BudgetPolicy::default()
+        };
         let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget);
         let segments = vec![
             Segment::system_prompt("system"),
@@ -488,8 +484,10 @@ mod tests {
                 Ok(s)
             }
         }
-        let mut budget = BudgetPolicy::default();
-        budget.total_window = 2_000;
+        let budget = BudgetPolicy {
+            total_window: 2_000,
+            ..BudgetPolicy::default()
+        };
         let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget)
             .with_summarizer(Arc::new(MockSummarizer));
         // Many large older turns, guaranteed to overflow → summarizer fires.
@@ -512,8 +510,10 @@ mod tests {
     #[test]
     fn with_embedder_reranks_unpinned_without_panic() {
         use crate::embedder::PlaceholderEmbedder;
-        let mut budget = BudgetPolicy::default();
-        budget.total_window = 1_000;
+        let budget = BudgetPolicy {
+            total_window: 1_000,
+            ..BudgetPolicy::default()
+        };
         let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget)
             .with_embedder(Arc::new(PlaceholderEmbedder::new()));
         // Two older turns with different text; user prompt matches the second.
@@ -541,8 +541,10 @@ mod tests {
             }
         }
         let sink = Arc::new(CapturingSink::default());
-        let mut budget = BudgetPolicy::default();
-        budget.total_window = 1_500;
+        let budget = BudgetPolicy {
+            total_window: 1_500,
+            ..BudgetPolicy::default()
+        };
         let compiler = ContextCompiler::new(Arc::new(HeuristicScorer::new()), budget)
             .with_summarizer(Arc::new(FailingSummarizer))
             .with_sink(sink.clone());

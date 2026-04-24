@@ -54,11 +54,11 @@ fn path_for_sandboxed_child() -> Option<String> {
                 base
             });
         }
-        return Some(if base.is_empty() {
+        Some(if base.is_empty() {
             format!("{brew}:/usr/bin:/bin")
         } else {
             format!("{brew}:{base}")
-        });
+        })
     }
     #[cfg(windows)]
     {

@@ -63,15 +63,15 @@ static MEETS_MIN_CACHE: OnceLock<dashmap::DashMap<String, (i64, bool)>> = OnceLo
 const MEETS_MIN_CACHE_TTL_SECS: i64 = 300;
 
 fn nonces() -> &'static dashmap::DashMap<String, i64> {
-    NONCES.get_or_init(|| dashmap::DashMap::new())
+    NONCES.get_or_init(dashmap::DashMap::new)
 }
 
 fn tickets() -> &'static dashmap::DashMap<String, (i64, String)> {
-    TICKETS.get_or_init(|| dashmap::DashMap::new())
+    TICKETS.get_or_init(dashmap::DashMap::new)
 }
 
 fn meets_min_cache() -> &'static dashmap::DashMap<String, (i64, bool)> {
-    MEETS_MIN_CACHE.get_or_init(|| dashmap::DashMap::new())
+    MEETS_MIN_CACHE.get_or_init(dashmap::DashMap::new)
 }
 
 fn cache_key(wallet: &str, mint: &str, min_ui: u128) -> String {

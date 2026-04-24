@@ -151,7 +151,7 @@ async fn usage_summary_includes_dashboard_contract_fields_and_updates() {
 
     // Base usage totals: endpoint must expose `query_summary(None)` data.
     assert!(
-        u64_field(&after, "call_count") >= before_calls + 1,
+        u64_field(&after, "call_count") > before_calls,
         "call_count should increase after recording usage event"
     );
     assert!(

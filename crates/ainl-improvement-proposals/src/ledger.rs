@@ -216,6 +216,7 @@ impl ProposalLedger {
     }
 
     /// Full row + parsed envelope and proposed AINL text (for host adoption to `ainl_memory.db`).
+    #[allow(clippy::type_complexity)] // 12-tuple maps 1:1 to the SELECT columns; readable as-is
     pub fn get_for_graph_adopt(
         &self,
         id: ImprovementProposalId,

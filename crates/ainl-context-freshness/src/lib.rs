@@ -41,11 +41,10 @@ pub fn impact_decision_strict(f: ContextFreshness, repo_intel_ready: bool) -> Im
             }
         }
         ContextFreshness::Unknown => {
-            if repo_intel_ready {
-                ImpactDecision::RequireImpactFirst
-            } else {
-                ImpactDecision::RequireImpactFirst
-            }
+            // Strict policy: even without repo intel we still require impact-first
+            // checks for unknown freshness (avoids silent execution on stale state).
+            let _ = repo_intel_ready;
+            ImpactDecision::RequireImpactFirst
         }
         ContextFreshness::Fresh => ImpactDecision::AllowExecute,
     }

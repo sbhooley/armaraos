@@ -1782,7 +1782,7 @@ impl OpenFangKernel {
                     }
                 })
             };
-            match usage_store.backfill_compression_pricing(&pricing_lookup) {
+            match usage_store.backfill_compression_pricing(pricing_lookup) {
                 Ok(0) => {}
                 Ok(n) => info!(
                     "Backfilled compression pricing on {n} historical eco_compression_events row(s)"
@@ -3647,12 +3647,12 @@ impl OpenFangKernel {
                             .read()
                             .unwrap_or_else(|e| e.into_inner());
                         let input_price = MeteringEngine::catalog_input_price_per_million(
-                            &*catalog,
+                            &catalog,
                             &billing_model,
                         );
                         let est_input_usd =
                             MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
-                                &*catalog,
+                                &catalog,
                                 &billing_model,
                                 input_tokens_saved,
                             );
@@ -4596,9 +4596,9 @@ impl OpenFangKernel {
         let (input_price, est_input_usd) = {
             let catalog = self.model_catalog.read().unwrap_or_else(|e| e.into_inner());
             let input_price =
-                MeteringEngine::catalog_input_price_per_million(&*catalog, &billing_model);
+                MeteringEngine::catalog_input_price_per_million(&catalog, &billing_model);
             let est_input_usd = MeteringEngine::catalog_est_input_usd_for_saved_input_tokens(
-                &*catalog,
+                &catalog,
                 &billing_model,
                 input_tokens_saved,
             );
@@ -9037,7 +9037,7 @@ impl OpenFangKernel {
                         // Append scheduler output into the agent session (inbox-style), without
                         // triggering an LLM turn. Routine health/budget monitors are skipped on
                         // success so the chat is not bloated; failures do not hit this path.
-                        if !cron_success_suppresses_session_append(&job_name, program_path.as_str())
+                        if !cron_success_suppresses_session_append(job_name, program_path.as_str())
                         {
                             append_cron_output_to_agent_session(
                                 self,
@@ -9179,7 +9179,7 @@ fn cron_success_suppresses_session_append(job_name: &str, program_path: &str) ->
         "armaraos-budget-threshold-alert",
         "armaraos-ainl-health-weekly",
     ];
-    if BY_NAME.iter().any(|n| *n == job_name) {
+    if BY_NAME.contains(&job_name) {
         return true;
     }
     let p = program_path.replace('\\', "/");

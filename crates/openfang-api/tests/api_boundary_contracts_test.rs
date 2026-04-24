@@ -53,10 +53,12 @@ async fn spawn_test_server_with_kernel(
 
 async fn start_server_with_config(mut config: KernelConfig) -> TestServer {
     let tmp = tempfile::tempdir().expect("tempdir");
+    // Always isolate to the per-test tempdir. KernelConfig::default() pre-fills
+    // home_dir/data_dir with the user's real ~/.armaraos paths, so without
+    // unconditional override every parallel test collides on the same SQLite
+    // file ("database is locked" during boot).
     config.home_dir = tmp.path().to_path_buf();
-    if config.data_dir.as_os_str().is_empty() {
-        config.data_dir = tmp.path().join("data");
-    }
+    config.data_dir = tmp.path().join("data");
     let kernel = OpenFangKernel::boot_with_config(config).expect("boot");
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();

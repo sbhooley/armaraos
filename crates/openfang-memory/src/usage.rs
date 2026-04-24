@@ -865,6 +865,8 @@ impl UsageStore {
 
         // Snapshot of repair candidates. We materialize before opening the write transaction so
         // we don't hold the SELECT statement open across UPDATEs (rusqlite borrow rules).
+        // (8-tuple maps 1:1 to the SELECT columns; readability beats wrapping in a struct.)
+        #[allow(clippy::type_complexity)]
         let candidates: Vec<(String, String, String, i64, i64, f64, f64, f64)> = {
             let mut stmt = conn
                 .prepare(

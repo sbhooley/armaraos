@@ -934,8 +934,7 @@ pub async fn build_prompt_memory_context(
                 let fetch_cap = policy
                     .max_failure_recall_lines
                     .saturating_mul(2)
-                    .max(8)
-                    .min(50);
+                    .clamp(8, 50);
                 let hits = {
                     let inner = gm.inner.lock().await;
                     inner.search_failures_for_agent(gm.agent_id(), fts_q.as_str(), fetch_cap)
@@ -1560,11 +1559,13 @@ mod tests {
     fn to_memory_block_segments_matches_prompt_sections() {
         use ainl_context_compiler::SegmentKind;
 
-        let mut ctx = PromptMemoryContext::default();
-        ctx.episodic_lines = vec!["e1".to_string()];
-        ctx.failure_recall_lines = vec!["f1".to_string()];
-        ctx.trajectory_recap_lines = vec!["t1".to_string()];
-        ctx.semantic_lines = vec!["s1".to_string()];
+        let ctx = PromptMemoryContext {
+            episodic_lines: vec!["e1".to_string()],
+            failure_recall_lines: vec!["f1".to_string()],
+            trajectory_recap_lines: vec!["t1".to_string()],
+            semantic_lines: vec!["s1".to_string()],
+            ..Default::default()
+        };
 
         let segs = ctx.to_memory_block_segments();
         assert_eq!(segs.len(), 4);

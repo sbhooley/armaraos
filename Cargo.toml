@@ -105,6 +105,10 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 url = "2"
 
 # WASM sandbox
+# Pinned at 41.x: 42/43 require IntoFunc/Caller signature rewrites in sandbox.rs.
+# RUSTSEC-2026-0085..0096 are Winch/Cranelift sandbox-escape paths that don't apply
+# to ArmaraOS — we only run author-controlled AINL programs (no untrusted WASM,
+# no Winch backend, no aarch64 host today). Bump tracked in launch-roadmap.md.
 wasmtime = "41"
 
 # HTTP server (for API daemon)

@@ -46,6 +46,7 @@ fn coarse_steps_from_tools(tools: &[String]) -> Vec<TrajectoryStep> {
 /// Write trajectory graph node, `trajectory_of` edge, and `ainl_trajectories` detail row.
 ///
 /// Returns `(graph_trajectory_node_id, detail_table_row_id)`.
+#[allow(clippy::too_many_arguments)] // wide signature mirrors the trajectory schema columns
 pub fn persist_trajectory_for_episode(
     memory: &GraphMemory,
     agent_id: &str,
@@ -102,6 +103,7 @@ pub fn persist_trajectory_for_episode(
 
 /// Convenience when only coarse tool names are known (no per-call timings).
 #[inline]
+#[allow(clippy::too_many_arguments)] // forwards every column to `persist_trajectory_for_episode`
 pub fn persist_trajectory_coarse_tools(
     memory: &GraphMemory,
     agent_id: &str,

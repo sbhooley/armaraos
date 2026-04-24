@@ -44,7 +44,7 @@ mod dashboard_learning_panels_js_guard {
             "/api/graph-memory/failures/recent",
             "ImprovementProposalAdopted",
         ] {
-            assert_contains(&s, needle, "trajectories.js");
+            assert_contains(s, needle, "trajectories.js");
         }
     }
 
@@ -59,7 +59,7 @@ mod dashboard_learning_panels_js_guard {
             "GraphMemoryWrite",
             "/api/graph-memory/failures/recent",
         ] {
-            assert_contains(&s, needle, "graph-failures.js");
+            assert_contains(s, needle, "graph-failures.js");
         }
     }
 
@@ -74,7 +74,7 @@ mod dashboard_learning_panels_js_guard {
             "improvement_proposal",
             "/improvement-proposals",
         ] {
-            assert_contains(&s, needle, "graph-proposals.js");
+            assert_contains(s, needle, "graph-proposals.js");
         }
     }
 }

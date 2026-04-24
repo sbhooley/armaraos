@@ -1558,7 +1558,7 @@
               <template x-if="currentAgent">
                 <div>
                   <template x-for="(msg, $index) in filteredMessages" :key="msg.id">
-                    <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '') + (schedulerParts(msg) ? ' message-scheduler' : '')">
+                    <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '') + (schedulerParts(msg) ? ' message-scheduler' : '') + (msg.role === 'system' ? systemMessageSurfaceClass(msg) : '')">
                       <div class="message-avatar" x-show="msg.role === 'agent'">
                         <img src="/assets/armaraos-logo.png" alt="ArmaraOS">
                       </div>
@@ -1628,7 +1628,7 @@
                                 </div>
                               </template>
                               <template x-for="tool in (msg.tools || [])" :key="tool.id">
-                                <div class="tool-card" :class="{ 'tool-card-error': tool.is_error }" :data-tool="tool.name">
+                                <div class="tool-card" :class="toolCardStatusClasses(tool)" :data-tool="tool.name">
                                   <button type="button" class="tool-card-header" @click="tool.expanded = !tool.expanded" :aria-expanded="tool.expanded ? 'true' : 'false'">
                                     <template x-if="tool.running"><div class="tool-card-spinner"></div></template>
                                     <template x-if="!tool.running && !tool.is_error"><span class="tool-icon-ok">&#10003;</span></template>
@@ -1660,6 +1660,12 @@
                                     </div>
                                   </div>
                                   <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+                                    <div class="tool-user-action-callout" x-show="toolUserActionCalloutLines(tool).length && !toolAuthUrl(tool)">
+                                      <div class="tool-user-action-callout-title">What to do next</div>
+                                      <template x-for="(uaLine, uai) in toolUserActionCalloutLines(tool)" :key="tool.id + '-ua-' + uai">
+                                        <div class="tool-user-action-line" x-text="uaLine"></div>
+                                      </template>
+                                    </div>
                                     <div class="tool-auth-callout" x-show="toolAuthUrl(tool)">
                                       <div class="tool-auth-callout-title">Authorization needed</div>
                                       <div class="tool-auth-callout-copy">Open this URL to authorize access, then rerun your request.</div>

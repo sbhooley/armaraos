@@ -797,13 +797,21 @@ async fn test_send_message_includes_ainl_runtime_telemetry_field() {
     let status = resp.status();
     let body_text = resp.text().await.unwrap();
     if status != 200 {
-        // Default integration server uses ollama + `test-model`; local installs may not have it.
-        if status == 500
-            && (body_text.contains("not_found_error")
-                || body_text.contains("model") && body_text.contains("not found"))
-        {
+        // Default integration server uses ollama + `test-model`; local installs and
+        // CI runners may not have Ollama running (-> connection refused / EOF), or
+        // may not have the model pulled (-> "not_found_error"). Either way, skip
+        // rather than fail — this test asserts response *shape*, not connectivity.
+        let connection_refused = body_text.contains("error sending request for url")
+            || body_text.contains("Connection refused")
+            || body_text.contains("connection refused")
+            || body_text.contains("connect error")
+            || body_text.contains("tcp connect error")
+            || body_text.contains("dns error");
+        let model_missing = body_text.contains("not_found_error")
+            || (body_text.contains("model") && body_text.contains("not found"));
+        if status == 500 && (connection_refused || model_missing) {
             eprintln!(
-                "skipping test_send_message_includes_ainl_runtime_telemetry_field: model unavailable ({body_text})"
+                "skipping test_send_message_includes_ainl_runtime_telemetry_field: provider unavailable ({body_text})"
             );
             return;
         }
