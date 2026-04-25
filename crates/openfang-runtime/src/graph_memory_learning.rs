@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use openfang_memory::session::Session;
 use openfang_types::agent::AgentManifest;
 use regex::Regex;
+use uuid::Uuid;
 
 use crate::graph_memory_writer::GraphMemoryWriter;
 
@@ -213,6 +214,58 @@ impl LearningRecorder {
         Ok(gm)
     }
 
+    fn mcp_ainl_graph_snapshot_gate(&self) -> Option<&GraphMemoryWriter> {
+        if self.policy.master_stack_disabled {
+            return None;
+        }
+        self.gm.as_ref()
+    }
+
+    /// Persist `mcp_ainl_ainl_capabilities` / `recommended_next_tools` snapshots to **semantic** graph rows
+    /// when the session cache reports new content (hash changed).
+    pub async fn record_mcp_ainl_tool_snapshots(
+        &self,
+        _session: &Session,
+        tool_name: &str,
+        content: &str,
+        apply: crate::mcp_ainl_session::McpAinlApplyResult,
+    ) {
+        if !apply.new_capabilities_for_graph && !apply.new_recommended_next_for_graph {
+            return;
+        }
+        let Some(gm) = self.mcp_ainl_graph_snapshot_gate() else {
+            return;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let pid = self.memory_project_id.as_deref();
+
+        if apply.new_capabilities_for_graph && tool_name == "mcp_ainl_ainl_capabilities" {
+            if let Some(fact) = crate::mcp_ainl_session::format_capabilities_digest(&v) {
+                let h = crate::mcp_ainl_session::content_sha16(content);
+                let tags = vec![
+                    "mcp:ainl:capabilities".to_string(),
+                    format!("v:{h}"),
+                ];
+                gm.record_fact_with_tags(fact, 0.95, Uuid::new_v4(), &tags, pid)
+                    .await;
+            }
+        }
+
+        if apply.new_recommended_next_for_graph && v.get("recommended_next_tools").is_some() {
+            if let Some(fact) = crate::mcp_ainl_session::format_recommended_next_tools_echo(&v) {
+                let h = crate::mcp_ainl_session::content_sha16(&fact);
+                let tags = vec![
+                    "mcp:ainl:recommended_next".to_string(),
+                    format!("v:{h}"),
+                ];
+                gm.record_fact_with_tags(fact, 0.9, Uuid::new_v4(), &tags, pid)
+                    .await;
+            }
+        }
+    }
+
     pub async fn record_loop_guard_failure(
         &self,
         session: &Session,
@@ -247,17 +300,32 @@ impl LearningRecorder {
         tool_name: &str,
         message: &str,
     ) {
+        self.record_tool_execution_failure_with_source(session, tool_name, message, None, None)
+            .await;
+    }
+
+    /// Like [`Self::record_tool_execution_failure`], with optional MCP `source_namespace` / `source_tool` metadata.
+    pub async fn record_tool_execution_failure_with_source(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        message: &str,
+        source_namespace: Option<&str>,
+        source_tool: Option<&str>,
+    ) {
         let Ok(gm) = self.failures_record_gate() else {
             return;
         };
         let sid = session.id.0.to_string();
         let msg = sanitize_failure_message(message);
         let r = gm
-            .record_tool_execution_failure(
+            .record_tool_execution_failure_with_source(
                 tool_name,
                 msg.as_str(),
                 Some(sid.as_str()),
                 self.memory_project_id.as_deref(),
+                source_namespace,
+                source_tool,
             )
             .await;
         if r.is_some() {

@@ -51,6 +51,8 @@ cargo build -p openfang-runtime --no-default-features --features ainl-persona-ev
 
 ## Graph-memory learning stack (trajectories + failures)
 
+**AINL MCP snapshots:** When learning is on and **`mcp_ainl_ainl_capabilities`** / **`recommended_next_tools`** payloads **change** (content hash), the loop may write **semantic** facts tagged **`mcp:ainl:capabilities`** / **`mcp:ainl:recommended_next`** plus **`v:<sha16>`** for dedupe (`graph_memory_learning::record_mcp_ainl_tool_snapshots`). Prompt extras resolve from graph memory first, then `mcp_ainl_session`. **`mcp_ainl_*`** tool failures use **`FailureNode.source_namespace` / `source_tool`** (no message-prefix hack).
+
 **Master switch — `AINL_LEARNING`:** when set to a falsy token (`0`, `false`, `no`, `off`), the agent loop disables **both** (a) per-turn trajectory slot capture **and** (b) typed `Failure` graph writes, regardless of the subsystem envs below. When **`AINL_LEARNING` is unset**, you can opt an agent out with **`manifest.metadata["ainl_learning"]`** using the same tokens.
 
 When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_ENABLED`**, **`AINL_FAILURE_LEARNING_ENABLED`** (see `graph_memory_writer`).
@@ -79,6 +81,8 @@ The agent loop feeds the assembled system prompt, history, and current user mess
 | **`AINL_CONTEXT_COMPOSE_EMBED`** | Uses Tier 2 **embedding** rerank of score-ordered non-pinned segments when a host `Embedder` is available (`PlaceholderEmbedder` for tests; production wiring optional). | **Default: off** |
 
 **Reference:** [docs/SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) (Phase 6), [`compose_telemetry.rs`](src/compose_telemetry.rs).
+
+**AINL MCP in the agent session (`mcp_ainl_session`):** Per WebSocket/HTTP session, the runtime caches recent **`mcp_ainl_*`** tool output to enrich the static AINL tools block (capabilities digest, optional **`recommended_next_tools`** echo). Host built-in **`mcp_resource_read`** uses [`McpConnection::read_resource_by_uri_limited`](src/mcp.rs) (**`resources/read`**) with a default **UTF-8 byte** cap so agents can load **`ainl://…`** text safely. **`mcp_ainl_*`** tool failures record **`source_namespace` / `source_tool`** on **`Failure`** nodes (no message-prefix hack). See [docs/mcp-a2a.md](../../docs/mcp-a2a.md) (*Host mcp_resource_read* under MCP Client).
 
 ### M2 safe rollout and observability
 

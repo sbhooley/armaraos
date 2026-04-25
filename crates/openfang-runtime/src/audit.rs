@@ -28,6 +28,8 @@ pub enum AuditAction {
     AuthAttempt,
     WireConnect,
     ConfigChange,
+    /// Vault, provider API key, OAuth app credentials, or other stored secret material (set/remove/test probe).
+    CredentialChange,
     /// Full agent manifest applied via `PUT /api/agents/:id/update`.
     AgentManifestUpdate,
     /// Scheduler/cron job executed.
@@ -143,6 +145,7 @@ impl AuditLog {
                         "AuthAttempt" => AuditAction::AuthAttempt,
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
+                        "CredentialChange" => AuditAction::CredentialChange,
                         "AgentManifestUpdate" => AuditAction::AgentManifestUpdate,
                         "CronJobRun" => AuditAction::CronJobRun,
                         "CronJobOutput" => AuditAction::CronJobOutput,

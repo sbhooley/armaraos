@@ -74,6 +74,10 @@ pub struct PromptContext {
     pub sender_id: Option<String>,
     /// Sender display name.
     pub sender_name: Option<String>,
+    /// Cached digest from the last `mcp_ainl_ainl_capabilities` in this chat session (host-filled).
+    pub ainl_mcp_capabilities_digest: Option<String>,
+    /// Compact echo of the last `recommended_next_tools` from an AINL MCP tool response in this session.
+    pub mcp_ainl_recommended_next_echo: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -99,7 +103,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     sections.push(AINL_AUTHORING_WORKFLOW_SECTION.to_string());
 
     if granted_ainl_mcp_tools(&ctx.granted_tools) {
-        sections.push(AINL_MCP_TOOLS_GRANTED_NOTE.to_string());
+        sections.push(build_ainl_mcp_tools_section(ctx));
     }
     if granted_google_workspace_mcp_tools(&ctx.granted_tools) {
         sections.push(GOOGLE_WORKSPACE_MCP_TOOLS_GRANTED_NOTE.to_string());
@@ -279,12 +283,13 @@ For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or simi
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
 - **Do not use `mcp_ainl_ainl_capabilities` to infer other MCP servers:** its payload is **AINL adapter verbs only** (the `http` / `web` / `calendar` / … blocks you see there). It is **not** a catalog of every connected MCP server. **Google Workspace** (Gmail, Drive, Docs, …) is a **separate** MCP server. When connected, names follow **`mcp_{server_id}_*`** (hyphens in the server id become underscores); the bundled integration id is **`google-workspace-mcp`** → tools like **`mcp_google_workspace_mcp_*`**. **Use only the exact MCP tool names listed under “Your Tools”** — never invent prefixes. If Workspace is supposedly set up but none of those names appear, the Workspace MCP is not in your current tool list (subprocess did not register tools): tell the user to check **Skills → MCP** / reconnect **google-workspace-mcp**, **`GOOGLE_OAUTH_CLIENT_ID`**, that **`uvx`** is installed, and **restart the ArmaraOS app** so the daemon picks up a normal `PATH` — do not infer “no Google” from `ainl_capabilities` alone.
 - **Starters:** for new graphs, consider **`mcp_ainl_ainl_list_ecosystem`** and **`mcp_ainl_ainl_import_*`** before writing large graphs from scratch.
+- **MCP resource bodies:** `mcp_ainl_ainl_capabilities` includes an `mcp_resources` list (e.g. `ainl://integrations-http-machine-payments`, `ainl://authoring-cheatsheet`). To read the text, call the host tool **`mcp_resource_read`** with `mcp_server`=`ainl` (or `server`) and `uri`.
 - **`ainl_run` adapters:** graphs that use `http`, `fs`, `cache`, or `sqlite` must pass an **`adapters`** object in the run payload — the MCP server does not register those adapters by default (see tool schema / server instructions).";
 
 /// Short reminder when this agent actually has `mcp_ainl_*` tools granted.
 const AINL_MCP_TOOLS_GRANTED_NOTE: &str = "\
 ## AINL MCP tools (granted)
-You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters.";
+You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters. Use **`mcp_resource_read`** (`mcp_server`=`ainl`, `uri`) to fetch `ainl://…` bodies listed under `mcp_resources` in **`mcp_ainl_ainl_capabilities`.**";
 
 /// Short reminder when this agent has Google Workspace MCP tools (`mcp_google_workspace_mcp_*`).
 ///
@@ -305,6 +310,33 @@ fn granted_ainl_mcp_tools(granted: &[String]) -> bool {
         let p: Vec<&str> = t.splitn(3, '_').collect();
         p.len() >= 3 && p[0] == "mcp" && p[1] == "ainl"
     })
+}
+
+/// AINL MCP granted section + optional session-warmed digest / `recommended_next_tools` echo.
+fn build_ainl_mcp_tools_section(ctx: &PromptContext) -> String {
+    let mut s = AINL_MCP_TOOLS_GRANTED_NOTE.to_string();
+    let have_capabilities_digest = ctx
+        .ainl_mcp_capabilities_digest
+        .as_ref()
+        .map(|d| !d.trim().is_empty())
+        .unwrap_or(false);
+    if let Some(ref d) = ctx.ainl_mcp_capabilities_digest {
+        if !d.trim().is_empty() {
+            s.push_str("\n\n");
+            s.push_str(d);
+        }
+    }
+    if let Some(ref r) = ctx.mcp_ainl_recommended_next_echo {
+        if !r.trim().is_empty() {
+            s.push_str("\n\n");
+            s.push_str(r);
+        }
+    }
+    if !have_capabilities_digest {
+        s.push_str("\n\n**Fallback (static)** — no live `mcp_ainl_ainl_capabilities` digest in graph memory or session yet (adapter registration hints only):\n");
+        s.push_str(ainl_context_compiler::MCP_AINL_RUN_ADAPTERS_CHEATSHEET);
+    }
+    s
 }
 
 /// True when `granted_tools` includes Google Workspace MCP tools (`google-workspace-mcp` server).
@@ -777,7 +809,7 @@ fn mcp_ainl_tool_hint(full_name: &str) -> &'static str {
         }
         "ainl_compile" => "compile AINL source to IR JSON",
         "ainl_capabilities" => {
-            "list adapter verbs and strict contract (use before inventing R lines)"
+            "list adapter verbs, strict contract, and mcp_resources URIs — use mcp_resource_read(ainl, uri) for ainl:// bodies"
         }
         "ainl_security_report" => "security / policy report for AINL source",
         "ainl_run" => "compile and run AINL; pass adapters for http/fs/cache/sqlite when needed",
@@ -908,6 +940,10 @@ pub fn tool_hint(name: &str) -> &'static str {
         "process_write" => "write to a process's stdin",
         "process_kill" => "terminate a running process",
         "process_list" => "list active processes",
+
+        "mcp_resource_read" => {
+            "read MCP resource by URI (mcp_server + uri) e.g. ainl://authoring-cheatsheet on server ainl"
+        }
 
         _ if name.starts_with("mcp_ainl_") => mcp_ainl_tool_hint(name),
 
@@ -1138,6 +1174,8 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("## AINL MCP tools (granted)"));
         assert!(prompt.contains("Golden path"));
+        assert!(prompt.contains("Fallback (static)"));
+        assert!(prompt.contains("allow_hosts"));
     }
 
     #[test]

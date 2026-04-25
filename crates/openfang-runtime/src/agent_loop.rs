@@ -322,6 +322,40 @@ fn get_or_create_ainl_runtime_bridge(
     Ok(bridge)
 }
 
+async fn learning_mcp_ainl_after_tool(
+    learning: &crate::graph_memory_learning::LearningRecorder,
+    session: &openfang_memory::session::Session,
+    tool_name: &str,
+    result: &openfang_types::tool::ToolResult,
+) {
+    if result.is_error {
+        if tool_name.starts_with("mcp_ainl_") {
+            learning
+                .record_tool_execution_failure_with_source(
+                    session,
+                    tool_name,
+                    result.content.as_str(),
+                    Some("ainl"),
+                    Some(tool_name),
+                )
+                .await;
+        } else {
+            learning
+                .record_tool_execution_failure(session, tool_name, result.content.as_str())
+                .await;
+        }
+    } else if tool_name.starts_with("mcp_ainl_") {
+        let apply = crate::mcp_ainl_session::on_mcp_ainl_tool_result(
+            session.id,
+            tool_name,
+            result.content.as_str(),
+        );
+        learning
+            .record_mcp_ainl_tool_snapshots(session, tool_name, result.content.as_str(), apply)
+            .await;
+    }
+}
+
 /// Runs **ainl-runtime** graph-memory bookkeeping for this turn, then lets the normal OpenFang
 /// LLM loop produce the assistant reply. Does not append assistant messages or end the loop early.
 #[cfg(feature = "ainl-runtime-engine")]
@@ -649,7 +683,10 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                 }
             }
             // shell_exec: dominant failure mode in real logs is the agent calling
-            // it with `{}` or with a non-string `command`.
+            // it with `{}` or with a non-string `command`. We additionally
+            // recognise common `git` / `gh` / `curl` failure strings because
+            // those are the workhorses for "pull a GitHub repo" tasks and
+            // agents tend to loop on the same network/auth error otherwise.
             "shell_exec" => {
                 if lc.contains("missing 'command'") || lc.contains("'command' parameter") {
                     return Some(
@@ -661,6 +698,176 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                     return Some(
                         "the binary is not in the agent's shell allowlist. Either pick an \
                          already-allowed command (curl, ls, jq, …) or surface this to the user.",
+                    );
+                }
+                // ---- git / gh -----------------------------------------------
+                if lc.contains("permission denied (publickey)")
+                    || lc.contains("could not read from remote repository")
+                {
+                    return Some(
+                        "git refused over SSH (publickey). Switch the URL to HTTPS \
+                         (https://github.com/<owner>/<repo>.git) or surface the missing key to the user.",
+                    );
+                }
+                if lc.contains("repository not found")
+                    || (lc.contains("remote:") && lc.contains("not found"))
+                {
+                    return Some(
+                        "GitHub returned 'Repository not found'. The repo may be private or the \
+                         URL is wrong — verify the slug and, if private, ask the user for a token \
+                         (Settings → Vault: GITHUB_TOKEN / GH_TOKEN, or `gh auth login`).",
+                    );
+                }
+                if lc.contains("could not resolve host")
+                    || lc.contains("name or service not known")
+                {
+                    return Some(
+                        "DNS / network failure reaching the host. Re-check the URL spelling and \
+                         confirm the agent has outbound network for that domain.",
+                    );
+                }
+                if lc.contains("fatal: not a git repository") {
+                    return Some(
+                        "you ran a git command outside of a clone. cd into (or pass `-C`) the \
+                         cloned directory, or `git clone` the repo first.",
+                    );
+                }
+                if lc.contains("authentication failed") && lc.contains("github") {
+                    return Some(
+                        "GitHub auth failed for HTTPS. Use a token: \
+                         `git -c http.extraheader=\"AUTHORIZATION: bearer $GITHUB_TOKEN\" clone …`, \
+                         `gh auth login`, or store a PAT under Settings → Vault (GITHUB_TOKEN / GH_TOKEN).",
+                    );
+                }
+                if lc.contains("did you mean") && lc.contains("git") {
+                    return Some(
+                        "git rejected the subcommand. Use `git --help` to confirm the spelling \
+                         (common typos: `git colne`, `git statuts`).",
+                    );
+                }
+                // ---- curl / wget --------------------------------------------
+                if (lc.contains("curl:") || lc.contains("wget:"))
+                    && (lc.contains("404") || lc.contains("403") || lc.contains("401"))
+                {
+                    return Some(
+                        "HTTP fetch failed with an auth/not-found code. For GitHub raw files use \
+                         `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>` and \
+                         add `-H \"Authorization: Bearer $GITHUB_TOKEN\"` for private repos \
+                         (token in Settings → Vault).",
+                    );
+                }
+            }
+            // web_fetch: the built-in HTTP tool. The single biggest failure
+            // mode in real chat logs is the agent looping web_fetch on
+            // raw.githubusercontent.com / api.github.com URLs to "clone" a
+            // subdirectory — and then claiming success with a partial
+            // download. Steer them at the dedicated tool which enumerates
+            // server-side and returns a full manifest.
+            "web_fetch" => {
+                let mentions_github_raw = lc.contains("raw.githubusercontent.com")
+                    || lc.contains("api.github.com")
+                    || lc.contains("github.com");
+                if mentions_github_raw {
+                    if lc.contains("403") || lc.contains("rate limit") {
+                        return Some(
+                            "GitHub rate limit / 403 on web_fetch. Switch to the \
+                             `github_subtree_download` tool (one call enumerates the \
+                             whole subdir and returns a manifest), and pass `token` \
+                             for higher quota.",
+                        );
+                    }
+                    if lc.contains("404") {
+                        return Some(
+                            "GitHub 404 on web_fetch. To pull a directory, do not loop \
+                             web_fetch — call `github_subtree_download` with `repo` and \
+                             `path`; it lists every file via the Trees API and returns \
+                             a manifest of what was actually written.",
+                        );
+                    }
+                    return Some(
+                        "fetching GitHub via web_fetch is brittle — use \
+                         `github_subtree_download` for whole subdirectories so the \
+                         manifest tells you exactly which files landed and which did not.",
+                    );
+                }
+            }
+            // github_subtree_download: when the dedicated tool fails, point at
+            // the most likely cause. The manifest is JSON, so the agent
+            // already has the per-file detail in the error body — these hints
+            // are about the call-level errors (bad repo string, branch wrong).
+            "github_subtree_download" => {
+                if lc.contains("could not parse") || lc.contains("missing `repo`") {
+                    return Some(
+                        "`github_subtree_download` needs a real `repo` — `owner/name` or a \
+                         github.com URL. The optional `path` is the subdirectory inside the repo.",
+                    );
+                }
+                if lc.contains(" 404 ") || lc.contains("returned 404") {
+                    return Some(
+                        "GitHub returned 404 — usually a wrong branch (try `branch: \"master\"`), \
+                         a private repo (add `token`), or a typo in the slug. The tool already \
+                         falls back from `main` to `master` when no branch was specified.",
+                    );
+                }
+                if lc.contains(" 403 ") || lc.contains("rate limit") {
+                    return Some(
+                        "GitHub rate limit hit before the manifest finished. Pass `token` \
+                         (a PAT with `public_repo` is enough for public repos) and re-run, \
+                         or set GITHUB_TOKEN / GH_TOKEN in Settings → Vault so the tool can pick it up.",
+                    );
+                }
+                if lc.contains(" 401 ")
+                    || lc.contains("401 unauthorized")
+                    || lc.contains("bad credentials")
+                {
+                    return Some(
+                        "GitHub returned 401 (bad credentials). If the tool input had \
+                         `\"token\": \"\"` or a placeholder, **omit** `token` entirely — an empty \
+                         string is not a valid PAT and makes GitHub reject the request. Public \
+                         repos work unauthenticated. For private repos or higher rate limits, set \
+                         a real GitHub PAT in Settings → Vault (this is **not** the chat LLM provider API key).",
+                    );
+                }
+            }
+            // http / web: GitHub host failures show up here when the agent uses
+            // R http.* / R web.* instead of shell_exec curl. Hint at the same
+            // GitHub-shaped fixes (token, raw URL, allowlist) so the agent has
+            // a concrete next step regardless of which transport it picked.
+            "http" | "web" | "mcp_http" => {
+                let mentions_github = lc.contains("github.com")
+                    || lc.contains("raw.githubusercontent.com")
+                    || lc.contains("api.github.com");
+                if lc.contains("not in allow_hosts")
+                    || lc.contains("host not allowed")
+                    || lc.contains("not in allowlist")
+                {
+                    return Some(
+                        "the host is not on this agent's HTTP allowlist. Add it (e.g. \
+                         `allow_hosts = [\"github.com\", \"raw.githubusercontent.com\", \"api.github.com\"]`) \
+                         or use a different already-allowed host.",
+                    );
+                }
+                if mentions_github
+                    && (lc.contains("rate limit") || lc.contains(" 403 ") || lc.ends_with("403"))
+                {
+                    return Some(
+                        "GitHub rate limit / 403. Authenticate with a token \
+                         (`Authorization: Bearer $GITHUB_TOKEN`; store the PAT in Settings → Vault) — unauthenticated quota is ~60 req/h.",
+                    );
+                }
+                if mentions_github
+                    && (lc.contains(" 401 ") || lc.ends_with("401") || lc.contains("bad credentials"))
+                {
+                    return Some(
+                        "GitHub returned 401. The token is missing, expired, or lacks scope. \
+                         Ask the user for a fresh PAT with `repo` scope (or `public_repo` for public).",
+                    );
+                }
+                if mentions_github && (lc.contains(" 404 ") || lc.ends_with("404")) {
+                    return Some(
+                        "GitHub 404. Either the path is wrong or the repo is private — for raw \
+                         files use `https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>`; \
+                         for private repos add a token.",
                     );
                 }
             }
@@ -3136,14 +3343,8 @@ pub async fn run_agent_loop(
                                 let _ = hook_reg.fire(&ctx);
                             }
 
-                            if result.is_error {
-                                learning.record_tool_execution_failure(
-                                    session,
-                                    tool_call.name.as_str(),
-                                    result.content.as_str(),
-                                )
+                            learning_mcp_ainl_after_tool(&learning, session, &tool_call.name, &result)
                                 .await;
-                            }
 
                             let content =
                                 truncate_tool_result_dynamic(&result.content, &context_budget);
@@ -5550,14 +5751,8 @@ pub async fn run_agent_loop_streaming(
                                 let _ = hook_reg.fire(&ctx);
                             }
 
-                            if result.is_error {
-                                learning.record_tool_execution_failure(
-                                    session,
-                                    tool_call.name.as_str(),
-                                    result.content.as_str(),
-                                )
+                            learning_mcp_ainl_after_tool(&learning, session, &tool_call.name, &result)
                                 .await;
-                            }
 
                             let content =
                                 truncate_tool_result_dynamic(&result.content, &context_budget);
@@ -7393,6 +7588,136 @@ mod tests {
         ];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
         assert!(h.contains("FULL file body"), "first-match-wins violated: {h}");
+    }
+
+    /// GitHub-shaped failures the agent loop should recognise — covers the
+    /// shell_exec + http/web branches added for `git clone` / `curl` / raw URL
+    /// workflows so agents stop looping on the same auth-or-not-found error.
+    #[test]
+    fn test_corrective_hint_for_failures_github_shapes() {
+        // git over SSH publickey
+        let errs = vec![(
+            "shell_exec",
+            "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("HTTPS"), "publickey hint should suggest HTTPS: {h}");
+
+        // private repo / wrong slug
+        let errs = vec![(
+            "shell_exec",
+            "remote: Repository not found.\nfatal: repository 'https://github.com/x/y.git/' not found",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("Repository not found"), "{h}");
+        assert!(h.contains("GITHUB_TOKEN") || h.contains("gh auth"), "{h}");
+
+        // DNS / offline
+        let errs = vec![(
+            "shell_exec",
+            "fatal: unable to access 'https://github.com/x/y/': Could not resolve host: github.com",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.to_lowercase().contains("dns") || h.contains("network"), "{h}");
+
+        // ran git outside a clone
+        let errs = vec![(
+            "shell_exec",
+            "fatal: not a git repository (or any of the parent directories): .git",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("clone") || h.contains("cd"), "{h}");
+
+        // curl 404 on a raw URL
+        let errs = vec![(
+            "shell_exec",
+            "curl: (22) The requested URL returned error: 404",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("raw.githubusercontent.com"), "{h}");
+
+        // http tool: github not on allow_hosts
+        let errs = vec![(
+            "http",
+            "host 'github.com' not in allow_hosts",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("allow_hosts"), "{h}");
+
+        // http tool: GitHub rate limit (403)
+        let errs = vec![(
+            "http",
+            "GET https://api.github.com/repos/x/y → 403 rate limit exceeded",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("rate limit") || h.contains("token"), "{h}");
+
+        // http tool: 401 Bad credentials on GitHub
+        let errs = vec![(
+            "http",
+            "GET https://api.github.com/user → 401 Bad credentials",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("PAT") || h.contains("token") || h.contains("scope"), "{h}");
+
+        // web tool: 404 on github.com
+        let errs = vec![(
+            "web",
+            "FETCH https://github.com/x/y/blob/main/file → 404",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("raw.githubusercontent.com"), "{h}");
+
+        // Sanity: a non-GitHub 404 on http does NOT misfire a GitHub hint
+        let errs = vec![("http", "GET https://example.com/missing → 404")];
+        assert!(corrective_hint_for_failures(&errs).is_none());
+
+        // web_fetch loop on raw.githubusercontent.com → steer to the new tool
+        let errs = vec![(
+            "web_fetch",
+            "GET https://raw.githubusercontent.com/o/n/main/missing.txt → 404",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("github_subtree_download"), "{h}");
+
+        // web_fetch 403 / rate limit on api.github.com
+        let errs = vec![(
+            "web_fetch",
+            "GET https://api.github.com/repos/o/n/contents/dir → 403 rate limit",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("github_subtree_download"), "{h}");
+        assert!(h.contains("token"), "{h}");
+
+        // github_subtree_download with bad repo → tool-level hint
+        let errs = vec![(
+            "github_subtree_download",
+            "Could not parse `not-a-repo` as a repo — expected `owner/name` or a github.com URL",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("`owner/name`"), "{h}");
+
+        // github_subtree_download 404 → suggest branch fallback / token
+        let errs = vec![(
+            "github_subtree_download",
+            "GitHub API returned 404 Not Found for /repos/o/n/git/trees/main",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("master") || h.contains("token"), "{h}");
+
+        // github_subtree_download 401 (e.g. empty `token: ""` sent Bearer with no value)
+        let errs = vec![(
+            "github_subtree_download",
+            "GitHub API returned 401 Unauthorized for https://api.github.com/repos/o/n/git/trees/main: { \"message\": \"Bad credentials\" }",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("omit"), "{h}");
+        assert!(h.contains("chat LLM provider"), "{h}");
+
+        // Sanity: a non-GitHub web_fetch failure does NOT trigger the
+        // github_subtree_download hint
+        let errs = vec![("web_fetch", "GET https://example.com/x → 500 server error")];
+        assert!(corrective_hint_for_failures(&errs).is_none());
     }
 
     #[tokio::test]

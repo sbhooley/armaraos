@@ -9,7 +9,10 @@
 
 use http::{HeaderName, HeaderValue};
 use openfang_types::tool::ToolDefinition;
-use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
+use rmcp::model::{
+    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation, ReadResourceRequestParams,
+    ResourceContents,
+};
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};
 use serde::{Deserialize, Serialize};
@@ -277,6 +280,69 @@ impl McpConnection {
         }
     }
 
+    /// Read a resource URI from this MCP server (`resources/read`).
+    pub async fn read_resource_by_uri(&self, uri: &str) -> Result<String, String> {
+        self.read_resource_by_uri_limited(uri, usize::MAX, 0, true)
+            .await
+    }
+
+    /// Read a resource with a **UTF-8 byte** ceiling on returned text (after `char_offset`),
+    /// optional Unicode-scalar skip, and optional rejection of binary-only resources
+    /// (`allow_binary: false` → error if there is no text part). When truncated, a short
+    /// notice line is appended (total string may exceed `max_bytes` by that suffix).
+    pub async fn read_resource_by_uri_limited(
+        &self,
+        uri: &str,
+        max_bytes: usize,
+        char_offset: usize,
+        allow_binary: bool,
+    ) -> Result<String, String> {
+        let params = ReadResourceRequestParams::new(uri);
+        let result = self
+            .client
+            .read_resource(params)
+            .await
+            .map_err(|e| format!("MCP resources/read failed: {e}"))?;
+        let mut out = String::new();
+        let mut saw_text = false;
+        for c in &result.contents {
+            match c {
+                ResourceContents::TextResourceContents { text, .. } => {
+                    saw_text = true;
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(text);
+                }
+                ResourceContents::BlobResourceContents { blob, .. } => {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&format!(
+                        "[non-text resource, base64 length {} — decode externally if needed]\n",
+                        blob.len()
+                    ));
+                }
+            }
+        }
+        if !allow_binary && !saw_text {
+            return Err(
+                "Resource has no text content (binary-only). Re-call with allow_binary: true if you need a placeholder, or use another URI.".to_string(),
+            );
+        }
+        if out.is_empty() {
+            out.push_str("(empty resource body)");
+        }
+        let after_skip: String = out.chars().skip(char_offset).collect();
+        let s = if max_bytes < usize::MAX && after_skip.len() > max_bytes {
+            let cut = truncate_utf8_prefix_to_max_bytes(&after_skip, max_bytes);
+            format!("{cut}\n… [truncated to {max_bytes} UTF-8 bytes]")
+        } else {
+            after_skip
+        };
+        Ok(s)
+    }
+
     /// Get the discovered tool definitions.
     pub fn tools(&self) -> &[ToolDefinition] {
         &self.tools
@@ -495,6 +561,22 @@ pub fn normalize_name(name: &str) -> String {
     name.to_lowercase().replace('-', "_")
 }
 
+/// Longest UTF-8 prefix of `s` with **byte** length ≤ `max_bytes`, never splitting a scalar value.
+#[must_use]
+fn truncate_utf8_prefix_to_max_bytes(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    if max_bytes == 0 {
+        return "";
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,6 +661,17 @@ mod tests {
         if std::path::Path::new("/opt/homebrew/bin").is_dir() {
             assert!(aug.contains("/opt/homebrew/bin"));
         }
+    }
+
+    #[test]
+    fn truncate_utf8_prefix_respects_byte_cap_and_char_boundaries() {
+        let s = "a€ë";
+        assert_eq!(super::truncate_utf8_prefix_to_max_bytes(s, 64), s);
+        assert_eq!(super::truncate_utf8_prefix_to_max_bytes(s, 1), "a");
+        assert_eq!(super::truncate_utf8_prefix_to_max_bytes(s, 4), "a€");
+        // Byte 5 lands inside `ë`; must snap back to before `ë`.
+        assert_eq!(super::truncate_utf8_prefix_to_max_bytes(s, 5), "a€");
+        assert_eq!(super::truncate_utf8_prefix_to_max_bytes(s, 0), "");
     }
 
     #[test]

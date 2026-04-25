@@ -178,6 +178,46 @@ async fn dispatch_mcp_tool_by_name(
         .map_err(|e| format!("MCP tool call failed: {e}"))
 }
 
+async fn tool_mcp_resource_read(
+    input: &serde_json::Value,
+    mcp_connections: Option<&tokio::sync::Mutex<Vec<mcp::McpConnection>>>,
+) -> Result<String, String> {
+    let server = input
+        .get("mcp_server")
+        .or_else(|| input.get("server"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field: mcp_server (or server)".to_string())?;
+    let uri = input
+        .get("uri")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field: uri".to_string())?;
+    const DEFAULT_MAX: usize = 65_536;
+    let max_bytes = input
+        .get("max_bytes")
+        .and_then(serde_json::Value::as_u64)
+        .map(|n| n.min(2_000_000) as usize)
+        .unwrap_or(DEFAULT_MAX);
+    let offset = input
+        .get("offset")
+        .or_else(|| input.get("char_offset"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    let allow_binary = input
+        .get("allow_binary")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let Some(mcp_mtx) = mcp_connections else {
+        return Err("MCP is not available in this context".to_string());
+    };
+    let mut conns = mcp_mtx.lock().await;
+    let Some(conn) = conns.iter_mut().find(|c| c.name() == server) else {
+        return Err(format!("MCP server '{server}' is not connected"));
+    };
+    conn.read_resource_by_uri_limited(uri, max_bytes, offset, allow_binary)
+        .await
+}
+
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
     static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
@@ -439,6 +479,13 @@ pub async fn execute_tool_with_trajectory(
             crate::document_tools::tool_spreadsheet_build(input, workspace_root).await
         }
 
+        // GitHub subtree download — single-call clone of a public-or-tokened
+        // GitHub subdirectory. Replaces the failure-prone "loop on web_fetch"
+        // pattern; returns a manifest of every file written so the agent
+        // cannot claim a partial download as a success.
+        "github_subtree_download" => {
+            crate::github_subtree::run(input, workspace_root).await
+        }
         // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
         "web_fetch" => {
             // Taint check: block URLs containing secrets/PII from being exfiltrated
@@ -766,6 +813,9 @@ pub async fn execute_tool_with_trajectory(
         "email_reply" => tool_email_reply(input, kernel, mcp_connections).await,
         "email_draft" => tool_email_draft(input, mcp_connections).await,
 
+        // Read MCP `resources/read` (e.g. `ainl://…` from `mcp_ainl_ainl_capabilities` mcp_resources).
+        "mcp_resource_read" => tool_mcp_resource_read(input, mcp_connections).await,
+
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
@@ -897,6 +947,26 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["path", "sheets"]
+            }),
+        },
+        // --- GitHub subtree download ---
+        ToolDefinition {
+            name: "github_subtree_download".to_string(),
+            description: "Download an entire subdirectory of a public (or token-authenticated) GitHub repo into the agent workspace in a single call. Enumerates files server-side via the GitHub Trees API, then fetches each blob from raw.githubusercontent.com. Returns a manifest (including `token_source`: how auth was resolved). You cannot tell public vs private from the URL alone — unauthenticated access to a private repo often returns **404**. Auth resolution order: optional `token` in this call, else process env `GITHUB_TOKEN`, else `GH_TOKEN` (same as the `gh` CLI). The tool does **not** read workspace `.env` or agent memory; put tokens in the daemon environment (e.g. `~/.armaraos/.env`) or pass `token` explicitly. For private repos or higher rate limits, ask the user for a PAT or use env. PREFER THIS over looping `web_fetch` on raw URLs — that pattern silently misses files.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "repo": { "type": "string", "description": "Repository as `owner/name` or a github.com URL (https or git@). Path/branch suffixes in the URL are ignored." },
+                    "path": { "type": "string", "description": "Subdirectory inside the repo to mirror (e.g. `apollo-x-bot`). Empty string = whole repo." },
+                    "dest": { "type": "string", "description": "Workspace-relative output directory. Defaults to the basename of `path` (or repo name when `path` is empty)." },
+                    "branch": { "type": "string", "description": "Branch / ref. Default `main`; falls back to `master` on 404 only when this argument is omitted." },
+                    "token": { "type": "string", "description": "Optional GitHub PAT (`repo` for private, `public_repo` for rate-lift on public). If omitted, `GITHUB_TOKEN` / `GH_TOKEN` in the daemon process environment are used. **Omit for public repos** — do not pass `\"\"` (invalid header → 401)." },
+                    "extensions": { "type": "array", "items": { "type": "string" }, "description": "Optional allowlist of file extensions (e.g. [\"ainl\", \"md\"]). Files not matching any extension are skipped with a reason." },
+                    "exclude": { "type": "array", "items": { "type": "string" }, "description": "Optional substrings; any tree path containing one is skipped." },
+                    "max_files": { "type": "integer", "description": "Cap on files written (default 500, hard max 5000)." },
+                    "max_total_bytes": { "type": "integer", "description": "Cap on total bytes written (default 50 MiB, hard max 200 MiB)." }
+                },
+                "required": ["repo"]
             }),
         },
         // --- Web tools ---
@@ -1872,6 +1942,23 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "provider": { "type": "string", "description": "Provider hint: 'gmail', 'outlook', 'mcp'" }
                 },
                 "required": ["to", "subject", "body"]
+            }),
+        },
+        ToolDefinition {
+            name: "mcp_resource_read".to_string(),
+            description: "Read a resource body from a connected MCP server via the MCP `resources/read` request. Use for `ainl://…` URIs listed under `mcp_resources` in `mcp_ainl_ainl_capabilities` (e.g. `ainl://authoring-cheatsheet`, integration docs).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mcp_server": { "type": "string", "description": "MCP server id as configured in the host (e.g. `ainl`)" },
+                    "server": { "type": "string", "description": "Alias for `mcp_server`" },
+                    "uri": { "type": "string", "description": "Resource URI to read (e.g. `ainl://integrations-http-machine-payments`)" },
+                    "max_bytes": { "type": "integer", "description": "Max UTF-8 **bytes** of resource text returned after offset (default 65536; capped at 2_000_000). Truncation is on a char boundary; a one-line truncation notice may be appended." },
+                    "offset": { "type": "integer", "description": "Skip this many leading Unicode scalar values before applying the byte cap" },
+                    "char_offset": { "type": "integer", "description": "Alias for `offset`" },
+                    "allow_binary": { "type": "boolean", "description": "If true, allow binary resources (placeholder text). Default false: binary-only resources return an error." }
+                },
+                "required": ["uri"]
             }),
         },
     ]
@@ -5358,6 +5445,7 @@ pub fn tool_execution_timeout(tool_name: &str) -> std::time::Duration {
             Duration::from_secs(300)
         }
         "hermes_a2a_status" => Duration::from_secs(30),
+        "mcp_resource_read" => Duration::from_secs(90),
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
             Duration::from_secs(30)
         }

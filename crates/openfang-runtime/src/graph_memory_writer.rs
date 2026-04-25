@@ -549,13 +549,40 @@ impl GraphMemoryWriter {
         session_id: Option<&str>,
         memory_project_id: Option<&str>,
     ) -> Option<Uuid> {
+        self.record_tool_execution_failure_with_source(
+            tool_name,
+            message,
+            session_id,
+            memory_project_id,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Like [`Self::record_tool_execution_failure`], with optional MCP-style `source_namespace` / `source_tool` for analytics.
+    pub async fn record_tool_execution_failure_with_source(
+        &self,
+        tool_name: &str,
+        message: &str,
+        session_id: Option<&str>,
+        memory_project_id: Option<&str>,
+        source_namespace: Option<&str>,
+        source_tool: Option<&str>,
+    ) -> Option<Uuid> {
         if !failure_learning_env_enabled() {
             return None;
         }
         let msg = openfang_types::truncate_str(message, 8000);
         let res = {
             let inner = self.inner.lock().await;
-            let mut node = AinlMemoryNode::new_tool_execution_failure(tool_name, msg, session_id);
+            let mut node = AinlMemoryNode::new_tool_execution_failure_with_source(
+                tool_name,
+                msg,
+                session_id,
+                source_namespace,
+                source_tool,
+            );
             node.agent_id = self.agent_id.clone();
             crate::memory_project_scope::apply_memory_project_id_to_node(
                 &mut node,
