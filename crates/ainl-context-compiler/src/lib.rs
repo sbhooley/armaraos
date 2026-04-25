@@ -49,6 +49,7 @@ pub mod metrics;
 pub mod orchestrator;
 pub mod relevance;
 pub mod segment;
+pub mod mcp_ainl_prompt;
 pub mod summarizer;
 
 pub mod embedder;
@@ -66,6 +67,9 @@ pub use metrics::{ContextCompilerMetrics, SegmentMetrics};
 pub use orchestrator::{ComposedPrompt, ContextCompiler};
 pub use relevance::{HeuristicScorer, RelevanceScore, RelevanceScorer};
 pub use segment::{Role, Segment, SegmentKind};
+pub use mcp_ainl_prompt::{
+    mcp_ainl_run_adapters_cheatsheet_segment, MCP_AINL_RUN_ADAPTERS_CHEATSHEET,
+};
 pub use summarizer::{AnchoredSummary, AnchoredSummarySection, Summarizer, SummarizerError};
 #[cfg(feature = "sources-trajectory-recap")]
 pub use trajectory_recap::format_trajectory_recap_lines;
