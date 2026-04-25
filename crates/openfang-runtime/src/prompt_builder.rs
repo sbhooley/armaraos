@@ -806,7 +806,8 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_read_page" | "browser_close" | "browser_scroll" | "browser_wait"
-        | "browser_evaluate" | "browser_select" | "browser_back" => "Browser",
+        | "browser_evaluate" | "browser_select" | "browser_back" | "browser_run_js"
+        | "browser_session_start" | "browser_session_status" => "Browser",
 
         "shell_exec" | "shell_background" => "Shell",
 
@@ -857,8 +858,13 @@ pub fn tool_hint(name: &str) -> &'static str {
         "browser_scroll" => "scroll the page",
         "browser_wait" => "wait for an element or condition",
         "browser_evaluate" => "run JavaScript on the page",
+        "browser_run_js" => "run JavaScript on the page",
         "browser_select" => "select a dropdown option",
         "browser_back" => "go back to the previous page",
+        "browser_session_start" => {
+            "open or restart the browser in headless / headed / attach mode"
+        }
+        "browser_session_status" => "report current browser session mode",
 
         // Shell
         "shell_exec" => "execute a shell command",

@@ -6,6 +6,8 @@ icon = "\U0001F310"
 tools = [
     "browser_navigate", "browser_click", "browser_type",
     "browser_screenshot", "browser_read_page", "browser_close",
+    "browser_scroll", "browser_wait", "browser_run_js", "browser_back",
+    "browser_session_start", "browser_session_status",
     "web_search", "web_fetch",
     "memory_store", "memory_recall",
     "knowledge_add_entity", "knowledge_add_relation", "knowledge_query",
@@ -51,9 +53,43 @@ estimated_time = "1-3 min"
 # ─── Configurable settings ───────────────────────────────────────────────────
 
 [[settings]]
+key = "default_mode"
+label = "Default Browser Mode"
+description = "How to open the browser by default. The agent can override this per-task: pass mode=\"headed\" to browser_navigate / browser_session_start when the user wants to watch, or mode=\"attach\" to drive a Chrome the user started themselves with --remote-debugging-port=9222."
+setting_type = "select"
+default = "headless"
+
+[[settings.options]]
+value = "headless"
+label = "Headless (no window — fastest, recommended for servers and most tasks)"
+
+[[settings.options]]
+value = "headed"
+label = "Headed (visible Chrome window — better for sites that detect headless, or when the user wants to watch)"
+
+[[settings.options]]
+value = "attach"
+label = "Attach (connect to user's already-running Chrome on --remote-debugging-port=9222)"
+
+[[settings]]
+key = "attach_port"
+label = "Attach Port"
+description = "Port to use for attach mode (must match --remote-debugging-port the user passed to Chrome). Default 9222."
+setting_type = "select"
+default = "9222"
+
+[[settings.options]]
+value = "9222"
+label = "9222 (Chrome convention)"
+
+[[settings.options]]
+value = "9333"
+label = "9333"
+
+[[settings]]
 key = "headless"
-label = "Headless Mode"
-description = "Run the browser without a visible window (recommended for servers)"
+label = "Headless Mode (legacy)"
+description = "Legacy single-toggle for headless. Set the default_mode select above instead — this only applies when default_mode is unset."
 setting_type = "toggle"
 default = "true"
 
@@ -125,6 +161,25 @@ system_prompt = """You are Browser Hand — an autonomous web browser agent that
 ## Core Capabilities
 
 You can navigate to URLs, click buttons/links, fill forms, read page content, and take screenshots. You have a real browser session that persists across tool calls within a conversation.
+
+## Browser Mode Selection (IMPORTANT — pick the right mode for the task)
+
+You can drive the browser in three modes. Pass `mode=` on `browser_navigate` or call `browser_session_start` with `mode=` to switch.
+
+| Mode | When to use | Notes |
+|------|-------------|-------|
+| `headless` | Default for most tasks. Fastest, no window. | Some sites detect headless and serve degraded content / block. |
+| `headed` | The user said "show me", "let me watch", "I want to see"; OR a site is blocking or serving a CAPTCHA in headless; OR you're debugging a flaky selector. | Spawns a visible Chrome window. The user sees what you're doing. |
+| `attach` | The user said "use my browser", "I'm already logged in", "use my Chrome", or the task needs their *real* sign-ins/cookies/profile (banking, GitHub, gmail, social media you don't want to log into again). | Requires the user to have started Chrome themselves with `chrome --remote-debugging-port=9222`. If you call this and Chrome isn't running on that port, the tool returns a clear error with the command they need to run — relay it to them and stop. |
+
+**Decision rules:**
+1. Start tasks in `headless` unless one of the conditions above applies.
+2. **Promote to `headed`** when: a site explicitly blocks headless (`headless` Navigate returns a blocked / Cloudflare / CAPTCHA page), the user asks to watch, or you've retried twice and still get a degraded page.
+3. **Promote to `attach`** when: the task fundamentally needs the user's logged-in session (e.g. "check my Gmail", "post to my Twitter", "look at my LinkedIn DMs"). Always ask the user to start Chrome with `--remote-debugging-port=9222` first if they haven't.
+4. **Never silently switch back to headless** mid-task — it closes the user's view of the browser.
+5. Use `browser_session_status` if you're unsure what mode you're in or whether Chromium is even installed locally.
+
+When you switch modes, the existing session is closed and a new one opens — *cookies and login state from the previous session are lost*. Plan accordingly: do all the work in one mode, or warn the user before switching.
 
 ## Multi-Phase Pipeline
 
@@ -229,9 +284,11 @@ When CSS selectors fail, fall back to clicking by visible text content.
 ## Session Management
 
 - Your browser session persists across messages in this conversation
-- Cookies and login state are maintained
+- Cookies and login state are maintained — but **switching mode resets the session** (you lose them)
+- Use `browser_session_status` to check which mode you're in and whether Chromium is installed
+- Use `browser_session_start` to deliberately switch modes (e.g. headless → headed) without navigating
 - Use `browser_close` when you're done to free resources
-- The browser auto-closes when the conversation ends
+- The browser auto-closes when the conversation ends — **except** in `attach` mode, where it leaves the user's Chrome alone
 
 Update stats via memory_store after each task:
 - `browser_hand_pages_visited` — increment by pages navigated

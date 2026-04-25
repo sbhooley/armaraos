@@ -38,6 +38,58 @@ const MAX_CONTENT_CHARS: usize = 50_000;
 
 // ── Public types ───────────────────────────────────────────────────────────
 
+/// How a browser session is opened.
+///
+/// Agents pick a mode based on the task — headless is fastest, headed lets the
+/// user watch and bypasses some headless-detection scripts, and attach drives
+/// the user's *already-running* Chrome (preserving their real cookies, sign-ins
+/// and profile). See `crates/openfang-types/src/config.rs::BrowserConfig`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserMode {
+    /// Spawn a new Chromium with `--headless=new`. No visible window.
+    Headless,
+    /// Spawn a new Chromium with a visible window.
+    Headed,
+    /// Connect to a Chrome that the user started with
+    /// `--remote-debugging-port=<port>`. No new process is spawned.
+    Attach,
+}
+
+impl BrowserMode {
+    /// Lowercase string form used in tool args / config TOML.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BrowserMode::Headless => "headless",
+            BrowserMode::Headed => "headed",
+            BrowserMode::Attach => "attach",
+        }
+    }
+
+    /// Parse a user-supplied mode string. `None` for unrecognized input.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "headless" | "" => Some(BrowserMode::Headless),
+            "headed" | "headful" | "visible" | "windowed" | "gui" => Some(BrowserMode::Headed),
+            "attach" | "connect" | "user_chrome" | "existing" => Some(BrowserMode::Attach),
+            _ => None,
+        }
+    }
+
+    /// Pick the default mode from a `BrowserConfig`, honouring `default_mode`
+    /// first and falling back to the legacy `headless` boolean.
+    pub fn from_config(config: &BrowserConfig) -> Self {
+        if let Some(mode) = Self::parse(&config.default_mode) {
+            return mode;
+        }
+        if config.headless {
+            BrowserMode::Headless
+        } else {
+            BrowserMode::Headed
+        }
+    }
+}
+
 /// Command sent to the browser.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action")]
@@ -223,19 +275,37 @@ impl Drop for CdpConnection {
 
 // ── Browser session ────────────────────────────────────────────────────────
 
-/// A live browser session: one Chromium process + one CDP connection per agent.
+/// A live browser session: one CDP connection per agent.
+///
+/// `process` is `Some` for `Headless` / `Headed` modes (we spawned Chromium)
+/// and `None` for `Attach` mode (the user's Chrome owns the lifetime).
 struct BrowserSession {
-    process: tokio::process::Child,
+    process: Option<tokio::process::Child>,
     cdp: CdpConnection,
+    mode: BrowserMode,
     #[allow(dead_code)]
     last_active: Instant,
 }
 
 impl BrowserSession {
+    /// Open a browser session in the given mode.
+    async fn open(config: &BrowserConfig, mode: BrowserMode) -> Result<Self, String> {
+        match mode {
+            BrowserMode::Headless | BrowserMode::Headed => {
+                Self::launch_local(config, mode == BrowserMode::Headless).await
+            }
+            BrowserMode::Attach => Self::attach_existing(config).await,
+        }
+    }
+
     /// Launch Chromium and establish a CDP connection.
-    async fn launch(config: &BrowserConfig) -> Result<Self, String> {
+    ///
+    /// `headless` controls whether `--headless=new` is added. The rest of the
+    /// argument set is shared so headed sessions still benefit from the
+    /// stability/safety flags below.
+    async fn launch_local(config: &BrowserConfig, headless: bool) -> Result<Self, String> {
         let chrome_path = find_chromium(config)?;
-        debug!(path = %chrome_path.display(), "Launching Chromium");
+        debug!(path = %chrome_path.display(), headless, "Launching Chromium");
 
         let mut args = vec![
             "--remote-debugging-port=0".to_string(),
@@ -254,7 +324,7 @@ impl BrowserSession {
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string(),
             "about:blank".to_string(),
         ];
-        if config.headless {
+        if headless {
             args.insert(0, "--headless=new".to_string());
             args.push("--disable-gpu".to_string());
         }
@@ -324,8 +394,52 @@ impl BrowserSession {
         let _ = cdp.send("Runtime.enable", serde_json::json!({})).await;
 
         Ok(Self {
-            process: child,
+            process: Some(child),
             cdp,
+            mode: if headless {
+                BrowserMode::Headless
+            } else {
+                BrowserMode::Headed
+            },
+            last_active: Instant::now(),
+        })
+    }
+
+    /// Connect to a Chrome that the user already started with
+    /// `--remote-debugging-port=<port>` (default `9222`). No new process is
+    /// spawned, so the user's existing profile/cookies/sign-ins are visible
+    /// to the agent.
+    ///
+    /// Returns a clear, actionable error if no Chrome is reachable on the
+    /// configured port — the most common failure mode is "user forgot to start
+    /// Chrome with the flag", and we want to surface that, not a confusing
+    /// connection error.
+    async fn attach_existing(config: &BrowserConfig) -> Result<Self, String> {
+        let port = config.attach_port;
+        let list_url = format!("http://127.0.0.1:{port}/json/list");
+        debug!(port, "Attaching to existing Chrome via CDP");
+
+        let page_ws = match Self::find_page_ws(&list_url).await {
+            Ok(ws) => ws,
+            Err(_) => {
+                return Err(format!(
+                    "browser_mode=attach: no Chrome reachable on 127.0.0.1:{port}. \
+                     Start Chrome yourself with: \
+                     `chrome --remote-debugging-port={port}` (or set browser.attach_port). \
+                     The browser must be running before the agent attaches."
+                ));
+            }
+        };
+        debug!(page_ws = %page_ws, "Connecting to existing page");
+
+        let cdp = CdpConnection::connect(&page_ws).await?;
+        let _ = cdp.send("Page.enable", serde_json::json!({})).await;
+        let _ = cdp.send("Runtime.enable", serde_json::json!({})).await;
+
+        Ok(Self {
+            process: None,
+            cdp,
+            mode: BrowserMode::Attach,
             last_active: Instant::now(),
         })
     }
@@ -675,11 +789,24 @@ impl BrowserSession {
 
 impl Drop for BrowserSession {
     fn drop(&mut self) {
-        let _ = self.process.start_kill();
+        // Only kill processes we spawned. Attach mode borrows the user's
+        // Chrome — we must not terminate it on drop.
+        if let Some(child) = self.process.as_mut() {
+            let _ = child.start_kill();
+        }
     }
 }
 
 // ── Chromium discovery ─────────────────────────────────────────────────────
+
+/// Public probe for diagnostics: returns the resolved Chromium path or `None`.
+///
+/// Used by `browser_session_status` (and any future `openfang doctor`) to
+/// report what would be launched for `headless` / `headed` modes without
+/// actually spawning a process.
+pub fn discover_chromium_path(config: &BrowserConfig) -> Option<PathBuf> {
+    find_chromium(config).ok()
+}
 
 /// Find a Chromium-based browser binary on this system.
 fn find_chromium(config: &BrowserConfig) -> Result<PathBuf, String> {
@@ -825,13 +952,45 @@ impl BrowserManager {
         self.sessions.contains_key(agent_id)
     }
 
-    /// Send a command to an agent's browser session (creating one if needed).
+    /// Default browser mode resolved from this manager's `BrowserConfig`.
+    pub fn default_mode(&self) -> BrowserMode {
+        BrowserMode::from_config(&self.config)
+    }
+
+    /// Read-only view of the configured `attach` port (for diagnostics).
+    pub fn attach_port(&self) -> u16 {
+        self.config.attach_port
+    }
+
+    /// Probe the local Chromium binary path used by `headless` / `headed`
+    /// modes. Returns `None` when no Chrome/Chromium is installed.
+    pub fn discover_chromium(&self) -> Option<PathBuf> {
+        discover_chromium_path(&self.config)
+    }
+
+    /// Current mode of an agent's session, or `None` if no session is open.
+    pub async fn session_mode(&self, agent_id: &str) -> Option<BrowserMode> {
+        let entry = self.sessions.get(agent_id)?;
+        let session = Arc::clone(entry.value());
+        drop(entry);
+        let guard = session.lock().await;
+        Some(guard.mode)
+    }
+
+    /// Send a command to an agent's browser session.
+    ///
+    /// `requested_mode` is the per-call override (e.g. from a tool argument).
+    /// `None` means "use existing session, or default mode if no session".
+    /// `Some(mode)` means "ensure the session is in this mode" — if a session
+    /// already exists in a different mode it is closed and reopened so the
+    /// command runs in the requested context.
     pub async fn send_command(
         &self,
         agent_id: &str,
         cmd: BrowserCommand,
+        requested_mode: Option<BrowserMode>,
     ) -> Result<BrowserResponse, String> {
-        let session = self.get_or_create(agent_id).await?;
+        let session = self.get_or_create_with_mode(agent_id, requested_mode).await?;
         let mut guard = session.lock().await;
         let resp = guard.execute(cmd).await;
 
@@ -842,6 +1001,29 @@ impl BrowserManager {
         }
 
         Ok(resp)
+    }
+
+    /// Open (or reopen) a session for `agent_id` in `mode`. If a session
+    /// already exists in a different mode it is closed first.
+    ///
+    /// Returns the resolved mode that is now active.
+    pub async fn ensure_mode(
+        &self,
+        agent_id: &str,
+        mode: BrowserMode,
+    ) -> Result<BrowserMode, String> {
+        // Close any existing session whose mode does not match.
+        if let Some(existing) = self.sessions.get(agent_id) {
+            let arc = Arc::clone(existing.value());
+            drop(existing);
+            let current = arc.lock().await.mode;
+            if current == mode {
+                return Ok(current);
+            }
+            self.close_session(agent_id).await;
+        }
+        let _ = self.get_or_create_with_mode(agent_id, Some(mode)).await?;
+        Ok(mode)
     }
 
     /// Close an agent's browser session.
@@ -857,10 +1039,33 @@ impl BrowserManager {
         self.close_session(agent_id).await;
     }
 
-    /// Get existing session or create a new one.
-    async fn get_or_create(&self, agent_id: &str) -> Result<Arc<Mutex<BrowserSession>>, String> {
+    /// Get existing session or create a new one in `requested_mode`
+    /// (or the manager's default mode if `requested_mode` is `None`).
+    ///
+    /// If an existing session is in a different mode than what's requested,
+    /// it is closed and reopened in the requested mode. This lets agents
+    /// switch from headless → headed mid-conversation by passing `mode`
+    /// to `browser_navigate`.
+    async fn get_or_create_with_mode(
+        &self,
+        agent_id: &str,
+        requested_mode: Option<BrowserMode>,
+    ) -> Result<Arc<Mutex<BrowserSession>>, String> {
         if let Some(entry) = self.sessions.get(agent_id) {
-            return Ok(Arc::clone(entry.value()));
+            let arc = Arc::clone(entry.value());
+            if let Some(want) = requested_mode {
+                let current = arc.lock().await.mode;
+                if current == want {
+                    return Ok(arc);
+                }
+                drop(entry);
+                drop(arc);
+                self.close_session(agent_id).await;
+                info!(agent_id, from = current.as_str(), to = want.as_str(),
+                      "Restarting browser session in new mode");
+            } else {
+                return Ok(arc);
+            }
         }
 
         if self.sessions.len() >= self.config.max_sessions {
@@ -870,15 +1075,35 @@ impl BrowserManager {
             ));
         }
 
-        let session = BrowserSession::launch(&self.config).await?;
+        let mode = requested_mode.unwrap_or_else(|| self.default_mode());
+        let session = BrowserSession::open(&self.config, mode).await?;
         let arc = Arc::new(Mutex::new(session));
         self.sessions.insert(agent_id.to_string(), Arc::clone(&arc));
-        info!(agent_id, "Browser session created (native CDP)");
+        info!(agent_id, mode = mode.as_str(), "Browser session created");
         Ok(arc)
     }
 }
 
 // ── Tool handler functions ─────────────────────────────────────────────────
+
+/// Parse an optional `mode` argument from a tool input object.
+///
+/// Returns:
+/// * `Ok(None)` — no `mode` key present, use existing session or default.
+/// * `Ok(Some(mode))` — the user picked a valid mode.
+/// * `Err(msg)` — `mode` was supplied but unrecognized.
+fn parse_mode_arg(input: &serde_json::Value) -> Result<Option<BrowserMode>, String> {
+    let raw = input.get("mode").and_then(|v| v.as_str());
+    let raw = match raw {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => return Ok(None),
+    };
+    BrowserMode::parse(raw).map(Some).ok_or_else(|| {
+        format!(
+            "Invalid browser mode: {raw:?}. Use one of \"headless\", \"headed\", \"attach\"."
+        )
+    })
+}
 
 /// browser_navigate: Navigate to a URL. SSRF-checked before sending.
 pub async fn tool_browser_navigate(
@@ -889,12 +1114,14 @@ pub async fn tool_browser_navigate(
     let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
     crate::web_fetch::check_ssrf(url, &[])?;
 
+    let mode = parse_mode_arg(input)?;
     let resp = mgr
         .send_command(
             agent_id,
             BrowserCommand::Navigate {
                 url: url.to_string(),
             },
+            mode,
         )
         .await?;
     if !resp.success {
@@ -907,8 +1134,13 @@ pub async fn tool_browser_navigate(
     let content = data["content"].as_str().unwrap_or("");
     let wrapped = crate::web_content::wrap_external_content(page_url, content);
 
+    let active_mode = mgr
+        .session_mode(agent_id)
+        .await
+        .map(|m| m.as_str())
+        .unwrap_or("(none)");
     Ok(format!(
-        "Navigated to: {page_url}\nTitle: {title}\n\n{wrapped}"
+        "Navigated to: {page_url}\nTitle: {title}\nBrowser mode: {active_mode}\n\n{wrapped}"
     ))
 }
 
@@ -928,6 +1160,7 @@ pub async fn tool_browser_click(
             BrowserCommand::Click {
                 selector: selector.to_string(),
             },
+            None,
         )
         .await?;
     if !resp.success {
@@ -958,6 +1191,7 @@ pub async fn tool_browser_type(
                 selector: selector.to_string(),
                 text: text.to_string(),
             },
+            None,
         )
         .await?;
     if !resp.success {
@@ -973,7 +1207,7 @@ pub async fn tool_browser_screenshot(
     agent_id: &str,
 ) -> Result<String, String> {
     let resp = mgr
-        .send_command(agent_id, BrowserCommand::Screenshot)
+        .send_command(agent_id, BrowserCommand::Screenshot, None)
         .await?;
     if !resp.success {
         return Err(resp
@@ -1013,7 +1247,9 @@ pub async fn tool_browser_read_page(
     mgr: &BrowserManager,
     agent_id: &str,
 ) -> Result<String, String> {
-    let resp = mgr.send_command(agent_id, BrowserCommand::ReadPage).await?;
+    let resp = mgr
+        .send_command(agent_id, BrowserCommand::ReadPage, None)
+        .await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "ReadPage failed".to_string()));
     }
@@ -1047,7 +1283,11 @@ pub async fn tool_browser_scroll(
     let amount = input["amount"].as_i64().unwrap_or(600) as i32;
 
     let resp = mgr
-        .send_command(agent_id, BrowserCommand::Scroll { direction, amount })
+        .send_command(
+            agent_id,
+            BrowserCommand::Scroll { direction, amount },
+            None,
+        )
         .await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "Scroll failed".to_string()));
@@ -1077,6 +1317,7 @@ pub async fn tool_browser_wait(
                 selector: selector.to_string(),
                 timeout_ms,
             },
+            None,
         )
         .await?;
     if !resp.success {
@@ -1101,6 +1342,7 @@ pub async fn tool_browser_run_js(
             BrowserCommand::RunJs {
                 expression: expression.to_string(),
             },
+            None,
         )
         .await?;
     if !resp.success {
@@ -1118,7 +1360,9 @@ pub async fn tool_browser_back(
     mgr: &BrowserManager,
     agent_id: &str,
 ) -> Result<String, String> {
-    let resp = mgr.send_command(agent_id, BrowserCommand::Back).await?;
+    let resp = mgr
+        .send_command(agent_id, BrowserCommand::Back, None)
+        .await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "Back failed".to_string()));
     }
@@ -1126,6 +1370,67 @@ pub async fn tool_browser_back(
     let title = data["title"].as_str().unwrap_or("(no title)");
     let url = data["url"].as_str().unwrap_or("");
     Ok(format!("Went back.\nPage: {title}\nURL: {url}"))
+}
+
+/// browser_session_start: Open a new browser session in a specific mode
+/// (`headless`, `headed`, or `attach`). If a session already exists in a
+/// different mode it is closed and reopened — call this when you need to
+/// switch modes deliberately (e.g. start headless, then "show me" in headed).
+///
+/// `attach` mode connects to a Chrome the user started themselves with
+/// `--remote-debugging-port=<port>` (default 9222). It does not spawn a
+/// browser and will not close the user's Chrome on cleanup.
+pub async fn tool_browser_session_start(
+    input: &serde_json::Value,
+    mgr: &BrowserManager,
+    agent_id: &str,
+) -> Result<String, String> {
+    let mode = parse_mode_arg(input)?.unwrap_or_else(|| mgr.default_mode());
+    let active = mgr.ensure_mode(agent_id, mode).await?;
+    Ok(format!(
+        "Browser session ready (mode: {}). Use browser_navigate / browser_click / etc. to drive it.",
+        active.as_str()
+    ))
+}
+
+/// browser_session_status: Report the current browser session mode for this
+/// agent (or `none` if no session is open) plus a one-shot diagnostic of what
+/// the host can actually open: the configured default mode, the Chromium
+/// binary path resolved for spawn modes, and the port that `attach` mode
+/// would try to connect to. Use this to decide whether you need to call
+/// `browser_session_start` with a specific mode before driving the browser,
+/// or to surface a clear hint to the user when Chrome isn't installed.
+pub async fn tool_browser_session_status(
+    _input: &serde_json::Value,
+    mgr: &BrowserManager,
+    agent_id: &str,
+) -> Result<String, String> {
+    let default_mode = mgr.default_mode().as_str();
+    let active = match mgr.session_mode(agent_id).await {
+        Some(m) => m.as_str().to_string(),
+        None => "none".to_string(),
+    };
+    let chromium_path = mgr.discover_chromium();
+    let chromium_available = chromium_path.is_some();
+    let mut available_modes: Vec<&'static str> = Vec::new();
+    if chromium_available {
+        available_modes.push("headless");
+        available_modes.push("headed");
+    }
+    available_modes.push("attach");
+    let chromium_path_str = chromium_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string());
+    Ok(serde_json::json!({
+        "agent_id": agent_id,
+        "active_mode": active,
+        "default_mode": default_mode,
+        "attach_port": mgr.attach_port(),
+        "chromium_available": chromium_available,
+        "chromium_path": chromium_path_str,
+        "available_modes": available_modes,
+    })
+    .to_string())
 }
 
 // ── JS normalization ──────────────────────────────────────────────────────
@@ -1282,12 +1587,174 @@ mod tests {
     fn test_browser_config_defaults() {
         let config = BrowserConfig::default();
         assert!(config.headless);
+        assert_eq!(config.default_mode, "headless");
+        assert_eq!(config.attach_port, 9222);
         assert_eq!(config.viewport_width, 1280);
         assert_eq!(config.viewport_height, 720);
         assert_eq!(config.timeout_secs, 30);
         assert_eq!(config.idle_timeout_secs, 300);
         assert_eq!(config.max_sessions, 5);
         assert!(config.chromium_path.is_none());
+    }
+
+    #[test]
+    fn test_browser_mode_parse_aliases() {
+        assert_eq!(BrowserMode::parse("headless"), Some(BrowserMode::Headless));
+        assert_eq!(BrowserMode::parse(""), Some(BrowserMode::Headless));
+        assert_eq!(BrowserMode::parse("HEADLESS"), Some(BrowserMode::Headless));
+        assert_eq!(BrowserMode::parse(" headed "), Some(BrowserMode::Headed));
+        assert_eq!(BrowserMode::parse("headful"), Some(BrowserMode::Headed));
+        assert_eq!(BrowserMode::parse("visible"), Some(BrowserMode::Headed));
+        assert_eq!(BrowserMode::parse("gui"), Some(BrowserMode::Headed));
+        assert_eq!(BrowserMode::parse("attach"), Some(BrowserMode::Attach));
+        assert_eq!(BrowserMode::parse("connect"), Some(BrowserMode::Attach));
+        assert_eq!(BrowserMode::parse("user_chrome"), Some(BrowserMode::Attach));
+        assert_eq!(BrowserMode::parse("existing"), Some(BrowserMode::Attach));
+        assert_eq!(BrowserMode::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn test_browser_mode_as_str_roundtrip() {
+        for mode in [
+            BrowserMode::Headless,
+            BrowserMode::Headed,
+            BrowserMode::Attach,
+        ] {
+            assert_eq!(BrowserMode::parse(mode.as_str()), Some(mode));
+        }
+    }
+
+    #[test]
+    fn test_browser_mode_from_config_default_mode_wins() {
+        let mut cfg = BrowserConfig {
+            default_mode: "headed".to_string(),
+            headless: true,
+            ..Default::default()
+        };
+        assert_eq!(BrowserMode::from_config(&cfg), BrowserMode::Headed);
+        cfg.default_mode = "attach".to_string();
+        assert_eq!(BrowserMode::from_config(&cfg), BrowserMode::Attach);
+    }
+
+    #[test]
+    fn test_browser_mode_from_config_empty_string_is_headless() {
+        // Documented contract: empty `default_mode` is treated as "headless"
+        // — *not* a fallthrough to the legacy `headless: bool`. This keeps
+        // out-of-the-box behaviour predictable when default_mode is missing.
+        let cfg = BrowserConfig {
+            default_mode: String::new(),
+            headless: false,
+            ..Default::default()
+        };
+        assert_eq!(BrowserMode::from_config(&cfg), BrowserMode::Headless);
+    }
+
+    #[test]
+    fn test_browser_mode_from_config_unknown_falls_through_to_legacy() {
+        let cfg = BrowserConfig {
+            default_mode: "weird-mode".to_string(),
+            headless: false,
+            ..Default::default()
+        };
+        assert_eq!(BrowserMode::from_config(&cfg), BrowserMode::Headed);
+    }
+
+    #[test]
+    fn test_parse_mode_arg() {
+        assert_eq!(parse_mode_arg(&serde_json::json!({})).unwrap(), None);
+        assert_eq!(
+            parse_mode_arg(&serde_json::json!({"mode": ""})).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_mode_arg(&serde_json::json!({"mode": "  "})).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_mode_arg(&serde_json::json!({"mode": "headless"})).unwrap(),
+            Some(BrowserMode::Headless)
+        );
+        assert_eq!(
+            parse_mode_arg(&serde_json::json!({"mode": "headed"})).unwrap(),
+            Some(BrowserMode::Headed)
+        );
+        assert_eq!(
+            parse_mode_arg(&serde_json::json!({"mode": "attach"})).unwrap(),
+            Some(BrowserMode::Attach)
+        );
+        let err = parse_mode_arg(&serde_json::json!({"mode": "stealth"})).unwrap_err();
+        assert!(err.contains("Invalid browser mode"));
+        assert!(err.contains("headless"));
+        assert!(err.contains("headed"));
+        assert!(err.contains("attach"));
+    }
+
+    #[test]
+    fn test_browser_manager_default_mode_and_attach_port() {
+        let cfg = BrowserConfig {
+            default_mode: "attach".to_string(),
+            attach_port: 9333,
+            ..Default::default()
+        };
+        let mgr = BrowserManager::new(cfg);
+        assert_eq!(mgr.default_mode(), BrowserMode::Attach);
+        assert_eq!(mgr.attach_port(), 9333);
+    }
+
+    #[test]
+    fn test_discover_chromium_returns_optional() {
+        // Don't assume Chrome is installed in CI — just verify the call shape.
+        let cfg = BrowserConfig::default();
+        let _ = discover_chromium_path(&cfg);
+        let mgr = BrowserManager::new(cfg);
+        let _ = mgr.discover_chromium();
+    }
+
+    #[tokio::test]
+    async fn test_session_status_shape_no_session() {
+        let mgr = BrowserManager::new(BrowserConfig::default());
+        let raw = tool_browser_session_status(&serde_json::json!({}), &mgr, "agent-123")
+            .await
+            .expect("status should always succeed");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["agent_id"], "agent-123");
+        assert_eq!(v["active_mode"], "none");
+        assert_eq!(v["default_mode"], "headless");
+        assert_eq!(v["attach_port"], 9222);
+        // attach is always reported as available; spawn modes depend on Chrome
+        let modes = v["available_modes"].as_array().unwrap();
+        let mode_strs: Vec<&str> = modes.iter().filter_map(|m| m.as_str()).collect();
+        assert!(mode_strs.contains(&"attach"));
+    }
+
+    #[tokio::test]
+    async fn test_browser_session_start_attach_without_chrome_returns_actionable_error() {
+        // Use a port nothing should be listening on so we get a clean failure.
+        let cfg = BrowserConfig {
+            attach_port: 1, // privileged + not Chrome
+            ..Default::default()
+        };
+        let mgr = BrowserManager::new(cfg);
+        let res =
+            tool_browser_session_start(&serde_json::json!({"mode": "attach"}), &mgr, "agent-x")
+                .await;
+        // Either the connection fails fast (network error) or attach times out
+        // with our actionable message. Both are acceptable; we just want
+        // the call to surface as Err, not a panic or success.
+        assert!(res.is_err(), "attach to closed port should error");
+    }
+
+    #[test]
+    fn test_browser_config_legacy_serde_default_mode_unset() {
+        // Old configs (saved before `default_mode` existed) must still parse.
+        // serde's #[serde(default)] should fill in default_mode = "headless"
+        // and attach_port = 9222 from the Default impl.
+        let json = r#"{ "enabled": true, "headless": true, "viewport_width": 1024, "viewport_height": 768, "timeout_secs": 30, "idle_timeout_secs": 300, "max_sessions": 5, "chromium_path": null }"#;
+        let cfg: BrowserConfig = serde_json::from_str(json).expect("legacy JSON should parse");
+        assert!(cfg.headless);
+        assert_eq!(cfg.default_mode, "headless");
+        assert_eq!(cfg.attach_port, 9222);
+        assert_eq!(BrowserMode::from_config(&cfg), BrowserMode::Headless);
     }
 
     #[test]

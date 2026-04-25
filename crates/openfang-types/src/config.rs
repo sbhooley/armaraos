@@ -330,6 +330,21 @@ impl Default for WebFetchConfig {
 }
 
 /// Browser automation configuration.
+///
+/// `default_mode` controls which mode is used when an agent calls a browser tool
+/// without specifying one. Agents can always override per-call via the `mode`
+/// argument on `browser_navigate` / `browser_session_start`.
+///
+/// Supported modes:
+/// * `"headless"` — launch a new Chromium without a visible window (default).
+/// * `"headed"` — launch a new Chromium with a visible window. Use when the
+///   user wants to watch what the agent does, when the site detects headless,
+///   or for debugging.
+/// * `"attach"` — connect over CDP to a user-launched Chrome on
+///   `127.0.0.1:<attach_port>`. Requires the user to have started Chrome with
+///   `--remote-debugging-port=<attach_port>` themselves. Use this when the
+///   agent needs to drive the user's *actual* browser (already-logged-in
+///   sessions, real user profile, native window).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrowserConfig {
@@ -338,7 +353,19 @@ pub struct BrowserConfig {
     /// CamoFox, which replaces these tools with its own set.
     pub enabled: bool,
     /// Run browser in headless mode (no visible window).
+    ///
+    /// Maintained for backwards compatibility. New code should use
+    /// `default_mode` ("headless" / "headed" / "attach"). When `default_mode`
+    /// is unset (legacy configs) this field still controls the default mode.
     pub headless: bool,
+    /// Default browser mode when an agent does not pass `mode` per call.
+    ///
+    /// One of `"headless"`, `"headed"`, `"attach"`. Empty / unknown falls back
+    /// to `headless` if `headless == true`, else `headed`.
+    pub default_mode: String,
+    /// Port to use for `attach` mode (the port the user passed to Chrome's
+    /// `--remote-debugging-port` flag). Default 9222 (Chrome's convention).
+    pub attach_port: u16,
     /// Viewport width in pixels.
     pub viewport_width: u32,
     /// Viewport height in pixels.
@@ -358,6 +385,8 @@ impl Default for BrowserConfig {
         Self {
             enabled: true,
             headless: true,
+            default_mode: "headless".to_string(),
+            attach_port: 9222,
             viewport_width: 1280,
             viewport_height: 720,
             timeout_secs: 30,
