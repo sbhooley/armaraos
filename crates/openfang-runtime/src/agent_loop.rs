@@ -592,6 +592,109 @@ fn is_silent_token(text: &str) -> bool {
     trimmed == "NO_REPLY" || trimmed.eq_ignore_ascii_case("[silent]")
 }
 
+/// Inspect a batch of failed `(tool_name, error_text)` pairs and, if any matches a
+/// well-known failure mode we have seen agents loop on, return a short corrective
+/// hint (single sentence) the model can act on without re-reading docs.
+///
+/// Keep hints **specific** and **action-oriented** ("call X with Y"), not vague
+/// ("try harder"). Order matters: the first matched pattern wins so multi-tool
+/// rounds still produce one focused hint instead of a wall of guidance.
+///
+/// This deliberately runs only on the *first* failure (see `ToolErrorTracker`)
+/// so we don't pile hints on a stuck model — the second-occurrence branch
+/// already escalates with "stop and try a different method".
+fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str> {
+    for (name, content) in errors {
+        let lc = content.to_lowercase();
+        match *name {
+            // file_write: deep path that previously failed to canonicalize is now
+            // auto-created, so this should be rare. When it does fire we point
+            // the agent at the directory shape they need.
+            "file_write" => {
+                if lc.contains("placeholder/truncation")
+                    || lc.contains("truncated for brevity")
+                {
+                    return Some(
+                        "you wrote a placeholder like '... truncated for brevity ...' instead \
+                         of the real content. Re-issue file_write with the FULL file body.",
+                    );
+                }
+                if lc.contains("escapes allowed root") || lc.contains("path traversal") {
+                    return Some(
+                        "the path escaped the workspace root. Use a path relative to the agent \
+                         workspace (no absolute paths, no '..').",
+                    );
+                }
+                if lc.contains("missing 'content'") || lc.contains("'content' parameter") {
+                    return Some(
+                        "file_write needs both `path` and `content`. An empty body is treated \
+                         as an error — pass the actual file text.",
+                    );
+                }
+            }
+            // file_read: directory case is now handled in the tool itself, so
+            // most remaining failures are missing-path or wrong-extension.
+            "file_read" => {
+                if lc.contains("no such file") || lc.contains("not found") {
+                    return Some(
+                        "the path does not exist. Run file_list on the parent directory first \
+                         to confirm the exact name (case-sensitive).",
+                    );
+                }
+                if lc.contains("escapes allowed root") || lc.contains("path traversal") {
+                    return Some(
+                        "the path escaped the workspace root. Use a relative path inside the \
+                         agent workspace.",
+                    );
+                }
+            }
+            // shell_exec: dominant failure mode in real logs is the agent calling
+            // it with `{}` or with a non-string `command`.
+            "shell_exec" => {
+                if lc.contains("missing 'command'") || lc.contains("'command' parameter") {
+                    return Some(
+                        "shell_exec requires a single string `command` field — do not pass an \
+                         empty object or a list of arguments.",
+                    );
+                }
+                if lc.contains("not in allowlist") || lc.contains("not allowed") {
+                    return Some(
+                        "the binary is not in the agent's shell allowlist. Either pick an \
+                         already-allowed command (curl, ls, jq, …) or surface this to the user.",
+                    );
+                }
+            }
+            // mcp_ainl_ainl_validate / ainl_compile / ainl_run: the most common
+            // recurring agent loop is "include points at a non-existent file".
+            n if n.starts_with("mcp_ainl_") => {
+                if lc.contains("include") && (lc.contains("not found") || lc.contains("missing"))
+                {
+                    return Some(
+                        "an include directive points at a file that does not exist on disk. \
+                         file_write the missing module first (or fix the include path), then \
+                         re-run validate.",
+                    );
+                }
+                if lc.contains("adapter") && lc.contains("not registered") {
+                    return Some(
+                        "an adapter referenced in the IR is not registered. Pass the adapter \
+                         set in the `adapters` argument of mcp_ainl_ainl_run (e.g. enable: [\"http\", \"fs\"]).",
+                    );
+                }
+                if lc.contains("strict") && lc.contains("validate") {
+                    return Some(
+                        "validation failed under --strict. Fix the diagnostic instead of \
+                         re-running with the same source; check the suggested_fix field on \
+                         the first error.",
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Tracks error patterns across agent loop iterations to inject guidance that is targeted,
 /// non-redundant, and coordinated with the loop guard.
 ///
@@ -704,11 +807,19 @@ impl ToolErrorTracker {
                          supply all required fields — do not call tools with empty {{}} inputs.]"
                     ))
                 } else {
+                    // Look across the failing tools for a known error class and
+                    // append a one-line corrective hint. We keep the base message
+                    // identical (covered by tests) and only *add* a hint suffix.
+                    let hint = corrective_hint_for_failures(&all_errors);
+                    let suffix = match hint {
+                        Some(h) => format!(" Hint: {h}"),
+                        None => String::new(),
+                    };
                     Some(format!(
                         "[System: {non_denial_errors} tool call(s) failed ([{tool_list}]). \
                          Do not invent results from failed calls or take actions downstream of \
                          failed outputs. If the task is not finished, retry with different \
-                         parameters, a different tool, or a different approach.]"
+                         parameters, a different tool, or a different approach.{suffix}]"
                     ))
                 }
             }
@@ -7244,6 +7355,44 @@ mod tests {
             guidance_seen,
             "Expected [System: ...] error guidance in session messages after first failed tool call"
         );
+    }
+
+    #[test]
+    fn test_corrective_hint_for_failures() {
+        // file_write placeholder hint
+        let errs = vec![("file_write", "Refusing to write content containing placeholder/truncation marker: '... truncated for brevity ...'")];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("FULL file body"), "unexpected hint: {h}");
+
+        // file_read missing-path hint
+        let errs = vec![("file_read", "Failed to read: No such file or directory")];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("file_list"), "unexpected hint: {h}");
+
+        // shell_exec empty-command hint
+        let errs = vec![("shell_exec", "Missing 'command' parameter")];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("string `command` field"), "unexpected hint: {h}");
+
+        // mcp_ainl_* missing-include hint
+        let errs = vec![(
+            "mcp_ainl_ainl_validate",
+            "include 'modules/common/retry.ainl' not found in workspace",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("include directive"), "unexpected hint: {h}");
+
+        // unknown class → no hint, gracefully None
+        let errs = vec![("totally_made_up_tool", "kaboom")];
+        assert!(corrective_hint_for_failures(&errs).is_none());
+
+        // First match wins when multiple tools fail at once.
+        let errs = vec![
+            ("file_write", "Refusing: placeholder/truncation marker"),
+            ("shell_exec", "Missing 'command' parameter"),
+        ];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("FULL file body"), "first-match-wins violated: {h}");
     }
 
     #[tokio::test]
