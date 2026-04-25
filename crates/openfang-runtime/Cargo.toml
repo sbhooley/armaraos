@@ -22,6 +22,7 @@ ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.2" }
 ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
 ainl-improvement-proposals = { path = "../ainl-improvement-proposals", version = "0.1.1" }
 ainl-failure-learning = { path = "../ainl-failure-learning", version = "0.1.1" }
+ainl-procedure-learning = { path = "../ainl-procedure-learning", version = "0.1.0" }
 ainl-repo-intel = { path = "../ainl-repo-intel", version = "0.1.1" }
 ainl-context-freshness = { path = "../ainl-context-freshness", version = "0.1.1" }
 ainl-context-compiler = { path = "../ainl-context-compiler", version = "0.1.1" }

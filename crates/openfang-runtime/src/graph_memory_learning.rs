@@ -271,7 +271,7 @@ impl LearningRecorder {
                 let tags = vec!["mcp:ainl:capabilities".to_string(), format!("v:{h}")];
                 gm.record_fact_with_tags(fact, 0.95, Uuid::new_v4(), &tags, pid)
                     .await;
-            }
+            };
         }
 
         if apply.new_recommended_next_for_graph && v.get("recommended_next_tools").is_some() {
@@ -453,6 +453,38 @@ impl LearningRecorder {
                     "auto-submit pattern_promote improvement proposal failed"
                 ),
             }
+            let proc_spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+                name: name.as_str(),
+                tool_sequence: tool_sequence.as_slice(),
+                observation_count,
+                fitness,
+                freshness_at_proposal: None,
+            };
+            match crate::procedure_learning_host::auto_submit_procedure_mint_from_pattern(
+                home_dir.as_path(),
+                agent_id.as_str(),
+                &proc_spec,
+            ) {
+                Ok(Some(id)) => debug!(
+                    agent_id = %agent_id,
+                    pattern = %name,
+                    proposal_id = %id,
+                    observations = observation_count,
+                    fitness,
+                    "auto-submitted procedure_mint improvement proposal"
+                ),
+                Ok(None) => debug!(
+                    agent_id = %agent_id,
+                    pattern = %name,
+                    "procedure_mint auto-submit no-op"
+                ),
+                Err(e) => warn!(
+                    agent_id = %agent_id,
+                    pattern = %name,
+                    error = %e,
+                    "auto-submit procedure_mint improvement proposal failed"
+                ),
+            };
         });
     }
 

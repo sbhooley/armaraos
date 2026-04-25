@@ -20,7 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ainl_contracts::telemetry;
-use ainl_contracts::{ContextFreshness, ImpactDecision, ProposalEnvelope, LEARNER_SCHEMA_VERSION};
+use ainl_contracts::{
+    ContextFreshness, ImpactDecision, ProcedureArtifact, ProcedureExecutionPlan,
+    ProcedureLifecycle, ProcedurePatch, ProposalEnvelope, LEARNER_SCHEMA_VERSION,
+};
 use ainl_improvement_proposals::{
     sha256_hex_lower, AdoptResult, ImprovementProposalId, ImprovementProposalListItem,
     ProposalLedger, ProposalLedgerError,
@@ -440,6 +443,38 @@ fn is_pattern_promote_kind(k: &str) -> bool {
         || t.eq_ignore_ascii_case("pattern promote")
 }
 
+fn is_procedure_mint_kind(k: &str) -> bool {
+    k.trim()
+        .eq_ignore_ascii_case(ainl_improvement_proposals::proposal_kind::PROCEDURE_MINT)
+}
+
+fn is_procedure_patch_kind(k: &str) -> bool {
+    k.trim()
+        .eq_ignore_ascii_case(ainl_improvement_proposals::proposal_kind::PROCEDURE_PATCH)
+}
+
+fn is_procedure_promote_kind(k: &str) -> bool {
+    k.trim()
+        .eq_ignore_ascii_case(ainl_improvement_proposals::proposal_kind::PROCEDURE_PROMOTE)
+}
+
+fn is_procedure_deprecate_kind(k: &str) -> bool {
+    k.trim()
+        .eq_ignore_ascii_case(ainl_improvement_proposals::proposal_kind::PROCEDURE_DEPRECATE)
+}
+
+fn is_graph_patch_from_procedure_kind(k: &str) -> bool {
+    k.trim()
+        .eq_ignore_ascii_case(ainl_improvement_proposals::proposal_kind::GRAPH_PATCH_FROM_PROCEDURE)
+}
+
+#[derive(serde::Deserialize)]
+struct ProcedureLifecycleAction {
+    procedure_id: String,
+    #[allow(dead_code)]
+    reason: Option<String>,
+}
+
 fn find_existing_proposal_node(
     gm: &GraphMemory,
     agent_id: &str,
@@ -559,6 +594,167 @@ pub fn adopt_validated_proposal(
 
     let proposal_kind = payload.envelope.kind.clone();
     let pattern = is_pattern_promote_kind(&proposal_kind);
+    let procedure_mint = is_procedure_mint_kind(&proposal_kind);
+    let procedure_patch = is_procedure_patch_kind(&proposal_kind);
+    let procedure_promote = is_procedure_promote_kind(&proposal_kind);
+    let procedure_deprecate = is_procedure_deprecate_kind(&proposal_kind);
+    let graph_patch_from_procedure = is_graph_patch_from_procedure_kind(&proposal_kind);
+    if procedure_mint {
+        let mut artifact: ProcedureArtifact = serde_json::from_str(&payload.proposed_ainl_text)
+            .map_err(|e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("procedure_mint proposed text is not ProcedureArtifact JSON: {e}")
+            })?;
+        artifact.lifecycle = ProcedureLifecycle::Promoted;
+        let nid = gm
+            .write_procedure_artifact_for_agent(agent_id, &artifact)
+            .inspect_err(|_e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+            })?;
+        ledger
+            .mark_adopted(proposal_id, &nid.to_string())
+            .map_err(|e: ProposalLedgerError| {
+                ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("graph write succeeded but ledger could not be marked adopted (re-fetch proposals and adopt again to repair): {e}")
+            })?;
+        let _ = crate::procedure_learning_host::write_procedure_promotion_outputs(
+            home_dir, agent_id, &artifact,
+        );
+        ADOPT_OK.fetch_add(1, Ordering::Relaxed);
+        return Ok(AdoptToGraphResult {
+            graph_node_id: nid,
+            proposal_kind,
+            idempotent: false,
+        });
+    }
+    if procedure_patch {
+        let patch: ProcedurePatch =
+            serde_json::from_str(&payload.proposed_ainl_text).map_err(|e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("procedure_patch proposed text is not ProcedurePatch JSON: {e}")
+            })?;
+        let source = gm
+            .recall_procedure_artifacts()
+            .inspect_err(|_e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+            })?
+            .into_iter()
+            .find(|artifact| artifact.id == patch.procedure_id)
+            .ok_or_else(|| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("procedure_patch target not found: {}", patch.procedure_id)
+            })?;
+        let mut patched = ainl_procedure_learning::apply_patch(&source, &patch);
+        patched.lifecycle = ProcedureLifecycle::Promoted;
+        let nid = gm
+            .upsert_procedure_artifact_for_agent(agent_id, &patched)
+            .inspect_err(|_e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+            })?;
+        ledger
+            .mark_adopted(proposal_id, &nid.to_string())
+            .map_err(|e: ProposalLedgerError| {
+                ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("graph write succeeded but ledger could not be marked adopted (re-fetch proposals and adopt again to repair): {e}")
+            })?;
+        ADOPT_OK.fetch_add(1, Ordering::Relaxed);
+        return Ok(AdoptToGraphResult {
+            graph_node_id: nid,
+            proposal_kind,
+            idempotent: false,
+        });
+    }
+    if procedure_promote || procedure_deprecate {
+        let action: ProcedureLifecycleAction = serde_json::from_str(&payload.proposed_ainl_text)
+            .map_err(|e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("procedure lifecycle action is not valid JSON: {e}")
+            })?;
+        let mut artifact = gm
+            .recall_procedure_artifacts()
+            .inspect_err(|_e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+            })?
+            .into_iter()
+            .find(|artifact| artifact.id == action.procedure_id)
+            .ok_or_else(|| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("procedure target not found: {}", action.procedure_id)
+            })?;
+        artifact.lifecycle = if procedure_promote {
+            ProcedureLifecycle::Promoted
+        } else {
+            ProcedureLifecycle::Deprecated
+        };
+        let nid = gm
+            .upsert_procedure_artifact_for_agent(agent_id, &artifact)
+            .inspect_err(|_e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+            })?;
+        if procedure_promote {
+            let _ = crate::procedure_learning_host::write_procedure_promotion_outputs(
+                home_dir, agent_id, &artifact,
+            );
+        }
+        ledger
+            .mark_adopted(proposal_id, &nid.to_string())
+            .map_err(|e: ProposalLedgerError| {
+                ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("graph write succeeded but ledger could not be marked adopted (re-fetch proposals and adopt again to repair): {e}")
+            })?;
+        ADOPT_OK.fetch_add(1, Ordering::Relaxed);
+        return Ok(AdoptToGraphResult {
+            graph_node_id: nid,
+            proposal_kind,
+            idempotent: false,
+        });
+    }
+    if graph_patch_from_procedure {
+        let plan: ProcedureExecutionPlan = serde_json::from_str(&payload.proposed_ainl_text)
+            .map_err(|e| {
+                ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+                format!(
+                    "graph_patch_from_procedure payload is not ProcedureExecutionPlan JSON: {e}"
+                )
+            })?;
+        let mut n = AinlMemoryNode::new_fact(
+            format!("Adopted graph patch from procedure {}", plan.procedure_id),
+            0.92,
+            Uuid::new_v4(),
+        );
+        n.agent_id = agent_id.to_string();
+        if let AinlNodeType::Semantic { ref mut semantic } = n.node_type {
+            semantic.tags.push("scope:agent_private".to_string());
+            semantic.tags.push("graph_patch_from_procedure".to_string());
+            semantic.tags.push(format!("proposal:{proposal_id}"));
+            semantic.topic_cluster = Some(
+                serde_json::json!({
+                    "schema": "graph_patch_from_procedure_v1",
+                    "proposal_id": proposal_id.to_string(),
+                    "procedure_id": plan.procedure_id,
+                    "plan": plan,
+                })
+                .to_string(),
+            );
+        }
+        gm.write_node(&n).inspect_err(|_e| {
+            ADOPT_GRAPH_WRITE_ERR.fetch_add(1, Ordering::Relaxed);
+        })?;
+        let nid = n.id;
+        ledger
+            .mark_adopted(proposal_id, &nid.to_string())
+            .map_err(|e: ProposalLedgerError| {
+                ADOPT_ERR.fetch_add(1, Ordering::Relaxed);
+                format!("graph write succeeded but ledger could not be marked adopted (re-fetch proposals and adopt again to repair): {e}")
+            })?;
+        ADOPT_OK.fetch_add(1, Ordering::Relaxed);
+        return Ok(AdoptToGraphResult {
+            graph_node_id: nid,
+            proposal_kind,
+            idempotent: false,
+        });
+    }
+
     let node: AinlMemoryNode = if pattern {
         let mut pbytes = payload.proposed_ainl_text.as_bytes().to_vec();
         if pbytes.len() > MAX_PROC_PATTERN_BYTES {
@@ -768,5 +964,184 @@ mod tests {
             Some(v) => std::env::set_var(K_AUTO, v),
             None => std::env::remove_var(K_AUTO),
         }
+    }
+
+    #[test]
+    fn procedure_mint_proposal_validates_and_adopts_to_procedural_graph() {
+        let tools = vec!["file_read".to_string(), "shell_exec".to_string()];
+        let spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+            name: "Review pull request",
+            tool_sequence: &tools,
+            observation_count: 3,
+            fitness: 0.85,
+            freshness_at_proposal: Some(ContextFreshness::Fresh),
+        };
+        let (envelope, text) =
+            crate::procedure_learning_host::build_procedure_mint_envelope("agent-z", &spec)
+                .expect("envelope");
+        assert!(structural_prologue_only(&text).is_ok());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let id = submit(home, "agent-z", &envelope, &text).expect("submit");
+        let accepted = validate_proposal(home, "agent-z", id, Some(ValidateMode::Structural))
+            .expect("validate");
+        assert!(accepted.accepted);
+
+        let adopted = adopt_validated_proposal(home, "agent-z", id).expect("adopt");
+        assert_eq!(
+            adopted.proposal_kind,
+            ainl_improvement_proposals::proposal_kind::PROCEDURE_MINT
+        );
+        let gm = GraphMemory::new(&graph_memory_db_path(home, "agent-z")).expect("gm");
+        let artifacts = gm.recall_procedure_artifacts().expect("artifacts");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].lifecycle, ProcedureLifecycle::Promoted);
+        assert_eq!(artifacts[0].intent, "Review pull request");
+    }
+
+    #[test]
+    fn procedure_patch_proposal_adoption_updates_artifact() {
+        let tools = vec!["file_read".to_string(), "shell_exec".to_string()];
+        let spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+            name: "Review pull request",
+            tool_sequence: &tools,
+            observation_count: 3,
+            fitness: 0.85,
+            freshness_at_proposal: Some(ContextFreshness::Fresh),
+        };
+        let (_, text) =
+            crate::procedure_learning_host::build_procedure_mint_envelope("agent-patch", &spec)
+                .expect("mint envelope");
+        let mut artifact: ProcedureArtifact = serde_json::from_str(&text).expect("artifact");
+        artifact.lifecycle = ProcedureLifecycle::Promoted;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let gm_path = graph_memory_db_path(home, "agent-patch");
+        std::fs::create_dir_all(gm_path.parent().expect("agent dir")).expect("agent dir");
+        let gm = GraphMemory::new(&gm_path).expect("gm");
+        gm.write_procedure_artifact_for_agent("agent-patch", &artifact)
+            .expect("write artifact");
+
+        let (envelope, patch_text) =
+            crate::procedure_learning_host::build_procedure_patch_envelope(
+                &artifact,
+                "failure-42",
+                "validation failed",
+            )
+            .expect("patch envelope");
+        let id = submit(home, "agent-patch", &envelope, &patch_text).expect("submit");
+        let accepted = validate_proposal(home, "agent-patch", id, Some(ValidateMode::Structural))
+            .expect("validate");
+        assert!(accepted.accepted);
+        let adopted = adopt_validated_proposal(home, "agent-patch", id).expect("adopt");
+        assert_eq!(
+            adopted.proposal_kind,
+            ainl_improvement_proposals::proposal_kind::PROCEDURE_PATCH
+        );
+
+        let artifacts = gm.recall_procedure_artifacts().expect("artifacts");
+        assert_eq!(artifacts.len(), 1);
+        assert!(artifacts[0]
+            .known_failures
+            .iter()
+            .any(|failure| failure.contains("validation failed")));
+        assert!(artifacts[0]
+            .source_failure_ids
+            .iter()
+            .any(|failure| failure == "failure-42"));
+        assert_eq!(artifacts[0].lifecycle, ProcedureLifecycle::Promoted);
+    }
+
+    #[test]
+    fn procedure_deprecate_proposal_updates_lifecycle() {
+        let tools = vec!["file_read".to_string()];
+        let spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+            name: "Read file",
+            tool_sequence: &tools,
+            observation_count: 3,
+            fitness: 0.85,
+            freshness_at_proposal: Some(ContextFreshness::Fresh),
+        };
+        let (_, text) =
+            crate::procedure_learning_host::build_procedure_mint_envelope("agent-dep", &spec)
+                .expect("mint envelope");
+        let mut artifact: ProcedureArtifact = serde_json::from_str(&text).expect("artifact");
+        artifact.lifecycle = ProcedureLifecycle::Promoted;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let gm_path = graph_memory_db_path(home, "agent-dep");
+        std::fs::create_dir_all(gm_path.parent().expect("agent dir")).expect("agent dir");
+        let gm = GraphMemory::new(&gm_path).expect("gm");
+        gm.write_procedure_artifact_for_agent("agent-dep", &artifact)
+            .expect("write artifact");
+        let action =
+            serde_json::json!({"procedure_id": artifact.id, "reason": "superseded"}).to_string();
+        let env = ProposalEnvelope {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            original_hash: sha256_hex_lower("deprecate"),
+            proposed_hash: sha256_hex_lower(&action),
+            kind: ainl_improvement_proposals::proposal_kind::PROCEDURE_DEPRECATE.into(),
+            rationale: "Deprecate procedure".into(),
+            freshness_at_proposal: ContextFreshness::Fresh,
+            impact_decision: ImpactDecision::RequireImpactFirst,
+        };
+        let id = submit(home, "agent-dep", &env, &action).expect("submit");
+        assert!(
+            validate_proposal(home, "agent-dep", id, Some(ValidateMode::Structural))
+                .expect("validate")
+                .accepted
+        );
+        adopt_validated_proposal(home, "agent-dep", id).expect("adopt");
+        let nodes = gm.store().find_by_type("procedural").expect("procedural");
+        let artifact = nodes
+            .iter()
+            .find_map(|node| {
+                let p = node.procedural()?;
+                serde_json::from_slice::<ProcedureArtifact>(&p.compiled_graph).ok()
+            })
+            .expect("artifact");
+        assert_eq!(artifact.lifecycle, ProcedureLifecycle::Deprecated);
+    }
+
+    #[test]
+    fn graph_patch_from_procedure_validates_and_adopts() {
+        let tools = vec!["file_read".to_string()];
+        let spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+            name: "Read file",
+            tool_sequence: &tools,
+            observation_count: 3,
+            fitness: 0.85,
+            freshness_at_proposal: Some(ContextFreshness::Fresh),
+        };
+        let (_, text) =
+            crate::procedure_learning_host::build_procedure_mint_envelope("agent-graph", &spec)
+                .expect("mint envelope");
+        let artifact: ProcedureArtifact = serde_json::from_str(&text).expect("artifact");
+        let plan = ainl_procedure_learning::render_execution_plan(&artifact);
+        let plan_text = serde_json::to_string_pretty(&plan).expect("plan");
+        let env = ProposalEnvelope {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            original_hash: sha256_hex_lower(&artifact.id),
+            proposed_hash: sha256_hex_lower(&plan_text),
+            kind: ainl_improvement_proposals::proposal_kind::GRAPH_PATCH_FROM_PROCEDURE.into(),
+            rationale: "Adopt execution plan".into(),
+            freshness_at_proposal: ContextFreshness::Fresh,
+            impact_decision: ImpactDecision::RequireImpactFirst,
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let id = submit(home, "agent-graph", &env, &plan_text).expect("submit");
+        assert!(
+            validate_proposal(home, "agent-graph", id, Some(ValidateMode::Structural))
+                .expect("validate")
+                .accepted
+        );
+        let adopted = adopt_validated_proposal(home, "agent-graph", id).expect("adopt");
+        assert_eq!(
+            adopted.proposal_kind,
+            ainl_improvement_proposals::proposal_kind::GRAPH_PATCH_FROM_PROCEDURE
+        );
     }
 }

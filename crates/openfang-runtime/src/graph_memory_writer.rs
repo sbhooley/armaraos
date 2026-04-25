@@ -153,8 +153,10 @@ fn trajectory_steps_from_tools(tools: &[String]) -> Vec<TrajectoryStep> {
 pub fn trajectory_turn_frame_vars(
     vitals_trust: Option<f32>,
     compression_semantic: Option<f32>,
+    selected_procedure_ids: &[String],
 ) -> Option<serde_json::Value> {
-    if vitals_trust.is_none() && compression_semantic.is_none() {
+    if vitals_trust.is_none() && compression_semantic.is_none() && selected_procedure_ids.is_empty()
+    {
         return None;
     }
     let mut m = serde_json::Map::new();
@@ -165,6 +167,12 @@ pub fn trajectory_turn_frame_vars(
         m.insert(
             "compression_semantic_score".to_string(),
             serde_json::json!(s),
+        );
+    }
+    if !selected_procedure_ids.is_empty() {
+        m.insert(
+            "selected_procedure_ids".to_string(),
+            serde_json::json!(selected_procedure_ids),
         );
     }
     Some(serde_json::Value::Object(m))
@@ -1810,7 +1818,10 @@ mod tests {
             promote_events, 1,
             "just_promoted must fire exactly once per pattern (at threshold crossing)"
         );
-        assert_eq!(last_obs, 5, "observation_count keeps incrementing post-promotion");
+        assert_eq!(
+            last_obs, 5,
+            "observation_count keeps incrementing post-promotion"
+        );
 
         match prev_min {
             Some(p) => std::env::set_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS", p),

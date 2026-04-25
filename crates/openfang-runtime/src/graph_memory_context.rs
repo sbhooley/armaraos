@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Mutex as StdMutex, OnceLock};
 
-use ainl_contracts::ContextFreshness;
+use ainl_contracts::{ContextFreshness, ProcedureArtifact};
 use ainl_failure_learning::should_emit_failure_suggestion;
 use ainl_memory::{recall_task_scoped_episodes, AinlMemoryNode, AinlNodeKind, AinlNodeType};
 use openfang_types::agent::AgentManifest;
@@ -137,6 +137,7 @@ pub struct PromptMemoryContext {
     pub truncation_hits: usize,
     pub provenance_lines: usize,
     pub selection_debug: Vec<serde_json::Value>,
+    pub selected_procedure_ids: Vec<String>,
 }
 
 impl PromptMemoryContext {
@@ -853,7 +854,7 @@ pub async fn build_prompt_memory_context(
     }
 
     if policy.include_procedural_hints {
-        let mut procedure_scored: Vec<(f32, String)> = recent_procedural
+        let mut procedure_scored: Vec<(f32, String, Option<String>)> = recent_procedural
             .iter()
             .filter_map(|n| {
                 let AinlNodeType::Procedural { procedural } = &n.node_type else {
@@ -874,8 +875,63 @@ pub async fn build_prompt_memory_context(
                 } else {
                     recency_score(procedural.last_invoked_at as i64, now_ts)
                 };
-                let score = (base * 0.8) + (freshness * 0.2);
-                let mut line = if !procedural.tool_sequence.is_empty() {
+                let mut score = (base * 0.8) + (freshness * 0.2);
+                let artifact =
+                    serde_json::from_slice::<ProcedureArtifact>(&procedural.compiled_graph).ok();
+                let procedure_id = artifact.as_ref().map(|artifact| artifact.id.clone());
+                if let Some(artifact) = artifact.as_ref() {
+                    let has_failure_risk = !artifact.known_failures.is_empty()
+                        || !artifact.source_failure_ids.is_empty();
+                    if context_freshness == Some(ContextFreshness::Stale) && has_failure_risk {
+                        return None;
+                    }
+                    let available_tools = if procedural.tool_sequence.is_empty() {
+                        artifact.required_tools.clone()
+                    } else {
+                        procedural.tool_sequence.clone()
+                    };
+                    let reuse = ainl_procedure_learning::score_reuse(
+                        artifact,
+                        user_message.unwrap_or_default(),
+                        &available_tools,
+                    );
+                    score = (score * 0.35) + (reuse.score * 0.65);
+                    if score < 0.35 {
+                        return None;
+                    }
+                }
+                let mut line = if let Some(artifact) = artifact.as_ref() {
+                    let tools = if artifact.required_tools.is_empty() {
+                        procedural.tool_sequence.join(" -> ")
+                    } else {
+                        artifact.required_tools.join(" -> ")
+                    };
+                    if score >= 0.72 {
+                        let checks = artifact
+                            .verification
+                            .checks
+                            .iter()
+                            .take(2)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("; ");
+                        format!(
+                            "{}: {} [{}]{}",
+                            artifact.title,
+                            artifact.intent,
+                            tools,
+                            if checks.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" verify: {checks}")
+                            }
+                        )
+                    } else if tools.is_empty() {
+                        format!("{}: {}", artifact.title, artifact.summary)
+                    } else {
+                        format!("{}: {} [{}]", artifact.title, artifact.summary, tools)
+                    }
+                } else if !procedural.tool_sequence.is_empty() {
                     format!(
                         "{} -> {}",
                         if procedural.pattern_name.is_empty() {
@@ -902,16 +958,21 @@ pub async fn build_prompt_memory_context(
                         line.push_str(&format!(" [trace:{}]", short_id_str(trace_id)));
                     }
                 }
-                Some((score, line))
+                Some((score, line, procedure_id))
             })
             .collect();
         procedure_scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
+        ctx.selected_procedure_ids = procedure_scored
+            .iter()
+            .filter_map(|(_, _, id)| id.clone())
+            .take(policy.max_procedural_lines)
+            .collect();
         let selected_before = ctx.procedural_lines.len();
         append_limited_lines(
             &mut ctx.procedural_lines,
             procedure_scored
                 .into_iter()
-                .map(|(_, line)| truncate_with_ellipsis(&line, 180))
+                .map(|(_, line, _)| truncate_with_ellipsis(&line, 180))
                 .collect(),
             policy.max_procedural_lines,
             policy.max_procedural_chars,
@@ -1287,6 +1348,52 @@ mod tests {
         inner.write_node(&node).expect("write pattern candidate");
     }
 
+    async fn write_procedure_artifact(writer: &crate::graph_memory_writer::GraphMemoryWriter) {
+        let artifact = test_procedure_artifact(vec![], vec![]);
+        let inner = writer.inner.lock().await;
+        inner
+            .write_procedure_artifact_for_agent(writer.agent_id(), &artifact)
+            .expect("write procedure artifact");
+    }
+
+    async fn write_risky_procedure_artifact(
+        writer: &crate::graph_memory_writer::GraphMemoryWriter,
+    ) {
+        let artifact = test_procedure_artifact(vec!["prior timeout".into()], vec!["f1".into()]);
+        let inner = writer.inner.lock().await;
+        inner
+            .write_procedure_artifact_for_agent(writer.agent_id(), &artifact)
+            .expect("write risky procedure artifact");
+    }
+
+    fn test_procedure_artifact(
+        known_failures: Vec<String>,
+        source_failure_ids: Vec<String>,
+    ) -> ProcedureArtifact {
+        ProcedureArtifact {
+            schema_version: ainl_contracts::LEARNER_SCHEMA_VERSION,
+            id: "proc:artifact".into(),
+            title: "Artifact Procedure".into(),
+            intent: "review pull requests safely".into(),
+            summary: "Use the proven PR review workflow.".into(),
+            required_tools: vec!["file_read".into(), "shell_exec".into()],
+            required_adapters: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            preconditions: vec![],
+            steps: vec![],
+            verification: Default::default(),
+            known_failures,
+            recovery: vec![],
+            source_trajectory_ids: vec![],
+            source_failure_ids,
+            fitness: 0.95,
+            observation_count: 3,
+            lifecycle: ainl_contracts::ProcedureLifecycle::Validated,
+            render_targets: vec![ainl_contracts::ProcedureArtifactFormat::PromptOnly],
+        }
+    }
+
     async fn write_tool_failure(
         writer: &crate::graph_memory_writer::GraphMemoryWriter,
         tool_name: &str,
@@ -1443,6 +1550,49 @@ mod tests {
             .procedural_lines
             .iter()
             .all(|line| !line.contains("retired_proc")));
+    }
+
+    #[tokio::test]
+    async fn procedure_artifacts_render_rich_prompt_hints() {
+        let writer = test_writer("ctx-proc-artifact");
+        write_procedure_artifact(&writer).await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            Some("please review this pull request"),
+            false,
+            None,
+        )
+        .await;
+        let line = ctx.procedural_lines.join("\n");
+        assert!(line.contains("Artifact Procedure"), "{line}");
+        assert!(line.contains("review pull requests safely"), "{line}");
+        assert!(line.contains("file_read -> shell_exec"), "{line}");
+        assert_eq!(
+            ctx.selected_procedure_ids,
+            vec!["proc:artifact".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn procedure_artifact_with_failure_risk_is_gated_when_context_stale() {
+        let writer = test_writer("ctx-proc-risk");
+        write_risky_procedure_artifact(&writer).await;
+        let ctx = build_prompt_memory_context(
+            &writer,
+            &MemoryContextPolicy::default(),
+            Some("please review this pull request"),
+            false,
+            Some(ContextFreshness::Stale),
+        )
+        .await;
+        assert!(
+            ctx.procedural_lines
+                .iter()
+                .all(|line| !line.contains("Artifact Procedure")),
+            "{:?}",
+            ctx.procedural_lines
+        );
     }
 
     #[tokio::test]

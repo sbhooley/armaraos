@@ -47,6 +47,20 @@ pub fn improvement_proposals_metrics() -> serde_json::Value {
     improvement_proposals_host::metrics_snapshot()
 }
 
+/// Counters for post-turn background learning work.
+#[must_use]
+pub fn post_turn_learning_metrics() -> serde_json::Value {
+    let mut v = post_turn_learning::metrics_snapshot();
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(proc_obj) = procedure_learning_host::metrics_snapshot().as_object() {
+            for (k, val) in proc_obj {
+                obj.insert(k.clone(), val.clone());
+            }
+        }
+    }
+    v
+}
+
 /// Runtime counters for ainl-runtime bridge cache behavior.
 #[must_use]
 pub fn ainl_runtime_bridge_metrics() -> serde_json::Value {
@@ -84,6 +98,7 @@ pub use ainl_bridge_telemetry::{AinlBridgeTelemetry, AinlBridgeTurnStatus};
 
 pub mod a2a;
 pub mod agent_loop;
+pub mod agent_tool_round;
 pub mod ainl_graph_extractor_bridge;
 #[cfg(feature = "ainl-runtime-engine")]
 pub mod ainl_runtime_bridge;
@@ -144,6 +159,8 @@ pub mod persona_evolution;
 pub mod plan_executor;
 pub mod planner_metrics;
 pub mod planner_mode;
+pub mod post_turn_learning;
+pub mod procedure_learning_host;
 pub mod process_manager;
 pub mod prompt_builder;
 pub mod prompt_compressor;

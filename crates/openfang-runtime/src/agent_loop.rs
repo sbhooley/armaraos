@@ -18,6 +18,7 @@
 //! applies **`AINL_LEARNING`** / `manifest.metadata["ainl_learning"]` as a master off-switch, then
 //! existing per-subsystem envs; all failure ingest is centralized there (sanitization + metrics).
 
+use crate::agent_tool_round::ToolRoundExecutor;
 use crate::auth_cooldown::{CooldownVerdict, ProviderCooldown};
 use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
@@ -449,7 +450,7 @@ fn graph_memory_expected_db_path(agent_id: &openfang_types::agent::AgentId) -> s
 /// Path resolution matches [`crate::graph_memory_writer::armaraos_graph_memory_export_json_path`]:
 /// optional `AINL_GRAPH_MEMORY_ARMARAOS_EXPORT` (**directory**) → `{dir}/{agent_id}_graph_export.json`,
 /// else `{openfang_home_dir()}/agents/{agent_id}/ainl_graph_memory_export.json`.
-async fn graph_memory_refresh_armaraos_export_json(agent_id: &str) {
+pub(crate) async fn graph_memory_refresh_armaraos_export_json(agent_id: &str) {
     let path = crate::graph_memory_writer::armaraos_graph_memory_export_json_path(agent_id);
     if let Some(parent) = path.parent() {
         if let Err(e) = tokio::fs::create_dir_all(parent).await {
@@ -1005,6 +1006,108 @@ struct ToolErrorTracker {
     same_fingerprint_streak: usize,
 }
 
+/// Summary of an AINL authoring failure that must be repaired before the model is allowed
+/// to finish the turn. AINL MCP tools can fail semantically (`ok: false`) while the MCP
+/// transport itself succeeds; `tool_runner` promotes that to `is_error = true`, and this
+/// guard prevents the follow-up LLM turn from narrating success on top of the failed authoring
+/// step.
+#[derive(Debug, Clone, Default)]
+struct PendingAinlAuthoringFailure {
+    tool_name: String,
+    summary: String,
+    blocked_final_attempts: u32,
+}
+
+const MAX_AINL_AUTHORING_PREMATURE_FINAL_ATTEMPTS: u32 = 3;
+
+fn is_ainl_authoring_gate_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "mcp_ainl_ainl_validate" | "mcp_ainl_ainl_compile" | "mcp_ainl_ainl_run"
+    )
+}
+
+fn ainl_authoring_failure_from_tool_results(
+    tool_result_blocks: &[ContentBlock],
+) -> Option<PendingAinlAuthoringFailure> {
+    tool_result_blocks.iter().find_map(|b| {
+        let ContentBlock::ToolResult {
+            tool_name,
+            content,
+            is_error: true,
+            ..
+        } = b
+        else {
+            return None;
+        };
+        if !is_ainl_authoring_gate_tool(tool_name) {
+            return None;
+        }
+        Some(PendingAinlAuthoringFailure {
+            tool_name: tool_name.clone(),
+            summary: content.chars().take(1_200).collect(),
+            blocked_final_attempts: 0,
+        })
+    })
+}
+
+fn ainl_authoring_success_in_tool_results(
+    tool_result_blocks: &[ContentBlock],
+    pending: Option<&PendingAinlAuthoringFailure>,
+) -> bool {
+    tool_result_blocks.iter().any(|b| {
+        matches!(
+            b,
+            ContentBlock::ToolResult {
+                tool_name,
+                content,
+                is_error: false,
+                ..
+            } if is_ainl_authoring_gate_tool(tool_name)
+                && pending
+                    .map(|p| p.tool_name.as_str() == tool_name.as_str())
+                    .unwrap_or(true)
+                && serde_json::from_str::<serde_json::Value>(content)
+                    .ok()
+                    .and_then(|v| v.get("ok").and_then(|ok| ok.as_bool()))
+                    == Some(true)
+        )
+    })
+}
+
+fn ainl_authoring_tool_label(tool_name: &str) -> &'static str {
+    match tool_name {
+        "mcp_ainl_ainl_validate" => "validation",
+        "mcp_ainl_ainl_compile" => "compilation",
+        "mcp_ainl_ainl_run" => "execution",
+        _ => "authoring",
+    }
+}
+
+fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) -> String {
+    let label = ainl_authoring_tool_label(&pending.tool_name);
+    let tool = &pending.tool_name;
+    let summary = &pending.summary;
+    format!(
+        "[System: `{tool}` reported an AINL {label} failure. \
+         You may not claim the workflow is fixed, ready, executed, scheduled, or successful yet. \
+         Do not downgrade to strict=false or call the strict failure \"non-blocking\". \
+         You must use file_read/file_write/apply_patch as needed to fix the diagnostic, then call \
+         `{tool}` again with the updated source/arguments. Continue this repair → retry loop \
+         until `{tool}` returns `ok: true`.\n\nLast AINL {label} failure:\n{summary}]"
+    )
+}
+
+fn ainl_authoring_unresolved_summary(pending: &PendingAinlAuthoringFailure) -> String {
+    let label = ainl_authoring_tool_label(&pending.tool_name);
+    format!(
+        "I could not complete the task because `{}` still reports an AINL {label} failure. \
+         I will not claim it ran successfully until that tool returns `ok: true`.\n\n\
+         Last AINL {label} failure:\n{}",
+        pending.tool_name, pending.summary
+    )
+}
+
 impl ToolErrorTracker {
     fn new() -> Self {
         Self {
@@ -1171,6 +1274,81 @@ pub enum LoopPhase {
 pub type PhaseCallback = Arc<dyn Fn(LoopPhase) + Send + Sync>;
 
 /// Result of an agent loop execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLoopOutcome {
+    /// The agent completed the requested turn without a known blocking failure.
+    Completed,
+    /// The agent intentionally produced no user-visible response.
+    Silent,
+    /// The runtime returned a safe failure message instead of allowing a false success.
+    FailedSafely,
+    /// Repeated loop-guard blocks stopped the loop.
+    BlockedByLoopGuard,
+    /// The upstream model/provider returned repeated empty or unusable responses.
+    ProviderFailure,
+    /// The loop hit the continuation cap while the model was still producing text.
+    MaxContinuations,
+    /// The loop hit the iteration cap before reaching a normal final answer.
+    MaxIterations,
+    /// AINL authoring/validation failed and was not repaired before the turn ended.
+    AinlAuthoringUnresolved,
+    /// The deterministic planner path completed the turn.
+    PlannerCompleted,
+}
+
+impl AgentLoopOutcome {
+    pub fn is_task_success(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Silent | Self::PlannerCompleted
+        )
+    }
+}
+
+fn select_turn_vitals(
+    provider_vitals: Option<&openfang_types::vitals::CognitiveVitals>,
+    final_response: &str,
+    tool_calls_count: usize,
+) -> Option<openfang_types::vitals::CognitiveVitals> {
+    provider_vitals
+        .cloned()
+        .or_else(|| crate::vitals_classifier::classify_from_text(final_response, tool_calls_count))
+}
+
+fn vitals_record_fields(
+    vitals: Option<&openfang_types::vitals::CognitiveVitals>,
+) -> (Option<String>, Option<String>, Option<f32>) {
+    vitals
+        .map(|v| {
+            (
+                Some(v.gate.as_str().to_string()),
+                Some(v.phase.clone()),
+                Some(v.trust),
+            )
+        })
+        .unwrap_or((None, None, None))
+}
+
+fn trajectory_outcome_for_agent_loop(
+    outcome: AgentLoopOutcome,
+) -> ainl_contracts::TrajectoryOutcome {
+    match outcome {
+        AgentLoopOutcome::Completed
+        | AgentLoopOutcome::Silent
+        | AgentLoopOutcome::PlannerCompleted => ainl_contracts::TrajectoryOutcome::Success,
+        AgentLoopOutcome::MaxContinuations | AgentLoopOutcome::MaxIterations => {
+            ainl_contracts::TrajectoryOutcome::PartialSuccess
+        }
+        AgentLoopOutcome::BlockedByLoopGuard | AgentLoopOutcome::AinlAuthoringUnresolved => {
+            ainl_contracts::TrajectoryOutcome::Failure
+        }
+        AgentLoopOutcome::FailedSafely | AgentLoopOutcome::ProviderFailure => {
+            ainl_contracts::TrajectoryOutcome::Aborted
+        }
+    }
+}
+
+/// Result of an agent loop execution.
 #[derive(Debug)]
 pub struct AgentLoopResult {
     /// The final text response from the agent.
@@ -1183,6 +1361,9 @@ pub struct AgentLoopResult {
     pub cost_usd: Option<f64>,
     /// True when the agent intentionally chose not to reply (NO_REPLY token or [[silent]]).
     pub silent: bool,
+    /// Machine-readable outcome for telemetry, learning, and UI status. This separates a
+    /// transport-level successful loop return from task-level success.
+    pub outcome: AgentLoopOutcome,
     /// Reply directives extracted from the agent's response.
     pub directives: openfang_types::message::ReplyDirectives,
     /// Wall time for the full agent loop (LLM + tools), for dashboard latency.
@@ -1785,6 +1966,7 @@ pub async fn run_agent_loop(
 
     // Persona hook: query AINL graph memory for PersonaNodes and prepend
     // to system prompt so the agent's learned traits affect every LLM call.
+    let mut selected_procedure_ids: Vec<String> = Vec::new();
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
             let context_freshness = crate::graph_memory_context::workspace_context_freshness_for_prompt(
@@ -1799,6 +1981,7 @@ pub async fn run_agent_loop(
                 context_freshness,
             )
             .await;
+            selected_procedure_ids = prompt_ctx.selected_procedure_ids.clone();
             if !prompt_ctx.is_empty() {
                 if crate::compose_telemetry::compose_graph_memory_as_segments_from_env() {
                     compose_system_base = Some(system_prompt.clone());
@@ -2086,6 +2269,9 @@ pub async fn run_agent_loop(
     let mut last_tools_called: std::collections::HashSet<String> = Default::default();
     // Per-tool trajectory steps accumulated across chained ToolUse rounds.
     let mut trajectory_steps_accum: Vec<ainl_contracts::TrajectoryStep> = Vec::new();
+    // If strict AINL validation fails, do not let the next model turn end with a success narrative.
+    // The model must edit and re-run `mcp_ainl_ainl_validate` until it returns `ok: true`.
+    let mut pending_ainl_authoring_failure: Option<PendingAinlAuthoringFailure> = None;
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -2512,6 +2698,7 @@ pub async fn run_agent_loop(
                                                     iterations: 1,
                                                     cost_usd: None,
                                                     silent: false,
+                                                    outcome: AgentLoopOutcome::PlannerCompleted,
                                                     directives: Default::default(),
                                                     latency_ms: Some(
                                                         loop_t0.elapsed().as_millis() as u64,
@@ -2662,6 +2849,21 @@ pub async fn run_agent_loop(
                 // [SILENT] must not be stored literally — it reinforces silence in future turns.
                 let wants_silent =
                     crate::reply_directives::assistant_intended_silent(&text, &parsed_directives);
+                if wants_silent {
+                    if let Some(pending) = pending_ainl_authoring_failure.as_mut() {
+                        pending.blocked_final_attempts += 1;
+                        let pending_snapshot = pending.clone();
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "Model attempted silent final response after failed AINL authoring step; forcing repair loop"
+                        );
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(
+                            &pending_snapshot,
+                        )));
+                        continue;
+                    }
+                }
                 if wants_silent && any_tools_executed && silent_tools_override_attempts < 2 {
                     silent_tools_override_attempts += 1;
                     warn!(
@@ -2693,6 +2895,7 @@ pub async fn run_agent_loop(
                         iterations: iteration + 1,
                         cost_usd: None,
                         silent: true,
+                        outcome: AgentLoopOutcome::Silent,
                         directives: openfang_types::message::ReplyDirectives {
                             reply_to: parsed_directives.reply_to,
                             current_thread: parsed_directives.current_thread,
@@ -2762,6 +2965,7 @@ pub async fn run_agent_loop(
                                 iterations: iteration + 1,
                                 cost_usd: None,
                                 silent: false,
+                                outcome: AgentLoopOutcome::ProviderFailure,
                                 directives: Default::default(),
                                 latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                                 llm_fallback_note: llm_fallback_note.clone(),
@@ -2824,6 +3028,34 @@ pub async fn run_agent_loop(
                         "[Task completed — the agent executed tools but did not produce a text summary.]".to_string()
                     } else {
                         "[The model returned an empty response. This usually means the model is overloaded, the context is too large, or the API key lacks credits. Try again or check /status.]".to_string()
+                    }
+                } else {
+                    text
+                };
+                let mut final_outcome = AgentLoopOutcome::Completed;
+                let text = if let Some(pending) = pending_ainl_authoring_failure.as_mut() {
+                    pending.blocked_final_attempts += 1;
+                    let pending_snapshot = pending.clone();
+                    if pending.blocked_final_attempts
+                        >= MAX_AINL_AUTHORING_PREMATURE_FINAL_ATTEMPTS
+                    {
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "AINL validate failure remained unresolved; returning safe failure summary"
+                        );
+                        pending_ainl_authoring_failure = None;
+                        final_outcome = AgentLoopOutcome::AinlAuthoringUnresolved;
+                        ainl_authoring_unresolved_summary(&pending_snapshot)
+                    } else {
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "Model attempted to finish after failed AINL validate; forcing repair loop"
+                        );
+                        messages.push(Message::assistant(text));
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(pending)));
+                        continue;
                     }
                 } else {
                     text
@@ -2927,10 +3159,13 @@ pub async fn run_agent_loop(
                     let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
                         &tools_for_episode,
                     );
+                    let turn_vitals = select_turn_vitals(
+                        response.vitals.as_ref(),
+                        &final_response,
+                        turn_tool_names.len(),
+                    );
                     let (ep_vitals_gate, ep_vitals_phase, ep_vitals_trust) =
-                        response.vitals.as_ref().map(|v| {
-                            (Some(v.gate.as_str().to_string()), Some(v.phase.clone()), Some(v.trust))
-                        }).unwrap_or((None, None, None));
+                        vitals_record_fields(turn_vitals.as_ref());
                     if let Some(episode_id) = gm
                         .record_turn(
                             tools_for_episode.clone(),
@@ -2968,9 +3203,12 @@ pub async fn run_agent_loop(
                             )
                             .await;
                         }
+                        let mut pending_pattern_promotion: Option<
+                            crate::graph_memory_writer::PatternUpsertOutcome,
+                        > = None;
                         if let Some(pattern) = turn_pattern {
                             if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
-                                response.vitals.as_ref().map(|v| v.gate),
+                                turn_vitals.as_ref().map(|v| v.gate),
                             ) {
                                 let outcome = gm
                                     .record_pattern_with_outcome(
@@ -2981,15 +3219,8 @@ pub async fn run_agent_loop(
                                         mem_pid.as_deref(),
                                     )
                                     .await;
-                                if let Some(outcome) = outcome {
-                                    if outcome.just_promoted {
-                                        learning.maybe_auto_submit_pattern_promotion(
-                                            openfang_types::config::openfang_home_dir(),
-                                            agent_id_str.clone(),
-                                            &outcome,
-                                        );
-                                    }
-                                }
+                                pending_pattern_promotion =
+                                    outcome.filter(|outcome| outcome.just_promoted);
                             } else {
                                 debug!(
                                     agent_id = %agent_id_str,
@@ -3014,6 +3245,7 @@ pub async fn run_agent_loop(
                         let trajectory_frame = crate::graph_memory_writer::trajectory_turn_frame_vars(
                             ep_vitals_trust,
                             compression_semantic_score,
+                            &selected_procedure_ids,
                         );
                         let trajectory_fitness = crate::trajectory_fitness_state::vitals_trust_fitness_delta(
                             agent_id_str.as_str(),
@@ -3023,7 +3255,7 @@ pub async fn run_agent_loop(
                             episode_id,
                             &tools_for_episode,
                             detailed,
-                            ainl_contracts::TrajectoryOutcome::Success,
+                            trajectory_outcome_for_agent_loop(final_outcome),
                             &session.id.to_string(),
                             project_id.as_deref(),
                             dur_ms,
@@ -3032,6 +3264,34 @@ pub async fn run_agent_loop(
                             trajectory_fitness,
                         )
                         .await;
+                        if let Some(outcome) = pending_pattern_promotion.as_ref() {
+                            learning.maybe_auto_submit_pattern_promotion(
+                                openfang_types::config::openfang_home_dir(),
+                                agent_id_str.clone(),
+                                outcome,
+                            );
+                        }
+                        if !selected_procedure_ids.is_empty() {
+                            let traj_outcome = trajectory_outcome_for_agent_loop(final_outcome);
+                            crate::procedure_learning_host::record_reuse_outcomes_for_selected_procedures(
+                                &openfang_types::config::openfang_home_dir(),
+                                agent_id_str.as_str(),
+                                &selected_procedure_ids,
+                                traj_outcome,
+                                (!final_outcome.is_task_success())
+                                    .then(|| format!("turn:{}:{:?}", session.id, final_outcome)),
+                                Some(format!("Agent loop ended with {:?}", final_outcome)),
+                            );
+                        }
+                        if !final_outcome.is_task_success() && !selected_procedure_ids.is_empty() {
+                            crate::procedure_learning_host::maybe_submit_patches_for_selected_procedures(
+                                &openfang_types::config::openfang_home_dir(),
+                                agent_id_str.as_str(),
+                                &selected_procedure_ids,
+                                &format!("turn:{}:{:?}", session.id, final_outcome),
+                                &format!("Agent loop ended with {:?}", final_outcome),
+                            );
+                        }
                     } else {
                         warn!(
                             agent_id = %session.agent_id,
@@ -3052,25 +3312,7 @@ pub async fn run_agent_loop(
                     // but `yield_now` lets the runtime finish scheduling work so the spawned reader is
                     // less likely to race the tail of the write path on the same SQLite connection.
                     tokio::task::yield_now().await;
-                    tokio::spawn(async move {
-                        let agent_id = gm.agent_id().to_string();
-                        let _report = gm.run_persona_evolution_pass().await;
-                        let _ = gm.run_background_memory_consolidation().await;
-                        if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
-                            &gm,
-                            &agent_id,
-                            &turn_outcome,
-                        )
-                        .await
-                        {
-                            warn!(
-                                agent_id = %agent_id,
-                                error = %e,
-                                "AINL persona turn evolution (AINL_PERSONA_EVOLUTION) failed; continuing"
-                            );
-                        }
-                        graph_memory_refresh_armaraos_export_json(&agent_id).await;
-                    });
+                    crate::post_turn_learning::spawn_persona_background(gm, turn_outcome, false);
                 }
                 } else {
                     crate::graph_memory_context::record_temp_mode_write_suppressed();
@@ -3160,6 +3402,7 @@ pub async fn run_agent_loop(
                     iterations: iteration + 1,
                     cost_usd: None,
                     silent: false,
+                    outcome: final_outcome,
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
@@ -3361,59 +3604,58 @@ pub async fn run_agent_loop(
                 } else {
                     None
                 };
-                let mut pending_slot: usize = 0;
-                let pending_futures: Vec<_> = dispatches
+                let pending_tool_calls: Vec<&&ToolCall> = dispatches
                     .iter()
-                    .filter_map(|d| {
-                        if let ToolDispatch::Pending { tool_call, .. } = d {
-                            let slot = pending_slot;
-                            pending_slot += 1;
+                    .filter_map(|d| match d {
+                        ToolDispatch::Pending { tool_call, .. } => Some(tool_call),
+                        ToolDispatch::Resolved(_) => None,
+                    })
+                    .collect();
+                let mut parallel_results = Vec::with_capacity(pending_tool_calls.len());
+                for batch in ToolRoundExecutor::ordered_batches(&pending_tool_calls, |tc| {
+                    ToolRoundExecutor::classify_lane(&tc.name)
+                }) {
+                    let pending_futs: Vec<_> = batch
+                        .clone()
+                        .map(|slot| {
+                            let tool_call = pending_tool_calls[slot];
                             let timeout = tool_timeout_for(&tool_call.name);
                             let cap = traj_capture_buf
                                 .as_ref()
                                 .map(|b| (std::sync::Arc::clone(b), slot));
-                            Some((
-                                tool_call,
-                                tokio::time::timeout(
-                                    timeout,
-                                    tool_runner::execute_tool_with_trajectory(
-                                        &tool_call.id,
-                                        &tool_call.name,
-                                        &tool_call.input,
-                                        kernel.as_ref(),
-                                        Some(&allowed_tool_names),
-                                        Some(&caller_id_str),
-                                        skill_registry,
-                                        mcp_connections,
-                                        web_ctx,
-                                        browser_ctx,
-                                        if hand_allowed_env.is_empty() {
-                                            None
-                                        } else {
-                                            Some(&hand_allowed_env)
-                                        },
-                                        workspace_root,
-                                        ainl_library_root,
-                                        media_engine,
-                                        effective_exec_policy,
-                                        tts_engine,
-                                        docker_config,
-                                        process_manager,
-                                        orchestration_live,
-                                        cap,
-                                    ),
+                            tokio::time::timeout(
+                                timeout,
+                                tool_runner::execute_tool_with_trajectory(
+                                    &tool_call.id,
+                                    &tool_call.name,
+                                    &tool_call.input,
+                                    kernel.as_ref(),
+                                    Some(&allowed_tool_names),
+                                    Some(&caller_id_str),
+                                    skill_registry,
+                                    mcp_connections,
+                                    web_ctx,
+                                    browser_ctx,
+                                    if hand_allowed_env.is_empty() {
+                                        None
+                                    } else {
+                                        Some(&hand_allowed_env)
+                                    },
+                                    workspace_root,
+                                    ainl_library_root,
+                                    media_engine,
+                                    effective_exec_policy,
+                                    tts_engine,
+                                    docker_config,
+                                    process_manager,
+                                    orchestration_live,
+                                    cap,
                                 ),
-                            ))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                // Collect futures while preserving their association with the tool_call metadata
-                let (pending_tool_calls, pending_futs): (Vec<&&ToolCall>, Vec<_>) =
-                    pending_futures.into_iter().unzip();
-                let parallel_results = futures::future::join_all(pending_futs).await;
+                            )
+                        })
+                        .collect();
+                    parallel_results.extend(futures::future::join_all(pending_futs).await);
+                }
 
                 if let Some(buf) = traj_capture_buf {
                     match Arc::try_unwrap(buf) {
@@ -3481,12 +3723,20 @@ pub async fn run_agent_loop(
 
                             let content =
                                 truncate_tool_result_dynamic(&result.content, &context_budget);
-                            let final_content =
+                            let mut final_content =
                                 if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
                                     format!("{content}\n\n[LOOP GUARD] {warn_msg}")
                                 } else {
                                     content
                                 };
+                            if let Some(outcome_msg) = loop_guard.record_outcome(
+                                &tool_call.name,
+                                &tool_call.input,
+                                &result.content,
+                            ) {
+                                final_content
+                                    .push_str(&format!("\n\n[LOOP GUARD] {outcome_msg}"));
+                            }
 
                             tool_result_blocks.push(ContentBlock::ToolResult {
                                 tool_use_id: result.tool_use_id,
@@ -3538,6 +3788,7 @@ pub async fn run_agent_loop(
                             iterations: iteration + 1,
                             cost_usd: None,
                             silent: false,
+                            outcome: AgentLoopOutcome::BlockedByLoopGuard,
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
@@ -3563,6 +3814,17 @@ pub async fn run_agent_loop(
                     },
                         });
                     }
+                }
+
+                if ainl_authoring_success_in_tool_results(
+                    &tool_result_blocks,
+                    pending_ainl_authoring_failure.as_ref(),
+                ) {
+                    pending_ainl_authoring_failure = None;
+                }
+                if let Some(pending) = ainl_authoring_failure_from_tool_results(&tool_result_blocks)
+                {
+                    pending_ainl_authoring_failure = Some(pending);
                 }
 
                 // Approval denials: always inject — the model must not retry denied tools.
@@ -3612,17 +3874,27 @@ pub async fn run_agent_loop(
                 // the LLM to stop calling tools and produce a text summary. This prevents
                 // a hard MaxIterationsExceeded error for agents stuck in a tool loop.
                 if iteration + 1 + 3 >= max_iterations {
-                    warn!(
-                        agent = %manifest.name,
-                        iteration,
-                        max_iterations,
-                        "Approaching iteration limit — injecting wrap-up prompt"
-                    );
-                    messages.push(Message::user(
-                        "[System: You are very close to the maximum number of allowed steps. \
-                         Stop calling tools now. Write a final text response summarizing \
-                         what you have done and any results or next steps for the user.]",
-                    ));
+                    if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+                        warn!(
+                            agent = %manifest.name,
+                            iteration,
+                            max_iterations,
+                            "Approaching iteration limit with unresolved AINL authoring failure"
+                        );
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(pending)));
+                    } else {
+                        warn!(
+                            agent = %manifest.name,
+                            iteration,
+                            max_iterations,
+                            "Approaching iteration limit — injecting wrap-up prompt"
+                        );
+                        messages.push(Message::user(
+                            "[System: You are very close to the maximum number of allowed steps. \
+                             Stop calling tools now. Write a final text response summarizing \
+                             what you have done and any results or next steps for the user.]",
+                        ));
+                    }
                 }
 
                 // Interim save after tool execution to prevent data loss on crash
@@ -3634,12 +3906,22 @@ pub async fn run_agent_loop(
                 consecutive_max_tokens += 1;
                 if consecutive_max_tokens >= runtime_limits.max_continuations {
                     // Return partial response instead of continuing forever
-                    let text = response.text();
-                    let text = if text.trim().is_empty() {
-                        "[Partial response — token limit reached with no text output.]".to_string()
-                    } else {
-                        text
-                    };
+                    let (text, outcome) =
+                        if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+                            (
+                                ainl_authoring_unresolved_summary(pending),
+                                AgentLoopOutcome::AinlAuthoringUnresolved,
+                            )
+                        } else {
+                            let text = response.text();
+                            let text = if text.trim().is_empty() {
+                                "[Partial response — token limit reached with no text output.]"
+                                    .to_string()
+                            } else {
+                                text
+                            };
+                            (text, AgentLoopOutcome::MaxContinuations)
+                        };
                     session.messages.push(Message::assistant(&text));
                     if let Err(e) = memory.save_session_async(session).await {
                         warn!("Failed to save session on max continuations: {e}");
@@ -3668,6 +3950,7 @@ pub async fn run_agent_loop(
                         iterations: iteration + 1,
                         cost_usd: None,
                         silent: false,
+                        outcome,
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
@@ -3712,11 +3995,22 @@ pub async fn run_agent_loop(
         "Agent loop hit max iterations — returning graceful fallback response"
     );
 
-    let fallback = format!(
-        "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
-         If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
-         If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
-    );
+    let (fallback, fallback_outcome) =
+        if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+            (
+                ainl_authoring_unresolved_summary(pending),
+                AgentLoopOutcome::AinlAuthoringUnresolved,
+            )
+        } else {
+            (
+                format!(
+                    "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
+                     If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
+                     If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
+                ),
+                AgentLoopOutcome::MaxIterations,
+            )
+        };
     session.messages.push(Message::assistant(&fallback));
 
     if let Err(e) = memory.save_session_async(session).await {
@@ -3742,6 +4036,7 @@ pub async fn run_agent_loop(
         iterations: max_iterations,
         cost_usd: None,
         silent: false,
+        outcome: fallback_outcome,
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
@@ -4402,7 +4697,7 @@ pub async fn run_agent_loop_streaming(
     btw_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     redirect_rx: Option<tokio::sync::mpsc::Receiver<String>>,
     runtime_limits: EffectiveRuntimeLimits,
-    _planner_model_tier: Option<openfang_types::model_catalog::ModelTier>,
+    planner_model_tier: Option<openfang_types::model_catalog::ModelTier>,
     orchestration_ctx: Option<openfang_types::orchestration::OrchestrationContext>,
     orchestration_live: Option<&tool_runner::OrchestrationLive>,
 ) -> OpenFangResult<AgentLoopResult> {
@@ -4442,6 +4737,78 @@ pub async fn run_agent_loop_streaming(
                 let live_llm = kernel
                     .as_ref()
                     .and_then(|k| k.live_llm_config());
+
+                let provider_name = manifest.model.provider.as_str();
+                let provider_url = kernel
+                    .as_ref()
+                    .and_then(|k| k.lookup_provider_url(provider_name));
+                let provider_is_inference_server =
+                    provider_is_ainl_inference_server(provider_name, provider_url.as_deref());
+                let native_infer_url =
+                    effective_native_infer_base_url(provider_name, provider_url.as_deref());
+                let planner_mode_on = resolve_planner_mode(
+                    &manifest.metadata,
+                    &manifest.model.model,
+                    planner_model_tier,
+                    provider_is_inference_server,
+                );
+                let streaming_planner_path_eligible =
+                    planner_mode_on && native_infer_url.is_some() && graph_memory.is_some();
+                if streaming_planner_path_eligible {
+                    let _ = stream_tx
+                        .send(StreamEvent::PhaseChange {
+                            phase: "planner".to_string(),
+                            detail: Some(
+                                "native planner path selected; streaming final result".to_string(),
+                            ),
+                        })
+                        .await;
+                    let result = run_agent_loop(
+                        manifest,
+                        user_message,
+                        session,
+                        memory,
+                        driver,
+                        available_tools,
+                        kernel,
+                        skill_registry,
+                        mcp_connections,
+                        web_ctx,
+                        browser_ctx,
+                        embedding_driver,
+                        workspace_root,
+                        ainl_library_root,
+                        on_phase,
+                        media_engine,
+                        tts_engine,
+                        docker_config,
+                        hooks,
+                        context_window_tokens,
+                        process_manager,
+                        user_content_blocks,
+                        btw_rx,
+                        redirect_rx,
+                        runtime_limits,
+                        planner_model_tier,
+                        orchestration_ctx,
+                        orchestration_live,
+                    )
+                    .await?;
+                    if !result.silent && !result.response.is_empty() {
+                        let _ = stream_tx
+                            .send(StreamEvent::TextDelta {
+                                text: result.response.clone(),
+                            })
+                            .await;
+                    }
+                    let _ = stream_tx
+                        .send(StreamEvent::ContentComplete {
+                            stop_reason: StopReason::EndTurn,
+                            usage: result.total_usage,
+                        })
+                        .await;
+                    return Ok(result);
+                }
 
     // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
     let hand_allowed_env: Vec<String> = manifest
@@ -4546,6 +4913,7 @@ pub async fn run_agent_loop_streaming(
         system_prompt.push_str(&octx.system_prompt_appendix(runtime_limits.max_agent_call_depth));
     }
 
+    let mut selected_procedure_ids: Vec<String> = Vec::new();
     if memory_policy.allow_reads() {
         if let Some(ref gm) = graph_memory {
             let context_freshness = crate::graph_memory_context::workspace_context_freshness_for_prompt(
@@ -4560,6 +4928,7 @@ pub async fn run_agent_loop_streaming(
                 context_freshness,
             )
             .await;
+            selected_procedure_ids = prompt_ctx.selected_procedure_ids.clone();
             if !prompt_ctx.is_empty() {
                 if crate::compose_telemetry::compose_graph_memory_as_segments_from_env() {
                     compose_system_base = Some(system_prompt.clone());
@@ -4842,6 +5211,9 @@ pub async fn run_agent_loop_streaming(
     let mut last_tools_called: std::collections::HashSet<String> = Default::default();
     // Per-tool trajectory steps accumulated across chained ToolUse rounds.
     let mut trajectory_steps_accum: Vec<ainl_contracts::TrajectoryStep> = Vec::new();
+    // Streaming path mirrors the non-streaming loop: strict AINL validate failure is a pending
+    // repair obligation until a later `mcp_ainl_ainl_validate` returns `ok: true`.
+    let mut pending_ainl_authoring_failure: Option<PendingAinlAuthoringFailure> = None;
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -5107,6 +5479,21 @@ pub async fn run_agent_loop_streaming(
                     &text,
                     &parsed_directives_s,
                 );
+                if wants_silent {
+                    if let Some(pending) = pending_ainl_authoring_failure.as_mut() {
+                        pending.blocked_final_attempts += 1;
+                        let pending_snapshot = pending.clone();
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "Model attempted silent final response after failed AINL authoring step (streaming); forcing repair loop"
+                        );
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(
+                            &pending_snapshot,
+                        )));
+                        continue;
+                    }
+                }
                 if wants_silent && any_tools_executed && silent_tools_override_attempts < 2 {
                     silent_tools_override_attempts += 1;
                     warn!(
@@ -5138,6 +5525,7 @@ pub async fn run_agent_loop_streaming(
                         iterations: iteration + 1,
                         cost_usd: None,
                         silent: true,
+                        outcome: AgentLoopOutcome::Silent,
                         directives: openfang_types::message::ReplyDirectives {
                             reply_to: parsed_directives_s.reply_to,
                             current_thread: parsed_directives_s.current_thread,
@@ -5203,6 +5591,7 @@ pub async fn run_agent_loop_streaming(
                                 iterations: iteration + 1,
                                 cost_usd: None,
                                 silent: false,
+                                outcome: AgentLoopOutcome::ProviderFailure,
                                 directives: Default::default(),
                                 latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                                 llm_fallback_note: llm_fallback_note.clone(),
@@ -5264,6 +5653,34 @@ pub async fn run_agent_loop_streaming(
                         "[Task completed — the agent executed tools but did not produce a text summary.]".to_string()
                     } else {
                         "[The model returned an empty response. This usually means the model is overloaded, the context is too large, or the API key lacks credits. Try again or check /status.]".to_string()
+                    }
+                } else {
+                    text
+                };
+                let mut final_outcome = AgentLoopOutcome::Completed;
+                let text = if let Some(pending) = pending_ainl_authoring_failure.as_mut() {
+                    pending.blocked_final_attempts += 1;
+                    let pending_snapshot = pending.clone();
+                    if pending.blocked_final_attempts
+                        >= MAX_AINL_AUTHORING_PREMATURE_FINAL_ATTEMPTS
+                    {
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "AINL validate failure remained unresolved; returning safe failure summary"
+                        );
+                        pending_ainl_authoring_failure = None;
+                        final_outcome = AgentLoopOutcome::AinlAuthoringUnresolved;
+                        ainl_authoring_unresolved_summary(&pending_snapshot)
+                    } else {
+                        warn!(
+                            agent = %manifest.name,
+                            attempts = pending.blocked_final_attempts,
+                            "Model attempted to finish after failed AINL validate; forcing repair loop"
+                        );
+                        messages.push(Message::assistant(text));
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(pending)));
+                        continue;
                     }
                 } else {
                     text
@@ -5360,14 +5777,12 @@ pub async fn run_agent_loop_streaming(
                     let episode_tags = crate::ainl_semantic_tagger_bridge::SemanticTaggerBridge::tag_episode(
                         &tools_for_episode,
                     );
-                    let stream_vitals = crate::vitals_classifier::classify_from_text(
+                    let stream_vitals = select_turn_vitals(
+                        response.vitals.as_ref(),
                         &final_response,
                         turn_tool_names.len(),
                     );
-                    let (sv_gate, sv_phase, sv_trust) = stream_vitals
-                        .as_ref()
-                        .map(|v| (Some(v.gate.as_str().to_string()), Some(v.phase.clone()), Some(v.trust)))
-                        .unwrap_or((None, None, None));
+                    let (sv_gate, sv_phase, sv_trust) = vitals_record_fields(stream_vitals.as_ref());
                     if let Some(episode_id) = gm
                         .record_turn(
                             tools_for_episode.clone(),
@@ -5405,6 +5820,9 @@ pub async fn run_agent_loop_streaming(
                             )
                             .await;
                         }
+                        let mut pending_pattern_promotion: Option<
+                            crate::graph_memory_writer::PatternUpsertOutcome,
+                        > = None;
                         if let Some(pattern) = turn_pattern {
                             if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
                                 stream_vitals.as_ref().map(|v| v.gate),
@@ -5418,15 +5836,8 @@ pub async fn run_agent_loop_streaming(
                                         mem_pid.as_deref(),
                                     )
                                     .await;
-                                if let Some(outcome) = outcome {
-                                    if outcome.just_promoted {
-                                        learning.maybe_auto_submit_pattern_promotion(
-                                            openfang_types::config::openfang_home_dir(),
-                                            agent_id_str.clone(),
-                                            &outcome,
-                                        );
-                                    }
-                                }
+                                pending_pattern_promotion =
+                                    outcome.filter(|outcome| outcome.just_promoted);
                             } else {
                                 debug!(
                                     agent_id = %agent_id_str,
@@ -5452,6 +5863,7 @@ pub async fn run_agent_loop_streaming(
                         let trajectory_frame = crate::graph_memory_writer::trajectory_turn_frame_vars(
                             v_trust,
                             compression_semantic_score,
+                            &selected_procedure_ids,
                         );
                         let trajectory_fitness = crate::trajectory_fitness_state::vitals_trust_fitness_delta(
                             agent_id_str.as_str(),
@@ -5461,7 +5873,7 @@ pub async fn run_agent_loop_streaming(
                             episode_id,
                             &tools_for_episode,
                             detailed,
-                            ainl_contracts::TrajectoryOutcome::Success,
+                            trajectory_outcome_for_agent_loop(final_outcome),
                             &session.id.to_string(),
                             project_id.as_deref(),
                             dur_ms,
@@ -5470,6 +5882,34 @@ pub async fn run_agent_loop_streaming(
                             trajectory_fitness,
                         )
                         .await;
+                        if let Some(outcome) = pending_pattern_promotion.as_ref() {
+                            learning.maybe_auto_submit_pattern_promotion(
+                                openfang_types::config::openfang_home_dir(),
+                                agent_id_str.clone(),
+                                outcome,
+                            );
+                        }
+                        if !selected_procedure_ids.is_empty() {
+                            let traj_outcome = trajectory_outcome_for_agent_loop(final_outcome);
+                            crate::procedure_learning_host::record_reuse_outcomes_for_selected_procedures(
+                                &openfang_types::config::openfang_home_dir(),
+                                agent_id_str.as_str(),
+                                &selected_procedure_ids,
+                                traj_outcome,
+                                (!final_outcome.is_task_success())
+                                    .then(|| format!("turn:{}:{:?}", session.id, final_outcome)),
+                                Some(format!("Agent loop ended with {:?}", final_outcome)),
+                            );
+                        }
+                        if !final_outcome.is_task_success() && !selected_procedure_ids.is_empty() {
+                            crate::procedure_learning_host::maybe_submit_patches_for_selected_procedures(
+                                &openfang_types::config::openfang_home_dir(),
+                                agent_id_str.as_str(),
+                                &selected_procedure_ids,
+                                &format!("turn:{}:{:?}", session.id, final_outcome),
+                                &format!("Agent loop ended with {:?}", final_outcome),
+                            );
+                        }
                     } else {
                         warn!(
                             agent_id = %session.agent_id,
@@ -5488,25 +5928,7 @@ pub async fn run_agent_loop_streaming(
                     };
                     // Same cooperative barrier as the non-streaming path (see above).
                     tokio::task::yield_now().await;
-                    tokio::spawn(async move {
-                        let agent_id = gm.agent_id().to_string();
-                        let _report = gm.run_persona_evolution_pass().await;
-                        let _ = gm.run_background_memory_consolidation().await;
-                        if let Err(e) = crate::persona_evolution::PersonaEvolutionHook::evolve_from_turn(
-                            &gm,
-                            &agent_id,
-                            &turn_outcome,
-                        )
-                        .await
-                        {
-                            warn!(
-                                agent_id = %agent_id,
-                                error = %e,
-                                "AINL persona turn evolution (AINL_PERSONA_EVOLUTION) failed; continuing (streaming)"
-                            );
-                        }
-                        graph_memory_refresh_armaraos_export_json(&agent_id).await;
-                    });
+                    crate::post_turn_learning::spawn_persona_background(gm, turn_outcome, true);
                 }
                 } else {
                     crate::graph_memory_context::record_temp_mode_write_suppressed();
@@ -5595,6 +6017,7 @@ pub async fn run_agent_loop_streaming(
                     iterations: iteration + 1,
                     cost_usd: None,
                     silent: false,
+                    outcome: final_outcome,
                     directives: Default::default(),
                     latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                     llm_fallback_note: llm_fallback_note.clone(),
@@ -5787,63 +6210,20 @@ pub async fn run_agent_loop_streaming(
                 } else {
                     None
                 };
-                let mut pending_slot_s: usize = 0;
-                let pending_futures_s: Vec<_> = dispatches_s
+                let pending_tcs_s: Vec<&&ToolCall> = dispatches_s
                     .iter()
-                    .filter_map(|d| {
-                        if let ToolDispatch::Pending { tool_call, .. } = d {
-                            let slot = pending_slot_s;
-                            pending_slot_s += 1;
-                            let timeout = tool_timeout_for(&tool_call.name);
-                            let cap = traj_capture_buf_s
-                                .as_ref()
-                                .map(|b| (std::sync::Arc::clone(b), slot));
-                            Some((
-                                tool_call,
-                                tokio::time::timeout(
-                                    timeout,
-                                    tool_runner::execute_tool_with_trajectory(
-                                        &tool_call.id,
-                                        &tool_call.name,
-                                        &tool_call.input,
-                                        kernel.as_ref(),
-                                        Some(&allowed_tool_names),
-                                        Some(&caller_id_str),
-                                        skill_registry,
-                                        mcp_connections,
-                                        web_ctx,
-                                        browser_ctx,
-                                        if hand_allowed_env.is_empty() {
-                                            None
-                                        } else {
-                                            Some(&hand_allowed_env)
-                                        },
-                                        workspace_root,
-                                        ainl_library_root,
-                                        media_engine,
-                                        effective_exec_policy,
-                                        tts_engine,
-                                        docker_config,
-                                        process_manager,
-                                        orchestration_live,
-                                        cap,
-                                    ),
-                                ),
-                            ))
-                        } else {
-                            None
-                        }
+                    .filter_map(|d| match d {
+                        ToolDispatch::Pending { tool_call, .. } => Some(tool_call),
+                        ToolDispatch::Resolved(_) => None,
                     })
                     .collect();
-
-                let (pending_tcs_s, pending_futs_s): (Vec<&&ToolCall>, Vec<_>) =
-                    pending_futures_s.into_iter().unzip();
-                let parallel_results_s = if pending_futs_s.is_empty() {
-                    Vec::new()
-                } else {
-                    let detail_base = pending_tcs_s
-                        .iter()
-                        .map(|tc| tc.name.as_str())
+                let mut parallel_results_s = Vec::with_capacity(pending_tcs_s.len());
+                for batch in ToolRoundExecutor::ordered_batches(&pending_tcs_s, |tc| {
+                    ToolRoundExecutor::classify_lane(&tc.name)
+                }) {
+                    let detail_base = batch
+                        .clone()
+                        .map(|slot| pending_tcs_s[slot].name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
                     let detail_base = if detail_base.is_empty() {
@@ -5851,12 +6231,54 @@ pub async fn run_agent_loop_streaming(
                     } else {
                         detail_base
                     };
+                    let pending_futs_s: Vec<_> = batch
+                        .clone()
+                        .map(|slot| {
+                            let tool_call = pending_tcs_s[slot];
+                            let timeout = tool_timeout_for(&tool_call.name);
+                            let cap = traj_capture_buf_s
+                                .as_ref()
+                                .map(|b| (std::sync::Arc::clone(b), slot));
+                            tokio::time::timeout(
+                                timeout,
+                                tool_runner::execute_tool_with_trajectory(
+                                    &tool_call.id,
+                                    &tool_call.name,
+                                    &tool_call.input,
+                                    kernel.as_ref(),
+                                    Some(&allowed_tool_names),
+                                    Some(&caller_id_str),
+                                    skill_registry,
+                                    mcp_connections,
+                                    web_ctx,
+                                    browser_ctx,
+                                    if hand_allowed_env.is_empty() {
+                                        None
+                                    } else {
+                                        Some(&hand_allowed_env)
+                                    },
+                                    workspace_root,
+                                    ainl_library_root,
+                                    media_engine,
+                                    effective_exec_policy,
+                                    tts_engine,
+                                    docker_config,
+                                    process_manager,
+                                    orchestration_live,
+                                    cap,
+                                ),
+                            )
+                        })
+                        .collect();
+                    if pending_futs_s.is_empty() {
+                        continue;
+                    }
                     let mut interval = tokio::time::interval(Duration::from_secs(4));
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     interval.tick().await;
                     let join_fut = futures::future::join_all(pending_futs_s);
                     tokio::pin!(join_fut);
-                    loop {
+                    let batch_results = loop {
                         tokio::select! {
                             biased;
                             res = &mut join_fut => break res,
@@ -5869,8 +6291,9 @@ pub async fn run_agent_loop_streaming(
                                     .await;
                             }
                         }
-                    }
-                };
+                    };
+                    parallel_results_s.extend(batch_results);
+                }
 
                 if let Some(buf) = traj_capture_buf_s {
                     match Arc::try_unwrap(buf) {
@@ -5936,12 +6359,20 @@ pub async fn run_agent_loop_streaming(
 
                             let content =
                                 truncate_tool_result_dynamic(&result.content, &context_budget);
-                            let final_content =
+                            let mut final_content =
                                 if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
                                     format!("{content}\n\n[LOOP GUARD] {warn_msg}")
                                 } else {
                                     content
                                 };
+                            if let Some(outcome_msg) = loop_guard.record_outcome(
+                                &tool_call.name,
+                                &tool_call.input,
+                                &result.content,
+                            ) {
+                                final_content
+                                    .push_str(&format!("\n\n[LOOP GUARD] {outcome_msg}"));
+                            }
 
                             let preview: String = final_content.chars().take(300).collect();
                             if stream_tx
@@ -6009,6 +6440,7 @@ pub async fn run_agent_loop_streaming(
                             iterations: iteration + 1,
                             cost_usd: None,
                             silent: false,
+                            outcome: AgentLoopOutcome::BlockedByLoopGuard,
                             directives: Default::default(),
                             latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                             llm_fallback_note: llm_fallback_note.clone(),
@@ -6034,6 +6466,17 @@ pub async fn run_agent_loop_streaming(
                     },
                         });
                     }
+                }
+
+                if ainl_authoring_success_in_tool_results(
+                    &tool_result_blocks,
+                    pending_ainl_authoring_failure.as_ref(),
+                ) {
+                    pending_ainl_authoring_failure = None;
+                }
+                if let Some(pending) = ainl_authoring_failure_from_tool_results(&tool_result_blocks)
+                {
+                    pending_ainl_authoring_failure = Some(pending);
                 }
 
                 // Approval denials: always inject — the model must not retry denied tools.
@@ -6081,17 +6524,27 @@ pub async fn run_agent_loop_streaming(
                 // Wrap-up injection: if we are within 3 iterations of the limit, tell
                 // the LLM to stop calling tools and produce a text summary.
                 if iteration + 1 + 3 >= max_iterations {
-                    warn!(
-                        agent = %manifest.name,
-                        iteration,
-                        max_iterations,
-                        "Approaching iteration limit (streaming) — injecting wrap-up prompt"
-                    );
-                    messages.push(Message::user(
-                        "[System: You are very close to the maximum number of allowed steps. \
-                         Stop calling tools now. Write a final text response summarizing \
-                         what you have done and any results or next steps for the user.]",
-                    ));
+                    if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+                        warn!(
+                            agent = %manifest.name,
+                            iteration,
+                            max_iterations,
+                            "Approaching iteration limit with unresolved AINL authoring failure (streaming)"
+                        );
+                        messages.push(Message::user(ainl_authoring_repair_required_prompt(pending)));
+                    } else {
+                        warn!(
+                            agent = %manifest.name,
+                            iteration,
+                            max_iterations,
+                            "Approaching iteration limit (streaming) — injecting wrap-up prompt"
+                        );
+                        messages.push(Message::user(
+                            "[System: You are very close to the maximum number of allowed steps. \
+                             Stop calling tools now. Write a final text response summarizing \
+                             what you have done and any results or next steps for the user.]",
+                        ));
+                    }
                 }
 
                 if let Err(e) = memory.save_session_async(session).await {
@@ -6101,12 +6554,22 @@ pub async fn run_agent_loop_streaming(
             StopReason::MaxTokens => {
                 consecutive_max_tokens += 1;
                 if consecutive_max_tokens >= runtime_limits.max_continuations {
-                    let text = response.text();
-                    let text = if text.trim().is_empty() {
-                        "[Partial response — token limit reached with no text output.]".to_string()
-                    } else {
-                        text
-                    };
+                    let (text, outcome) =
+                        if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+                            (
+                                ainl_authoring_unresolved_summary(pending),
+                                AgentLoopOutcome::AinlAuthoringUnresolved,
+                            )
+                        } else {
+                            let text = response.text();
+                            let text = if text.trim().is_empty() {
+                                "[Partial response — token limit reached with no text output.]"
+                                    .to_string()
+                            } else {
+                                text
+                            };
+                            (text, AgentLoopOutcome::MaxContinuations)
+                        };
                     session.messages.push(Message::assistant(&text));
                     if let Err(e) = memory.save_session_async(session).await {
                         warn!("Failed to save session on max continuations: {e}");
@@ -6135,6 +6598,7 @@ pub async fn run_agent_loop_streaming(
                         iterations: iteration + 1,
                         cost_usd: None,
                         silent: false,
+                        outcome,
                         directives: Default::default(),
                         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
                         llm_fallback_note: llm_fallback_note.clone(),
@@ -6177,11 +6641,22 @@ pub async fn run_agent_loop_streaming(
         "Streaming agent loop hit max iterations — returning graceful fallback response"
     );
 
-    let fallback = format!(
-        "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
-         If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
-         If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
-    );
+    let (fallback, fallback_outcome) =
+        if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
+            (
+                ainl_authoring_unresolved_summary(pending),
+                AgentLoopOutcome::AinlAuthoringUnresolved,
+            )
+        } else {
+            (
+                format!(
+                    "I reached my step limit ({max_iterations} steps) and could not complete the task in one go. \
+                     If I got stuck in a loop, try `/reset` to clear the session and rephrase your request. \
+                     If the task genuinely needs more steps, increase `max_iterations` under `[autonomous]` in agent.toml."
+                ),
+                AgentLoopOutcome::MaxIterations,
+            )
+        };
     session.messages.push(Message::assistant(&fallback));
 
     // Stream the fallback message so the UI displays it in the chat bubble
@@ -6214,6 +6689,7 @@ pub async fn run_agent_loop_streaming(
         iterations: max_iterations,
         cost_usd: None,
         silent: false,
+        outcome: fallback_outcome,
         directives: Default::default(),
         latency_ms: Some(loop_t0.elapsed().as_millis() as u64),
         llm_fallback_note,
@@ -7091,12 +7567,19 @@ fn try_parse_bare_json_tool_call(
     parse_json_tool_call_object(&text[..end], tool_names)
 }
 
-/// Deduplicate tool calls from the response.
-/// Returns a reference to the deduplicated tool calls.
+/// Deduplicate only side-effect-free duplicate tool calls from the response.
+///
+/// Repeating an exact `file_read` or `ainl_validate` in the same assistant message adds no value,
+/// but repeating a side-effecting call (`file_write`, `shell_exec`, channel send, process control)
+/// may be intentional. Preserve those calls and let the loop guard handle repeated failures.
 pub fn deduplicate_tool_calls(response: &crate::llm_driver::CompletionResponse) -> Vec<&ToolCall> {
     let mut hash_set = std::collections::HashSet::new();
     let mut deduplicated = Vec::new();
     for tool_call in &response.tool_calls {
+        if !ToolRoundExecutor::safe_to_deduplicate(&tool_call.name) {
+            deduplicated.push(tool_call);
+            continue;
+        }
         let hash = LoopGuard::compute_hash(&tool_call.name, &tool_call.input);
         if hash_set.insert(hash) {
             deduplicated.push(tool_call);
@@ -7153,6 +7636,205 @@ mod tests {
 
     fn runtime_env_lock() -> &'static tokio::sync::Mutex<()> {
         crate::runtime_env_test_lock()
+    }
+
+    fn response_with_tool_calls(tool_calls: Vec<ToolCall>) -> CompletionResponse {
+        CompletionResponse {
+            content: vec![],
+            stop_reason: StopReason::ToolUse,
+            tool_calls,
+            usage: TokenUsage::default(),
+            vitals: None,
+        }
+    }
+
+    #[test]
+    fn deduplicate_preserves_side_effecting_duplicate_tool_calls() {
+        let call_a = ToolCall {
+            id: "write_1".to_string(),
+            name: "file_write".to_string(),
+            input: serde_json::json!({"path":"out.txt","content":"same"}),
+        };
+        let call_b = ToolCall {
+            id: "write_2".to_string(),
+            name: "file_write".to_string(),
+            input: serde_json::json!({"path":"out.txt","content":"same"}),
+        };
+        let response = response_with_tool_calls(vec![call_a, call_b]);
+
+        let deduped = deduplicate_tool_calls(&response);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].id, "write_1");
+        assert_eq!(deduped[1].id, "write_2");
+    }
+
+    #[test]
+    fn deduplicate_removes_safe_readonly_duplicate_tool_calls() {
+        let call_a = ToolCall {
+            id: "validate_1".to_string(),
+            name: "mcp_ainl_ainl_validate".to_string(),
+            input: serde_json::json!({"code":"bad"}),
+        };
+        let call_b = ToolCall {
+            id: "validate_2".to_string(),
+            name: "mcp_ainl_ainl_validate".to_string(),
+            input: serde_json::json!({"code":"bad"}),
+        };
+        let response = response_with_tool_calls(vec![call_a, call_b]);
+
+        let deduped = deduplicate_tool_calls(&response);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].id, "validate_1");
+    }
+
+    #[test]
+    fn trajectory_outcome_maps_safe_failures_to_non_success() {
+        assert_eq!(
+            trajectory_outcome_for_agent_loop(AgentLoopOutcome::Completed),
+            ainl_contracts::TrajectoryOutcome::Success
+        );
+        assert_eq!(
+            trajectory_outcome_for_agent_loop(AgentLoopOutcome::AinlAuthoringUnresolved),
+            ainl_contracts::TrajectoryOutcome::Failure
+        );
+        assert_eq!(
+            trajectory_outcome_for_agent_loop(AgentLoopOutcome::BlockedByLoopGuard),
+            ainl_contracts::TrajectoryOutcome::Failure
+        );
+        assert_eq!(
+            trajectory_outcome_for_agent_loop(AgentLoopOutcome::ProviderFailure),
+            ainl_contracts::TrajectoryOutcome::Aborted
+        );
+    }
+
+    #[test]
+    fn select_turn_vitals_prefers_provider_then_text_fallback() {
+        let provider = openfang_types::vitals::CognitiveVitals {
+            gate: openfang_types::vitals::VitalsGate::Warn,
+            phase: "provider:0.91".to_string(),
+            trust: 0.91,
+            mean_logprob: -0.1,
+            entropy: 0.2,
+            sample_tokens: 4,
+        };
+        let selected = select_turn_vitals(Some(&provider), "normal text", 0).unwrap();
+        assert_eq!(selected.phase, "provider:0.91");
+
+        let fallback = select_turn_vitals(None, "The capital of France is Paris.", 0).unwrap();
+        assert_eq!(fallback.gate, openfang_types::vitals::VitalsGate::Pass);
+    }
+
+    #[test]
+    fn ainl_validate_failure_sets_pending_repair_obligation() {
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: "ainl_validate reports the AINL source is INVALID\nerrors:\n  1. Line 10: label-only op 'Loop' used at top-level".to_string(),
+            is_error: true,
+        }];
+
+        let pending = ainl_authoring_failure_from_tool_results(&blocks).expect("pending failure");
+        assert!(pending.summary.contains("INVALID"));
+        assert!(pending.summary.contains("Line 10"));
+        assert_eq!(pending.blocked_final_attempts, 0);
+    }
+
+    #[test]
+    fn ainl_compile_and_run_failures_set_pending_repair_obligation() {
+        for tool_name in ["mcp_ainl_ainl_compile", "mcp_ainl_ainl_run"] {
+            let blocks = vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".to_string(),
+                tool_name: tool_name.to_string(),
+                content: format!("{tool_name} reported ok:false\nerror: policy_violation"),
+                is_error: true,
+            }];
+
+            let pending =
+                ainl_authoring_failure_from_tool_results(&blocks).expect("pending failure");
+            assert_eq!(pending.tool_name, tool_name);
+            assert!(pending.summary.contains("ok:false"));
+        }
+    }
+
+    #[test]
+    fn ainl_validate_success_clears_pending_repair_obligation() {
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":true,"errors":[],"warnings":[]}"#.to_string(),
+            is_error: false,
+        }];
+
+        assert!(ainl_authoring_success_in_tool_results(&blocks, None));
+        assert!(ainl_authoring_failure_from_tool_results(&blocks).is_none());
+    }
+
+    #[test]
+    fn ainl_authoring_success_only_clears_matching_pending_tool() {
+        let compile_pending = PendingAinlAuthoringFailure {
+            tool_name: "mcp_ainl_ainl_compile".to_string(),
+            summary: "compile failed".to_string(),
+            blocked_final_attempts: 0,
+        };
+        let validate_ok = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":true,"errors":[],"warnings":[]}"#.to_string(),
+            is_error: false,
+        }];
+        let compile_ok = vec![ContentBlock::ToolResult {
+            tool_use_id: "t2".to_string(),
+            tool_name: "mcp_ainl_ainl_compile".to_string(),
+            content: r#"{"ok":true,"ir":{},"frame_hints":[]}"#.to_string(),
+            is_error: false,
+        }];
+
+        assert!(!ainl_authoring_success_in_tool_results(
+            &validate_ok,
+            Some(&compile_pending)
+        ));
+        assert!(ainl_authoring_success_in_tool_results(
+            &compile_ok,
+            Some(&compile_pending)
+        ));
+    }
+
+    #[test]
+    fn ainl_validate_success_requires_ok_true_body() {
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: "not json".to_string(),
+            is_error: false,
+        }];
+
+        assert!(!ainl_authoring_success_in_tool_results(&blocks, None));
+    }
+
+    #[test]
+    fn ainl_validate_repair_prompt_rejects_strict_false_downgrade() {
+        let prompt = ainl_authoring_repair_required_prompt(&PendingAinlAuthoringFailure {
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            summary: "Line 13: unknown adapter.verb".to_string(),
+            blocked_final_attempts: 0,
+        });
+        assert!(prompt.contains("mcp_ainl_ainl_validate"));
+        assert!(prompt.contains("strict=false"));
+        assert!(prompt.contains("ok: true"));
+        assert!(prompt.contains("Line 13"));
+    }
+
+    #[test]
+    fn ainl_validate_unresolved_summary_never_claims_success() {
+        let summary = ainl_authoring_unresolved_summary(&PendingAinlAuthoringFailure {
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            summary: "Line 10: invalid syntax".to_string(),
+            blocked_final_attempts: 0,
+        });
+        assert!(summary.contains("could not complete"));
+        assert!(summary.contains("invalid"));
+        assert!(summary.contains("ok: true"));
+        assert!(!summary.to_lowercase().contains("executed successfully"));
     }
 
     #[test]

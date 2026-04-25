@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use ainl_contracts::{ProcedureArtifact, ProcedureExecutionPlan, ProcedurePatch};
 use uuid::Uuid;
 
 /// `structural` — `graph` header + size; `strict` — structural + minimal AINL section/transform shape; `external` — runs
@@ -50,6 +51,13 @@ pub fn structural_prologue_only(proposed: &str) -> Result<(), String> {
             "proposed_ainl_text exceeds {MAX_PROPOSED_AINL_BYTES} bytes"
         ));
     }
+    if serde_json::from_str::<ProcedureArtifact>(t).is_ok()
+        || serde_json::from_str::<ProcedurePatch>(t).is_ok()
+        || serde_json::from_str::<ProcedureExecutionPlan>(t).is_ok()
+        || serde_json::from_str::<ProcedureLifecycleAction>(t).is_ok()
+    {
+        return Ok(());
+    }
     let first = t.lines().map(|l| l.trim()).find(|l| !l.is_empty());
     match first {
         Some(line) if line.eq_ignore_ascii_case("graph") => Ok(()),
@@ -61,6 +69,42 @@ pub fn structural_prologue_only(proposed: &str) -> Result<(), String> {
 pub fn strict_line_shape(proposed: &str) -> Result<(), String> {
     structural_prologue_only(proposed)?;
     let t = proposed.trim();
+    if let Ok(artifact) = serde_json::from_str::<ProcedureArtifact>(t) {
+        if artifact.steps.is_empty() {
+            return Err("strict: procedure artifact must include at least one step".to_string());
+        }
+        if artifact.intent.trim().is_empty() || artifact.title.trim().is_empty() {
+            return Err(
+                "strict: procedure artifact requires non-empty title and intent".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    if let Ok(patch) = serde_json::from_str::<ProcedurePatch>(t) {
+        if patch.add_steps.is_empty()
+            && patch.add_known_failures.is_empty()
+            && patch.add_recovery.is_empty()
+        {
+            return Err(
+                "strict: procedure patch must add steps, known failures, or recovery".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    if let Ok(plan) = serde_json::from_str::<ProcedureExecutionPlan>(t) {
+        if plan.procedure_id.trim().is_empty() || plan.steps.is_empty() {
+            return Err(
+                "strict: procedure execution plan requires procedure_id and steps".to_string(),
+            );
+        }
+        return Ok(());
+    }
+    if let Ok(action) = serde_json::from_str::<ProcedureLifecycleAction>(t) {
+        if action.procedure_id.trim().is_empty() {
+            return Err("strict: procedure lifecycle action requires procedure_id".to_string());
+        }
+        return Ok(());
+    }
     let line_count = t.lines().filter(|l| !l.trim().is_empty()).count();
     if line_count < 2 {
         return Err("strict: expected at least two non-empty lines after `graph`".to_string());
@@ -78,6 +122,13 @@ pub fn strict_line_shape(proposed: &str) -> Result<(), String> {
     } else {
         Err("strict: add at least one `tN` transform line or a `## ` top-level section".to_string())
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ProcedureLifecycleAction {
+    procedure_id: String,
+    #[allow(dead_code)]
+    reason: Option<String>,
 }
 
 /// Run `structural` + (for `Strict` / `External`) `strict_line_shape` + optional external.
@@ -140,5 +191,21 @@ mod tests {
             "graph\n# a\n# b only\n# no ## or t1\n",
         );
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn structural_accepts_procedure_artifact_json() {
+        let tools = vec!["file_read".to_string()];
+        let spec = crate::procedure_learning_host::ProcedureMintFromPattern {
+            name: "Test",
+            tool_sequence: &tools,
+            observation_count: 3,
+            fitness: 0.8,
+            freshness_at_proposal: None,
+        };
+        let (_, text) =
+            crate::procedure_learning_host::build_procedure_mint_envelope("agent", &spec).unwrap();
+        assert!(run_validate(ValidateMode::Structural, &text).is_ok());
+        assert!(run_validate(ValidateMode::Strict, &text).is_ok());
     }
 }

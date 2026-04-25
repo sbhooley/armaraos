@@ -948,15 +948,17 @@ pub fn tool_category(name: &str) -> &'static str {
         | "schedule_delete"
         | "channels_list" => "Scheduling & channels",
 
-        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list"
+        "process_start"
+        | "process_poll"
+        | "process_write"
+        | "process_kill"
+        | "process_list"
         | "script_run"
         | "script_detect"
         | "workspace_actions_list"
         | "workspace_action"
         | "workspace_action_set"
-        | "workspace_action_delete" => {
-            "Processes"
-        }
+        | "workspace_action_delete" => "Processes",
 
         _ if name.starts_with("mcp_") => "MCP",
         _ if name.starts_with("skill_") => "Skills",
