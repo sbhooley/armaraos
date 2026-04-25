@@ -19,6 +19,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [AINL first (default language)](ainl-first-language.md) | AINL as default for programs/apps; Rust host; when to use other languages |
 | [Architecture](architecture.md) | Workspace crate graph, kernel boot, agent lifecycle, memory + graph-memory substrates |
+| [Workspace actions](workspace-actions.md) | Declarative `armaraos.toml` actions + `workspace_action` / `schedule_action_create` deterministic execution |
 | [Dashboard UI design system](dashboard-design-system.md) | Canonical tokens/rules for dashboard typography, spacing, radii, shadows, and agent-safe design changes |
 | [Agent Templates](agent-templates.md) | 30 pre-built agents across 4 performance tiers |
 | [Workflows](workflows.md) | Multi-agent pipelines with branching, fan-out, loops, and triggers |
@@ -65,7 +66,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 |-------|-------------|
 | [Data directory](data-directory.md) | `~/.armaraos/`, env overrides, migration from `~/.openfang` |
 | [Local voice](local-voice.md) | Whisper.cpp + Piper: first-launch `~/.armaraos/voice/`, `[local_voice]`, STT for user audio in WebChat, **text replies by default** (optional Piper voice reply) |
-| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, post-turn **`ExtractionReport`** (per-phase errors + **`warn!`** slots), optional **`runtime_state`** when **`ainl-runtime`** shares the DB; **`AINL_EXTRACTOR_ENABLED`** (opt-out) / **`AINL_TAGGER_ENABLED`** (**tagger: only** `1`, opt-in) / **`AINL_PERSONA_EVOLUTION`** (opt-out); vs orchestration traces |
+| [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, post-turn **`ExtractionReport`** (per-phase errors + **`warn!`** slots), optional **`runtime_state`** when **`ainl-runtime`** shares the DB; **`AINL_EXTRACTOR_ENABLED`** (opt-out) / **`AINL_TAGGER_ENABLED`** (opt-out) / **`AINL_PERSONA_EVOLUTION`** (opt-out); vs orchestration traces |
 | [Persona evolution (axis hook)](persona-evolution.md) | **`PersonaEvolutionHook`** (on by default; opt out via **`AINL_PERSONA_EVOLUTION=0`**), axis snapshot growth/decay |
 | [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), **Orientation FAQ**, delegation depth (**`DelegationDepthExceeded`**), Tokio `async` feature, verification vs daemon path |
 | [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes, **Settings → Vault** [`/api/secrets`](api-reference.md#vault-and-credentials)) |

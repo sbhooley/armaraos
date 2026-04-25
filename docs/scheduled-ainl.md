@@ -110,6 +110,7 @@ The API supports **updating** a job in place: **`PUT /api/cron/jobs/{id}`** with
 ## Related docs
 
 - [Data directory](data-directory.md) — `~/.armaraos/` layout (per-agent **`ainl_memory.db`**, **`bundle.ainlbundle`**)  
+- [Workspace actions](workspace-actions.md) — declarative `armaraos.toml`, `workspace_action`, and `schedule_action_create` (`action.kind = workspace_action`)  
 - [AINL graph memory (runtime)](graph-memory.md) — **`GraphMemoryWriter`**, persona **system prompt** hook  
 - [Architecture](architecture.md) — **`openfang-runtime`**, **`ainl-memory`**, graph memory  
 - [AINL first (default language)](ainl-first-language.md)  

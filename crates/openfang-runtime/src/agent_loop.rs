@@ -545,7 +545,11 @@ fn process_phantom_detected(text: &str, tools_called: &std::collections::HashSet
     let lower = text.to_lowercase();
 
     // Phantom start: model claims process is now running without having called process_start
-    if !tools_called.contains("process_start") {
+    // or a deterministic wrapper that can daemonize via process_manager.
+    if !tools_called.contains("process_start")
+        && !tools_called.contains("script_run")
+        && !tools_called.contains("workspace_action")
+    {
         let start_claims = [
             "is up in background",
             "started it now",
@@ -619,11 +623,72 @@ fn scheduling_phantom_detected(
         || (a.contains("created") && a.contains("job") && a.contains("recur"))
 }
 
-/// Returns true when the agent response text indicates an intentional silent completion.
-/// Matches `NO_REPLY` (exact) and `[SILENT]` (case-insensitive).
-fn is_silent_token(text: &str) -> bool {
-    let trimmed = text.trim();
-    trimmed == "NO_REPLY" || trimmed.eq_ignore_ascii_case("[silent]")
+/// Detect copy/paste terminal handoff responses when user asked the agent to execute directly.
+fn terminal_handoff_detected(
+    user_message: &str,
+    assistant_text: &str,
+    tools_called: &std::collections::HashSet<String>,
+) -> bool {
+    let u = user_message.to_lowercase();
+    let t = assistant_text.to_lowercase();
+
+    let user_requested_execution = [
+        "can you start",
+        "start the",
+        "stop the",
+        "restart",
+        "run it",
+        "fix it",
+        "please fix",
+        "do it",
+    ]
+    .iter()
+    .any(|p| u.contains(p));
+    if !user_requested_execution {
+        return false;
+    }
+    if u.contains("what command")
+        || u.contains("show command")
+        || u.contains("terminal command")
+        || u.contains("copy paste")
+    {
+        return false;
+    }
+
+    let handoff_markers = [
+        "paste into terminal",
+        "terminal fix",
+        "terminal (",
+        "run this",
+        "copy",
+        "nohup",
+        "lsof -ti",
+    ];
+    let looks_like_handoff = handoff_markers.iter().any(|p| t.contains(p))
+        || (t.contains("```") && (t.contains("bash") || t.contains("sh")));
+    if !looks_like_handoff {
+        return false;
+    }
+
+    let did_execution = tools_called.iter().any(|name| {
+        matches!(
+            name.as_str(),
+            "shell_exec"
+                | "process_start"
+                | "process_kill"
+                | "script_run"
+                | "workspace_action"
+                | "apply_patch"
+                | "file_write"
+        )
+    });
+    if !did_execution {
+        return true;
+    }
+    t.contains("what to do next")
+        || t.contains("next:")
+        || t.contains("share curl")
+        || t.contains("post-restart")
 }
 
 /// Inspect a batch of failed `(tool_name, error_text)` pairs and, if any matches a
@@ -645,9 +710,7 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
             // auto-created, so this should be rare. When it does fire we point
             // the agent at the directory shape they need.
             "file_write" => {
-                if lc.contains("placeholder/truncation")
-                    || lc.contains("truncated for brevity")
-                {
+                if lc.contains("placeholder/truncation") || lc.contains("truncated for brevity") {
                     return Some(
                         "you wrote a placeholder like '... truncated for brevity ...' instead \
                          of the real content. Re-issue file_write with the FULL file body.",
@@ -700,6 +763,29 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                          already-allowed command (curl, ls, jq, …) or surface this to the user.",
                     );
                 }
+                if lc.contains("address already in use")
+                    || lc.contains("eaddrinuse")
+                    || lc.contains("only one usage of each socket address")
+                    || lc.contains("preflight bind check")
+                {
+                    return Some(
+                        "the command failed because a TCP listen port is already in use (or the \
+                         runtime preflight detected it). Before starting another dev server, pick a \
+                         free port, stop the existing listener, or probe with \
+                         `lsof -nP -iTCP:<port> -sTCP:LISTEN` (macOS/Linux). Do not auto-start servers \
+                         that bind ports unless the user asked.",
+                    );
+                }
+                if !lc.contains(crate::shell_job_guard::SHELL_JOB_GUARD_TAG)
+                    && lc.contains("syntax error")
+                    && lc.contains('&')
+                {
+                    return Some(
+                        "the shell rejected the command (often `&` / `nohup` under `sh -c` in Full mode). \
+                         Prefer `process_start` with `command` + `args` + optional `cwd` for daemons; \
+                         in Allowlist mode use a single argv-safe command without shell list operators.",
+                    );
+                }
                 // ---- git / gh -----------------------------------------------
                 if lc.contains("permission denied (publickey)")
                     || lc.contains("could not read from remote repository")
@@ -718,8 +804,7 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                          (Settings → Vault: GITHUB_TOKEN / GH_TOKEN, or `gh auth login`).",
                     );
                 }
-                if lc.contains("could not resolve host")
-                    || lc.contains("name or service not known")
+                if lc.contains("could not resolve host") || lc.contains("name or service not known")
                 {
                     return Some(
                         "DNS / network failure reaching the host. Re-check the URL spelling and \
@@ -856,7 +941,9 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                     );
                 }
                 if mentions_github
-                    && (lc.contains(" 401 ") || lc.ends_with("401") || lc.contains("bad credentials"))
+                    && (lc.contains(" 401 ")
+                        || lc.ends_with("401")
+                        || lc.contains("bad credentials"))
                 {
                     return Some(
                         "GitHub returned 401. The token is missing, expired, or lacks scope. \
@@ -874,8 +961,7 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
             // mcp_ainl_ainl_validate / ainl_compile / ainl_run: the most common
             // recurring agent loop is "include points at a non-existent file".
             n if n.starts_with("mcp_ainl_") => {
-                if lc.contains("include") && (lc.contains("not found") || lc.contains("missing"))
-                {
+                if lc.contains("include") && (lc.contains("not found") || lc.contains("missing")) {
                     return Some(
                         "an include directive points at a file that does not exist on disk. \
                          file_write the missing module first (or fix the include path), then \
@@ -2005,6 +2091,9 @@ pub async fn run_agent_loop(
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
+    // When the model returns NO_REPLY / `[[silent]]` after executing tools, ignore it (up to a cap)
+    // and nudge for a user-visible summary instead of ending the turn as "silent".
+    let mut silent_tools_override_attempts: u32 = 0;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
     // The provider/model that **actually** serviced a turn when a fallback path fires (None = primary).
@@ -2571,7 +2660,25 @@ pub async fn run_agent_loop(
 
                 // NO_REPLY / [SILENT]: agent intentionally chose not to reply.
                 // [SILENT] must not be stored literally — it reinforces silence in future turns.
-                if is_silent_token(&text) || parsed_directives.silent {
+                let wants_silent =
+                    crate::reply_directives::assistant_intended_silent(&text, &parsed_directives);
+                if wants_silent && any_tools_executed && silent_tools_override_attempts < 2 {
+                    silent_tools_override_attempts += 1;
+                    warn!(
+                        agent = %manifest.name,
+                        iteration,
+                        attempt = silent_tools_override_attempts,
+                        "NO_REPLY/[[silent]] after tool use — nudging model for a user-visible summary"
+                    );
+                    messages.push(Message::user(
+                        "[System: You already ran tools this turn. The user cannot rely on tool cards alone — \
+                         reply with a concise summary of outcomes, errors (if any), and next steps. \
+                         Do not use NO_REPLY, [SILENT], or [[silent]] for this turn.]".to_string(),
+                    ));
+                    continue;
+                }
+
+                if wants_silent {
                     debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent — silent completion");
                     session
                         .messages
@@ -2760,6 +2867,22 @@ pub async fn run_agent_loop(
                 } else {
                     text
                 };
+                let text = if terminal_handoff_detected(
+                    session_user_message,
+                    &text,
+                    &last_tools_called,
+                ) {
+                    warn!(agent = %manifest.name, "Terminal handoff detected — re-prompting for direct tool execution");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: The user asked you to perform the fix directly. Do not return terminal copy/paste instructions. \
+                         Use available tools now (e.g., file_read/file_write/apply_patch/shell_exec/process_* / script_run) and report the completed result.]",
+                    ));
+                    last_tools_called.clear();
+                    continue;
+                } else {
+                    text
+                };
                 // Process phantom detection: the model used some tools (e.g. process_list) but then
                 // claimed to have started/stopped a process without calling process_start/process_kill.
                 // This fires even when any_tools_executed is true, because the wrong tool was used.
@@ -2849,14 +2972,24 @@ pub async fn run_agent_loop(
                             if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
                                 response.vitals.as_ref().map(|v| v.gate),
                             ) {
-                                gm.record_pattern(
-                                    &pattern.name,
-                                    pattern.tool_sequence,
-                                    pattern.confidence,
-                                    pattern_trace_id.clone(),
-                                    mem_pid.as_deref(),
-                                )
-                                .await;
+                                let outcome = gm
+                                    .record_pattern_with_outcome(
+                                        &pattern.name,
+                                        pattern.tool_sequence,
+                                        pattern.confidence,
+                                        pattern_trace_id.clone(),
+                                        mem_pid.as_deref(),
+                                    )
+                                    .await;
+                                if let Some(outcome) = outcome {
+                                    if outcome.just_promoted {
+                                        learning.maybe_auto_submit_pattern_promotion(
+                                            openfang_types::config::openfang_home_dir(),
+                                            agent_id_str.clone(),
+                                            &outcome,
+                                        );
+                                    }
+                                }
                             } else {
                                 debug!(
                                     agent_id = %agent_id_str,
@@ -4714,6 +4847,7 @@ pub async fn run_agent_loop_streaming(
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
+    let mut silent_tools_override_attempts: u32 = 0;
     let loop_t0 = std::time::Instant::now();
     let mut llm_fallback_note: Option<String> = None;
     // The provider/model that **actually** serviced a turn when a fallback path fires (None = primary).
@@ -4969,7 +5103,27 @@ pub async fn run_agent_loop_streaming(
 
                 // NO_REPLY / [SILENT]: agent intentionally chose not to reply.
                 // [SILENT] must not be stored literally — it reinforces silence in future turns.
-                if is_silent_token(&text) || parsed_directives_s.silent {
+                let wants_silent = crate::reply_directives::assistant_intended_silent(
+                    &text,
+                    &parsed_directives_s,
+                );
+                if wants_silent && any_tools_executed && silent_tools_override_attempts < 2 {
+                    silent_tools_override_attempts += 1;
+                    warn!(
+                        agent = %manifest.name,
+                        iteration,
+                        attempt = silent_tools_override_attempts,
+                        "NO_REPLY/[[silent]] after tool use (streaming) — nudging model for a user-visible summary"
+                    );
+                    messages.push(Message::user(
+                        "[System: You already ran tools this turn. The user cannot rely on tool cards alone — \
+                         reply with a concise summary of outcomes, errors (if any), and next steps. \
+                         Do not use NO_REPLY, [SILENT], or [[silent]] for this turn.]".to_string(),
+                    ));
+                    continue;
+                }
+
+                if wants_silent {
                     debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent (streaming) — silent completion");
                     session
                         .messages
@@ -5148,6 +5302,22 @@ pub async fn run_agent_loop_streaming(
                 } else {
                     text
                 };
+                let text = if terminal_handoff_detected(
+                    session_user_message_s,
+                    &text,
+                    &last_tools_called,
+                ) {
+                    warn!(agent = %manifest.name, "Terminal handoff detected (streaming) — re-prompting");
+                    messages.push(Message::assistant(text));
+                    messages.push(Message::user(
+                        "[System: The user asked you to perform the fix directly. Do not return terminal copy/paste instructions. \
+                         Use available tools now (e.g., file_read/file_write/apply_patch/shell_exec/process_* / script_run) and report the completed result.]",
+                    ));
+                    last_tools_called.clear();
+                    continue;
+                } else {
+                    text
+                };
                 // Process phantom detection (streaming): model claimed to start/stop a process
                 // without calling process_start or process_kill.
                 let text = if process_phantom_detected(&text, &last_tools_called) {
@@ -5239,14 +5409,24 @@ pub async fn run_agent_loop_streaming(
                             if !ainl_memory::pattern_promotion::should_skip_pattern_persist_for_vitals(
                                 stream_vitals.as_ref().map(|v| v.gate),
                             ) {
-                                gm.record_pattern(
-                                    &pattern.name,
-                                    pattern.tool_sequence,
-                                    pattern.confidence,
-                                    pattern_trace_id.clone(),
-                                    mem_pid.as_deref(),
-                                )
-                                .await;
+                                let outcome = gm
+                                    .record_pattern_with_outcome(
+                                        &pattern.name,
+                                        pattern.tool_sequence,
+                                        pattern.confidence,
+                                        pattern_trace_id.clone(),
+                                        mem_pid.as_deref(),
+                                    )
+                                    .await;
+                                if let Some(outcome) = outcome {
+                                    if outcome.just_promoted {
+                                        learning.maybe_auto_submit_pattern_promotion(
+                                            openfang_types::config::openfang_home_dir(),
+                                            agent_id_str.clone(),
+                                            &outcome,
+                                        );
+                                    }
+                                }
                             } else {
                                 debug!(
                                     agent_id = %agent_id_str,
@@ -7175,6 +7355,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn terminal_handoff_triggers_when_user_wants_direct_fix() {
+        let tools = std::collections::HashSet::new();
+        assert!(terminal_handoff_detected(
+            "Can you start the gateway server and fix it?",
+            "Terminal Fix:\nCopy\nnohup python3 gateway_server.py > gateway.log 2>&1 &",
+            &tools,
+        ));
+    }
+
+    #[test]
+    fn terminal_handoff_ignored_when_user_asks_for_commands() {
+        let tools = std::collections::HashSet::new();
+        assert!(!terminal_handoff_detected(
+            "What command should I run in terminal?",
+            "Copy this:\n```bash\nnohup python3 gateway_server.py\n```",
+            &tools,
+        ));
+    }
+
     // --- Integration tests for empty response guards ---
 
     fn test_manifest() -> AgentManifest {
@@ -7569,6 +7769,14 @@ mod tests {
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
         assert!(h.contains("string `command` field"), "unexpected hint: {h}");
 
+        // shell_exec: background `&` / sh -c syntax error → steer at process_start
+        let errs = vec![(
+            "shell_exec",
+            "sh: -c: line 0: syntax error near unexpected token `&'",
+        )];
+        let h = corrective_hint_for_failures(&errs).expect("expected a hint");
+        assert!(h.contains("process_start"), "unexpected hint: {h}");
+
         // mcp_ainl_* missing-include hint
         let errs = vec![(
             "mcp_ainl_ainl_validate",
@@ -7587,7 +7795,10 @@ mod tests {
             ("shell_exec", "Missing 'command' parameter"),
         ];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
-        assert!(h.contains("FULL file body"), "first-match-wins violated: {h}");
+        assert!(
+            h.contains("FULL file body"),
+            "first-match-wins violated: {h}"
+        );
     }
 
     /// GitHub-shaped failures the agent loop should recognise — covers the
@@ -7601,7 +7812,10 @@ mod tests {
             "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
         )];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
-        assert!(h.contains("HTTPS"), "publickey hint should suggest HTTPS: {h}");
+        assert!(
+            h.contains("HTTPS"),
+            "publickey hint should suggest HTTPS: {h}"
+        );
 
         // private repo / wrong slug
         let errs = vec![(
@@ -7618,7 +7832,10 @@ mod tests {
             "fatal: unable to access 'https://github.com/x/y/': Could not resolve host: github.com",
         )];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
-        assert!(h.to_lowercase().contains("dns") || h.contains("network"), "{h}");
+        assert!(
+            h.to_lowercase().contains("dns") || h.contains("network"),
+            "{h}"
+        );
 
         // ran git outside a clone
         let errs = vec![(
@@ -7637,10 +7854,7 @@ mod tests {
         assert!(h.contains("raw.githubusercontent.com"), "{h}");
 
         // http tool: github not on allow_hosts
-        let errs = vec![(
-            "http",
-            "host 'github.com' not in allow_hosts",
-        )];
+        let errs = vec![("http", "host 'github.com' not in allow_hosts")];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
         assert!(h.contains("allow_hosts"), "{h}");
 
@@ -7658,13 +7872,13 @@ mod tests {
             "GET https://api.github.com/user → 401 Bad credentials",
         )];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
-        assert!(h.contains("PAT") || h.contains("token") || h.contains("scope"), "{h}");
+        assert!(
+            h.contains("PAT") || h.contains("token") || h.contains("scope"),
+            "{h}"
+        );
 
         // web tool: 404 on github.com
-        let errs = vec![(
-            "web",
-            "FETCH https://github.com/x/y/blob/main/file → 404",
-        )];
+        let errs = vec![("web", "FETCH https://github.com/x/y/blob/main/file → 404")];
         let h = corrective_hint_for_failures(&errs).expect("expected a hint");
         assert!(h.contains("raw.githubusercontent.com"), "{h}");
 
@@ -9363,37 +9577,5 @@ mod tests {
             events.push(ev);
         }
         assert!(!events.is_empty(), "Should have received stream events");
-    }
-
-    #[test]
-    fn test_silent_detection_uppercase() {
-        assert!(is_silent_token("[SILENT]"));
-    }
-
-    #[test]
-    fn test_silent_detection_lowercase() {
-        assert!(is_silent_token("[silent]"));
-    }
-
-    #[test]
-    fn test_silent_detection_mixed_case() {
-        assert!(is_silent_token("[Silent]"));
-    }
-
-    #[test]
-    fn test_silent_detection_with_whitespace() {
-        assert!(is_silent_token("  [SILENT]  "));
-    }
-
-    #[test]
-    fn test_silent_detection_no_reply() {
-        assert!(is_silent_token("NO_REPLY"));
-    }
-
-    #[test]
-    fn test_silent_detection_rejects_normal_text() {
-        assert!(!is_silent_token("Hello, how can I help?"));
-        assert!(!is_silent_token("SILENT"));
-        assert!(!is_silent_token(""));
     }
 }

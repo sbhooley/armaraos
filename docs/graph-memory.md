@@ -34,7 +34,7 @@ When **`ARMARAOS_AGENT_ID`** is set, **ainativelang** can append **`MemoryNode`*
 2. Map rows into **`ainl_memory::AgentGraphSnapshot`** and run **`GraphMemory::import_graph(..., allow_dangling_edges = true)`** (same pattern as forensic snapshot import).
 3. Reset the inbox to an empty envelope so Python can append again.
 
-**Capability hints:** if the inbox lists **`requires_ainl_tagger`** under **`source_features`** but this binary was built without the **`ainl-tagger`** feature, semantic nodes with non-empty **`tags`** are skipped (logged at **debug**). Default ArmaraOS builds include **`ainl-tagger`**; distributors can disable it via **`openfang-runtime`** features. Even when the feature is present, **runtime** tagging for **Rust-originated** episode/fact writes only runs when **`AINL_TAGGER_ENABLED=1`** (see **`crates/openfang-runtime/README.md`**).
+**Capability hints:** if the inbox lists **`requires_ainl_tagger`** under **`source_features`** but this binary was built without the **`ainl-tagger`** feature, semantic nodes with non-empty **`tags`** are skipped (logged at **debug**). Default ArmaraOS builds include **`ainl-tagger`**; distributors can disable it via **`openfang-runtime`** features. When the feature is present, **runtime** tagging for Rust-originated episode/fact writes is **enabled by default**; opt out with **`AINL_TAGGER_ENABLED=0`** (see **`crates/openfang-runtime/README.md`**).
 
 **Schema (cross-repo):** **ainativelang** ships **`armaraos/bridge/ainl_graph_memory_inbox_schema_v1.json`** and a CI workflow that type-checks against upstream **armaraos** (`cargo build -p openfang-runtime --lib`).
 
@@ -44,7 +44,7 @@ When **`ARMARAOS_AGENT_ID`** is set, **ainativelang** can append **`MemoryNode`*
 
 | Source | Node / behavior | Notes |
 |--------|-----------------|-------|
-| **`run_agent_loop` / streaming** — EndTurn success | **Episode** via **`record_turn`** | Canonical tool names for the turn; optional trace JSON when wired (e.g. orchestration). Episode **`tags`** include tagger strings when **`ainl-tagger`** is compiled in **and** **`AINL_TAGGER_ENABLED`** is exactly **`1`** (trimmed). |
+| **`run_agent_loop` / streaming** — EndTurn success | **Episode** via **`record_turn`** | Canonical tool names for the turn; optional trace JSON when wired (e.g. orchestration). Episode **`tags`** include tagger strings when **`ainl-tagger`** is compiled in (default on); opt out via **`AINL_TAGGER_ENABLED=0`**. |
 | Same — after **`record_turn`** | **Semantic** via **`record_fact_with_tags`** | **`graph_memory_turn_extraction`** picks structured **`ainl_graph_extractor_bridge`** vs legacy **`graph_extractor`** based on **`AINL_EXTRACTOR_ENABLED`** (requires **`ainl-extractor`**). Fact tag lists merge orchestration correlation strings + optional **`SemanticTaggerBridge::tag_fact`**. **`source_turn_id`** is the **episode** UUID returned from **`record_turn`**. |
 | Same — after facts | **Procedural** via **`record_pattern`** (optional) | When a workflow or repeated-tool pattern is detected; may carry orchestration **`trace_id`**. |
 | Same — after patterns (same `record_turn` success path) | **Trajectory** via **`record_trajectory_for_episode`** | One **`Trajectory`** row per turn with coarse **`TrajectoryStep`** entries derived from canonical tool names; edge **`trajectory_of`** → episode node id. Gated by **`AINL_TRAJECTORY_ENABLED`** (**opt-out**, same falsy set as **`AINL_EXTRACTOR_ENABLED`**). Optional **`AINL_MEMORY_PROJECT_ID`** supplies `project_id` on the node when set. |
@@ -61,12 +61,12 @@ When **`ARMARAOS_AGENT_ID`** is set, **ainativelang** can append **`MemoryNode`*
 
 ## Extraction, tagging, and persona evolution (env + features)
 
-These control **extra** graph richness on top of the always-on **episode** row. `AINL_EXTRACTOR_ENABLED` and `AINL_PERSONA_EVOLUTION` are **opt-out** (on by default when their Cargo features are compiled in); `AINL_TAGGER_ENABLED` is **opt-in** (must be explicitly enabled).
+These control **extra** graph richness on top of the always-on **episode** row. `AINL_EXTRACTOR_ENABLED`, `AINL_PERSONA_EVOLUTION`, and `AINL_TAGGER_ENABLED` are **opt-out** (on by default when their Cargo features are compiled in).
 
 | Variable | Cargo feature | Semantics |
 |----------|---------------|-----------|
 | **`AINL_EXTRACTOR_ENABLED`** | **`ainl-extractor`** (default) | **Opt-out.** When the feature is compiled in, the crate path (`ainl_graph_extractor_bridge`) is **on by default**. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**, case-insensitive) to fall back to legacy `graph_extractor` heuristics. `run_persona_evolution_pass` does **not** read this env var. |
-| **`AINL_TAGGER_ENABLED`** | **`ainl-tagger`** (default in ArmaraOS) | **Opt-in.** Must be **exactly** **`1`** after trim to enable `SemanticTaggerBridge` tag strings on episode and fact nodes. (`true` / `yes` / `on` do **not** enable the tagger — deliberate strictness to avoid accidental activation.) |
+| **`AINL_TAGGER_ENABLED`** | **`ainl-tagger`** (default in ArmaraOS) | **Opt-out.** Set to a falsy value (`0`, `false`, `no`, `off`) to disable tag writes from `SemanticTaggerBridge`. When unset (normal case) or set to any other value, tagging stays enabled. |
 | **`AINL_PERSONA_EVOLUTION`** | **`ainl-persona-evolution`** (default) | **Opt-out.** When the feature is compiled in, `PersonaEvolutionHook::evolve_from_turn` runs after each turn by default. Set to a falsy value (**`0`**, **`false`**, **`no`**, **`off`**) to disable (see **[persona-evolution.md](persona-evolution.md)**). |
 | **`AINL_TRAJECTORY_ENABLED`** | n/a (always compiled) | **Opt-out** for **`Trajectory`** nodes after **`record_turn`**. Unset ⇒ on; falsy (**`0`**, **`false`**, **`no`**, **`off`**) ⇒ off. See **`crates/openfang-runtime/README.md`**. |
 | **`AINL_IMPROVEMENT_PROPOSALS_ENABLED`** | n/a | **Opt-out** for the improvement-proposal **HTTP** surface and **ledger** (`~/.armaraos/agents/<id>/.graph-memory/improvement_proposals.db`). Unset ⇒ on; falsy (**`0`**, **`false`**, **`no`**, **`off`**) ⇒ off (list/submit/validate/adopt return **503**). See **[SELF_LEARNING_INTEGRATION_MAP.md](SELF_LEARNING_INTEGRATION_MAP.md) §15.7**. |

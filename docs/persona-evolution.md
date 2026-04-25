@@ -58,7 +58,7 @@ Additional integration tests (`tests/test_persona_evolution.rs`): default-on ass
 ## Related docs
 
 - `docs/graph-memory-sync.md` — Python **`AinlMemorySyncWriter`** → **`ainl_graph_memory_inbox.json`** when **`ARMARAOS_AGENT_ID`**
-- `docs/graph-memory.md` — SQLite layout, export path, **`AINL_EXTRACTOR_ENABLED`** (opt-out) vs **`AINL_TAGGER_ENABLED`** (tagger: **only** `1`), EndTurn write order, scheduled `ainl run` bundles.
+- `docs/graph-memory.md` — SQLite layout, export path, **`AINL_EXTRACTOR_ENABLED`** (opt-out) vs **`AINL_TAGGER_ENABLED`** (tagger: opt-out), EndTurn write order, scheduled `ainl run` bundles.
 - `crates/openfang-runtime/README.md` — **`AINL_EXTRACTOR_ENABLED`**, **`AINL_TAGGER_ENABLED`**, **`AINL_PERSONA_EVOLUTION`**, default Cargo features.
 - `crates/ainl-persona/README.md` — axis model and evolution engine API.
 - `docs/ainl-runtime.md` — **`ainl-runtime`** hub (async path, tests); **`docs/ainl-runtime-integration.md`** — optional OpenFang embed.

@@ -8,13 +8,13 @@ Agent loop, tool execution, graph memory (`GraphMemoryWriter`), and related runt
 
 Feature **`ainl-tagger`** links **`ainl-semantic-tagger`** and wires [`ainl_semantic_tagger_bridge::SemanticTaggerBridge`] into graph-memory writes (episode + fact nodes). It is **on by default** in this workspace; distributors may ship a binary without it.
 
-At **runtime**, tagger-derived strings are merged **only** when the variable is set to the literal **`1`** (after trim):
+At **runtime**, tagging is **enabled by default** when the feature is compiled in. To opt out at runtime without recompiling, set:
 
 ```bash
-export AINL_TAGGER_ENABLED=1
+export AINL_TAGGER_ENABLED=0  # also: false, no, off
 ```
 
-If unset, or set to any other value (including `true` / `yes` / `on`), tag lists from this bridge stay **empty**—even when the feature is compiled in—so operators opt in explicitly.
+When the variable is absent (the normal case) or set to any other value, tagger-derived tag lists are written.
 
 Re-enable the dependency after **`--no-default-features`**:
 
@@ -59,7 +59,7 @@ When the master switch is **not** off, existing knobs apply: **`AINL_TRAJECTORY_
 
 **Introspection:** `openfang_runtime::graph_memory_learning_metrics()` returns best-effort counters (recorded vs skipped vs write-none) for operators / status surfaces.
 
-**Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals — **on by default**; set to `0` / `false` / `no` / `off` to disable), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
+**Other self-learning / kernel toggles (see [SELF_LEARNING_INTEGRATION_MAP.md](../../docs/SELF_LEARNING_INTEGRATION_MAP.md) §13, §8, §15.7.1):** `AINL_IMPROVEMENT_PROPOSALS_ENABLED` (improvement proposals master gate — **on by default**; set to `0` / `false` / `no` / `off` to disable submit / validate / adopt / list), `AINL_AUTO_SUBMIT_PATTERN_PROPOSALS` (loop-driven `pattern_promote` auto-submission on recurrence detection — **on by default**; opt out per host with `0` / `false` / `no` / `off`, or per agent via manifest metadata `ainl_auto_submit_pattern_proposals`), `AINL_AUTO_VALIDATE_PATTERN_PROPOSALS` (also runs `ValidateMode::Structural` immediately after each auto-submit — **off by default**), `AINL_ADAPTIVE_COMPRESSION` + kernel `[adaptive_eco]`, `AINL_COMPRESSION_CACHE_AWARE` (see `ainl-compression` cache), `AINL_MEMORY_PROJECT_SCOPE=1` (per-project `project_id` for graph + FTS in `ainl-memory`).
 
 | Env | Behavior |
 |-----|----------|

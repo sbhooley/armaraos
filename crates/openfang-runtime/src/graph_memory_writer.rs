@@ -56,6 +56,26 @@ impl PersonaEvolutionExtractionReport {
 pub(crate) const PERSONA_PRIOR_LOOKBACK_SECS: i64 = 60 * 60 * 24 * 365 * 100;
 const CONSOLIDATION_MIN_INTERVAL_SECS: i64 = 60;
 
+/// Outcome of a [`GraphMemoryWriter::record_pattern_with_outcome`] call: post-write state of the
+/// procedural row plus a `just_promoted` flag set when this call flipped `prompt_eligible` from
+/// `false` to `true` for the first time.
+///
+/// Hosts use `just_promoted` as the recurrence-detection trigger that auto-submits a
+/// `pattern_promote` improvement proposal (see
+/// [`crate::improvement_proposals_host::auto_submit_pattern_proposal`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternUpsertOutcome {
+    pub node_id: Uuid,
+    pub name: String,
+    pub tool_sequence: Vec<String>,
+    pub observation_count: u32,
+    pub fitness: f32,
+    pub prompt_eligible: bool,
+    /// `true` exactly once per pattern node, on the call where promotion-gate thresholds
+    /// (see [`ainl_memory::pattern_promotion::should_promote`]) are crossed.
+    pub just_promoted: bool,
+}
+
 /// When **unset** or any non-falsy value: record [`TrajectoryNode`] rows after each successful
 /// [`GraphMemoryWriter::record_turn`] (opt-out mirrors `AINL_EXTRACTOR_ENABLED`).
 /// Falsy: `0`, `false`, `no`, `off` (case-insensitive).
@@ -740,6 +760,9 @@ impl GraphMemoryWriter {
     /// Record a procedural pattern node (named tool workflow).
     ///
     /// When `trace_id` is set, it is stored on [`ainl_memory::ProceduralNode::trace_id`] for export / Python bridge correlation.
+    ///
+    /// Thin wrapper over [`Self::record_pattern_with_outcome`] for callers that don't need
+    /// the promotion-event signal.
     pub async fn record_pattern(
         &self,
         name: &str,
@@ -748,8 +771,45 @@ impl GraphMemoryWriter {
         trace_id: Option<String>,
         memory_project_id: Option<&str>,
     ) {
+        let _ = self
+            .record_pattern_with_outcome(
+                name,
+                tool_sequence,
+                confidence,
+                trace_id,
+                memory_project_id,
+            )
+            .await;
+    }
+
+    /// Like [`Self::record_pattern`], but returns a [`PatternUpsertOutcome`] describing the
+    /// post-write state of the procedural row (observation count, EMA fitness, prompt-eligibility,
+    /// and a `just_promoted` flag set when this call flipped `prompt_eligible` from `false` to
+    /// `true` for the first time).
+    ///
+    /// Returns `None` only if the underlying SQLite write failed (a `warn!` is emitted in that
+    /// case, matching the legacy [`Self::record_pattern`] behavior).
+    pub async fn record_pattern_with_outcome(
+        &self,
+        name: &str,
+        tool_sequence: Vec<String>,
+        confidence: f32,
+        trace_id: Option<String>,
+        memory_project_id: Option<&str>,
+    ) -> Option<PatternUpsertOutcome> {
         let seq_preview = tool_sequence.join(" → ");
-        let res = {
+        // (write_result, observation_count, ema_fitness, was_eligible_before, is_eligible_after,
+        //  effective_name, effective_sequence)
+        type UpsertProbe = (
+            Result<Uuid, String>,
+            u32,
+            f32,
+            bool,
+            bool,
+            String,
+            Vec<String>,
+        );
+        let probe: UpsertProbe = {
             let inner = self.inner.lock().await;
             let found = match inner.find_procedural_by_tool_sequence(&self.agent_id, &tool_sequence)
             {
@@ -764,11 +824,18 @@ impl GraphMemoryWriter {
                 }
             };
             if let Some(mut node) = found {
+                let mut prior_eligible = false;
+                let mut new_obs = 0u32;
+                let mut new_ema = confidence.clamp(0.0, 1.0);
+                let mut effective_name = name.to_string();
+                let mut effective_seq: Vec<String> = tool_sequence.clone();
+                let mut now_eligible = false;
                 if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+                    prior_eligible = procedural.prompt_eligible;
                     procedural.pattern_observation_count =
                         procedural.pattern_observation_count.saturating_add(1);
-                    let new_ema =
-                        pattern_promotion::ema_fitness_update(procedural.fitness, confidence);
+                    new_obs = procedural.pattern_observation_count;
+                    new_ema = pattern_promotion::ema_fitness_update(procedural.fitness, confidence);
                     procedural.fitness = Some(new_ema);
                     procedural.confidence = Some(confidence.clamp(0.0, 1.0));
                     if !name.is_empty() {
@@ -783,17 +850,29 @@ impl GraphMemoryWriter {
                     if let Some(t) = trace_id.as_ref() {
                         procedural.trace_id = Some(t.clone());
                     }
+                    now_eligible = procedural.prompt_eligible;
+                    effective_name = procedural.pattern_name.clone();
+                    effective_seq = procedural.tool_sequence.clone();
                 }
                 crate::memory_project_scope::apply_memory_project_id_to_node(
                     &mut node,
                     memory_project_id,
                 );
                 let id = node.id;
-                inner.write_node(&node).map(|()| id)
+                let res = inner.write_node(&node).map(|()| id);
+                (
+                    res,
+                    new_obs,
+                    new_ema,
+                    prior_eligible,
+                    now_eligible,
+                    effective_name,
+                    effective_seq,
+                )
             } else {
                 let mut node = AinlMemoryNode::new_procedural_tools(
                     name.to_string(),
-                    tool_sequence,
+                    tool_sequence.clone(),
                     confidence,
                 );
                 node.agent_id = self.agent_id.clone();
@@ -801,22 +880,68 @@ impl GraphMemoryWriter {
                     &mut node,
                     memory_project_id,
                 );
+                let mut now_eligible = false;
+                let mut effective_name = name.to_string();
+                let mut effective_seq: Vec<String> = tool_sequence.clone();
                 if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
                     procedural.trace_id = trace_id.clone();
+                    // First write: observation_count starts at 1 in `new_procedural_tools`,
+                    // so honor `should_promote` for the (rare) case of MIN_OBSERVATIONS == 1.
+                    if pattern_promotion::should_promote(
+                        procedural.pattern_observation_count,
+                        procedural.fitness.unwrap_or(confidence.clamp(0.0, 1.0)),
+                    ) {
+                        procedural.prompt_eligible = true;
+                    }
+                    now_eligible = procedural.prompt_eligible;
+                    effective_name = procedural.pattern_name.clone();
+                    effective_seq = procedural.tool_sequence.clone();
                 }
                 let id = node.id;
-                inner.write_node(&node).map(|()| id)
+                let new_obs_first = match &node.node_type {
+                    AinlNodeType::Procedural { procedural } => procedural.pattern_observation_count,
+                    _ => 1,
+                };
+                let new_ema_first = match &node.node_type {
+                    AinlNodeType::Procedural { procedural } => {
+                        procedural.fitness.unwrap_or(confidence.clamp(0.0, 1.0))
+                    }
+                    _ => confidence.clamp(0.0, 1.0),
+                };
+                let res = inner.write_node(&node).map(|()| id);
+                (
+                    res,
+                    new_obs_first,
+                    new_ema_first,
+                    false, // never eligible before first write
+                    now_eligible,
+                    effective_name,
+                    effective_seq,
+                )
             }
         };
-        match res {
+        let (
+            write_res,
+            observation_count,
+            fitness,
+            was_eligible_before,
+            now_eligible,
+            effective_name,
+            effective_seq,
+        ) = probe;
+        match write_res {
             Ok(id) => {
+                let just_promoted = !was_eligible_before && now_eligible;
                 debug!(
                     agent_id = %self.agent_id,
                     pattern_id = %id,
-                    pattern_name = %name,
+                    pattern_name = %effective_name,
+                    pattern_observation_count = observation_count,
+                    pattern_fitness = fitness,
+                    just_promoted,
                     "AINL graph memory: procedural pattern written"
                 );
-                let summary = format!("Pattern “{name}”: {seq_preview}");
+                let summary = format!("Pattern “{effective_name}”: {seq_preview}");
                 self.fire_write_hook(
                     "procedural",
                     Some(GraphMemoryWriteProvenance {
@@ -828,12 +953,24 @@ impl GraphMemoryWriter {
                         tool_name: None,
                     }),
                 );
+                Some(PatternUpsertOutcome {
+                    node_id: id,
+                    name: effective_name,
+                    tool_sequence: effective_seq,
+                    observation_count,
+                    fitness,
+                    prompt_eligible: now_eligible,
+                    just_promoted,
+                })
             }
-            Err(e) => warn!(
-                agent_id = %self.agent_id,
-                error = %e,
-                "AINL graph memory: failed to write procedural pattern"
-            ),
+            Err(e) => {
+                warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "AINL graph memory: failed to write procedural pattern"
+                );
+                None
+            }
         }
     }
 
@@ -1635,6 +1772,54 @@ mod tests {
             .find(|n| n["node_type"]["type"] == "procedural")
             .expect("procedural in export");
         assert_eq!(proc_json["node_type"]["trace_id"], "trace-z99");
+    }
+
+    #[tokio::test]
+    async fn record_pattern_with_outcome_signals_just_promoted_once_at_threshold() {
+        let _guard = env_lock().lock().await;
+        let prev_min = std::env::var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS").ok();
+        let prev_floor = std::env::var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR").ok();
+        std::env::set_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS", "3");
+        std::env::set_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR", "0.7");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("record_pat_outcome.db");
+        let memory = GraphMemory::new(&db_path).expect("open");
+        let writer = GraphMemoryWriter {
+            inner: Arc::new(Mutex::new(memory)),
+            agent_id: "pat-outcome-agent".to_string(),
+            on_write: None,
+        };
+        let seq = vec!["tool_a".into(), "tool_b".into()];
+
+        let mut promote_events = 0u32;
+        let mut last_obs = 0u32;
+        for _ in 0..5 {
+            let outcome = writer
+                .record_pattern_with_outcome("demo_pat", seq.clone(), 0.85, None, None)
+                .await
+                .expect("write outcome");
+            if outcome.just_promoted {
+                promote_events += 1;
+            }
+            last_obs = outcome.observation_count;
+            assert_eq!(outcome.tool_sequence, seq, "tool_sequence echoed back");
+            assert_eq!(outcome.name, "demo_pat");
+        }
+        assert_eq!(
+            promote_events, 1,
+            "just_promoted must fire exactly once per pattern (at threshold crossing)"
+        );
+        assert_eq!(last_obs, 5, "observation_count keeps incrementing post-promotion");
+
+        match prev_min {
+            Some(p) => std::env::set_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS", p),
+            None => std::env::remove_var("AINL_PATTERN_PROMOTION_MIN_OBSERVATIONS"),
+        }
+        match prev_floor {
+            Some(p) => std::env::set_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR", p),
+            None => std::env::remove_var("AINL_PATTERN_PROMOTION_FITNESS_FLOOR"),
+        }
     }
 
     #[tokio::test]

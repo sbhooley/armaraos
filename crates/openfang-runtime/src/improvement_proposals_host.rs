@@ -1,14 +1,29 @@
 //! Host integration for the `ainl-improvement-proposals` ledger: DB path, env gating, metrics, and
 //! validators in [`crate::improvement_proposals_validators`].
+//!
+//! ## Auto-submitted `pattern_promote` proposals
+//!
+//! [`auto_submit_pattern_proposal`] is the closed-loop entry point invoked by the agent loop
+//! (via [`crate::graph_memory_learning::LearningRecorder`]) the moment a tool-sequence pattern
+//! crosses the `should_promote` gate (see `ainl_memory::pattern_promotion`). Behavior:
+//!
+//! - Default **on** — opt out with `AINL_AUTO_SUBMIT_PATTERN_PROPOSALS=0|false|no|off`.
+//! - Builds a deterministic [`ProposalEnvelope`] (`kind = "pattern_promote"`) and a tiny
+//!   `proposed_ainl_text` that passes [`structural_prologue_only`].
+//! - Idempotent: looks up [`list_proposals`] and skips submit when an existing
+//!   `pattern_promote` row with the same `proposed_hash` is present.
+//! - Optional auto-validate (`AINL_AUTO_VALIDATE_PATTERN_PROPOSALS=1`) runs the structural
+//!   validator immediately after submit; **adopt remains operator-driven** so the loop never
+//!   silently materializes graph nodes.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ainl_contracts::telemetry;
-use ainl_contracts::ProposalEnvelope;
+use ainl_contracts::{ContextFreshness, ImpactDecision, ProposalEnvelope, LEARNER_SCHEMA_VERSION};
 use ainl_improvement_proposals::{
-    AdoptResult, ImprovementProposalId, ImprovementProposalListItem, ProposalLedger,
-    ProposalLedgerError,
+    sha256_hex_lower, AdoptResult, ImprovementProposalId, ImprovementProposalListItem,
+    ProposalLedger, ProposalLedgerError,
 };
 use ainl_memory::{AinlMemoryNode, AinlNodeKind, AinlNodeType, GraphMemory, ProcedureType};
 
@@ -38,6 +53,13 @@ static ADOPT_NOT_ADOPTABLE: AtomicU64 = AtomicU64::new(0);
 static ADOPT_GRAPH_WRITE_ERR: AtomicU64 = AtomicU64::new(0);
 static ADOPT_IDEMPOTENT: AtomicU64 = AtomicU64::new(0);
 static ADOPT_REPAIR: AtomicU64 = AtomicU64::new(0);
+static AUTO_SUBMIT_OK: AtomicU64 = AtomicU64::new(0);
+static AUTO_SUBMIT_DEDUP: AtomicU64 = AtomicU64::new(0);
+static AUTO_SUBMIT_DISABLED: AtomicU64 = AtomicU64::new(0);
+static AUTO_SUBMIT_ERROR: AtomicU64 = AtomicU64::new(0);
+static AUTO_VALIDATE_ACCEPTED: AtomicU64 = AtomicU64::new(0);
+static AUTO_VALIDATE_REJECTED: AtomicU64 = AtomicU64::new(0);
+static AUTO_VALIDATE_ERROR: AtomicU64 = AtomicU64::new(0);
 
 /// When **unset** or any non-falsy value, the improvement-proposals HTTP routes and ledger
 /// host APIs are **on** (same opt-out as `AINL_TRAJECTORY_ENABLED`: `0`, `false`, `no`, `off`).
@@ -50,6 +72,48 @@ pub fn env_enabled() -> bool {
         }
         Err(_) => true,
     }
+}
+
+#[must_use]
+fn env_bool_default_on(key: &str) -> bool {
+    match std::env::var(key) {
+        Ok(s) => {
+            let v = s.trim().to_ascii_lowercase();
+            !(v == "0" || v == "false" || v == "no" || v == "off")
+        }
+        Err(_) => true,
+    }
+}
+
+#[must_use]
+fn env_bool_default_off(key: &str) -> bool {
+    match std::env::var(key) {
+        Ok(s) => {
+            let v = s.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        }
+        Err(_) => false,
+    }
+}
+
+/// When **unset** or any non-falsy value, the agent loop will auto-submit a `pattern_promote`
+/// improvement proposal each time a tool-sequence pattern crosses the
+/// [`ainl_memory::pattern_promotion::should_promote`] gate (default **on**).
+///
+/// Opt-out tokens (case-insensitive): `0`, `false`, `no`, `off`. Inherits the master switch
+/// from [`env_enabled`] and the learning master switch in
+/// [`crate::graph_memory_learning::master_learning_stack_disabled`].
+#[must_use]
+pub fn auto_submit_env_enabled() -> bool {
+    env_bool_default_on("AINL_AUTO_SUBMIT_PATTERN_PROPOSALS")
+}
+
+/// When **set** to a truthy token (`1`, `true`, `yes`, `on`), auto-submitted `pattern_promote`
+/// proposals are immediately validated using the **structural** validator (default **off**).
+/// Adopt remains operator-driven regardless of this setting.
+#[must_use]
+pub fn auto_validate_env_enabled() -> bool {
+    env_bool_default_off("AINL_AUTO_VALIDATE_PATTERN_PROPOSALS")
 }
 
 /// Re-exported for tests / tools that need the same `graph` + size pre-check as the ledger
@@ -89,6 +153,8 @@ pub fn metrics_snapshot() -> serde_json::Value {
     let adopt_ok = ADOPT_OK.load(Ordering::Relaxed);
     serde_json::json!({
         "env_enabled": env_enabled(),
+        "auto_submit_env_enabled": auto_submit_env_enabled(),
+        "auto_validate_env_enabled": auto_validate_env_enabled(),
         "submit_ok": SUBMIT_OK.load(Ordering::Relaxed),
         "submit_hash_mismatch": SUBMIT_HASH_MISMATCH.load(Ordering::Relaxed),
         "submit_ledger_error": SUBMIT_LEDGER_ERR.load(Ordering::Relaxed),
@@ -102,6 +168,13 @@ pub fn metrics_snapshot() -> serde_json::Value {
         "adopt_not_adoptable": ADOPT_NOT_ADOPTABLE.load(Ordering::Relaxed),
         "adopt_graph_write_error": ADOPT_GRAPH_WRITE_ERR.load(Ordering::Relaxed),
         "adopt_when_disabled": ADOPT_WHEN_DISABLED.load(Ordering::Relaxed),
+        "auto_submit_ok": AUTO_SUBMIT_OK.load(Ordering::Relaxed),
+        "auto_submit_dedup": AUTO_SUBMIT_DEDUP.load(Ordering::Relaxed),
+        "auto_submit_disabled": AUTO_SUBMIT_DISABLED.load(Ordering::Relaxed),
+        "auto_submit_error": AUTO_SUBMIT_ERROR.load(Ordering::Relaxed),
+        "auto_validate_accepted": AUTO_VALIDATE_ACCEPTED.load(Ordering::Relaxed),
+        "auto_validate_rejected": AUTO_VALIDATE_REJECTED.load(Ordering::Relaxed),
+        "auto_validate_error": AUTO_VALIDATE_ERROR.load(Ordering::Relaxed),
         telemetry::PROPOSAL_VALIDATED: v_ok + v_rej,
         telemetry::PROPOSAL_ADOPTED: adopt_ok,
         "validate_ledger_error": VALIDATE_LEDGER_ERR.load(Ordering::Relaxed),
@@ -197,6 +270,137 @@ pub fn validate_with_default(
 /// Re-export parse for the HTTP layer.
 pub fn parse_mode(s: &str) -> Option<ValidateMode> {
     parse_validate_mode(s)
+}
+
+/// Specification for an auto-submitted `pattern_promote` proposal.
+///
+/// Hosts (the OpenFang agent loop today) build this from a
+/// [`crate::graph_memory_writer::PatternUpsertOutcome`] when
+/// [`crate::graph_memory_writer::PatternUpsertOutcome::just_promoted`] is `true`.
+#[derive(Debug, Clone)]
+pub struct AutoSubmitPatternProposal<'a> {
+    pub name: &'a str,
+    pub tool_sequence: &'a [String],
+    pub observation_count: u32,
+    pub fitness: f32,
+    /// Optional context-freshness signal at proposal time (defaults to
+    /// [`ContextFreshness::Unknown`] when `None`).
+    pub freshness_at_proposal: Option<ContextFreshness>,
+}
+
+/// Build the deterministic [`ProposalEnvelope`] + `proposed_ainl_text` for a `pattern_promote`
+/// auto-submission. Public for tests / tools that need the same on-the-wire shape.
+#[must_use]
+pub fn build_pattern_promote_envelope(
+    spec: &AutoSubmitPatternProposal<'_>,
+) -> (ProposalEnvelope, String) {
+    let name = spec.name.trim();
+    let safe_name = if name.is_empty() { "pattern" } else { name };
+    let seq_join = spec.tool_sequence.join(" -> ");
+    let mut text = String::new();
+    text.push_str("graph\n");
+    text.push_str("# kind: pattern_promote\n");
+    text.push_str("# pattern_name: ");
+    text.push_str(safe_name);
+    text.push('\n');
+    text.push_str(&format!(
+        "# observations: {}; fitness: {:.3}\n",
+        spec.observation_count, spec.fitness
+    ));
+    text.push_str("# tool_sequence:\n");
+    for (i, t) in spec.tool_sequence.iter().enumerate() {
+        text.push_str(&format!("#   {}. {}\n", i + 1, t.trim()));
+    }
+    text.push_str(&format!("L_pattern_{safe_name}:\n"));
+    text.push_str(&format!("  # {seq_join}\n"));
+    text.push_str("  J ok\n");
+
+    let proposed_hash = sha256_hex_lower(&text);
+    // Stable identity for the *concept* of this pattern (name + sequence) — used as
+    // `original_hash` so dashboards can group sequential refinements of the same pattern.
+    let original_hash = sha256_hex_lower(&format!("pattern_promote:{safe_name}:{seq_join}"));
+    let envelope = ProposalEnvelope {
+        schema_version: LEARNER_SCHEMA_VERSION,
+        original_hash,
+        proposed_hash,
+        kind: "pattern_promote".to_string(),
+        rationale: format!(
+            "Auto-submitted: pattern '{safe_name}' crossed promotion threshold ({} observations, fitness {:.2})",
+            spec.observation_count, spec.fitness
+        ),
+        freshness_at_proposal: spec
+            .freshness_at_proposal
+            .unwrap_or(ContextFreshness::Unknown),
+        impact_decision: ImpactDecision::AllowExecute,
+    };
+    (envelope, text)
+}
+
+/// Auto-submit a `pattern_promote` proposal at the recurrence-detection point in the agent loop.
+///
+/// Returns `Ok(Some(id))` on a fresh submit, `Ok(None)` when the call was a no-op (env disabled,
+/// dedup hit, or the proposals subsystem is off), and `Err(_)` on a real ledger / submit failure.
+///
+/// **Idempotency:** scans [`list_proposals`] (most-recent 200) for a prior `pattern_promote` row
+/// with the same `proposed_hash`; if found, returns `Ok(None)` without inserting a duplicate.
+///
+/// **Auto-validate:** when [`auto_validate_env_enabled`] is true, runs the structural validator
+/// immediately after submit and records the outcome in dedicated counters
+/// (`auto_validate_accepted` / `auto_validate_rejected` / `auto_validate_error`). Adopt is
+/// **never** triggered automatically — operators close the loop via the dashboard or
+/// `POST /api/graph-memory/improvement-proposals/adopt`.
+pub fn auto_submit_pattern_proposal(
+    home_dir: &Path,
+    agent_id: &str,
+    spec: &AutoSubmitPatternProposal<'_>,
+) -> Result<Option<ImprovementProposalId>, String> {
+    if !env_enabled() {
+        AUTO_SUBMIT_DISABLED.fetch_add(1, Ordering::Relaxed);
+        return Ok(None);
+    }
+    if !auto_submit_env_enabled() {
+        AUTO_SUBMIT_DISABLED.fetch_add(1, Ordering::Relaxed);
+        return Ok(None);
+    }
+    if spec.tool_sequence.is_empty() {
+        // Defensive: a 0-step "pattern" is meaningless; skip silently.
+        AUTO_SUBMIT_DEDUP.fetch_add(1, Ordering::Relaxed);
+        return Ok(None);
+    }
+    let (envelope, text) = build_pattern_promote_envelope(spec);
+
+    let existing = list_proposals(home_dir, agent_id, 200).unwrap_or_default();
+    if existing
+        .iter()
+        .any(|r| r.proposed_hash == envelope.proposed_hash && is_pattern_promote_kind(&r.kind))
+    {
+        AUTO_SUBMIT_DEDUP.fetch_add(1, Ordering::Relaxed);
+        return Ok(None);
+    }
+
+    match submit(home_dir, agent_id, &envelope, &text) {
+        Ok(id) => {
+            AUTO_SUBMIT_OK.fetch_add(1, Ordering::Relaxed);
+            if auto_validate_env_enabled() {
+                match validate_proposal(home_dir, agent_id, id, Some(ValidateMode::Structural)) {
+                    Ok(r) if r.accepted => {
+                        AUTO_VALIDATE_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(_) => {
+                        AUTO_VALIDATE_REJECTED.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        AUTO_VALIDATE_ERROR.fetch_add(1, Ordering::Relaxed);
+                    }
+                };
+            }
+            Ok(Some(id))
+        }
+        Err(e) => {
+            AUTO_SUBMIT_ERROR.fetch_add(1, Ordering::Relaxed);
+            Err(e)
+        }
+    }
 }
 
 /// Recent rows from the per-agent proposal ledger.
@@ -440,19 +644,14 @@ pub fn adopt_validated_proposal(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
-
     use super::*;
-
-    static AINL_IMPROVEMENT_PROPOSALS_ENV_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn env_enabled_unset_is_on_and_opt_out_off() {
         const K: &str = "AINL_IMPROVEMENT_PROPOSALS_ENABLED";
-        let _g = AINL_IMPROVEMENT_PROPOSALS_ENV_TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("lock");
+        // Share the workspace-wide tokio Mutex so we serialize with all other tests that
+        // mutate proposal/auto-submit env vars (avoids poisoning + cross-test races).
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
         let prev = std::env::var(K).ok();
         let restore = || match &prev {
             Some(s) => std::env::set_var(K, s),
@@ -479,5 +678,95 @@ mod tests {
     #[test]
     fn structural_rejects_without_graph() {
         assert!(default_structural_validate("# no graph line\n").is_err());
+    }
+
+    fn sample_spec() -> (Vec<String>, AutoSubmitPatternProposal<'static>) {
+        let seq: Vec<String> = vec!["tool_a".into(), "tool_b".into(), "tool_c".into()];
+        // SAFETY: leak so the borrow lives 'static for the test (tiny, intentional).
+        let leaked: &'static [String] = Box::leak(seq.clone().into_boxed_slice());
+        (
+            seq,
+            AutoSubmitPatternProposal {
+                name: "demo_pattern",
+                tool_sequence: leaked,
+                observation_count: 3,
+                fitness: 0.82,
+                freshness_at_proposal: None,
+            },
+        )
+    }
+
+    #[test]
+    fn build_pattern_promote_envelope_has_matching_hash_and_passes_structural() {
+        let (_seq, spec) = sample_spec();
+        let (envelope, text) = build_pattern_promote_envelope(&spec);
+        assert_eq!(envelope.kind, "pattern_promote");
+        assert!(text.starts_with("graph\n"));
+        assert_eq!(sha256_hex_lower(&text), envelope.proposed_hash);
+        assert!(structural_prologue_only(&text).is_ok());
+    }
+
+    #[test]
+    fn auto_submit_pattern_proposal_inserts_then_dedups_by_hash() {
+        // Share the workspace-wide env lock so we don't race
+        // `graph_memory_learning::tests::auto_submit_policy_*` (which mutate the same envs).
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        const K_MASTER: &str = "AINL_IMPROVEMENT_PROPOSALS_ENABLED";
+        const K_AUTO: &str = "AINL_AUTO_SUBMIT_PATTERN_PROPOSALS";
+        const K_VALIDATE: &str = "AINL_AUTO_VALIDATE_PATTERN_PROPOSALS";
+        let prev_master = std::env::var(K_MASTER).ok();
+        let prev_auto = std::env::var(K_AUTO).ok();
+        let prev_validate = std::env::var(K_VALIDATE).ok();
+        std::env::remove_var(K_MASTER);
+        std::env::remove_var(K_AUTO);
+        std::env::remove_var(K_VALIDATE);
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join("agents/agent-x/.graph-memory")).unwrap();
+        let (_seq, spec) = sample_spec();
+
+        let first = auto_submit_pattern_proposal(home, "agent-x", &spec).expect("first ok");
+        assert!(first.is_some(), "first auto-submit should insert");
+
+        let second = auto_submit_pattern_proposal(home, "agent-x", &spec).expect("second ok");
+        assert!(
+            second.is_none(),
+            "duplicate auto-submit must dedup on proposed_hash"
+        );
+
+        match prev_master {
+            Some(v) => std::env::set_var(K_MASTER, v),
+            None => std::env::remove_var(K_MASTER),
+        }
+        match prev_auto {
+            Some(v) => std::env::set_var(K_AUTO, v),
+            None => std::env::remove_var(K_AUTO),
+        }
+        match prev_validate {
+            Some(v) => std::env::set_var(K_VALIDATE, v),
+            None => std::env::remove_var(K_VALIDATE),
+        }
+    }
+
+    #[test]
+    fn auto_submit_pattern_proposal_respects_env_opt_out() {
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        const K_AUTO: &str = "AINL_AUTO_SUBMIT_PATTERN_PROPOSALS";
+        let prev_auto = std::env::var(K_AUTO).ok();
+        std::env::set_var(K_AUTO, "off");
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let (_seq, spec) = sample_spec();
+        let r = auto_submit_pattern_proposal(home, "agent-y", &spec).expect("ok");
+        assert!(r.is_none(), "auto-submit must skip when env is off");
+        let db = improvement_proposals_db_path(home, "agent-y");
+        assert!(!db.exists(), "no ledger file should be written on opt-out");
+
+        match prev_auto {
+            Some(v) => std::env::set_var(K_AUTO, v),
+            None => std::env::remove_var(K_AUTO),
+        }
     }
 }

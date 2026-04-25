@@ -15,12 +15,14 @@
 //! All failure paths in the agent loop should go through [`LearningRecorder`] so sanitization,
 //! policy, and telemetry stay in one place.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use openfang_memory::session::Session;
 use openfang_types::agent::AgentManifest;
 use regex::Regex;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::graph_memory_writer::GraphMemoryWriter;
@@ -93,6 +95,10 @@ pub struct LearningStackPolicy {
     pub master_stack_disabled: bool,
     pub trajectories: bool,
     pub failures: bool,
+    /// `true` when the agent loop should auto-submit `pattern_promote` improvement proposals at
+    /// recurrence-detection time (`prompt_eligible: false → true`). Inherits master switch and
+    /// the per-agent manifest opt-out; defaults on when both upstream gates are on.
+    pub auto_submit_pattern_proposals: bool,
 }
 
 impl LearningStackPolicy {
@@ -103,12 +109,30 @@ impl LearningStackPolicy {
             !master_stack_disabled && crate::graph_memory_writer::trajectory_env_enabled();
         let failures =
             !master_stack_disabled && crate::graph_memory_writer::failure_learning_env_enabled();
+        let auto_submit_pattern_proposals = !master_stack_disabled
+            && crate::improvement_proposals_host::env_enabled()
+            && crate::improvement_proposals_host::auto_submit_env_enabled()
+            && !manifest_auto_submit_opt_out(manifest);
         Self {
             master_stack_disabled,
             trajectories,
             failures,
+            auto_submit_pattern_proposals,
         }
     }
+}
+
+#[must_use]
+fn manifest_auto_submit_opt_out(manifest: &AgentManifest) -> bool {
+    if let Some(raw) = manifest
+        .metadata
+        .get("ainl_auto_submit_pattern_proposals")
+        .and_then(|x| x.as_str())
+    {
+        let t = raw.trim().to_ascii_lowercase();
+        return matches!(t.as_str(), "0" | "false" | "no" | "off");
+    }
+    false
 }
 
 /// Best-effort redaction + size cap before persistence / FTS (`failure` nodes).
@@ -244,10 +268,7 @@ impl LearningRecorder {
         if apply.new_capabilities_for_graph && tool_name == "mcp_ainl_ainl_capabilities" {
             if let Some(fact) = crate::mcp_ainl_session::format_capabilities_digest(&v) {
                 let h = crate::mcp_ainl_session::content_sha16(content);
-                let tags = vec![
-                    "mcp:ainl:capabilities".to_string(),
-                    format!("v:{h}"),
-                ];
+                let tags = vec!["mcp:ainl:capabilities".to_string(), format!("v:{h}")];
                 gm.record_fact_with_tags(fact, 0.95, Uuid::new_v4(), &tags, pid)
                     .await;
             }
@@ -256,10 +277,7 @@ impl LearningRecorder {
         if apply.new_recommended_next_for_graph && v.get("recommended_next_tools").is_some() {
             if let Some(fact) = crate::mcp_ainl_session::format_recommended_next_tools_echo(&v) {
                 let h = crate::mcp_ainl_session::content_sha16(&fact);
-                let tags = vec![
-                    "mcp:ainl:recommended_next".to_string(),
-                    format!("v:{h}"),
-                ];
+                let tags = vec!["mcp:ainl:recommended_next".to_string(), format!("v:{h}")];
                 gm.record_fact_with_tags(fact, 0.9, Uuid::new_v4(), &tags, pid)
                     .await;
             }
@@ -363,6 +381,81 @@ impl LearningRecorder {
         }
     }
 
+    /// `true` when [`Self::maybe_auto_submit_pattern_promotion`] should attempt a submit for
+    /// promotion-event outcomes from this loop.
+    #[must_use]
+    pub fn auto_submit_pattern_proposals_on(&self) -> bool {
+        self.policy.auto_submit_pattern_proposals
+    }
+
+    /// Recurrence-detection trigger: when a tool-sequence pattern just crossed the
+    /// [`ainl_memory::pattern_promotion::should_promote`] gate
+    /// (`outcome.just_promoted == true`), spawn a blocking task that auto-submits a
+    /// `pattern_promote` improvement proposal via
+    /// [`crate::improvement_proposals_host::auto_submit_pattern_proposal`].
+    ///
+    /// Best-effort: never blocks the live agent loop and never propagates a submit failure.
+    /// All gating (master switch, env opt-out, manifest opt-out, dedup, idempotency) lives
+    /// inside the host helper.
+    pub fn maybe_auto_submit_pattern_promotion(
+        &self,
+        home_dir: PathBuf,
+        agent_id: String,
+        outcome: &crate::graph_memory_writer::PatternUpsertOutcome,
+    ) {
+        if !outcome.just_promoted {
+            return;
+        }
+        if !self.policy.auto_submit_pattern_proposals {
+            debug!(
+                agent_id = %agent_id,
+                pattern = %outcome.name,
+                "auto-submit disabled by policy; skipping pattern_promote proposal"
+            );
+            return;
+        }
+        let name = outcome.name.clone();
+        let tool_sequence = outcome.tool_sequence.clone();
+        let observation_count = outcome.observation_count;
+        let fitness = outcome.fitness;
+        tokio::task::spawn_blocking(move || {
+            let spec = crate::improvement_proposals_host::AutoSubmitPatternProposal {
+                name: name.as_str(),
+                tool_sequence: tool_sequence.as_slice(),
+                observation_count,
+                fitness,
+                freshness_at_proposal: None,
+            };
+            match crate::improvement_proposals_host::auto_submit_pattern_proposal(
+                home_dir.as_path(),
+                agent_id.as_str(),
+                &spec,
+            ) {
+                Ok(Some(id)) => debug!(
+                    agent_id = %agent_id,
+                    pattern = %name,
+                    proposal_id = %id,
+                    observations = observation_count,
+                    fitness,
+                    "auto-submitted pattern_promote improvement proposal"
+                ),
+                Ok(None) => {
+                    debug!(
+                        agent_id = %agent_id,
+                        pattern = %name,
+                        "auto-submit no-op (env disabled or duplicate proposed_hash)"
+                    );
+                }
+                Err(e) => warn!(
+                    agent_id = %agent_id,
+                    pattern = %name,
+                    error = %e,
+                    "auto-submit pattern_promote improvement proposal failed"
+                ),
+            }
+        });
+    }
+
     /// Graph validation failure from **`ainl-runtime`** before `run_turn` proceeds (dangling edges, etc.).
     pub async fn record_ainl_runtime_graph_validation_failure(
         &self,
@@ -445,5 +538,78 @@ mod tests {
     fn failure_recall_fts_query_none_when_only_stopwords_or_short() {
         assert!(failure_recall_fts_query("a b the and").is_none());
         assert!(failure_recall_fts_query("ok go").is_none());
+    }
+
+    #[test]
+    fn auto_submit_policy_default_on_when_master_on() {
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        for k in [
+            "AINL_LEARNING",
+            "AINL_IMPROVEMENT_PROPOSALS_ENABLED",
+            "AINL_AUTO_SUBMIT_PATTERN_PROPOSALS",
+        ] {
+            std::env::remove_var(k);
+        }
+        let m = AgentManifest::default();
+        let p = LearningStackPolicy::resolve(&m);
+        assert!(
+            p.auto_submit_pattern_proposals,
+            "auto-submit defaults to on when master + env unset"
+        );
+    }
+
+    #[test]
+    fn auto_submit_policy_off_when_master_disabled() {
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        let prev = std::env::var("AINL_LEARNING").ok();
+        std::env::set_var("AINL_LEARNING", "off");
+        let m = AgentManifest::default();
+        let p = LearningStackPolicy::resolve(&m);
+        assert!(p.master_stack_disabled);
+        assert!(!p.auto_submit_pattern_proposals);
+        match prev {
+            Some(v) => std::env::set_var("AINL_LEARNING", v),
+            None => std::env::remove_var("AINL_LEARNING"),
+        }
+    }
+
+    #[test]
+    fn auto_submit_policy_off_via_env_opt_out() {
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        let prev_master = std::env::var("AINL_LEARNING").ok();
+        let prev_auto = std::env::var("AINL_AUTO_SUBMIT_PATTERN_PROPOSALS").ok();
+        std::env::remove_var("AINL_LEARNING");
+        std::env::set_var("AINL_AUTO_SUBMIT_PATTERN_PROPOSALS", "false");
+        let m = AgentManifest::default();
+        let p = LearningStackPolicy::resolve(&m);
+        assert!(!p.auto_submit_pattern_proposals);
+        match prev_master {
+            Some(v) => std::env::set_var("AINL_LEARNING", v),
+            None => std::env::remove_var("AINL_LEARNING"),
+        }
+        match prev_auto {
+            Some(v) => std::env::set_var("AINL_AUTO_SUBMIT_PATTERN_PROPOSALS", v),
+            None => std::env::remove_var("AINL_AUTO_SUBMIT_PATTERN_PROPOSALS"),
+        }
+    }
+
+    #[test]
+    fn auto_submit_policy_off_via_manifest_metadata() {
+        let _lock = crate::runtime_env_test_lock().blocking_lock();
+        for k in [
+            "AINL_LEARNING",
+            "AINL_AUTO_SUBMIT_PATTERN_PROPOSALS",
+            "AINL_IMPROVEMENT_PROPOSALS_ENABLED",
+        ] {
+            std::env::remove_var(k);
+        }
+        let mut m = AgentManifest::default();
+        m.metadata
+            .insert("ainl_auto_submit_pattern_proposals".into(), json!("off"));
+        let p = LearningStackPolicy::resolve(&m);
+        assert!(
+            !p.auto_submit_pattern_proposals,
+            "manifest opt-out wins over env defaults"
+        );
     }
 }
