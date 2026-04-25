@@ -63,12 +63,14 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "channel_send",
     "event_publish",
     "web_fetch",
+    "github_subtree_download",
     "media_transcribe",
     "mcp_ainl_ainl_list_ecosystem",
     "mcp_ainl_ainl_capabilities",
     "mcp_ainl_ainl_validate",
     "mcp_ainl_ainl_compile",
     "mcp_ainl_ainl_run",
+    "mcp_resource_read",
     "mcp_ainl_*",
     "mcp_*",
     // ArmaraOS kernel scheduler — so agents with a custom allowlist can still
@@ -3296,6 +3298,13 @@ impl OpenFangKernel {
                 })
                 .collect();
 
+            let agent_id_prompt = agent_id.to_string();
+            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo) =
+                openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
+                    entry.session_id,
+                    Some(agent_id_prompt.as_str()),
+                );
+
             let prompt_ctx = openfang_runtime::prompt_builder::PromptContext {
                 agent_name: manifest.name.clone(),
                 agent_description: manifest.description.clone(),
@@ -3371,6 +3380,8 @@ impl OpenFangKernel {
                 ),
                 sender_id,
                 sender_name,
+                ainl_mcp_capabilities_digest,
+                mcp_ainl_recommended_next_echo,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -4251,6 +4262,13 @@ impl OpenFangKernel {
                 })
                 .collect();
 
+            let agent_id_prompt = agent_id.to_string();
+            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo) =
+                openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
+                    entry.session_id,
+                    Some(agent_id_prompt.as_str()),
+                );
+
             let prompt_ctx = openfang_runtime::prompt_builder::PromptContext {
                 agent_name: manifest.name.clone(),
                 agent_description: manifest.description.clone(),
@@ -4326,6 +4344,8 @@ impl OpenFangKernel {
                 ),
                 sender_id,
                 sender_name,
+                ainl_mcp_capabilities_digest,
+                mcp_ainl_recommended_next_echo,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -7366,6 +7386,16 @@ impl OpenFangKernel {
             .unwrap_or_else(|e| e.into_inner())
             .resolve(key)
             .map(|z| z.to_string())
+    }
+
+    /// Which layer has the first non-empty value for this env key (`vault`, `dotenv`,
+    /// `process_env`), or `None` if missing. Used by the Settings → Vault API (no values).
+    pub fn credential_first_layer(&self, key: &str) -> Option<String> {
+        self.credential_resolver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .first_resolution_layer(key)
+            .map(String::from)
     }
 
     /// Exposes host `PATH` / dotenv / credential state for Google Workspace MCP setup in the
