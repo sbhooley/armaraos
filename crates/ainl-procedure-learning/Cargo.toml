@@ -1,0 +1,24 @@
+[package]
+name = "ainl-procedure-learning"
+description = "Reusable procedure learning for AINL: experience distillation, reuse scoring, patch candidates, and renderers"
+version = "0.1.0"
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/ainl-procedure-learning"
+rust-version.workspace = true
+keywords = ["ainl", "agent", "learning", "procedure", "skills"]
+categories = ["development-tools"]
+
+[dependencies]
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

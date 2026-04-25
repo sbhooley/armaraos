@@ -6,6 +6,7 @@ mod builder;
 
 pub use builder::{build_snapshot, SnapshotError};
 
+use ainl_contracts::{ProcedureArtifact, ProcedureExecutionPlan, ProcedureStepKind};
 use ainl_memory::AinlMemoryNode;
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +93,116 @@ pub struct DeterministicPlan {
     pub confidence: f32,
     #[serde(default)]
     pub reasoning_required_at: Vec<String>,
+}
+
+/// Project a portable procedure into the deterministic planner protocol.
+#[must_use]
+pub fn deterministic_plan_from_procedure(artifact: &ProcedureArtifact) -> DeterministicPlan {
+    let execution = procedure_execution_plan_from_artifact(artifact);
+    let steps = execution
+        .steps
+        .iter()
+        .map(|step| PlanStep {
+            id: step.step_id.clone(),
+            tool: if step.executor == "tool" {
+                step.operation.clone()
+            } else {
+                format!("procedure_{}", step.executor)
+            },
+            args: if step.args_schema.is_null() {
+                serde_json::json!({
+                    "procedure_id": execution.procedure_id,
+                    "operation": step.operation,
+                    "title": step.title,
+                })
+            } else {
+                serde_json::json!({
+                    "procedure_id": execution.procedure_id,
+                    "operation": step.operation,
+                    "args_schema": step.args_schema,
+                })
+            },
+            depends_on: step.depends_on.clone(),
+            on_error: OnErrorPolicy::LocalPatch,
+            idempotency_key: Some(format!("{}:{}", execution.procedure_id, step.step_id)),
+            optional: false,
+            expected_output_schema: None,
+        })
+        .collect::<Vec<_>>();
+    DeterministicPlan {
+        steps,
+        graph_writes: vec![GraphWrite {
+            node_type: "semantic".into(),
+            label: format!("procedure_used:{}", artifact.id),
+            payload: serde_json::json!({
+                "fact": format!("Procedure {} was projected into a deterministic plan", artifact.id),
+                "procedure_id": artifact.id,
+            }),
+            fitness_delta: None,
+        }],
+        confidence: artifact.fitness.clamp(0.0, 1.0),
+        reasoning_required_at: Vec::new(),
+    }
+}
+
+#[must_use]
+pub fn procedure_execution_plan_from_artifact(
+    artifact: &ProcedureArtifact,
+) -> ProcedureExecutionPlan {
+    let mut prior_step: Option<String> = None;
+    let steps = artifact
+        .steps
+        .iter()
+        .map(|step| {
+            let (executor, operation, args_schema) = match &step.kind {
+                ProcedureStepKind::ToolCall { tool, args_schema } => {
+                    ("tool".to_string(), tool.clone(), args_schema.clone())
+                }
+                ProcedureStepKind::AdapterCall { adapter, op } => (
+                    "adapter".to_string(),
+                    format!("{adapter}.{op}"),
+                    serde_json::Value::Null,
+                ),
+                ProcedureStepKind::Validate { target } => (
+                    "validate".to_string(),
+                    target.clone(),
+                    serde_json::Value::Null,
+                ),
+                ProcedureStepKind::Branch { condition } => (
+                    "branch".to_string(),
+                    condition.clone(),
+                    serde_json::Value::Null,
+                ),
+                ProcedureStepKind::HumanReview { reason } => (
+                    "human_review".to_string(),
+                    reason.clone(),
+                    serde_json::Value::Null,
+                ),
+                ProcedureStepKind::Instruction { text } => (
+                    "instruction".to_string(),
+                    text.clone(),
+                    serde_json::Value::Null,
+                ),
+            };
+            let depends_on = prior_step.iter().cloned().collect::<Vec<_>>();
+            prior_step = Some(step.step_id.clone());
+            ainl_contracts::ProcedureExecutionStep {
+                step_id: step.step_id.clone(),
+                title: step.title.clone(),
+                executor,
+                operation,
+                args_schema,
+                depends_on,
+                on_error: "local_patch".into(),
+            }
+        })
+        .collect();
+    ProcedureExecutionPlan {
+        procedure_id: artifact.id.clone(),
+        schema_version: ainl_contracts::LEARNER_SCHEMA_VERSION,
+        steps,
+        verification: artifact.verification.clone(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -319,3 +430,54 @@ pub fn apply_graph_writes(
 pub const STRUCTURED_KIND_DETERMINISTIC_PLAN: &str = "deterministic_plan";
 /// Structured response when server-side plan validation fails after repair attempt.
 pub const STRUCTURED_KIND_PLANNER_INVALID_PLAN: &str = "planner_invalid_plan";
+
+#[cfg(test)]
+mod procedure_tests {
+    use super::*;
+    use ainl_contracts::{
+        ProcedureArtifact, ProcedureArtifactFormat, ProcedureLifecycle, ProcedureStep,
+        ProcedureStepKind, ProcedureVerification, LEARNER_SCHEMA_VERSION,
+    };
+
+    fn artifact() -> ProcedureArtifact {
+        ProcedureArtifact {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            id: "proc:test".into(),
+            title: "Test Procedure".into(),
+            intent: "test".into(),
+            summary: "summary".into(),
+            required_tools: vec!["file_read".into()],
+            required_adapters: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            preconditions: vec![],
+            steps: vec![ProcedureStep {
+                step_id: "s1".into(),
+                title: "Read".into(),
+                kind: ProcedureStepKind::ToolCall {
+                    tool: "file_read".into(),
+                    args_schema: serde_json::json!({"type":"object"}),
+                },
+                rationale: None,
+            }],
+            verification: ProcedureVerification::default(),
+            known_failures: vec![],
+            recovery: vec![],
+            source_trajectory_ids: vec![],
+            source_failure_ids: vec![],
+            fitness: 0.9,
+            observation_count: 3,
+            lifecycle: ProcedureLifecycle::Promoted,
+            render_targets: vec![ProcedureArtifactFormat::PromptOnly],
+        }
+    }
+
+    #[test]
+    fn projects_procedure_to_deterministic_plan() {
+        let plan = deterministic_plan_from_procedure(&artifact());
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].tool, "file_read");
+        assert_eq!(plan.steps[0].on_error, OnErrorPolicy::LocalPatch);
+        assert_eq!(plan.confidence, 0.9);
+    }
+}

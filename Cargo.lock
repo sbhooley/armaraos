@@ -88,6 +88,7 @@ dependencies = [
 name = "ainl-agent-snapshot"
 version = "0.1.2"
 dependencies = [
+ "ainl-contracts",
  "ainl-memory",
  "chrono",
  "serde",
@@ -207,6 +208,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "ainl-procedure-learning"
+version = "0.1.0"
+dependencies = [
+ "ainl-contracts",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -4942,6 +4956,7 @@ dependencies = [
  "ainl-improvement-proposals",
  "ainl-memory",
  "ainl-persona",
+ "ainl-procedure-learning",
  "ainl-repo-intel",
  "ainl-runtime",
  "ainl-semantic-tagger",

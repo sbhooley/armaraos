@@ -91,6 +91,10 @@ pub use snapshot::{
 pub use store::{GraphStore, GraphValidationError, SnapshotImportError, SqliteGraphStore};
 pub use trajectory_table::TrajectoryDetailRecord;
 
+use ainl_contracts::{
+    ProcedureArtifact, ProcedureLifecycle, ProcedureReuseOutcome, ProcedureStepKind,
+    TrajectoryOutcome,
+};
 use uuid::Uuid;
 
 /// High-level graph memory API - the main entry point for AINL memory.
@@ -98,6 +102,45 @@ use uuid::Uuid;
 /// Wraps a GraphStore implementation with a simplified 5-method API.
 pub struct GraphMemory {
     store: SqliteGraphStore,
+}
+
+fn score_procedure_artifact(
+    artifact: &ProcedureArtifact,
+    intent: &str,
+    available_tools: &[String],
+) -> f32 {
+    let haystack = format!(
+        "{} {} {}",
+        artifact.title.to_ascii_lowercase(),
+        artifact.intent.to_ascii_lowercase(),
+        artifact.summary.to_ascii_lowercase()
+    );
+    let tokens = intent
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    let intent_score = if tokens.is_empty() {
+        0.0
+    } else {
+        tokens
+            .iter()
+            .filter(|token| haystack.contains(token.as_str()))
+            .count() as f32
+            / tokens.len() as f32
+    };
+    let tool_score = if artifact.required_tools.is_empty() {
+        0.2
+    } else {
+        artifact
+            .required_tools
+            .iter()
+            .filter(|tool| available_tools.iter().any(|available| available == *tool))
+            .count() as f32
+            / artifact.required_tools.len() as f32
+    };
+    ((intent_score * 0.55) + (tool_score * 0.30) + (artifact.fitness.clamp(0.0, 1.0) * 0.15))
+        .clamp(0.0, 1.0)
 }
 
 impl GraphMemory {
@@ -218,6 +261,194 @@ impl GraphMemory {
         let node_id = node.id;
         self.store.write_node(&node)?;
         Ok(node_id)
+    }
+
+    /// Store a portable procedure artifact as a procedural graph node.
+    ///
+    /// The canonical JSON artifact is stored in `compiled_graph` so older graph consumers can
+    /// ignore it safely, while new consumers can recall and deserialize validated procedure
+    /// artifacts without adding a separate table.
+    pub fn write_procedure_artifact(&self, artifact: &ProcedureArtifact) -> Result<Uuid, String> {
+        self.write_procedure_artifact_for_agent("", artifact)
+    }
+
+    /// Store a portable procedure artifact for a specific agent.
+    pub fn write_procedure_artifact_for_agent(
+        &self,
+        agent_id: &str,
+        artifact: &ProcedureArtifact,
+    ) -> Result<Uuid, String> {
+        let artifact_json = serde_json::to_vec(artifact).map_err(|e| e.to_string())?;
+        let tool_sequence = artifact
+            .steps
+            .iter()
+            .filter_map(|step| match &step.kind {
+                ProcedureStepKind::ToolCall { tool, .. } => Some(tool.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut node = AinlMemoryNode::new_pattern(artifact.id.clone(), artifact_json);
+        node.agent_id = agent_id.to_string();
+        if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+            procedural.tool_sequence = tool_sequence;
+            procedural.confidence = Some(artifact.fitness.clamp(0.0, 1.0));
+            procedural.fitness = Some(artifact.fitness.clamp(0.0, 1.0));
+            procedural.pattern_observation_count = artifact.observation_count;
+            procedural.prompt_eligible = matches!(
+                artifact.lifecycle,
+                ProcedureLifecycle::Validated | ProcedureLifecycle::Promoted
+            );
+            procedural.label = artifact.id.clone();
+            procedural.trigger_conditions = vec![artifact.intent.clone()];
+        }
+        let node_id = node.id;
+        self.store.write_node(&node)?;
+        Ok(node_id)
+    }
+
+    /// Update an existing procedural node for `artifact.id`, or write a new one if no node exists.
+    pub fn upsert_procedure_artifact_for_agent(
+        &self,
+        agent_id: &str,
+        artifact: &ProcedureArtifact,
+    ) -> Result<Uuid, String> {
+        for mut node in self.store.find_by_type("procedural")? {
+            if node.agent_id != agent_id {
+                continue;
+            }
+            let Some(procedural) = node.procedural() else {
+                continue;
+            };
+            let matches_id = procedural.label == artifact.id
+                || serde_json::from_slice::<ProcedureArtifact>(&procedural.compiled_graph)
+                    .map(|existing| existing.id == artifact.id)
+                    .unwrap_or(false);
+            if !matches_id {
+                continue;
+            }
+            let artifact_json = serde_json::to_vec(artifact).map_err(|e| e.to_string())?;
+            let tool_sequence = artifact
+                .steps
+                .iter()
+                .filter_map(|step| match &step.kind {
+                    ProcedureStepKind::ToolCall { tool, .. } => Some(tool.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let AinlNodeType::Procedural { ref mut procedural } = node.node_type {
+                procedural.compiled_graph = artifact_json;
+                procedural.tool_sequence = tool_sequence;
+                procedural.confidence = Some(artifact.fitness.clamp(0.0, 1.0));
+                procedural.fitness = Some(artifact.fitness.clamp(0.0, 1.0));
+                procedural.pattern_observation_count = artifact.observation_count;
+                procedural.prompt_eligible = matches!(
+                    artifact.lifecycle,
+                    ProcedureLifecycle::Validated | ProcedureLifecycle::Promoted
+                );
+                procedural.label = artifact.id.clone();
+                procedural.trigger_conditions = vec![artifact.intent.clone()];
+            }
+            let node_id = node.id;
+            self.store.write_node(&node)?;
+            return Ok(node_id);
+        }
+        self.write_procedure_artifact_for_agent(agent_id, artifact)
+    }
+
+    /// Recall portable procedure artifacts previously stored with [`Self::write_procedure_artifact`].
+    pub fn recall_procedure_artifacts(&self) -> Result<Vec<ProcedureArtifact>, String> {
+        let mut out = Vec::new();
+        for node in self.store.find_by_type("procedural")? {
+            let Some(procedural) = node.procedural() else {
+                continue;
+            };
+            if !procedural.prompt_eligible || procedural.compiled_graph.is_empty() {
+                continue;
+            }
+            if let Ok(artifact) =
+                serde_json::from_slice::<ProcedureArtifact>(&procedural.compiled_graph)
+            {
+                out.push(artifact);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Search validated/promoted procedure artifacts by intent text and required tool overlap.
+    pub fn search_procedure_artifacts_for_agent(
+        &self,
+        agent_id: &str,
+        intent: &str,
+        available_tools: &[String],
+        limit: usize,
+    ) -> Result<Vec<ProcedureArtifact>, String> {
+        let mut scored = Vec::new();
+        for node in self.store.find_by_type("procedural")? {
+            if node.agent_id != agent_id {
+                continue;
+            }
+            let Some(procedural) = node.procedural() else {
+                continue;
+            };
+            if !procedural.prompt_eligible || procedural.compiled_graph.is_empty() {
+                continue;
+            }
+            let Ok(artifact) =
+                serde_json::from_slice::<ProcedureArtifact>(&procedural.compiled_graph)
+            else {
+                continue;
+            };
+            if matches!(artifact.lifecycle, ProcedureLifecycle::Deprecated) {
+                continue;
+            }
+            let score = score_procedure_artifact(&artifact, intent, available_tools);
+            if score > 0.0 {
+                scored.push((score, artifact));
+            }
+        }
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, artifact)| artifact)
+            .collect())
+    }
+
+    /// Update artifact lifecycle and fitness after an attempted reuse.
+    pub fn record_procedure_reuse_outcome_for_agent(
+        &self,
+        agent_id: &str,
+        outcome: &ProcedureReuseOutcome,
+    ) -> Result<Uuid, String> {
+        let mut artifacts =
+            self.search_procedure_artifacts_for_agent(agent_id, "", &[], usize::MAX)?;
+        let Some(mut artifact) = artifacts
+            .drain(..)
+            .find(|artifact| artifact.id == outcome.procedure_id)
+        else {
+            return Err(format!(
+                "procedure artifact not found: {}",
+                outcome.procedure_id
+            ));
+        };
+        artifact.observation_count = artifact.observation_count.saturating_add(1);
+        let delta = match outcome.outcome {
+            TrajectoryOutcome::Success => 0.04,
+            TrajectoryOutcome::PartialSuccess => 0.01,
+            TrajectoryOutcome::Failure => -0.08,
+            TrajectoryOutcome::Aborted => -0.12,
+        };
+        artifact.fitness = (artifact.fitness + delta).clamp(0.0, 1.0);
+        if let Some(failure_id) = outcome.failure_id.as_ref() {
+            if !artifact
+                .source_failure_ids
+                .iter()
+                .any(|id| id == failure_id)
+            {
+                artifact.source_failure_ids.push(failure_id.clone());
+            }
+        }
+        self.upsert_procedure_artifact_for_agent(agent_id, &artifact)
     }
 
     /// Write a graph edge between nodes (e.g. episode timeline `follows`).
@@ -717,5 +948,122 @@ mod tests {
             .expect("list after");
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].recorded_at, 200);
+    }
+
+    #[test]
+    fn stores_and_recalls_validated_procedure_artifact() {
+        use ainl_contracts::{
+            ProcedureArtifact, ProcedureArtifactFormat, ProcedureLifecycle, ProcedureStep,
+            ProcedureStepKind, ProcedureVerification, LEARNER_SCHEMA_VERSION,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let memory = GraphMemory::new(&tmp.path().join("memory.db")).unwrap();
+        let artifact = ProcedureArtifact {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            id: "proc:test".into(),
+            title: "Test Procedure".into(),
+            intent: "test intent".into(),
+            summary: "summary".into(),
+            required_tools: vec!["file_read".into()],
+            required_adapters: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            preconditions: vec![],
+            steps: vec![ProcedureStep {
+                step_id: "s1".into(),
+                title: "Read".into(),
+                kind: ProcedureStepKind::ToolCall {
+                    tool: "file_read".into(),
+                    args_schema: serde_json::json!({"type":"object"}),
+                },
+                rationale: None,
+            }],
+            verification: ProcedureVerification::default(),
+            known_failures: vec![],
+            recovery: vec![],
+            source_trajectory_ids: vec![],
+            source_failure_ids: vec![],
+            fitness: 0.9,
+            observation_count: 3,
+            lifecycle: ProcedureLifecycle::Validated,
+            render_targets: vec![ProcedureArtifactFormat::PromptOnly],
+        };
+        memory.write_procedure_artifact(&artifact).unwrap();
+        let recalled = memory.recall_procedure_artifacts().unwrap();
+        assert_eq!(recalled, vec![artifact]);
+    }
+
+    #[test]
+    fn searches_and_updates_procedure_reuse_fitness() {
+        use ainl_contracts::{
+            ProcedureArtifact, ProcedureArtifactFormat, ProcedureLifecycle, ProcedureReuseOutcome,
+            ProcedureStep, ProcedureStepKind, ProcedureVerification, TrajectoryOutcome,
+            LEARNER_SCHEMA_VERSION,
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let memory = GraphMemory::new(&tmp.path().join("memory.db")).unwrap();
+        let artifact = ProcedureArtifact {
+            schema_version: LEARNER_SCHEMA_VERSION,
+            id: "proc:review".into(),
+            title: "Review PR".into(),
+            intent: "review pull request".into(),
+            summary: "review code changes safely".into(),
+            required_tools: vec!["file_read".into(), "shell_exec".into()],
+            required_adapters: vec![],
+            inputs: vec![],
+            outputs: vec![],
+            preconditions: vec![],
+            steps: vec![ProcedureStep {
+                step_id: "s1".into(),
+                title: "Read".into(),
+                kind: ProcedureStepKind::ToolCall {
+                    tool: "file_read".into(),
+                    args_schema: serde_json::json!({"type":"object"}),
+                },
+                rationale: None,
+            }],
+            verification: ProcedureVerification::default(),
+            known_failures: vec![],
+            recovery: vec![],
+            source_trajectory_ids: vec![],
+            source_failure_ids: vec![],
+            fitness: 0.6,
+            observation_count: 3,
+            lifecycle: ProcedureLifecycle::Promoted,
+            render_targets: vec![ProcedureArtifactFormat::PromptOnly],
+        };
+        memory
+            .write_procedure_artifact_for_agent("agent-search", &artifact)
+            .unwrap();
+        let hits = memory
+            .search_procedure_artifacts_for_agent(
+                "agent-search",
+                "please review this pull request",
+                &["file_read".into(), "shell_exec".into()],
+                5,
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "proc:review");
+
+        memory
+            .record_procedure_reuse_outcome_for_agent(
+                "agent-search",
+                &ProcedureReuseOutcome {
+                    procedure_id: "proc:review".into(),
+                    outcome: TrajectoryOutcome::Failure,
+                    failure_id: Some("failure-x".into()),
+                    notes: None,
+                },
+            )
+            .unwrap();
+        let updated = memory
+            .search_procedure_artifacts_for_agent("agent-search", "review pull request", &[], 5)
+            .unwrap();
+        assert_eq!(updated[0].observation_count, 4);
+        assert!(updated[0].fitness < 0.6);
+        assert!(updated[0].source_failure_ids.contains(&"failure-x".into()));
     }
 }

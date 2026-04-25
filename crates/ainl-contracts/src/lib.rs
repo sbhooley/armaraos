@@ -4,9 +4,15 @@
 use serde::{Deserialize, Serialize};
 
 pub mod learner;
+pub mod procedure;
 pub mod vitals;
 
 pub use learner::{FailureKind, ProposalEnvelope, TrajectoryOutcome, TrajectoryStep};
+pub use procedure::{
+    ExperienceBundle, ExperienceEvent, ProcedureArtifact, ProcedureArtifactFormat,
+    ProcedureExecutionPlan, ProcedureExecutionStep, ProcedureLifecycle, ProcedurePatch,
+    ProcedureReuseOutcome, ProcedureStep, ProcedureStepKind, ProcedureVerification,
+};
 pub use vitals::{CognitivePhase, CognitiveVitals, VitalsGate};
 
 /// Telemetry / metrics field names — keep identical across ArmaraOS, AINL MCP, and optional inference-server.
@@ -26,6 +32,10 @@ pub mod telemetry {
     pub const FAILURE_PREVENTED_COUNT: &str = "failure_prevented_count";
     pub const PROPOSAL_VALIDATED: &str = "proposal_validated";
     pub const PROPOSAL_ADOPTED: &str = "proposal_adopted";
+    pub const PROCEDURE_MINTED: &str = "procedure_minted";
+    pub const PROCEDURE_REUSED: &str = "procedure_reused";
+    pub const PROCEDURE_PATCH_PROPOSED: &str = "procedure_patch_proposed";
+    pub const PROCEDURE_PATCH_ADOPTED: &str = "procedure_patch_adopted";
     pub const COMPRESSION_PROFILE_TUNED: &str = "compression_profile_tuned";
     pub const COMPRESSION_CACHE_HIT: &str = "compression_cache_hit";
     pub const PERSONA_AXIS_DELTA: &str = "persona_axis_delta";

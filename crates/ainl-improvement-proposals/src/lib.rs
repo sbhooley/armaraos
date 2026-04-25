@@ -15,6 +15,28 @@ pub use ledger::{
 use ainl_contracts::ProposalEnvelope;
 use sha2::{Digest, Sha256};
 
+pub mod proposal_kind {
+    pub const PATTERN_PROMOTE: &str = "pattern_promote";
+    pub const PROCEDURE_MINT: &str = "procedure_mint";
+    pub const PROCEDURE_PATCH: &str = "procedure_patch";
+    pub const PROCEDURE_PROMOTE: &str = "procedure_promote";
+    pub const PROCEDURE_DEPRECATE: &str = "procedure_deprecate";
+    pub const GRAPH_PATCH_FROM_PROCEDURE: &str = "graph_patch_from_procedure";
+}
+
+#[must_use]
+pub fn is_known_proposal_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        proposal_kind::PATTERN_PROMOTE
+            | proposal_kind::PROCEDURE_MINT
+            | proposal_kind::PROCEDURE_PATCH
+            | proposal_kind::PROCEDURE_PROMOTE
+            | proposal_kind::PROCEDURE_DEPRECATE
+            | proposal_kind::GRAPH_PATCH_FROM_PROCEDURE
+    )
+}
+
 /// Lowercase hex SHA-256 of UTF-8 bytes (for comparing to `ProposalEnvelope::proposed_hash`).
 #[must_use]
 pub fn sha256_hex_lower(s: &str) -> String {
@@ -49,6 +71,13 @@ mod tests {
             freshness_at_proposal: ContextFreshness::Fresh,
             impact_decision: ImpactDecision::AllowExecute,
         }
+    }
+
+    #[test]
+    fn procedure_proposal_kinds_are_known() {
+        assert!(is_known_proposal_kind(proposal_kind::PROCEDURE_MINT));
+        assert!(is_known_proposal_kind(proposal_kind::PROCEDURE_PATCH));
+        assert!(!is_known_proposal_kind("unknown"));
     }
 
     #[test]
