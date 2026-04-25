@@ -20,6 +20,7 @@ use axum::Json;
 use base64::Engine;
 use ed25519_dalek::{Signature, VerifyingKey};
 use openfang_kernel::OpenFangKernel;
+use openfang_types::agent::AgentId;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -801,6 +802,22 @@ pub async fn require_premium_for_hand_mutation(
         "premium gate allowed: wallet meets SPL minimum"
     );
     Ok(())
+}
+
+/// Require a fresh Premium verification only when the target agent was spawned
+/// from an active Premium Hand. Non-hand agents keep the normal chat contract.
+pub async fn require_premium_for_hand_agent_access(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    rid: &RequestId,
+    path: &str,
+    agent_id: AgentId,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if state.kernel.hand_registry.find_by_agent(agent_id).is_none() {
+        return Ok(());
+    }
+
+    require_premium_for_hand_mutation(state, headers, rid, path).await
 }
 
 async fn solana_rpc_json(body: serde_json::Value) -> Result<serde_json::Value, String> {

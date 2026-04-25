@@ -229,7 +229,14 @@ pub async fn agent_ws(
         return axum::http::StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // Wallet Premium: same SPL minimum as HTTP when a premium session token is present (header or `?premium_ainl=`).
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return axum::http::StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+
+    // Premium Hands: require a fresh Premium session before attaching chat WS.
     let mut premium_headers = headers.clone();
     if let Some(tok) =
         crate::premium_ainl::premium_token_from_headers_or_query(&headers, Some(&uri))
@@ -239,11 +246,12 @@ pub async fn agent_ws(
         }
     }
     let rid = RequestId("ws".to_string());
-    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
+    if let Err(resp) = crate::premium_ainl::require_premium_for_hand_agent_access(
         &state,
         &premium_headers,
         &rid,
         "/api/agents/:id/ws",
+        agent_id,
     )
     .await
     {
@@ -258,13 +266,6 @@ pub async fn agent_ws(
         None => {
             warn!(ip = %ip, "WebSocket rejected: too many connections from IP (max {MAX_WS_PER_IP})");
             return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
-        }
-    };
-
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return axum::http::StatusCode::BAD_REQUEST.into_response();
         }
     };
 

@@ -82,9 +82,10 @@
                 <button
                   type="button"
                   class="cmd-palette-item"
-                  :class="{ 'cmd-palette-item--selected': flatIndexFor(sIdx, iIdx) === selectedIdx }"
+                  :class="{ 'cmd-palette-item--selected': flatIndexFor(sIdx, iIdx) === selectedIdx, 'cmd-palette-item--locked': item.locked }"
                   @click="selectItem(item)"
                   @mouseenter="selectedIdx = flatIndexFor(sIdx, iIdx)"
+                  :title="item.locked ? 'Premium Agent locked. Verify in Premium Agents.' : ''"
                 >
                   <span class="cmd-palette-item-icon" aria-hidden="true">
                     <template x-if="item.emoji">
@@ -95,7 +96,13 @@
                     </template>
                   </span>
                   <span class="cmd-palette-item-body">
-                    <span class="cmd-palette-item-label" x-text="item.label"></span>
+                    <span class="cmd-palette-item-label-row">
+                      <span class="cmd-palette-item-label" x-text="item.label"></span>
+                      <span class="premium-lock-badge premium-lock-badge--compact" x-show="item.locked" aria-label="Premium Agent locked">
+                        <span aria-hidden="true">🔒</span>
+                        <span>Premium</span>
+                      </span>
+                    </span>
                     <span class="cmd-palette-item-sublabel" x-text="item.sublabel"></span>
                   </span>
                   <span class="cmd-palette-item-enter" aria-hidden="true">↵</span>
@@ -242,15 +249,19 @@
               <div class="sidebar-agent-list-label">Quick open</div>
               <template x-for="agent in $store.app.primaryAgentsForSidebar()" :key="agent.id">
                 <div class="sidebar-agent-row-wrap" x-data="{ hovered: false }" @mouseenter="hovered = true" @mouseleave="hovered = false">
-                  <button type="button" class="sidebar-agent-row" :class="{ 'sidebar-agent-row--pinned': $store.app.isAgentPinned(agent.id) }" @click="$store.app.openAgentChat(agent)" :title="(agent.name || '') + (agent.model_name ? ' · ' + agent.model_name : '') + ($store.app.agentHasChatUnread(agent.id) ? ' — unread messages' : '')">
+                  <button type="button" class="sidebar-agent-row" :class="{ 'sidebar-agent-row--pinned': $store.app.isAgentPinned(agent.id), 'sidebar-agent-row--locked': $store.app.premiumAgentLocked(agent) }" @click="$store.app.openAgentChat(agent)" :title="$store.app.premiumAgentLockTitle(agent) || ((agent.name || '') + (agent.model_name ? ' · ' + agent.model_name : '') + ($store.app.agentHasChatUnread(agent.id) ? ' — unread messages' : ''))">
                     <div class="sidebar-agent-row-avatar">
                       <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:16px;line-height:1"></span>
                       <svg x-show="!agent.identity || !agent.identity.emoji" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                       <span class="sidebar-chat-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                      <span class="premium-lock-dot" x-show="$store.app.premiumAgentLocked(agent)" aria-hidden="true">🔒</span>
                     </div>
                     <div class="sidebar-agent-row-body">
-                      <span class="sidebar-agent-row-name truncate" x-text="agent.name"></span>
-                      <span class="sidebar-agent-row-model truncate" x-text="agent.model_name"></span>
+                      <span class="sidebar-agent-row-name-line">
+                        <span class="sidebar-agent-row-name truncate" x-text="agent.name"></span>
+                        <span class="premium-lock-badge premium-lock-badge--tiny" x-show="$store.app.premiumAgentLocked(agent)" aria-label="Premium Agent locked">Locked</span>
+                      </span>
+                      <span class="sidebar-agent-row-model truncate" x-text="$store.app.premiumAgentLocked(agent) ? 'Verify wallet to chat' : agent.model_name"></span>
                       <span class="sidebar-agent-row-activity truncate" x-show="$store.app.agentActivityLines[agent.id]" x-text="$store.app.agentActivityLines[agent.id].text"></span>
                     </div>
                     <span class="sidebar-agent-row-dot" :class="(agent.state === 'Running' ? 'sidebar-agent-row-dot--run' : (agent.state === 'Crashed' ? 'sidebar-agent-row-dot--idle' : 'sidebar-agent-row-dot--other'))" :title="agent.state === 'Crashed' ? 'Idle' : (agent.state || 'Unknown')"></span>
@@ -623,12 +634,22 @@
             </div>
             <div class="overview-jump-back-list">
               <template x-for="agent in recentAgents" :key="agent.id">
-                <button type="button" class="overview-jump-back-tile" @click="$store.app.openAgentChat(agent)">
+                <button
+                  type="button"
+                  class="overview-jump-back-tile"
+                  :class="{ 'overview-jump-back-tile--locked': $store.app.premiumAgentLocked(agent) }"
+                  :title="$store.app.premiumAgentLockTitle(agent)"
+                  @click="$store.app.openAgentChat(agent)"
+                >
                   <span class="overview-jump-back-avatar" aria-hidden="true">
                     <span x-show="agent.identity && agent.identity.emoji" x-text="agent.identity && agent.identity.emoji" style="font-size:20px;line-height:1"></span>
                     <svg x-show="!agent.identity || !agent.identity.emoji" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span class="premium-lock-dot" x-show="$store.app.premiumAgentLocked(agent)" aria-hidden="true">🔒</span>
                   </span>
-                  <span class="overview-jump-back-name truncate" x-text="agent.name || agent.id"></span>
+                  <span class="overview-jump-back-name-row">
+                    <span class="overview-jump-back-name truncate" x-text="agent.name || agent.id"></span>
+                    <span class="premium-lock-badge premium-lock-badge--tiny" x-show="$store.app.premiumAgentLocked(agent)" aria-label="Premium Agent locked">Locked</span>
+                  </span>
                   <span class="overview-jump-back-arrow" aria-hidden="true">›</span>
                 </button>
               </template>
@@ -891,10 +912,12 @@
                           'is-ping': agentPinging[agent.id] === true,
                           'agent-vitals-card--error': String(agent.state) === 'Crashed',
                           'agent-vitals-card--pinned': isFleetAgentPinned(agent),
+                          'agent-vitals-card--locked': $store.app.premiumAgentLocked(agent),
                           'is-live': isAgentRunningState(agent) && ($store.app.agentActivityLines[agent.id] || demoMode)
                         }"
                         role="group"
                         :data-agent-id="agent.id"
+                        :title="$store.app.premiumAgentLockTitle(agent)"
                         @click="fleetClickCard(agent, $event)"
                         @keydown.enter.prevent="chatWithAgent(agent)"
                         @keydown.space.prevent="chatWithAgent(agent)"
@@ -924,6 +947,10 @@
                             <span class="agent-vitals-cog" title="Cognitive vitals">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
                             <span x-show="String(agent.state) === 'Crashed'" class="badge badge-error agent-vitals-badge-stabilize">Stabilize</span>
                             <span x-show="demoMode" class="badge badge-warn agent-vitals-badge-demo">Demo</span>
+                            <span x-show="$store.app.premiumAgentLocked(agent)" class="premium-lock-badge">
+                              <span aria-hidden="true">🔒</span>
+                              <span>Premium locked</span>
+                            </span>
                           </div>
                           <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
                             <template x-for="h in agentHourlyBars(agent)" :key="h.key">
@@ -943,6 +970,7 @@
                                 <path d="M12 3v2"/><path d="M12 19v2"/><path d="M4.2 4.2l1.4 1.4"/><path d="M18.4 18.4l1.4 1.4"/><path d="M1 12h2"/><path d="M21 12h2"/><path d="M4.2 19.8l1.4-1.4"/><path d="M18.4 5.6l1.4-1.4"/><path d="M8 12h.01"/><path d="M16 12a4 4 0 0 0-4-4"/><path d="M12 16a4 4 0 0 0-4-4h4V8"/>
                               </svg>
                               <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                              <span class="premium-lock-dot premium-lock-dot--vitals" x-show="$store.app.premiumAgentLocked(agent)" aria-hidden="true">🔒</span>
                             </div>
                             <div class="agent-vitals-identity-text">
                               <div class="agent-vitals-headline">
@@ -952,7 +980,7 @@
                                   <span class="agent-vitals-live-text" x-text="agentCurrentPhaseDetail(agent)"></span>
                                 </div>
                               </div>
-                              <div class="agent-vitals-model text-dim font-mono truncate" x-text="(agent.model_provider || '') + ':' + (agent.model_name || '')"></div>
+                              <div class="agent-vitals-model text-dim font-mono truncate" x-text="$store.app.premiumAgentLocked(agent) ? 'Verify Phantom wallet on Premium Agents' : ((agent.model_provider || '') + ':' + (agent.model_name || ''))"></div>
                             </div>
                           </div>
                           <div class="agent-vitals-metricrow">
@@ -1012,7 +1040,7 @@
                     <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
                       <div
                         class="agent-vitals-card agent-vitals-card--system"
-                        :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent) }"
+                        :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent), 'agent-vitals-card--locked': $store.app.premiumAgentLocked(agent) }"
                         @click="fleetClickCard(agent, $event)"
                         @keydown.enter.prevent="chatWithAgent(agent)"
                         @keydown.space.prevent="chatWithAgent(agent)"
@@ -1037,6 +1065,10 @@
                             <span class="badge" :class="String(agent.state) === 'Crashed' ? 'badge-error' : (String(agent.state) === 'Running' ? 'badge-success' : 'badge-muted')" x-text="String(agent.state) === 'Crashed' ? 'Error' : agent.state"></span>
                             <span class="agent-vitals-dot" :class="{'is-on': isAgentRunningState(agent) && $store.app.agentActivityLines[agent.id]}"></span>
                             <span class="agent-vitals-cog" title="Cognitive">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
+                            <span x-show="$store.app.premiumAgentLocked(agent)" class="premium-lock-badge">
+                              <span aria-hidden="true">🔒</span>
+                              <span>Premium locked</span>
+                            </span>
                           </div>
                           <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
                             <template x-for="h in agentHourlyBars(agent)" :key="h.key">
@@ -2290,10 +2322,12 @@
                       'is-ping': agentPinging[agent.id] === true,
                       'agent-vitals-card--error': String(agent.state) === 'Crashed',
                       'agent-vitals-card--pinned': isFleetAgentPinned(agent),
+                      'agent-vitals-card--locked': $store.app.premiumAgentLocked(agent),
                       'is-live': isAgentRunningState(agent) && ($store.app.agentActivityLines[agent.id] || demoMode)
                     }"
                     role="group"
                     :data-agent-id="agent.id"
+                    :title="$store.app.premiumAgentLockTitle(agent)"
                     @click="fleetClickCard(agent, $event)"
                     @keydown.enter.prevent="chatWithAgent(agent)"
                     @keydown.space.prevent="chatWithAgent(agent)"
@@ -2323,6 +2357,10 @@
                         <span class="agent-vitals-cog" title="Cognitive vitals">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
                         <span x-show="String(agent.state) === 'Crashed'" class="badge badge-error agent-vitals-badge-stabilize">Stabilize</span>
                         <span x-show="demoMode" class="badge badge-warn agent-vitals-badge-demo">Demo</span>
+                        <span x-show="$store.app.premiumAgentLocked(agent)" class="premium-lock-badge">
+                          <span aria-hidden="true">🔒</span>
+                          <span>Premium locked</span>
+                        </span>
                       </div>
                       <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
                         <template x-for="h in agentHourlyBars(agent)" :key="h.key">
@@ -2342,6 +2380,7 @@
                             <path d="M12 3v2"/><path d="M12 19v2"/><path d="M4.2 4.2l1.4 1.4"/><path d="M18.4 18.4l1.4 1.4"/><path d="M1 12h2"/><path d="M21 12h2"/><path d="M4.2 19.8l1.4-1.4"/><path d="M18.4 5.6l1.4-1.4"/><path d="M8 12h.01"/><path d="M16 12a4 4 0 0 0-4-4"/><path d="M12 16a4 4 0 0 0-4-4h4V8"/>
                           </svg>
                           <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                          <span class="premium-lock-dot premium-lock-dot--vitals" x-show="$store.app.premiumAgentLocked(agent)" aria-hidden="true">🔒</span>
                         </div>
                         <div class="agent-vitals-identity-text">
                           <div class="agent-vitals-headline">
@@ -2351,7 +2390,7 @@
                               <span class="agent-vitals-live-text" x-text="agentCurrentPhaseDetail(agent)"></span>
                             </div>
                           </div>
-                          <div class="agent-vitals-model text-dim font-mono truncate" x-text="(agent.model_provider || '') + ':' + (agent.model_name || '')"></div>
+                          <div class="agent-vitals-model text-dim font-mono truncate" x-text="$store.app.premiumAgentLocked(agent) ? 'Verify Phantom wallet on Premium Agents' : ((agent.model_provider || '') + ':' + (agent.model_name || ''))"></div>
                         </div>
                       </div>
                       <div class="agent-vitals-metricrow">
@@ -2412,7 +2451,8 @@
                 <template x-for="agent in chatPickerSystemAgents" :key="agent.id">
                   <div
                     class="agent-vitals-card agent-vitals-card--system"
-                    :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent) }"
+                    :class="{ 'is-ping': agentPinging[agent.id] === true, 'agent-vitals-card--error': String(agent.state) === 'Crashed', 'agent-vitals-card--pinned': isFleetAgentPinned(agent), 'agent-vitals-card--locked': $store.app.premiumAgentLocked(agent) }"
+                    :title="$store.app.premiumAgentLockTitle(agent)"
                     @click="fleetClickCard(agent, $event)"
                     @keydown.enter.prevent="chatWithAgent(agent)"
                     @keydown.space.prevent="chatWithAgent(agent)"
@@ -2437,6 +2477,10 @@
                         <span class="badge" :class="String(agent.state) === 'Crashed' ? 'badge-error' : (String(agent.state) === 'Running' ? 'badge-success' : 'badge-muted')" x-text="String(agent.state) === 'Crashed' ? 'Error' : agent.state"></span>
                         <span class="agent-vitals-dot" :class="{'is-on': isAgentRunningState(agent) && $store.app.agentActivityLines[agent.id]}"></span>
                         <span class="agent-vitals-cog" title="Cognitive">Cognitive: <span class="agent-vitals-cogval" x-text="cognitiveVitals(agent)"></span></span>
+                        <span x-show="$store.app.premiumAgentLocked(agent)" class="premium-lock-badge">
+                          <span aria-hidden="true">🔒</span>
+                          <span>Premium locked</span>
+                        </span>
                       </div>
                       <div class="agent-vitals-hourly-bars" role="img" aria-label="Agent activity over last 24 hours">
                         <template x-for="h in agentHourlyBars(agent)" :key="h.key">
@@ -2454,6 +2498,7 @@
                           <span class="agent-vitals-emoji" x-show="agent.identity && agent.identity.emoji" x-text="agent.identity.emoji"></span>
                           <svg x-show="!(agent.identity && agent.identity.emoji)" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="7" rx="1"/><rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                           <span class="agent-vitals-unread-dot" x-show="$store.app.agentHasChatUnread(agent.id)" aria-hidden="true"></span>
+                          <span class="premium-lock-dot premium-lock-dot--vitals" x-show="$store.app.premiumAgentLocked(agent)" aria-hidden="true">🔒</span>
                         </div>
                         <div class="agent-vitals-identity-text">
                           <div class="agent-vitals-headline">
@@ -2463,7 +2508,7 @@
                               <span class="agent-vitals-live-text" x-text="agentCurrentPhaseDetail(agent)"></span>
                             </div>
                           </div>
-                          <div class="agent-vitals-model text-dim font-mono truncate" x-text="(agent.model_provider || '') + ':' + (agent.model_name || '')"></div>
+                          <div class="agent-vitals-model text-dim font-mono truncate" x-text="$store.app.premiumAgentLocked(agent) ? 'Verify Phantom wallet on Premium Agents' : ((agent.model_provider || '') + ':' + (agent.model_name || ''))"></div>
                         </div>
                       </div>
                       <div class="agent-vitals-metricrow">
@@ -9499,7 +9544,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <h2 class="page-header" style="margin:0 0 6px;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em">Improvement proposals</h2>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="loadProposals(); selected = null" aria-label="Agent for proposals">
+            <select class="form-input text-xs" style="min-width:14rem" x-model="agentId" @change="loadProposals(); loadProcedures(); selected = null" aria-label="Agent for proposals">
               <template x-for="a in agents" :key="a.id">
                 <option :value="a.id" x-text="(a.name || a.id) + ' · ' + a.id"></option>
               </template>
@@ -9512,6 +9557,32 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div class="sessions-intro-body">
             <div class="sessions-intro-title">How proposals work</div>
             <p class="text-sm text-dim sessions-intro-copy">Ledger: <code class="text-xs">GET /api/graph-memory/improvement-proposals</code> (default on; 503 if opted out with <code class="text-xs">AINL_IMPROVEMENT_PROPOSALS_ENABLED=0|false|no|off</code>). Live: <strong>ImprovementProposalAdopted</strong> on the SSE bus refreshes the table.</p>
+          </div>
+        </div>
+        <div class="card sessions-intro-card" style="margin-bottom:14px">
+          <div class="sessions-intro-accent"></div>
+          <div class="sessions-intro-body">
+            <div class="sessions-intro-title">Procedure artifacts</div>
+            <p class="text-sm text-dim sessions-intro-copy">Validated and promoted reusable procedures from <code class="text-xs">GET /api/graph-memory/procedures</code>. Use this alongside proposal rows to review candidates, patches, deprecations, and graph-patch payloads.</p>
+            <div class="flex flex-wrap gap-2" style="margin-top:8px">
+              <button type="button" class="btn btn-ghost btn-sm" @click="loadProcedures()" :disabled="proceduresLoading">Refresh procedures</button>
+              <span class="badge" x-text="'Procedures · ' + (procedures || []).length"></span>
+            </div>
+            <div class="graph-procedure-list" style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+              <template x-if="proceduresLoading">
+                <p class="text-xs text-dim" style="margin:0">Loading procedures…</p>
+              </template>
+              <template x-if="!proceduresLoading && !(procedures || []).length">
+                <p class="text-xs text-dim" style="margin:0">No validated or promoted procedure artifacts yet.</p>
+              </template>
+              <template x-for="proc in procedures" :key="proc.id">
+                <button type="button" class="btn btn-ghost text-left" @click="copyText(JSON.stringify(proc, null, 2))" title="Copy procedure JSON">
+                  <span class="block font-semibold" x-text="proc.title || proc.id"></span>
+                  <span class="block text-xs text-dim" x-text="(proc.lifecycle || 'unknown') + ' · fitness ' + ((proc.fitness || 0).toFixed ? (proc.fitness || 0).toFixed(2) : proc.fitness)"></span>
+                  <span class="block text-xs text-dim" x-text="proc.intent || ''"></span>
+                </button>
+              </template>
+            </div>
           </div>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:stretch">

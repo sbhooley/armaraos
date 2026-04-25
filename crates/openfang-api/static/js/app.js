@@ -92,18 +92,31 @@ function ArmaraosDesktopTauriInvoke(cmd, args) {
 async function armaraosRedeemPremiumAinlTicket(ticket) {
   var t = String(ticket || '').trim();
   if (!t) throw new Error('Missing ticket');
-  var j = await OpenFangAPI.post('/api/premium/ainl/redeem', { ticket: t });
-  if (!j || !j.token) throw new Error('Redeem failed: missing token');
-  OpenFangAPI.setPremiumAinlToken(j.token);
-  try {
-    sessionStorage.setItem('armaraos-premium-unlocked', '1');
-  } catch (e0) { /* ignore */ }
-  try {
-    window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
-  } catch (e1) { /* ignore */ }
-  try {
-    OpenFangToast.success('Premium verified ($AINL)');
-  } catch (e2) { /* ignore */ }
+  var w = typeof window !== 'undefined' ? window : null;
+  if (w) {
+    w.__armaraosPremiumAinlTicketRedeems = w.__armaraosPremiumAinlTicketRedeems || {};
+    if (w.__armaraosPremiumAinlTicketRedeems[t]) {
+      return w.__armaraosPremiumAinlTicketRedeems[t];
+    }
+  }
+  var redeemPromise = (async function() {
+    var j = await OpenFangAPI.post('/api/premium/ainl/redeem', { ticket: t });
+    if (!j || !j.token) throw new Error('Redeem failed: missing token');
+    OpenFangAPI.setPremiumAinlToken(j.token);
+    try {
+      sessionStorage.setItem('armaraos-premium-unlocked', '1');
+    } catch (e0) { /* ignore */ }
+    try {
+      window.dispatchEvent(new CustomEvent('armaraos-premium-ainl-updated'));
+    } catch (e1) { /* ignore */ }
+    try {
+      OpenFangToast.success('Premium verified ($AINL)');
+    } catch (e2) { /* ignore */ }
+  })();
+  if (w) {
+    w.__armaraosPremiumAinlTicketRedeems[t] = redeemPromise;
+  }
+  return redeemPromise;
 }
 
 function armaraosExtractPremiumTicketFromDeepLinkPayload(payload) {
@@ -686,8 +699,11 @@ document.addEventListener('alpine:init', function() {
     booting: true,
     wsConnected: false,
     connectionState: 'connected',
-    /** When a wallet Premium token is present, false means SPL minimum is not met (chat/config/spawn blocked). */
+    /** Back-compat status flag for the Premium holdings probe. */
     premiumWalletHoldingsOk: true,
+    /** True only after this boot/session has verified a Premium $AINL wallet or admin unlock. */
+    premiumAinlSessionOk: false,
+    premiumAinlStatusReason: 'unknown',
     lastError: '',
     /** Longer recovery hint when the daemon is unreachable or returns an error */
     lastErrorHint: '',
@@ -1183,7 +1199,11 @@ document.addEventListener('alpine:init', function() {
     async refreshPremiumWalletHoldingsGate() {
       try {
         var st = await OpenFangAPI.get('/api/premium/ainl/status');
+        var tok = OpenFangAPI && OpenFangAPI.getPremiumAinlToken ? OpenFangAPI.getPremiumAinlToken() : '';
+        this.premiumAinlSessionOk = !!(st && st.ok && tok);
+        this.premiumAinlStatusReason = (st && st.reason) ? String(st.reason) : (st && st.ok ? 'ok' : 'unknown');
         if (st && st.reason === 'no_session') {
+          if (tok && OpenFangAPI.clearPremiumAinlToken) OpenFangAPI.clearPremiumAinlToken();
           this.premiumWalletHoldingsOk = true;
           return;
         }
@@ -1191,23 +1211,46 @@ document.addEventListener('alpine:init', function() {
       } catch (e) { /* keep last */ }
     },
 
-    premiumWalletInteractionsBlocked() {
-      return this.premiumWalletHoldingsOk === false;
+    agentRequiresPremiumVerification(agent) {
+      return !!(agent && agent.premium_hand);
+    },
+
+    premiumWalletInteractionsBlocked(agent) {
+      return this.agentRequiresPremiumVerification(agent) && this.premiumAinlSessionOk !== true;
+    },
+
+    premiumAgentLocked(agent) {
+      return this.premiumWalletInteractionsBlocked(agent);
+    },
+
+    premiumAgentLockTitle(agent) {
+      if (!this.agentRequiresPremiumVerification(agent)) return '';
+      if (!this.premiumAgentLocked(agent)) return 'Premium Agent verified for this session';
+      return 'Premium Agent locked. Open Premium Agents and verify a Phantom wallet with at least 1M $AINL.';
     },
 
     premiumWalletHoldingsToast() {
       if (typeof OpenFangToast !== 'undefined' && OpenFangToast.warn) {
-        OpenFangToast.warn('Premium $AINL holdings required — verify on the Premium screen.');
+        OpenFangToast.warn('Premium Agent locked — verify your Phantom wallet on the Premium Agents screen.', {
+          actionLabel: 'Open Premium Agents',
+          onAction: function() { window.location.hash = 'hands'; }
+        });
       }
     },
 
+    async ensurePremiumAgentAccess(agent) {
+      if (!this.agentRequiresPremiumVerification(agent)) return true;
+      await this.refreshPremiumWalletHoldingsGate();
+      if (this.premiumAinlSessionOk === true) return true;
+      this.premiumWalletHoldingsToast();
+      window.location.hash = 'hands';
+      return false;
+    },
+
     /** Open inline chat for this agent (Agents page) from anywhere (e.g. sidebar). */
-    openAgentChat(agent) {
+    async openAgentChat(agent) {
       if (!agent) return;
-      if (this.premiumWalletInteractionsBlocked()) {
-        this.premiumWalletHoldingsToast();
-        return;
-      }
+      if (!(await this.ensurePremiumAgentAccess(agent))) return;
       this.recordRecentAgent(agent);
       this.pendingAgent = agent;
       var h = (window.location.hash || '').replace(/^#/, '');
@@ -1217,12 +1260,9 @@ document.addEventListener('alpine:init', function() {
     },
 
     /** Open the agent settings/detail modal (Agents page) from Command Center or other routes. */
-    openAgentSettings(agent) {
+    async openAgentSettings(agent) {
       if (!agent) return;
-      if (this.premiumWalletInteractionsBlocked()) {
-        this.premiumWalletHoldingsToast();
-        return;
-      }
+      if (!(await this.ensurePremiumAgentAccess(agent))) return;
       this.recordRecentAgent(agent);
       this.pendingOpenAgentDetail = agent;
       var h = (window.location.hash || '').replace(/^#/, '');
@@ -1233,10 +1273,6 @@ document.addEventListener('alpine:init', function() {
 
     /** Open the multi-step New Agent wizard (same as + New Agent on All Agents). */
     openNewAgentWizard() {
-      if (this.premiumWalletInteractionsBlocked()) {
-        this.premiumWalletHoldingsToast();
-        return;
-      }
       var p = (window.location.hash || '').replace(/^#/, '') || 'overview';
       if (p !== 'agents') {
         this.pendingOpenSpawnWizard = true;

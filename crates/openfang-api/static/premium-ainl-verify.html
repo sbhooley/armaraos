@@ -461,19 +461,18 @@
       }
       if (browserTok) {
         showOk('Verification complete. Premium unlocked for this browser session.');
+        if (returnUrl) {
+          setTimeout(function() {
+            try { window.location.href = returnUrl; } catch (eR) { /* ignore */ }
+          }, 900);
+        }
       } else {
         showOk('Verification complete. Opening ArmaraOS...');
-      }
-      showFallback(ticket, link);
-      setTimeout(function() {
-        if (lastDeepLink) window.location.href = lastDeepLink;
-      }, 250);
-      window.location.href = link;
-      // Browser fallback: if deep link is ignored, return the user to dashboard.
-      if (returnUrl) {
+        showFallback(ticket, link);
         setTimeout(function() {
-          try { window.location.href = returnUrl; } catch (eR) { /* ignore */ }
-        }, 1200);
+          if (lastDeepLink) window.location.href = lastDeepLink;
+        }, 250);
+        window.location.href = link;
       }
     } catch (e) {
       showErr((e && e.message) ? e.message : String(e));

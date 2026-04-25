@@ -145,6 +145,21 @@ function commandPalette() {
       } catch(e) { this._recentAgents = []; }
     },
 
+    _agentLocked(agent) {
+      try {
+        var app = Alpine.store('app');
+        return !!(app && app.premiumAgentLocked && app.premiumAgentLocked(agent));
+      } catch (e) { return false; }
+    },
+
+    _agentSublabel(agent, prefix) {
+      var locked = this._agentLocked(agent);
+      var base = prefix || '';
+      if (agent && agent.model_name) base = base ? (base + ' · ' + agent.model_name) : agent.model_name;
+      if (!base) base = 'Agent';
+      return locked ? ('Locked · ' + base) : base;
+    },
+
     /** Match query against label and sublabel. */
     _matches(label, sublabel) {
       if (!this.query) return true;
@@ -162,11 +177,13 @@ function commandPalette() {
       var recentItems = this._recentAgents.filter(function(a) {
         return self._matches(a.name, a.model_name || '');
       }).map(function(agent) {
+        var locked = self._agentLocked(agent);
         return {
           id: 'recent-' + agent.id,
           label: agent.name || agent.id,
-          sublabel: agent.model_name ? 'Recent · ' + agent.model_name : 'Recent',
+          sublabel: self._agentSublabel(agent, 'Recent'),
           emoji: agent.identity && agent.identity.emoji ? agent.identity.emoji : '',
+          locked: locked,
           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
           action: function() {
             try { Alpine.store('app').openAgentChat(agent); } catch(e) { window.location.hash = 'agents'; }
@@ -188,11 +205,13 @@ function commandPalette() {
       var agentItems = allAgents.filter(function(a) {
         return self._matches(a.name, a.model_name || '');
       }).slice(0, agentLimit).map(function(agent) {
+        var locked = self._agentLocked(agent);
         return {
           id: 'agent-' + agent.id,
           label: agent.name || agent.id,
-          sublabel: agent.model_name || 'Agent',
+          sublabel: self._agentSublabel(agent, ''),
           emoji: agent.identity && agent.identity.emoji ? agent.identity.emoji : '',
+          locked: locked,
           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
           action: function() {
             try { Alpine.store('app').openAgentChat(agent); } catch(e) { window.location.hash = 'agents'; }

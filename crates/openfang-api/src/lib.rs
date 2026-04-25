@@ -74,6 +74,7 @@ mod dashboard_learning_panels_js_guard {
             "ImprovementProposalAdopted",
             "improvement_proposal",
             "/improvement-proposals",
+            "/api/graph-memory/procedures",
         ] {
             assert_contains(s, needle, "graph-proposals.js");
         }

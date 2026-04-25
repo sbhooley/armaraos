@@ -370,6 +370,14 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 && !ainl_runtime_engine_env_disabled
                 && (e.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
             let native_planner_enabled = manifest_native_planner_enabled(&e.manifest);
+            let premium_hand = state.kernel.hand_registry.find_by_agent(e.id).map(|h| {
+                serde_json::json!({
+                    "instance_id": h.instance_id.to_string(),
+                    "hand_id": h.hand_id,
+                    "agent_name": h.agent_name,
+                    "status": format!("{}", h.status),
+                })
+            });
 
             serde_json::json!({
                 "id": e.id.to_string(),
@@ -391,6 +399,7 @@ pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
                 "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
                 "native_planner_enabled": native_planner_enabled,
+                "premium_hand": premium_hand,
                 "profile": e.manifest.profile,
                 "system_prompt": e.manifest.model.system_prompt,
                 "identity": {
@@ -901,13 +910,6 @@ pub async fn send_message(
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     let msg_path = "/api/agents/:id/message";
-    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
-        &state, &headers, &rid, msg_path,
-    )
-    .await
-    {
-        return resp;
-    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -921,6 +923,14 @@ pub async fn send_message(
             );
         }
     };
+
+    if let Err(resp) = crate::premium_ainl::require_premium_for_hand_agent_access(
+        &state, &headers, &rid, msg_path, agent_id,
+    )
+    .await
+    {
+        return resp;
+    }
 
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
     const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
@@ -1209,13 +1219,6 @@ pub async fn get_agent_session(
         .map(|n| n.clamp(1, MAX_LIMIT))
         .unwrap_or(DEFAULT_LIMIT);
     let req_before = params.get("before").and_then(|s| s.parse::<usize>().ok());
-    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
-        &state, &headers, &rid, PATH,
-    )
-    .await
-    {
-        return resp;
-    }
     let agent_id: AgentId = match id.parse() {
         Ok(id) => id,
         Err(_) => {
@@ -1229,6 +1232,14 @@ pub async fn get_agent_session(
             );
         }
     };
+
+    if let Err(resp) = crate::premium_ainl::require_premium_for_hand_agent_access(
+        &state, &headers, &rid, PATH, agent_id,
+    )
+    .await
+    {
+        return resp;
+    }
 
     let entry = match state.kernel.registry.get(agent_id) {
         Some(e) => e,
@@ -1726,6 +1737,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let memory_contract_metrics = openfang_runtime::ainl_inbox_reader::inbox_contract_metrics();
     let graph_memory_learning_metrics = openfang_runtime::graph_memory_learning_metrics();
     let improvement_proposals_metrics = openfang_runtime::improvement_proposals_metrics();
+    let post_turn_learning_metrics = openfang_runtime::post_turn_learning_metrics();
     let shell_guard_metrics = openfang_runtime::shell_guard_metrics::shell_guard_metrics_snapshot();
     Json(serde_json::json!({
         "status": "running",
@@ -1747,6 +1759,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "graph_memory_contract_metrics": memory_contract_metrics,
         "graph_memory_learning_metrics": graph_memory_learning_metrics,
         "improvement_proposals": improvement_proposals_metrics,
+        "post_turn_learning_metrics": post_turn_learning_metrics,
         "shell_guard_metrics": shell_guard_metrics,
         "eco_compression": eco_compression,
         "quota_enforcement": quota_enforcement,
@@ -2686,6 +2699,14 @@ pub async fn get_agent(
         && !ainl_runtime_engine_env_disabled
         && (entry.manifest.ainl_runtime_engine || ainl_runtime_engine_forced_by_env);
     let native_planner_enabled = manifest_native_planner_enabled(&entry.manifest);
+    let premium_hand = state.kernel.hand_registry.find_by_agent(agent_id).map(|h| {
+        serde_json::json!({
+            "instance_id": h.instance_id.to_string(),
+            "hand_id": h.hand_id,
+            "agent_name": h.agent_name,
+            "status": format!("{}", h.status),
+        })
+    });
 
     let turn_error_rate: serde_json::Value = if turn_total == 0 {
         serde_json::Value::Null
@@ -2736,6 +2757,7 @@ pub async fn get_agent(
         "ainl_runtime_engine_env_disabled": ainl_runtime_engine_env_disabled,
         "ainl_runtime_engine_compiled": ainl_runtime_engine_compiled,
         "native_planner_enabled": native_planner_enabled,
+        "premium_hand": premium_hand,
         "skills": entry.manifest.skills,
         "skills_mode": if entry.manifest.skills.is_empty() { "all" } else { "allowlist" },
         "mcp_servers": entry.manifest.mcp_servers,
@@ -2780,8 +2802,23 @@ pub async fn send_message_stream(
 
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/message/stream";
-    if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
-        &state, &headers, &rid, PATH,
+    let agent_id: AgentId = match id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                PATH,
+                "Invalid agent ID",
+                "Agent id must be a valid UUID.".to_string(),
+                Some("Use GET /api/agents to list ids."),
+            )
+            .into_response();
+        }
+    };
+
+    if let Err(resp) = crate::premium_ainl::require_premium_for_hand_agent_access(
+        &state, &headers, &rid, PATH, agent_id,
     )
     .await
     {
@@ -2801,21 +2838,6 @@ pub async fn send_message_stream(
         )
         .into_response();
     }
-
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return api_json_error(
-                StatusCode::BAD_REQUEST,
-                &rid,
-                PATH,
-                "Invalid agent ID",
-                "Agent id must be a valid UUID.".to_string(),
-                Some("Use GET /api/agents to list ids."),
-            )
-            .into_response();
-        }
-    };
 
     if state.kernel.registry.get(agent_id).is_none() {
         return api_json_error(

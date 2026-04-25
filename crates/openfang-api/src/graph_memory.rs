@@ -121,6 +121,17 @@ pub struct NodesFtsSearchQuery {
     pub project_id: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct ProcedureArtifactsQuery {
+    pub agent_id: String,
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub tools: Option<String>,
+    #[serde(default = "default_procedure_limit")]
+    pub limit: usize,
+}
+
 /// Query for [`get_graph_memory_failures_recent`] (`GET /api/graph-memory/failures/recent`).
 #[derive(serde::Deserialize)]
 pub struct FailuresRecentQuery {
@@ -251,6 +262,10 @@ const fn default_failures_search_limit() -> usize {
 }
 
 const fn default_failures_recent_limit() -> usize {
+    50
+}
+
+const fn default_procedure_limit() -> usize {
     50
 }
 
@@ -1428,6 +1443,60 @@ pub async fn post_graph_memory_snapshot(
     )
 }
 
+/// GET /api/graph-memory/procedures
+pub async fn get_graph_memory_procedures(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ProcedureArtifactsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let agent_id = match sanitize_agent_id(&q.agent_id) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
+    };
+    let db = graph_db_path(&state.kernel.config.home_dir, &agent_id);
+    let gm = match GraphMemory::new(&db) {
+        Ok(gm) => gm,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
+    };
+    let limit = q.limit.clamp(1, 200);
+    let tools = q
+        .tools
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let artifacts = if let Some(query) = q.q.as_deref() {
+        gm.search_procedure_artifacts_for_agent(&agent_id, query, &tools, limit)
+            .unwrap_or_default()
+    } else {
+        gm.recall_procedure_artifacts()
+            .unwrap_or_default()
+            .into_iter()
+            .take(limit)
+            .collect::<Vec<_>>()
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "agent_id": agent_id,
+            "count": artifacts.len(),
+            "procedures": artifacts,
+        })),
+    )
+}
+
 /// POST /api/graph-memory/rollback
 pub async fn post_graph_memory_rollback(
     State(state): State<Arc<AppState>>,
@@ -2120,6 +2189,10 @@ fn is_pattern_promote_envelope(k: &str) -> bool {
         || t.eq_ignore_ascii_case("pattern promote")
 }
 
+fn is_procedure_mint_envelope(k: &str) -> bool {
+    k.trim().eq_ignore_ascii_case("procedure_mint")
+}
+
 /// POST /api/graph-memory/improvement-proposals/submit
 pub async fn post_improvement_proposal_submit(
     State(state): State<Arc<AppState>>,
@@ -2321,7 +2394,9 @@ pub async fn post_improvement_proposal_adopt(
         id,
     ) {
         Ok(r) => {
-            let storage = if is_pattern_promote_envelope(&r.proposal_kind) {
+            let storage = if is_pattern_promote_envelope(&r.proposal_kind)
+                || is_procedure_mint_envelope(&r.proposal_kind)
+            {
                 "procedural"
             } else {
                 "semantic"

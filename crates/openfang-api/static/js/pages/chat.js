@@ -1240,6 +1240,14 @@ function chatPage() {
     },
 
     selectAgent(agent) {
+      try {
+        var appStore = Alpine.store('app');
+        if (appStore && appStore.premiumWalletInteractionsBlocked && appStore.premiumWalletInteractionsBlocked(agent)) {
+          if (appStore.ensurePremiumAgentAccess) appStore.ensurePremiumAgentAccess(agent);
+          return;
+        }
+      } catch (eGate) { /* ignore */ }
+
       // Snapshot the current agent's messages before switching so we can restore
       // them instantly if the user comes back (avoids blank-screen round-trips).
       if (this.currentAgent && this.currentAgent.id && this.messages.length) {

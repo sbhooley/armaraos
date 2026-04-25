@@ -16,7 +16,9 @@ function graphProposalsPanel() {
     agents: [],
     agentId: '',
     proposals: [],
+    procedures: [],
     loading: false,
+    proceduresLoading: false,
     disabledMessage: null,
     liveFeed: [],
     selected: null,
@@ -85,11 +87,13 @@ function graphProposalsPanel() {
             (p.data.kind || '')
         );
         this.loadProposals();
+        this.loadProcedures();
       } else if (sub === 'GraphMemoryWrite' && p.data.kind === 'improvement_proposal') {
         this.pushFeed(
           '[' + ts + '] GraphMemoryWrite improvement_proposal — ' + (p.data.provenance && p.data.provenance.summary ? p.data.provenance.summary : '')
         );
         this.loadProposals();
+        this.loadProcedures();
       }
     },
 
@@ -185,10 +189,31 @@ function graphProposalsPanel() {
       this.loading = false;
     },
 
+    async loadProcedures() {
+      if (!this.agentId) {
+        this.procedures = [];
+        return;
+      }
+      this.proceduresLoading = true;
+      try {
+        var d = await OpenFangAPI.get(
+          '/api/graph-memory/procedures?agent_id=' +
+            encodeURIComponent(this.agentId) +
+            '&limit=60'
+        );
+        this.procedures = d && d.ok && Array.isArray(d.procedures) ? d.procedures : [];
+      } catch (e) {
+        console.warn('graph-proposals: load procedures failed', e);
+        this.procedures = [];
+      }
+      this.proceduresLoading = false;
+    },
+
     async init() {
       var self = this;
       await this.loadAgents();
       await this.loadProposals();
+      await this.loadProcedures();
       this._kernelHandler = function (e) {
         try {
           self.ingestKernelEvent(e.detail);
