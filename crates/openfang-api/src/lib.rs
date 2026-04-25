@@ -12,6 +12,7 @@ pub mod openai_compat;
 pub mod premium_ainl;
 pub mod rate_limiter;
 pub mod routes;
+pub mod secrets_api;
 pub mod server;
 pub mod session_auth;
 pub mod stream_chunker;

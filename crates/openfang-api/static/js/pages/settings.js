@@ -280,6 +280,17 @@ function settingsPage() {
     dashboardAnalyticsOk: false,
     dashboardReplayOk: false,
 
+    // -- Settings → Vault (shared secrets / PATs) --
+    vaultRows: [],
+    vaultDeps: null,
+    vaultLoading: false,
+    vaultError: '',
+    vaultEditKey: '',
+    vaultEditValue: '',
+    vaultSaving: false,
+    /** @type {Object.<string, boolean>} */
+    vaultTesting: {},
+
     loadDashboardAnalyticsPrefs() {
       this.dashboardAnalyticsConfigured = false;
       this.dashboardAnalyticsOk = false;
@@ -300,6 +311,123 @@ function settingsPage() {
         if (!a || typeof a.setConsent !== 'function') return;
         a.setConsent(!!this.dashboardAnalyticsOk, !!this.dashboardReplayOk);
       } catch (e) { /* ignore */ }
+    },
+
+    formatVaultTs(sec) {
+      if (sec == null || sec === '') return '—';
+      var n = parseInt(String(sec), 10);
+      if (isNaN(n) || n <= 0) return '—';
+      try {
+        return new Date(n * 1000).toLocaleString();
+      } catch (e) {
+        return '—';
+      }
+    },
+
+    /** Human-readable cell for last set / rotation hint (no secret values). */
+    vaultTelemetryLine(row) {
+      if (!row) return '—';
+      if (row.stale_suggested) return 'Rotation suggested (~90d since set)';
+      if (row.last_set_at) return 'Last set: ' + this.formatVaultTs(row.last_set_at);
+      return '—';
+    },
+
+    async loadVaultCenter() {
+      if (typeof OpenFangAPI === 'undefined' || !OpenFangAPI.get) return;
+      this.vaultLoading = true;
+      this.vaultError = '';
+      try {
+        var dep = await OpenFangAPI.get('/api/secrets/dependencies');
+        this.vaultDeps = dep;
+      } catch (eD) {
+        this.vaultDeps = { items: [] };
+      }
+      try {
+        var cat = await OpenFangAPI.get('/api/secrets/catalog');
+        this.vaultRows = (cat && cat.rows) ? cat.rows : [];
+      } catch (e) {
+        this.vaultError = (typeof openFangErrText === 'function') ? openFangErrText(e) : (e && e.message) || String(e);
+        this.vaultRows = [];
+      }
+      this.vaultLoading = false;
+    },
+
+    async saveVaultSecret() {
+      var key = (this.vaultEditKey || '').trim();
+      var value = (this.vaultEditValue || '').trim();
+      if (!key || !value) {
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.warn('Choose a key and enter a value.');
+        return;
+      }
+      this.vaultSaving = true;
+      try {
+        await OpenFangAPI.post('/api/secrets', { key: key, value: value });
+        if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('Saved to vault');
+        this.vaultEditValue = '';
+        await this.loadVaultCenter();
+        try {
+          if (typeof this.loadProviders === 'function') await this.loadProviders();
+        } catch (e2) { /* non-fatal */ }
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error((typeof openFangErrText === 'function') ? openFangErrText(e) : (e && e.message) || String(e));
+        }
+      }
+      this.vaultSaving = false;
+    },
+
+    removeVaultSecret(key) {
+      if (!key) return;
+      if (typeof OpenFangToast === 'undefined' || !OpenFangAPI || !OpenFangAPI.del) return;
+      var self = this;
+      OpenFangToast.confirm(
+        'Remove secret?',
+        'Clears the key from the vault, secrets.env, and this process. Tools that still need it may fail until you set it again.',
+        function() {
+          (async function() {
+            self.vaultSaving = true;
+            try {
+              await OpenFangAPI.del('/api/secrets/' + encodeURIComponent(key));
+              OpenFangToast.success('Removed ' + key);
+              await self.loadVaultCenter();
+            } catch (e) {
+              OpenFangToast.error((typeof openFangErrText === 'function') ? openFangErrText(e) : (e && e.message) || String(e));
+            }
+            self.vaultSaving = false;
+          })();
+        },
+        { confirmLabel: 'Remove', danger: true }
+      );
+    },
+
+    async testVaultSecret(key) {
+      if (!key || !OpenFangAPI || !OpenFangAPI.post) return;
+      this.vaultTesting = Object.assign({}, this.vaultTesting, (function() { var o = {}; o[key] = true; return o; })());
+      try {
+        var r = await OpenFangAPI.post('/api/secrets/' + encodeURIComponent(key) + '/test', {});
+        if (typeof OpenFangToast !== 'undefined') {
+          if (r && r.ok) {
+            OpenFangToast.success((r.detail || 'OK') + (r.ms != null ? ' (' + r.ms + 'ms)' : ''));
+          } else if (r && r.applicable === false) {
+            // Not a real failure — there is no automated test for this kind of key.
+            if (typeof OpenFangToast.info === 'function') {
+              OpenFangToast.info(r.detail ? String(r.detail) : 'No automated test for this key.');
+            } else {
+              OpenFangToast.warn(r.detail ? String(r.detail) : 'No automated test for this key.');
+            }
+          } else {
+            OpenFangToast.warn((r && r.detail) ? String(r.detail) : 'Test did not report success.');
+          }
+        }
+        await this.loadVaultCenter();
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error((typeof openFangErrText === 'function') ? openFangErrText(e) : (e && e.message) || String(e));
+        }
+      }
+      var t = Object.assign({}, this.vaultTesting);
+      delete t[key];
+      this.vaultTesting = t;
     },
 
     // -- Settings load --
@@ -370,6 +498,14 @@ function settingsPage() {
         }
       } catch (eS) { /* ignore */ }
       this.loading = false;
+      try {
+        if (this.tab === 'vault' && typeof this.loadVaultCenter === 'function') {
+          var self = this;
+          setTimeout(function() {
+            self.loadVaultCenter();
+          }, 0);
+        }
+      } catch (eV) { /* ignore */ }
     },
 
     copySettingsLoadErrorDebug() {

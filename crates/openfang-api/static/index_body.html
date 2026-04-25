@@ -5147,7 +5147,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       <div x-data="settingsPage" class="settings-page-root">
         <div class="page-header settings-page-header">
           <h2>Settings</h2>
-          <p class="settings-page-header-sub">Providers, models, configuration, tools, and system preferences for this ArmaraOS instance.</p>
+          <p class="settings-page-header-sub">Providers, models, configuration, tools, credentials (Vault), and system preferences for this ArmaraOS instance.</p>
         </div>
         <div class="page-body settings-page-body" x-init="loadSettings()">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading settings...</span></div>
@@ -5176,6 +5176,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab" role="tab" :class="{ active: tab === 'config' }" @click="tab = 'config'; if (!configSchema) loadConfigSchema()">Config</div>
             <div class="tabs-separator"></div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'tools' }" @click="tab = 'tools'">Tools</div>
+            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'vault' }" @click="tab = 'vault'; loadVaultCenter()">Vault</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'voice' }" @click="tab = 'voice'; loadVoiceSettings()">Voice</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'security' }" @click="tab = 'security'; if (!securityData && !secLoading) loadSecurity()">Security</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'network' }" @click="tab = 'network'; if (!peers.length && !peersLoading) { loadPeers(); startPeerPolling(); }">Network</div>
@@ -5529,6 +5530,95 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <!-- Vault tab — shared env secrets (PATs, integration keys) with vault + secrets.env + process -->
+          <div x-show="tab === 'vault'">
+            <div class="info-card mb-4">
+              <h4 style="margin-top:0">Vault &amp; credentials</h4>
+              <p class="text-xs text-dim" style="line-height:1.55;margin:0">
+                Central inventory for environment keys the daemon and tools read (on-disk vault, <code>secrets.env</code> under your home dir, and this process). Values are never shown back in this table — only presence and where the first resolved layer came from. LLM provider keys also appear here; use <strong>Providers</strong> to test a provider connection.
+              </p>
+            </div>
+            <div x-show="vaultLoading" class="loading-state" style="padding:16px 0"><div class="spinner"></div><span>Loading vault catalog…</span></div>
+            <p class="text-xs" style="color:var(--error);margin:0 0 8px" x-show="vaultError && !vaultLoading" x-text="vaultError"></p>
+            <div class="info-card mb-4" x-show="vaultDeps && vaultDeps.items && vaultDeps.items.length && !vaultLoading">
+              <h4 style="margin-top:0">Feature dependencies</h4>
+              <p class="text-xs text-dim" style="line-height:1.55;margin:0 0 10px">Which integrations expect optional keys (same source of truth as tool help text).</p>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Feature</th><th>Keys</th><th>Optional</th><th>Notes</th></tr></thead>
+                  <tbody>
+                    <template x-for="it in (vaultDeps && vaultDeps.items) || []" :key="it.feature">
+                      <tr>
+                        <td class="font-bold" style="font-size:12px;white-space:nowrap" x-text="it.feature"></td>
+                        <td class="text-dim" style="font-size:12px"><code x-text="(it.keys && it.keys.length) ? it.keys.join(', ') : '—'"></code></td>
+                        <td><span class="badge" :class="it.optional ? 'badge-muted' : 'badge-success'" x-text="it.optional ? 'yes' : 'no'"></span></td>
+                        <td class="text-dim" style="font-size:12px;line-height:1.45" x-text="it.notes"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="info-card mb-4" x-show="!vaultLoading && !vaultError">
+              <h4 style="margin-top:0">Set or rotate a secret</h4>
+              <p class="text-xs text-dim" style="line-height:1.5;margin:0 0 10px">Only catalog keys are accepted. Saving writes the vault, updates <code>secrets.env</code>, exports into this process, and triggers the same follow-up as provider key saves (MCP reconnect hooks where applicable).</p>
+              <div style="display:grid;grid-template-columns:1fr;gap:10px;max-width:520px">
+                <div>
+                  <label class="text-xs text-dim">Key</label>
+                  <select class="form-select" style="margin-top:6px" x-model="vaultEditKey">
+                    <option value="">— choose a key —</option>
+                    <template x-for="row in (vaultRows || [])" :key="row.id">
+                      <option :value="row.key" x-text="row.key + ' — ' + (row.title || '')"></option>
+                    </template>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-xs text-dim">Secret value</label>
+                  <input class="form-input" type="password" style="margin-top:6px" autocomplete="off" x-model="vaultEditValue" placeholder="Paste token or client secret" />
+                </div>
+                <div>
+                  <button type="button" class="btn btn-primary btn-sm" @click="saveVaultSecret()" :disabled="vaultSaving || !vaultEditKey || !vaultEditValue">
+                    <span x-show="!vaultSaving">Save to vault</span>
+                    <span x-show="vaultSaving" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="table-wrap" x-show="(vaultRows && vaultRows.length) && !vaultLoading">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Title</th>
+                    <th>Present</th>
+                    <th>Source</th>
+                    <th>Telemetry</th>
+                    <th style="text-align:right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="row in vaultRows" :key="row.id">
+                    <tr>
+                      <td style="font-size:12px;white-space:nowrap"><code x-text="row.key"></code></td>
+                      <td class="text-dim" style="font-size:12px;max-width:220px" x-text="row.title"></td>
+                      <td><span class="badge" :class="row.present ? 'badge-success' : 'badge-muted'" x-text="row.present ? 'yes' : 'no'"></span></td>
+                      <td class="text-dim" style="font-size:11px" x-text="row.source_layer || (row.present ? 'set' : '—')"></td>
+                      <td class="text-dim" style="font-size:11px;line-height:1.4" x-text="vaultTelemetryLine(row)"></td>
+                      <td style="text-align:right;white-space:nowrap">
+                        <button type="button" class="btn btn-ghost btn-sm" @click="testVaultSecret(row.key)" :disabled="vaultTesting[row.key]">
+                          <span x-show="!vaultTesting[row.key]">Test</span>
+                          <span x-show="vaultTesting[row.key]" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" x-show="row.present" @click="removeVaultSecret(row.key)" :disabled="vaultSaving">Remove</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="text-xs text-dim" style="margin-top:10px" x-show="!vaultLoading && (!vaultRows || !vaultRows.length) && !vaultError">No catalog rows returned.</p>
           </div>
 
           <!-- Voice tab — local TTS / STT installation status, voice picker, custom Piper upload, Kokoro -->

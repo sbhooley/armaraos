@@ -348,6 +348,27 @@ pub async fn build_router(
             "/api/ui-prefs",
             axum::routing::get(routes::get_ui_prefs).put(routes::put_ui_prefs),
         )
+        // Settings → Vault (secrets & credentials center)
+        .route(
+            "/api/secrets/catalog",
+            axum::routing::get(crate::secrets_api::get_secrets_catalog),
+        )
+        .route(
+            "/api/secrets/dependencies",
+            axum::routing::get(crate::secrets_api::get_secrets_dependencies),
+        )
+        .route(
+            "/api/secrets",
+            axum::routing::post(crate::secrets_api::post_secret),
+        )
+        .route(
+            "/api/secrets/{key}",
+            axum::routing::delete(crate::secrets_api::delete_secret),
+        )
+        .route(
+            "/api/secrets/{key}/test",
+            axum::routing::post(crate::secrets_api::post_secret_test),
+        )
         .route(
             "/api/agents/{id}/model",
             axum::routing::put(routes::set_model),

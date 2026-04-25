@@ -2562,12 +2562,15 @@ function chatPage() {
 
     addFiles(files) {
       var self = this;
+      /** Must match `MAX_UPLOAD_SIZE` in `routes.rs` (chat attachments). */
+      var MAX_CHAT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
       var blockedExt = ['.exe', '.dll', '.bat', '.cmd', '.msi', '.scr', '.com', '.app', '.deb', '.rpm', '.dmg', '.pkg', '.iso'];
       var extOkList = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff', '.heic', '.heif', '.avif', '.svg',
         '.pdf', '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.tsv', '.tab', '.xml', '.xsl', '.html', '.htm', '.xhtml',
         '.css', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts', '.vue', '.svelte', '.php', '.phtml', '.py', '.pyw',
         '.rs', '.go', '.java', '.kt', '.cs', '.c', '.h', '.cpp', '.hpp', '.rb', '.sql', '.yaml', '.yml', '.toml', '.ini', '.cfg',
-        '.ainl', '.lang', '.graphql', '.gql', '.xlsx', '.xls', '.xlsm', '.ods', '.docx', '.doc', '.odt', '.rtf', '.pptx', '.ppt', '.odp',
+        '.ainl', '.lang', '.graphql', '.gql',         '.xlsx', '.xls', '.xlsm', '.ods', '.docx', '.doc', '.odt', '.rtf', '.pptx', '.ppt', '.odp',
+        '.zip',
         '.woff', '.woff2', '.ttf', '.otf', '.eot', '.mp3', '.wav', '.ogg', '.oga', '.opus', '.flac', '.m4a', '.aac', '.mp4', '.webm', '.mov', '.mkv', '.m4v'];
       function attachmentAllowed(file) {
         var ext = file.name.lastIndexOf('.') !== -1 ? file.name.substring(file.name.lastIndexOf('.')).toLowerCase() : '';
@@ -2575,7 +2578,7 @@ function chatPage() {
         var t = (file.type || '').toLowerCase();
         if (t.startsWith('image/') || t.startsWith('audio/') || t.startsWith('video/') || t.startsWith('text/') || t.startsWith('font/')) return true;
         if (t.startsWith('application/vnd.openxmlformats') || t.startsWith('application/vnd.oasis') || t.startsWith('application/vnd.ms-')) return true;
-        var appExact = ['application/pdf', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/rtf', 'application/sql', 'application/csv', 'application/graphql', 'application/xhtml+xml', 'application/msword', 'application/ld+json', 'application/x-httpd-php', 'application/x-yaml', 'application/x-sh', 'application/x-shellscript', 'application/toml'];
+        var appExact = ['application/pdf', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/rtf', 'application/sql', 'application/csv', 'application/graphql', 'application/xhtml+xml', 'application/msword', 'application/ld+json', 'application/x-httpd-php', 'application/x-yaml', 'application/x-sh', 'application/x-shellscript', 'application/toml', 'application/zip', 'application/x-zip-compressed'];
         if (appExact.indexOf(t) !== -1) return true;
         if (ext && extOkList.indexOf(ext) !== -1) return true;
         if (t === 'application/octet-stream' && ext && extOkList.indexOf(ext) !== -1) return true;
@@ -2583,8 +2586,8 @@ function chatPage() {
       }
       for (var i = 0; i < files.length; i++) {
         var file = files[i];
-        if (file.size > 10 * 1024 * 1024) {
-          OpenFangToast.warn('File "' + file.name + '" exceeds 10MB limit');
+        if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+          OpenFangToast.warn('File "' + file.name + '" exceeds 128MB limit');
           continue;
         }
         if (!attachmentAllowed(file)) {
@@ -2724,6 +2727,14 @@ function chatPage() {
         return [
           'Open Settings → MCP: enable the server, confirm it is reachable, and finish OAuth if prompted.',
           'Save, wait for the green/connected state, then send your message again.'
+        ];
+      }
+      // Do not conflate GitHub API auth with the chat LLM provider key (UI matches "401" broadly).
+      if (tool && tool.name === 'github_subtree_download' && (/github\.com\/rest|api\.github\.com|bad credentials|git\/trees/i.test(r) || /401/.test(r))) {
+        return [
+          'Omit the `token` field for public repos, or set a real GitHub PAT if the repo is private or you hit rate limits. An empty `token` is invalid.',
+          'This is not the StandardCompute / chat provider key — that key is only for the LLM request.',
+          'To persist a PAT for tools and git, use Settings → Vault (GITHUB_TOKEN or GH_TOKEN), then retry.'
         ];
       }
       if (/invalid api key|api key not|authentication failed|401 unauthorized|bad api key/i.test(r)) {

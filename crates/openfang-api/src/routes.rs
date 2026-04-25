@@ -64,7 +64,7 @@ pub struct AppState {
 }
 
 #[inline]
-fn resolve_request_id(ext: Option<Extension<RequestId>>) -> RequestId {
+pub(crate) fn resolve_request_id(ext: Option<Extension<RequestId>>) -> RequestId {
     ext.map(|e| e.0)
         .unwrap_or_else(|| RequestId("unknown".to_string()))
 }
@@ -108,6 +108,21 @@ pub fn api_json_error(
         v["hint"] = serde_json::json!(h);
     }
     (status, Json(v))
+}
+
+/// Append-only audit entry for credential / secret mutations (Vault, provider keys, OAuth).
+/// Never pass raw secret values — only env key names, provider ids, and `request_id` for correlation.
+pub(crate) fn audit_credential_mutation(
+    kernel: &OpenFangKernel,
+    detail: String,
+    outcome: impl Into<String>,
+) {
+    let _ = kernel.audit_log.record(
+        "system",
+        openfang_runtime::audit::AuditAction::CredentialChange,
+        detail,
+        outcome.into(),
+    );
 }
 
 /// POST /api/agents — Spawn a new agent.
@@ -8251,6 +8266,17 @@ pub async fn post_google_workspace_oauth(
         });
     }
 
+    let sec_note = if sec_str.is_empty() {
+        "client_secret_cleared"
+    } else {
+        "client_secret_set"
+    };
+    audit_credential_mutation(
+        state.kernel.as_ref(),
+        format!("integration:google_workspace_oauth:save {sec_note} request_id={}", rid.0),
+        "ok",
+    );
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -12728,6 +12754,12 @@ pub async fn set_provider_key(
         false
     };
 
+    audit_credential_mutation(
+        state.kernel.as_ref(),
+        format!("provider:key:set provider={name} env_var={env_var} request_id={}", rid.0),
+        "ok",
+    );
+
     let mut resp = serde_json::json!({"status": "saved", "provider": name});
     if switched {
         resp["switched_default"] = serde_json::json!(true);
@@ -12800,6 +12832,12 @@ pub async fn delete_provider_key(
         .write()
         .unwrap_or_else(|e| e.into_inner())
         .detect_auth();
+
+    audit_credential_mutation(
+        state.kernel.as_ref(),
+        format!("provider:key:remove provider={name} env_var={env_var} request_id={}", rid.0),
+        "ok",
+    );
 
     (
         StatusCode::OK,
@@ -13365,7 +13403,7 @@ pub async fn create_skill(
 /// On Windows, `std::fs::write` can fail with "Access denied" if any other process
 /// (antivirus, the daemon itself during a hot-reload) has the file open. Writing to
 /// a sibling temp file and renaming avoids the lock window.
-fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
+pub(crate) fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
     // Avoid corrupting the KEY=value line format if the user accidentally pasted
     // with trailing newlines/spaces (common on Windows).
     let value = value.trim();
@@ -13418,7 +13456,7 @@ fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<()
 }
 
 /// Remove a key from the secrets.env file.
-fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::Error> {
+pub(crate) fn remove_secret_env(path: &std::path::Path, key: &str) -> Result<(), std::io::Error> {
     if !path.exists() {
         return Ok(());
     }
@@ -16747,8 +16785,10 @@ pub(crate) fn register_generated_upload(
     Ok(format!("/api/uploads/{file_id}"))
 }
 
-/// Maximum upload size: 10 MB.
-const MAX_UPLOAD_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum size for a single **chat attachment** (`POST /api/agents/{id}/upload`).
+/// 128 MiB balances large archives (e.g. project zips) with predictable daemon RAM for one in-memory buffer.
+/// (Unrelated caps: MCP stdio message size, `max_response_bytes`, home-folder download — see docs.)
+const MAX_UPLOAD_SIZE: usize = 128 * 1024 * 1024;
 
 fn upload_extension_lower(filename: &str) -> Option<String> {
     FsPath::new(filename)
@@ -16860,6 +16900,7 @@ const ALLOWED_UPLOAD_EXTENSIONS: &[&str] = &[
     "toml",
     "yaml",
     "yml",
+    "zip",
     "env",
     "properties",
     "ainl",
@@ -16932,6 +16973,7 @@ fn infer_mime_from_extension(ext: &str) -> String {
         "mov" => "video/quicktime",
         "mkv" => "video/x-matroska",
         "pdf" => "application/pdf",
+        "zip" => "application/zip",
         "json" | "jsonl" | "json5" => "application/json",
         "csv" | "tsv" | "tab" => "text/csv",
         "xlsx" | "xlsm" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -17016,6 +17058,8 @@ fn upload_mime_allowed(ct: &str) -> bool {
             | "application/graphql"
             | "application/ld+json"
             | "application/msword"
+            | "application/zip"
+            | "application/x-zip-compressed"
     )
 }
 
@@ -18948,6 +18992,15 @@ pub async fn copilot_oauth_poll(
                 .write()
                 .unwrap_or_else(|e| e.into_inner())
                 .detect_auth();
+
+            audit_credential_mutation(
+                state.kernel.as_ref(),
+                format!(
+                    "github_copilot:oauth:device_flow key=GITHUB_TOKEN stored request_id={}",
+                    rid.0
+                ),
+                "ok",
+            );
 
             // Clean up flow state
             COPILOT_FLOWS.remove(&poll_id);

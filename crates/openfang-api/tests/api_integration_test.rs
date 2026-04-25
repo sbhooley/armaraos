@@ -147,6 +147,97 @@ memory_read = ["*"]
 memory_write = ["self.*"]
 "#;
 
+/// `capabilities.tools` omitted → unrestricted; kernel uses `profile` to filter builtins.
+const CODING_PROFILE_LLM_TOOLS_MANIFEST: &str = r#"
+name = "coding-profile-llm-tools-smoke"
+version = "0.1.0"
+description = "GET /api/agents/:id/llm-tools smoke (coding profile)"
+author = "test"
+module = "builtin:chat"
+profile = "coding"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "test"
+
+[capabilities]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+const RESEARCH_PROFILE_LLM_TOOLS_MANIFEST: &str = r#"
+name = "research-profile-llm-tools-smoke"
+version = "0.1.0"
+description = "GET /api/agents/:id/llm-tools smoke (research profile)"
+author = "test"
+module = "builtin:chat"
+profile = "research"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "test"
+
+[capabilities]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+const AUTOMATION_PROFILE_LLM_TOOLS_MANIFEST: &str = r#"
+name = "automation-profile-llm-tools-smoke"
+version = "0.1.0"
+description = "GET /api/agents/:id/llm-tools smoke (automation profile)"
+author = "test"
+module = "builtin:chat"
+profile = "automation"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "test"
+
+[capabilities]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+const MINIMAL_PROFILE_LLM_TOOLS_MANIFEST: &str = r#"
+name = "minimal-profile-llm-tools-smoke"
+version = "0.1.0"
+description = "GET /api/agents/:id/llm-tools smoke (minimal profile)"
+author = "test"
+module = "builtin:chat"
+profile = "minimal"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "test"
+
+[capabilities]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+const MESSAGING_PROFILE_LLM_TOOLS_MANIFEST: &str = r#"
+name = "messaging-profile-llm-tools-smoke"
+version = "0.1.0"
+description = "GET /api/agents/:id/llm-tools smoke (messaging profile)"
+author = "test"
+module = "builtin:chat"
+profile = "messaging"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "test"
+
+[capabilities]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
 fn graph_db_path_for(server: &TestServer, agent_id: &str) -> std::path::PathBuf {
     server
         .state
@@ -258,6 +349,122 @@ async fn test_health_endpoint() {
     // Detailed fields should NOT appear in public health endpoint
     assert!(body["database"].is_null());
     assert!(body["agent_count"].is_null());
+}
+
+/// `GET /api/agents/{id}/llm-tools` — `github_subtree_download` appears for profiles that
+/// include it in `ToolProfile::tools()` (same stack as a live daemon; no external port needed).
+#[tokio::test]
+async fn test_agent_llm_tools_includes_github_subtree_by_named_profile() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    async fn assert_github_subtree_in_llm_tools(
+        server: &TestServer,
+        client: &reqwest::Client,
+        manifest_toml: &str,
+        expect_github_subtree: bool,
+    ) {
+        let resp = client
+            .post(format!("{}/api/agents", server.base_url))
+            .json(&serde_json::json!({ "manifest_toml": manifest_toml }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201, "spawn agent failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let agent_id = body["agent_id"].as_str().unwrap();
+
+        let resp = client
+            .get(format!(
+                "{}/api/agents/{}/llm-tools",
+                server.base_url, agent_id
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let tools_body: serde_json::Value = resp.json().await.unwrap();
+        let tools = tools_body["tools"].as_array().expect("tools must be array");
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+            .collect();
+        let has = names.contains(&"github_subtree_download");
+        assert_eq!(
+            has, expect_github_subtree,
+            "github_subtree_download presence={has} expected={expect_github_subtree}; tool names: {names:?}"
+        );
+    }
+
+    assert_github_subtree_in_llm_tools(
+        &server,
+        &client,
+        CODING_PROFILE_LLM_TOOLS_MANIFEST,
+        true,
+    )
+    .await;
+    assert_github_subtree_in_llm_tools(
+        &server,
+        &client,
+        RESEARCH_PROFILE_LLM_TOOLS_MANIFEST,
+        true,
+    )
+    .await;
+    assert_github_subtree_in_llm_tools(
+        &server,
+        &client,
+        AUTOMATION_PROFILE_LLM_TOOLS_MANIFEST,
+        true,
+    )
+    .await;
+    assert_github_subtree_in_llm_tools(
+        &server,
+        &client,
+        MINIMAL_PROFILE_LLM_TOOLS_MANIFEST,
+        false,
+    )
+    .await;
+    assert_github_subtree_in_llm_tools(
+        &server,
+        &client,
+        MESSAGING_PROFILE_LLM_TOOLS_MANIFEST,
+        false,
+    )
+    .await;
+
+    // Default assistant: full / wildcard profile → must include the tool.
+    let resp = client
+        .get(format!("{}/api/agents", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let agents: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let assistant = agents
+        .iter()
+        .find(|a| a["name"].as_str() == Some("assistant"))
+        .expect("default assistant agent");
+    let assistant_id = assistant["id"].as_str().unwrap();
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}/llm-tools",
+            server.base_url, assistant_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let tools_body: serde_json::Value = resp.json().await.unwrap();
+    let names: Vec<&str> = tools_body["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|t| t.get("name").and_then(|v| v.as_str()))
+        .collect();
+    assert!(
+        names.contains(&"github_subtree_download"),
+        "default assistant should include github_subtree_download; got: {names:?}"
+    );
 }
 
 /// Dashboard “daemon vs GitHub” uses this route (server-side GitHub fetch).
@@ -2824,4 +3031,84 @@ async fn providers_cli_test_endpoints_return_ok_json_shape() {
             "{id}: network_hints should be present for dashboard VPN hints"
         );
     }
+}
+
+#[tokio::test]
+async fn secrets_catalog_and_dependencies_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let cat = client
+        .get(format!("{}/api/secrets/catalog", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cat.status(), 200);
+    let body: serde_json::Value = cat.json().await.unwrap();
+    assert!(body.get("request_id").is_some(), "expected request_id: {body}");
+    assert!(body.get("home_dir").is_some());
+    assert!(body.get("generated_at").is_some());
+    let rows = body["rows"].as_array().expect("rows must be array");
+    assert!(!rows.is_empty(), "catalog should include static + provider rows");
+    let row0 = &rows[0];
+    for key in ["id", "key", "title", "present", "category"] {
+        assert!(
+            row0.get(key).is_some(),
+            "row should include {key}: {row0}"
+        );
+    }
+
+    let dep = client
+        .get(format!("{}/api/secrets/dependencies", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dep.status(), 200);
+    let dep_body: serde_json::Value = dep.json().await.unwrap();
+    let items = dep_body["items"]
+        .as_array()
+        .expect("dependencies.items must be array");
+    assert!(
+        !items.is_empty(),
+        "dependencies should list at least one feature"
+    );
+}
+
+#[tokio::test]
+async fn vault_post_emits_audit_credential_change() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let save = client
+        .post(format!("{}/api/secrets", server.base_url))
+        .json(&serde_json::json!({
+            "key": "GITHUB_TOKEN",
+            "value": "test-token-audit-placeholder"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(save.status(), 200, "vault POST should succeed");
+
+    let audit = client
+        .get(format!(
+            "{}/api/audit/recent?n=20&q=CredentialChange",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(audit.status(), 200);
+    let body: serde_json::Value = audit.json().await.unwrap();
+    let entries = body["entries"].as_array().expect("audit entries");
+    assert!(
+        entries.iter().any(|e| {
+            e["action"].as_str() == Some("CredentialChange")
+                && e["detail"]
+                    .as_str()
+                    .map(|d| d.contains("vault:set") && d.contains("GITHUB_TOKEN"))
+                    .unwrap_or(false)
+        }),
+        "expected CredentialChange for vault:set GITHUB_TOKEN, got: {entries:?}"
+    );
 }

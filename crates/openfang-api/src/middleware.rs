@@ -211,7 +211,10 @@ pub async fn auth(
         || path.starts_with("/api/providers/github-copilot/oauth/")
         || path == "/api/auth/login"
         || path == "/api/auth/logout"
-        || (path == "/api/auth/check" && is_get);
+        || (path == "/api/auth/check" && is_get)
+        // Settings → Vault: catalog + dependency map are read-only inventory (no secret values).
+        || (path == "/api/secrets/catalog" && is_get)
+        || (path == "/api/secrets/dependencies" && is_get);
 
     if is_public {
         return next.run(request).await;
