@@ -79,6 +79,31 @@ impl CredentialResolver {
         None
     }
 
+    /// Returns which layer would satisfy [`Self::resolve`] for `key` first,
+    /// if any layer has a **non-empty** value.
+    pub fn first_resolution_layer(&self, key: &str) -> Option<&'static str> {
+        if let Some(ref vault) = self.vault {
+            if vault.is_unlocked() {
+                if let Some(v) = vault.get(key) {
+                    if !v.to_string().trim().is_empty() {
+                        return Some("vault");
+                    }
+                }
+            }
+        }
+        if let Some(v) = self.dotenv.get(key) {
+            if !v.trim().is_empty() {
+                return Some("dotenv");
+            }
+        }
+        if let Ok(v) = std::env::var(key) {
+            if !v.trim().is_empty() {
+                return Some("process_env");
+            }
+        }
+        None
+    }
+
     /// Check if a credential is available (without prompting).
     pub fn has_credential(&self, key: &str) -> bool {
         // Check vault
