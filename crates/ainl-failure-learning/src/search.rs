@@ -11,6 +11,10 @@ pub struct FailureRecallHit {
     pub source: String,
     pub message: String,
     pub tool_name: Option<String>,
+    /// Optional MCP-style namespace (e.g. `ainl`) when the host recorded structured provenance.
+    pub source_namespace: Option<String>,
+    /// Optional fully-qualified tool name when the host recorded structured provenance.
+    pub source_tool: Option<String>,
     /// Best-effort ranking score (1.0 today; room for rankers later).
     pub score: f32,
 }
@@ -24,6 +28,8 @@ fn hit_from_node(node: AinlMemoryNode) -> Option<FailureRecallHit> {
         source: failure.source,
         message: failure.message,
         tool_name: failure.tool_name,
+        source_namespace: failure.source_namespace,
+        source_tool: failure.source_tool,
         score: 1.0,
     })
 }
