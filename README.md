@@ -14,6 +14,7 @@
   <a href="https://github.com/sbhooley/armaraos">Repository</a> &bull;
   <a href="docs/getting-started.md">Quick Start</a> &bull;
   <a href="docs/dashboard-design-system.md">UI Design System</a> &bull;
+  <a href="docs/api-reference.md#vault-and-credentials">Vault (credentials)</a> &bull;
   <a href="docs/docker.md">Docker</a> &bull;
   <a href="ARCHITECTURE.md">Architecture</a> &bull;
   <a href="docs/graph-memory.md">Graph memory (runtime)</a> &bull;
@@ -69,8 +70,9 @@ A focused drop bringing a refreshed UI, premium agents, swarm orchestration, a s
 
 - **Adaptive Compression** — **`adaptive` efficient_mode** combines heuristics with `ainl-compression` and per-project **EMA profiles** to learn the best token savings for your workload — **up to ~70 % token / API cost savings** on recurring jobs without losing critical context.
 - **Visual Analytics, Monitoring & Audit Logs** — dashboard for token / API spend, **budget limits + tracking**, system health, and a **Merkle hash-chain audit trail** so every action is tamper-evident.
+- **Settings → Vault** — one place in the embedded dashboard to inventory and set **shared env credentials** (GitHub PATs, integration keys, and provider `api_key_env` names): catalog + optional test/remove, backed by the same vault / `secrets.env` / process pipeline. API: [`/api/secrets`](docs/api-reference.md#vault-and-credentials).
 
-> **Read the deep links:** [`docs/SELF_LEARNING_INTEGRATION_MAP.md`](docs/SELF_LEARNING_INTEGRATION_MAP.md) · [`docs/persona-evolution.md`](docs/persona-evolution.md) · [`docs/graph-memory.md`](docs/graph-memory.md) · [`docs/prompt-compression-efficient-mode.md`](docs/prompt-compression-efficient-mode.md) · [`docs/local-voice.md`](docs/local-voice.md)
+> **Read the deep links:** [`docs/SELF_LEARNING_INTEGRATION_MAP.md`](docs/SELF_LEARNING_INTEGRATION_MAP.md) · [`docs/persona-evolution.md`](docs/persona-evolution.md) · [`docs/graph-memory.md`](docs/graph-memory.md) · [`docs/prompt-compression-efficient-mode.md`](docs/prompt-compression-efficient-mode.md) · [`docs/local-voice.md`](docs/local-voice.md) · [`docs/api-reference.md#vault-and-credentials`](docs/api-reference.md#vault-and-credentials)
 
 ---
 
@@ -107,6 +109,7 @@ High-level surface of what landed across recent development cycles; deep wiring 
 | **Planner & native infer** | Deterministic planner pipeline, **orchestration traces** API and UI, **planner_model_tier** from catalog, and **native infer** e2e paths (see recent `openfang-kernel` / `openfang-runtime` / dashboard orchestration work). |
 | **Token savings & compression** | **Balanced / Aggressive / Off / [Adaptive](docs/SELF_LEARNING_INTEGRATION_MAP.md)** `efficient_mode` — kernel **`adaptive_eco`** and **`AINL_ADAPTIVE_COMPRESSION`** merge content signals; **on-disk EMA** project profiles (`compression_project_ema`, **`GET /api/compression/project-profiles`**, `openfang compression project-profiles`); **whole-prompt** compression **telemetry** and **context-compiler** `compose_telemetry` (see [prompt compression](docs/prompt-compression-efficient-mode.md)). |
 | **Telemetry** | [Cognitive vitals](docs/learning-frame-v1.md) on streaming paths; compression sinks mirroring `CompressionTelemetrySink`; orchestration traces; dashboard **PostHog** (navigation / product usage, consented) and **desktop** first-open ping; kernel **SSE** for lifecycle and learning events. |
+| **Credentials (Vault)** | **Settings → Vault** in the dashboard + [`GET/POST/DELETE` `/api/secrets`](docs/api-reference.md#vault-and-credentials) for catalogued env keys (read-only public `GET`s for metadata; writes require API key or session when configured). Optional `secret_center_telemetry.json` for last-set / test hints. |
 
 ### Why teams switch to ArmaraOS
 

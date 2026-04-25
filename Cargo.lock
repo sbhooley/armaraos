@@ -4984,6 +4984,7 @@ dependencies = [
  "tracing",
  "uuid",
  "wasmtime",
+ "wiremock",
  "zeroize",
  "zip 4.6.1",
 ]

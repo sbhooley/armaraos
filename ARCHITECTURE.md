@@ -66,6 +66,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
    - Pinned agents with UI-prefs persistence
    - Setup wizard for first-run onboarding
    - Home folder browser with preview/download
+   - **Settings → Vault:** catalog of env-backed credentials (integration PATs, provider `api_key_env` keys) with `GET/POST/DELETE` `/api/secrets` — see `docs/api-reference.md` (*Vault and credentials*)
    - **AINL learning panels:** `/#trajectories`, `/#graph-failures`, `/#graph-proposals` (HTTP + `armaraos-kernel-event` SSE for `TrajectoryRecorded` / `FailureLearned` / `GraphMemoryWrite` / `ImprovementProposalAdopted`) — see `docs/SELF_LEARNING_INTEGRATION_MAP.md` §8
 
 4. **Scheduled AINL**

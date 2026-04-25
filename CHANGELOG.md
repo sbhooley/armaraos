@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Reserve for **0.7.8+** after the **`v0.7.7`** Git tag is published.
 
+### Added
+
+- **Settings → Vault (credentials center):** Dashboard tab + `GET/POST/DELETE` `/api/secrets` (+ `POST /api/secrets/{key}/test`, dependency map) for managed env keys (vault, `secrets.env`, process). Read-only catalog/dependencies are public `GET`s (no secret values); optional `~/.armaraos/secret_center_telemetry.json` for last-set / test / rotation hints. The test endpoint reports an **`applicable`** boolean — non-applicable tests (LLM provider keys, OAuth client pieces) return a friendly hint pointing at **Settings → Providers → Test** **without** writing a “last test failed” record into telemetry, so a Test click on a provider key never makes the row look broken. Docs: [api-reference.md](docs/api-reference.md#vault-and-credentials), [data-directory.md](docs/data-directory.md), [dashboard-design-system.md](docs/dashboard-design-system.md), [dashboard-settings-runtime-ui.md](docs/dashboard-settings-runtime-ui.md), [dashboard-testing.md](docs/dashboard-testing.md), [configuration.md](docs/configuration.md), [security.md](docs/security.md), [providers.md](docs/providers.md), [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Audit — `CredentialChange` (enterprise / compliance):** New `openfang_runtime::audit::AuditAction` variant. Successful Vault **set** / **remove** / applicable **Test** (GitHub user probe), **POST/DELETE** `/api/providers/{name}/key`, **POST** `/api/integrations/google-workspace/oauth`, and GitHub **Copilot** device-flow token storage append Merkle audit rows (`agent_id` **`system`**) with **key names and `request_id` only** — never raw secrets. See [api-reference.md](docs/api-reference.md#vault-and-credentials) and [security.md](docs/security.md).
+
 ## [0.7.7] - 2026-04-24
 
 Ships everything on `main` after **`v0.7.5`** through the **0.7.7** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples). See **[Unreleased]**-promoted entries below for the functional delta since **0.7.5**.

@@ -188,6 +188,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 # Testing
 tokio-test = "0.4"
 tempfile = "3"
+wiremock = "0.6"
 
 # Host + process stats for the dashboard (CPU / RSS)
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
