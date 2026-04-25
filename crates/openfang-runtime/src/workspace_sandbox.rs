@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 
 /// Canonicalize `candidate` relative to `root` and ensure the result stays under `root`
 /// (after resolving symlinks). Used for workspace and AINL library roots.
+///
+/// When `candidate` does not exist, walks up to the deepest existing ancestor and
+/// canonicalizes that, then re-attaches the missing tail components. This lets
+/// `file_write` target a file in a directory that hasn't been created yet — the
+/// caller is expected to `create_dir_all(parent)` before writing. The walk-up
+/// stays inside `candidate`'s lexical chain (no symlinks crossed in the missing
+/// tail) and the final path is still required to start with `canon_root`, so the
+/// sandbox containment guarantee is preserved.
 fn finalize_within_root(candidate: PathBuf, root: &Path) -> Result<PathBuf, String> {
     let canon_root = root
         .canonicalize()
@@ -21,16 +29,35 @@ fn finalize_within_root(candidate: PathBuf, root: &Path) -> Result<PathBuf, Stri
             .canonicalize()
             .map_err(|e| format!("Failed to resolve path: {e}"))?
     } else {
-        let parent = candidate
-            .parent()
-            .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
-        let filename = candidate
-            .file_name()
-            .ok_or_else(|| "Invalid path: no filename".to_string())?;
-        let canon_parent = parent
+        // Walk up the lexical path to the deepest ancestor that exists, canonicalize
+        // that, then re-append the still-missing tail components in original order.
+        // This unblocks writes into nested dirs that the caller intends to create.
+        let mut existing = candidate.clone();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        loop {
+            if existing.exists() {
+                break;
+            }
+            match (existing.file_name(), existing.parent()) {
+                (Some(name), Some(parent)) => {
+                    tail.push(name.to_os_string());
+                    existing = parent.to_path_buf();
+                }
+                _ => {
+                    return Err(
+                        "Invalid path: cannot walk up to an existing ancestor".to_string()
+                    );
+                }
+            }
+        }
+        let canon_existing = existing
             .canonicalize()
             .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
-        canon_parent.join(filename)
+        let mut joined = canon_existing;
+        for part in tail.iter().rev() {
+            joined = joined.join(part);
+        }
+        joined
     };
 
     if !canon_candidate.starts_with(&canon_root) {
@@ -237,6 +264,39 @@ mod tests {
         let resolved = result.unwrap();
         assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
         assert!(resolved.ends_with("new_file.txt"));
+    }
+
+    #[test]
+    fn test_nonexistent_file_with_missing_parent_dirs() {
+        // Regression: agents asking to write `apollo-x-bot/modules/common/retry.ainl`
+        // into a workspace that only contains the workspace root itself were getting
+        // "Failed to resolve parent directory: No such file or directory (os error 2)".
+        // The resolver should walk up to the existing root and let `tool_file_write`
+        // create the intermediate directories.
+        let dir = TempDir::new().unwrap();
+        let result =
+            resolve_sandbox_path("apollo-x-bot/modules/common/retry.ainl", dir.path());
+        assert!(
+            result.is_ok(),
+            "expected nested-missing-parent path to resolve, got: {:?}",
+            result.err()
+        );
+        let resolved = result.unwrap();
+        assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));
+        assert!(resolved.ends_with("retry.ainl"));
+        // Sanity: containment is preserved even though parents don't exist.
+        assert!(resolved
+            .to_string_lossy()
+            .contains("apollo-x-bot/modules/common"));
+    }
+
+    #[test]
+    fn test_nonexistent_file_with_missing_parent_dirs_blocks_dotdot_escape() {
+        // The walk-up must not be exploited via `..` to escape the workspace root.
+        let dir = TempDir::new().unwrap();
+        let result = resolve_sandbox_path("foo/../../etc/passwd", dir.path());
+        assert!(result.is_err(), "dotdot must still be blocked even when path doesn't exist");
+        assert!(result.unwrap_err().contains("Path traversal denied"));
     }
 
     #[cfg(unix)]
