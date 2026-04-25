@@ -2589,9 +2589,12 @@
 
                   <!-- Step 2: Model Selection -->
                   <div x-show="spawnStep === 2">
+                    <div class="info-card mb-3" style="border:1px solid var(--warning);background:rgba(245,158,11,0.08)" x-show="spawnCliProviderBlocked()" role="status">
+                      <p class="text-sm" style="margin:0">This provider needs its <strong>CLI</strong> on PATH (and CLI auth where applicable). Open <strong>Settings → Providers</strong>, run <strong>Detect</strong>, then return here.</p>
+                    </div>
                     <div class="form-group">
                       <label>Provider</label>
-                      <select class="form-select" x-model="spawnForm.provider">
+                      <select class="form-select" x-model="spawnForm.provider" @change="onSpawnProviderChange()">
                         <template x-if="spawnProvidersLoading">
                           <option disabled>Loading providers…</option>
                         </template>
@@ -5197,7 +5200,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           <div x-show="tab === 'providers'">
             <div class="info-card">
               <h4>LLM Providers</h4>
-              <p>ArmaraOS supports 12 LLM providers out of the box. Configure API keys to unlock models from each provider. Set environment variables and restart, or use the form below to save keys directly.</p>
+              <p>ArmaraOS includes a built-in LLM provider catalog (cloud, local, and CLI-backed). Configure API keys where required, or use CLI detection for providers like Claude Code. Set environment variables and restart, or use the forms below.</p>
               <p class="text-xs text-dim mt-2" style="line-height:1.5">Scheduled <code>ainl run</code> jobs use the same keys (vault / <code>~/.armaraos/.env</code>) as chat — no separate cron credential file.</p>
             </div>
             <div class="card-grid">
@@ -5230,18 +5233,31 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       </div>
                     </div>
                   </template>
-                  <!-- Claude Code install hint -->
-                  <template x-if="p.id === 'claude-code' && p.auth_status !== 'configured'">
-                    <div class="mt-2 text-xs text-dim">Install: <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">npm install -g @anthropic-ai/claude-code</code></div>
+                  <!-- Claude Code / Qwen Code: install hint + Detect (POST …/test refreshes catalog on success) -->
+                  <template x-if="isCliLlmProvider(p) && p.auth_status !== 'configured'">
+                    <div class="mt-2 text-xs text-dim" style="line-height:1.5">
+                      <template x-if="p.id === 'claude-code'">
+                        <div>Install <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">npm install -g @anthropic-ai/claude-code</code>, run <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">claude auth</code>, then <strong>Detect</strong>.</div>
+                      </template>
+                      <template x-if="p.id === 'qwen-code'">
+                        <div>Install the Qwen Code CLI so <code style="color:var(--accent-light);background:var(--bg);padding:1px 4px;border-radius:2px">qwen --version</code> works on PATH and you are signed in, then <strong>Detect</strong>.</div>
+                      </template>
+                      <div class="flex gap-2 mt-2">
+                        <button type="button" class="btn btn-primary btn-sm" @click="detectCliProvider(p)" :disabled="providerTesting[p.id]">
+                          <span x-show="!providerTesting[p.id]">Detect</span>
+                          <span x-show="providerTesting[p.id]" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
+                        </button>
+                      </div>
+                    </div>
                   </template>
                   <!-- Actions for configured providers -->
                   <template x-if="p.auth_status === 'configured'">
                     <div class="flex gap-2 mt-2">
-                      <button class="btn btn-ghost btn-sm" @click="testProvider(p)" :disabled="providerTesting[p.id]">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="testProvider(p)" :disabled="providerTesting[p.id]">
                         <span x-show="!providerTesting[p.id]">Test</span>
                         <span x-show="providerTesting[p.id]" class="spinner" style="width:10px;height:10px;border-width:2px"></span>
                       </button>
-                      <button class="btn btn-ghost btn-sm" style="color:var(--error)" @click="removeProviderKey(p)">Remove Key</button>
+                      <button type="button" class="btn btn-ghost btn-sm" style="color:var(--error)" x-show="p.api_key_env" @click="removeProviderKey(p)">Remove Key</button>
                     </div>
                   </template>
                   <!-- No key needed -->
@@ -8044,12 +8060,12 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div class="card" style="border-left:3px solid var(--accent);margin-top:16px">
                   <div class="card-header">Configure Claude Code</div>
                   <div class="text-xs text-dim mb-2" style="line-height:1.8">
-                    Claude Code uses its own CLI authentication &mdash; no API key needed.
+                    Claude Code uses its own CLI authentication on this machine &mdash; no <code style="font-size:11px">ANTHROPIC_API_KEY</code> in ArmaraOS. After you click <strong>Detect</strong>, the next step creates an agent whose model is <code style="font-size:11px">claude-code/sonnet</code> (unless you change it later in agent settings).
                   </div>
                   <div style="background:var(--bg);border-radius:4px;padding:10px 12px;margin-bottom:12px;font-size:12px;line-height:1.8">
                     <div><span style="color:var(--accent)">1.</span> Install: <code style="color:var(--accent-light);background:var(--bg-secondary);padding:1px 4px;border-radius:2px">npm install -g @anthropic-ai/claude-code</code></div>
-                    <div><span style="color:var(--accent)">2.</span> Authenticate: <code style="color:var(--accent-light);background:var(--bg-secondary);padding:1px 4px;border-radius:2px">claude auth</code></div>
-                    <div><span style="color:var(--accent)">3.</span> Click <strong>Detect</strong> below to verify</div>
+                    <div><span style="color:var(--accent)">2.</span> Authenticate: <code style="color:var(--accent-light);background:var(--bg-secondary);padding:1px 4px;border-radius:2px">claude auth</code> (same user account as this ArmaraOS daemon when possible)</div>
+                    <div><span style="color:var(--accent)">3.</span> Click <strong>Detect</strong> below &mdash; ArmaraOS will run <code style="font-size:11px">claude -p</code> for chat completions</div>
                   </div>
                   <button class="btn btn-primary btn-sm" @click="detectClaudeCode()" :disabled="testingProvider">
                     <span x-show="!testingProvider">Detect Claude Code</span>
@@ -8132,7 +8148,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <h3 style="font-size:16px;font-weight:700;margin-bottom:4px">Create Your First Agent</h3>
               <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;line-height:1.6">Pick a template to get started quickly. You can customize the agent later or create more from the Agents page.</p>
               <p style="font-size:11px;color:var(--text-muted);margin:-8px 0 16px;line-height:1.5">
-                Templates use <strong>OpenRouter</strong> with <code style="font-size:11px">nvidia/nemotron-3-super-120b-a12b:free</code> when that is the provider you configured in the previous step; otherwise the wizard uses your configured provider&rsquo;s default model.
+                The new agent&rsquo;s <code style="font-size:11px">[model]</code> uses the provider you made ready in step 2 (with that provider&rsquo;s default model). Templates still show OpenRouter as a placeholder until step 2 is complete. <strong>Claude Code:</strong> ArmaraOS runs the official <code style="font-size:11px">claude</code> CLI for each reply; the agent does not call the CLI itself.
               </p>
 
               <!-- Category filter pills -->
@@ -8154,7 +8170,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </div>
                     <div class="text-xs text-dim" style="line-height:1.6" x-text="tpl.description"></div>
                     <div class="flex justify-between items-center mt-2">
-                      <span class="text-xs" style="color:var(--text-muted)" x-text="(selectedProviderObj && providerIsConfigured(selectedProviderObj) ? selectedProviderObj.id : tpl.provider) + ' / ' + (selectedProviderObj && providerIsConfigured(selectedProviderObj) ? (defaultModelForProvider(selectedProviderObj.id) || tpl.model) : tpl.model)"></span>
+                      <span class="text-xs" style="color:var(--text-muted)" x-text="wizardTemplateCardProviderLine(tpl)"></span>
                       <span class="badge badge-muted" x-text="tpl.profile"></span>
                     </div>
                     <div class="text-xs mt-1 text-dim" x-show="profileInfo(tpl.profile).desc" x-text="profileInfo(tpl.profile).desc"></div>
@@ -8732,7 +8748,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <template x-for="p in providers" :key="p.id">
                     <tr>
                       <td x-text="p.display_name || p.id"></td>
-                      <td><span class="badge" :class="p.reachable ? 'badge-success' : (p.auth_status === 'Configured' ? 'badge-success' : 'badge-dim')" x-text="p.reachable ? 'Online' : (p.auth_status === 'Configured' ? 'Ready' : 'Not configured')"></span></td>
+                      <td><span class="badge" :class="p.reachable ? 'badge-success' : ((p.auth_status === 'configured' || p.auth_status === 'not_required') ? 'badge-success' : 'badge-dim')" x-text="p.reachable ? 'Online' : ((p.auth_status === 'configured' || p.auth_status === 'not_required') ? 'Ready' : 'Not configured')"></span></td>
                       <td x-text="p.model_count"></td>
                       <td x-text="p.latency_ms ? p.latency_ms + 'ms' : '-'"></td>
                     </tr>

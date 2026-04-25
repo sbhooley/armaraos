@@ -135,9 +135,8 @@ document.addEventListener('alpine:init', function() {
           else if (diff < 86400) this.uptime = Math.floor(diff / 3600) + 'h ' + Math.floor((diff % 3600) / 60) + 'm';
           else this.uptime = Math.floor(diff / 86400) + 'd ' + Math.floor((diff % 86400) / 3600) + 'h';
 
-          this.providers = (prov.providers || []).filter(function(p) {
-            return p.auth_status === 'Configured' || p.reachable || p.is_local;
-          });
+          // Full provider list for the table (auth_status is snake_case from the API).
+          this.providers = prov.providers || [];
         } catch(e) {
           console.error('Runtime load error:', e);
         }

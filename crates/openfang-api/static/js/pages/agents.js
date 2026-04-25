@@ -29,6 +29,26 @@ function validateManifestToml(toml) {
 var SPAWN_DEFAULT_PROVIDER = 'openrouter';
 var SPAWN_DEFAULT_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 
+/** Default model id when the spawn wizard provider changes (align with setup wizard.js `defaultModelForProvider`). */
+function spawnWizardDefaultModelForProvider(providerId) {
+  var defaults = {
+    anthropic: 'claude-sonnet-4-5',
+    'claude-code': 'claude-code/sonnet',
+    'qwen-code': 'qwen-code/qwen3-coder',
+    openai: 'gpt-4o',
+    gemini: 'gemini-2.5-flash',
+    groq: 'llama-3.3-70b-versatile',
+    deepseek: 'deepseek-chat',
+    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+    standardcompute: 'StandardCompute',
+    mistral: 'mistral-large-latest',
+    ollama: 'llama3.2',
+    vllm: 'local-model',
+    lmstudio: 'local-model',
+  };
+  return defaults[providerId] || '';
+}
+
 function spawnModelFromManifestToml(toml) {
   var provider = '?';
   var model = '?';
@@ -266,7 +286,23 @@ function agentsPage() {
     isProviderConfigured(providerName) {
       if (!providerName) return false;
       var p = this.tplProviders.find(function(pr) { return pr.id === providerName; });
-      return p ? p.auth_status === 'configured' : false;
+      if (!p) return false;
+      return p.auth_status === 'configured' || p.auth_status === 'not_required';
+    },
+
+    get spawnSelectedProviderObj() {
+      var id = (this.spawnForm && this.spawnForm.provider) || '';
+      var list = this.spawnProviders || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id) return list[i];
+      }
+      return null;
+    },
+
+    spawnCliProviderBlocked() {
+      var p = this.spawnSelectedProviderObj;
+      if (!p || (p.id !== 'claude-code' && p.id !== 'qwen-code')) return false;
+      return p.auth_status !== 'configured' && p.auth_status !== 'not_required';
     },
 
     async init() {
@@ -582,9 +618,20 @@ function agentsPage() {
       this.spawnProvidersLoading = false;
     },
 
+    onSpawnProviderChange() {
+      var id = (this.spawnForm && this.spawnForm.provider) || '';
+      var dm = spawnWizardDefaultModelForProvider(id);
+      if (dm) this.spawnForm.model = dm;
+    },
+
     nextStep() {
       if (this.spawnStep === 1 && !this.spawnForm.name.trim()) {
         OpenFangToast.warn('Please enter an agent name');
+        return;
+      }
+      if (this.spawnStep === 2 && this.spawnCliProviderBlocked()) {
+        var p = this.spawnSelectedProviderObj;
+        OpenFangToast.warn('Install the ' + (p && p.display_name ? p.display_name : 'CLI') + ' driver, then use Settings — Providers — Detect before continuing.');
         return;
       }
       if (this.spawnStep < 5) this.spawnStep++;
@@ -637,6 +684,12 @@ function agentsPage() {
       if (spawnErr) {
         this.spawning = false;
         OpenFangToast.warn(spawnErr);
+        return;
+      }
+      if (this.spawnMode === 'wizard' && this.spawnCliProviderBlocked()) {
+        this.spawning = false;
+        var pb = this.spawnSelectedProviderObj;
+        OpenFangToast.warn('Install the ' + (pb && pb.display_name ? pb.display_name : 'CLI') + ' driver, then use Settings — Providers — Detect, then spawn again.');
         return;
       }
 

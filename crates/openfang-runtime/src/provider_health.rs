@@ -36,11 +36,21 @@ pub fn is_local_provider(provider: &str) -> bool {
 /// Overall request timeout for local provider health probes (connect + response).
 const PROBE_TIMEOUT_SECS: u64 = 2;
 
+/// OpenAI-style `GET /models` on cloud gateways (e.g. NVIDIA NIM) can return large payloads.
+const PROBE_OPENAI_MODELS_TIMEOUT_SECS: u64 = 25;
+
 /// TCP connect timeout — fail fast when the local port is not listening.
 const PROBE_CONNECT_TIMEOUT_SECS: u64 = 1;
 
+/// Longer connect budget for remote HTTPS (NVIDIA NIM catalog).
+const PROBE_CLOUD_CONNECT_TIMEOUT_SECS: u64 = 5;
+
 /// Default TTL for cached probe results (seconds).
 const PROBE_CACHE_TTL_SECS: u64 = 60;
+
+fn probe_cache_key(provider: &str, base_url: &str) -> String {
+    format!("{provider}\0{base_url}")
+}
 
 // ── Probe cache ──────────────────────────────────────────────────────────
 
@@ -63,23 +73,23 @@ impl ProbeCache {
     }
 
     /// Look up a cached probe result. Returns `None` if missing or expired.
-    pub fn get(&self, provider_id: &str) -> Option<ProbeResult> {
-        if let Some(entry) = self.inner.get(provider_id) {
+    pub fn get(&self, cache_key: &str) -> Option<ProbeResult> {
+        if let Some(entry) = self.inner.get(cache_key) {
             let (ts, ref result) = *entry;
             if ts.elapsed() < self.ttl {
                 return Some(result.clone());
             }
             // Expired — drop the read guard before removing
             drop(entry);
-            self.inner.remove(provider_id);
+            self.inner.remove(cache_key);
         }
         None
     }
 
     /// Store a probe result.
-    pub fn insert(&self, provider_id: &str, result: ProbeResult) {
+    pub fn insert(&self, cache_key: &str, result: ProbeResult) {
         self.inner
-            .insert(provider_id.to_string(), (Instant::now(), result));
+            .insert(cache_key.to_string(), (Instant::now(), result));
     }
 }
 
@@ -97,11 +107,28 @@ impl Default for ProbeCache {
 /// `base_url` should be the provider's base URL from the catalog (e.g.,
 /// `http://localhost:11434/v1` for Ollama, `http://localhost:8000/v1` for vLLM).
 pub async fn probe_provider(provider: &str, base_url: &str) -> ProbeResult {
+    probe_provider_inner(provider, base_url, None).await
+}
+
+async fn probe_provider_inner(
+    provider: &str,
+    base_url: &str,
+    bearer_token: Option<&str>,
+) -> ProbeResult {
     let start = Instant::now();
 
+    let (connect_secs, total_secs) = if bearer_token.is_some() {
+        (
+            PROBE_CLOUD_CONNECT_TIMEOUT_SECS,
+            PROBE_OPENAI_MODELS_TIMEOUT_SECS,
+        )
+    } else {
+        (PROBE_CONNECT_TIMEOUT_SECS, PROBE_TIMEOUT_SECS)
+    };
+
     let client = match reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(PROBE_CONNECT_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(connect_secs))
+        .timeout(Duration::from_secs(total_secs))
         .build()
     {
         Ok(c) => c,
@@ -129,7 +156,14 @@ pub async fn probe_provider(provider: &str, base_url: &str) -> ProbeResult {
         (format!("{trimmed}/models"), false)
     };
 
-    let resp = match client.get(&url).send().await {
+    let mut req = client.get(&url);
+    if let Some(token) = bearer_token.filter(|t| !t.is_empty()) {
+        if !is_ollama {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+    }
+
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             return ProbeResult {
@@ -206,11 +240,35 @@ pub async fn probe_provider_cached(
     base_url: &str,
     cache: &ProbeCache,
 ) -> ProbeResult {
-    if let Some(cached) = cache.get(provider) {
+    let key = probe_cache_key(provider, base_url);
+    if let Some(cached) = cache.get(&key) {
         return cached;
     }
     let result = probe_provider(provider, base_url).await;
-    cache.insert(provider, result.clone());
+    cache.insert(&key, result.clone());
+    result
+}
+
+/// `GET {base_url}/models` with a Bearer token — used for **NVIDIA NIM** (and similar) cloud
+/// catalogs that require authentication. Response shape matches OpenAI: `{ "data": [ { "id": … } ] }`.
+pub async fn probe_openai_models_authenticated(base_url: &str, api_key: &str) -> ProbeResult {
+    probe_provider_inner("openai-compat-models", base_url, Some(api_key)).await
+}
+
+/// Cached variant of [`probe_openai_models_authenticated`]. Cache key is derived from
+/// `cache_namespace` and `base_url` (never the raw API key).
+pub async fn probe_openai_models_authenticated_cached(
+    cache_namespace: &str,
+    base_url: &str,
+    api_key: &str,
+    cache: &ProbeCache,
+) -> ProbeResult {
+    let key = format!("{cache_namespace}\0{base_url}");
+    if let Some(cached) = cache.get(&key) {
+        return cached;
+    }
+    let result = probe_openai_models_authenticated(base_url, api_key).await;
+    cache.insert(&key, result.clone());
     result
 }
 

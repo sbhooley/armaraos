@@ -1,6 +1,6 @@
 # LLM Providers Guide
 
-ArmaraOS ships with a comprehensive model catalog covering **3 native LLM drivers**, **20 providers**, **51 builtin models**, and **23 aliases**. Every provider uses one of three battle-tested drivers: the native **Anthropic** driver, the native **Gemini** driver, or the universal **OpenAI-compatible** driver. This guide is the single source of truth for configuring, selecting, and managing LLM providers in ArmaraOS.
+ArmaraOS ships with a comprehensive model catalog covering **3 native LLM drivers**, **21 providers** in this reference, **51 builtin models**, and **23 aliases**. Most HTTP providers use one of three battle-tested drivers: the native **Anthropic** driver, the native **Gemini** driver, or the universal **OpenAI-compatible** driver. **Claude Code** is different: a **subprocess driver** that shells out to Anthropic’s official **`claude`** CLI (print mode), using CLI auth instead of `ANTHROPIC_API_KEY`. This guide is the single source of truth for configuring, selecting, and managing LLM providers in ArmaraOS.
 
 ---
 
@@ -38,6 +38,8 @@ ArmaraOS auto-detects which providers have API keys configured at boot. Any mode
 
 For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
+**Claude Code (CLI):** no env var in this list — install the [Claude Code](https://code.claude.com/docs) CLI, run `claude auth`, then choose provider **`claude-code`** in the setup wizard or `[default_model]` (full walkthrough: **[Claude Code (CLI)](#2-claude-code-cli)** below).
+
 ---
 
 ## Provider Reference
@@ -65,9 +67,42 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 2. Create an API key under Settings > API Keys
 3. `export ANTHROPIC_API_KEY="sk-ant-..."`
 
+**Claude / Max via subscription (no API key):** use **[Claude Code (CLI)](#2-claude-code-cli)** — install the Claude Code CLI and `claude auth`; pick provider `claude-code` in ArmaraOS.
+
 ---
 
-### 2. OpenAI
+### 2. Claude Code (CLI)
+
+| | |
+|---|---|
+| **Display Name** | Claude Code |
+| **Driver** | Subprocess (`claude` CLI, print mode `-p`) |
+| **Env Var** | None (uses [Claude Code](https://code.claude.com/docs) CLI login, not `ANTHROPIC_API_KEY`) |
+| **Base URL** | Optional: set `[default_model].base_url` to the full path of the `claude` binary if it is not on `PATH` |
+| **Key Required** | **No** (subscription / CLI auth via `claude auth`) |
+| **Free Tier** | Per your Anthropic Claude / Claude Code plan |
+| **Auth** | Credentials under `~/.claude/` (CLI-managed) |
+| **Models** | 3 |
+
+**Available Models:**
+- `claude-code/opus` (Frontier)
+- `claude-code/sonnet` (Smart) — alias `claude-code` resolves here
+- `claude-code/haiku` (Fast)
+
+**Setup:**
+1. Install the official CLI (see Anthropic’s Claude Code install docs), e.g. `npm install -g @anthropic-ai/claude-code`.
+2. Run `claude --version` to confirm the binary is on your `PATH`.
+3. Authenticate once: `claude auth` (or the flow your CLI version documents).
+4. In ArmaraOS, set **`provider = "claude-code"`** and pick a model id above (wizard: **Claude Code**, or edit `~/.armaraos/config.toml` `[default_model]`).
+
+**Notes:**
+- ArmaraOS spawns **`claude -p`** non-interactively and parses JSON / stream-json output. Auth and rate limits follow Anthropic’s CLI, not the Console API key product.
+- The daemon sets **`HOME`** so the CLI can find `~/.claude/` when not started from a login shell.
+- If the CLI errors on permissions in headless mode, see **[troubleshooting.md](troubleshooting.md#claude-code-integration-shows-errors)**.
+
+---
+
+### 3. OpenAI
 
 | | |
 |---|---|
@@ -95,7 +130,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 3. Google Gemini
+### 4. Google Gemini
 
 | | |
 |---|---|
@@ -122,7 +157,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 4. DeepSeek
+### 5. DeepSeek
 
 | | |
 |---|---|
@@ -146,7 +181,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 5. Groq
+### 6. Groq
 
 | | |
 |---|---|
@@ -174,7 +209,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 6. OpenRouter
+### 7. OpenRouter
 
 | | |
 |---|---|
@@ -210,7 +245,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 7. Mistral AI
+### 8. Mistral AI
 
 | | |
 |---|---|
@@ -235,7 +270,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 8. Together AI
+### 9. Together AI
 
 | | |
 |---|---|
@@ -260,7 +295,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 9. Fireworks AI
+### 10. Fireworks AI
 
 | | |
 |---|---|
@@ -284,7 +319,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 10. Ollama
+### 11. Ollama
 
 | | |
 |---|---|
@@ -312,7 +347,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 11. vLLM
+### 12. vLLM
 
 | | |
 |---|---|
@@ -335,7 +370,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 12. LM Studio
+### 13. LM Studio
 
 | | |
 |---|---|
@@ -359,7 +394,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 13. Perplexity AI
+### 14. Perplexity AI
 
 | | |
 |---|---|
@@ -385,7 +420,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 14. Cohere
+### 15. Cohere
 
 | | |
 |---|---|
@@ -409,7 +444,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 15. AI21 Labs
+### 16. AI21 Labs
 
 | | |
 |---|---|
@@ -432,7 +467,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 16. Cerebras
+### 17. Cerebras
 
 | | |
 |---|---|
@@ -458,7 +493,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 17. SambaNova
+### 18. SambaNova
 
 | | |
 |---|---|
@@ -481,7 +516,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 18. Hugging Face
+### 19. Hugging Face
 
 | | |
 |---|---|
@@ -504,7 +539,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 19. xAI
+### 20. xAI
 
 | | |
 |---|---|
@@ -528,7 +563,7 @@ For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 ---
 
-### 20. Replicate
+### 21. Replicate
 
 | | |
 |---|---|

@@ -210,7 +210,7 @@ const PROVIDERS: &[ProviderInfo] = &[
         env_var: "",
         default_model: "claude-code/sonnet",
         needs_key: false,
-        hint: "no API key",
+        hint: "CLI + claude auth",
     },
     ProviderInfo {
         name: "ollama",
@@ -1708,13 +1708,19 @@ fn draw_migration_done(f: &mut Frame, area: Rect, state: &State) {
 
 fn draw_provider(f: &mut Frame, area: Rect, state: &mut State) {
     let chunks = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(3),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
     .split(area);
 
-    let prompt = Paragraph::new(Line::from(vec![Span::raw("  Choose your LLM provider:")]));
+    let prompt = Paragraph::new(vec![
+        Line::from(vec![Span::raw("  Choose your LLM provider:")]),
+        Line::from(vec![Span::styled(
+            "  Claude Code / Max: use Claude Code if the `claude` CLI is installed (see docs/providers.md).",
+            theme::dim_style(),
+        )]),
+    ]);
     f.render_widget(prompt, chunks[0]);
 
     let items: Vec<ListItem> = state
@@ -1733,9 +1739,9 @@ fn draw_provider(f: &mut Frame, area: Rect, state: &mut State) {
             let name_span = Span::raw(format!("{:<14}", p.display));
             let hint_text = if p.name == "claude-code" {
                 if detected {
-                    "CLI detected".to_string()
+                    "CLI on PATH".to_string()
                 } else {
-                    "no API key needed".to_string()
+                    "install CLI + claude auth".to_string()
                 }
             } else if detected {
                 format!("{} detected", p.env_var)

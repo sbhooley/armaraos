@@ -22,6 +22,8 @@ function wizardPage() {
 
     // Step 2: Provider setup
     providers: [],
+    /** Fetched after provider verify / CLI detect so catalog matches Settings (Models tab uses same API). */
+    models: [],
     /** Default selection before/after load — OpenRouter + bundled :free default model */
     selectedProvider: 'openrouter',
     apiKeyInput: '',
@@ -184,7 +186,7 @@ function wizardPage() {
     get previewAgentProvider() {
       var tpl = this.templates[this.selectedTemplate];
       if (!tpl) return '';
-      if (this.selectedProviderObj && this.providerIsConfigured(this.selectedProviderObj)) {
+      if (this.selectedProviderObj && this.wizardSelectedProviderDrivesAgent()) {
         return this.selectedProviderObj.id;
       }
       return tpl.provider;
@@ -192,7 +194,7 @@ function wizardPage() {
     get previewAgentModel() {
       var tpl = this.templates[this.selectedTemplate];
       if (!tpl) return '';
-      if (this.selectedProviderObj && this.providerIsConfigured(this.selectedProviderObj)) {
+      if (this.selectedProviderObj && this.wizardSelectedProviderDrivesAgent()) {
         return this.defaultModelForProvider(this.selectedProviderObj.id) || tpl.model;
       }
       return tpl.model;
@@ -490,6 +492,18 @@ function wizardPage() {
       } catch(e) { this.providers = []; }
     },
 
+    async loadModels() {
+      try {
+        var data = await OpenFangAPI.get('/api/models');
+        var mlist = data && data.models;
+        if (!Array.isArray(mlist) && data && Array.isArray(data.data)) mlist = data.data;
+        if (!Array.isArray(mlist) && Array.isArray(data)) mlist = data;
+        this.models = Array.isArray(mlist) ? mlist : [];
+      } catch (e) {
+        this.models = [];
+      }
+    },
+
     get selectedProviderObj() {
       var self = this;
       var match = this.providers.filter(function(p) { return p.id === self.selectedProvider; });
@@ -515,6 +529,9 @@ function wizardPage() {
     selectProvider(id) {
       this.providerVerifyToken++;
       this.selectedProvider = id;
+      if (id !== 'claude-code') {
+        this.claudeCodeDetected = false;
+      }
       this.apiKeyInput = '';
       this.testResult = null;
       this.step2ConnectionVerified = false;
@@ -540,6 +557,15 @@ function wizardPage() {
         return;
       }
       if (!this.providerIsConfigured(p)) {
+        // No saved API key in env — still allow auto-verify for providers that do not require one
+        // (e.g. Ollama / vLLM): a live /test proves the endpoint is reachable.
+        if (p.key_required === false) {
+          await this.runProviderConnectionTest({
+            successToast: false,
+            errorToast: true,
+          });
+          return;
+        }
         this.step2ConnectionVerified = false;
         return;
       }
@@ -564,13 +590,23 @@ function wizardPage() {
         perplexity: { url: 'https://www.perplexity.ai/settings/api', text: 'Get your key from Perplexity Settings' },
         cohere: { url: 'https://dashboard.cohere.com/api-keys', text: 'Get your key from the Cohere Dashboard' },
         xai: { url: 'https://console.x.ai/', text: 'Get your key from the xAI Console' },
-        'claude-code': { url: 'https://docs.anthropic.com/en/docs/claude-code', text: 'Install: npm install -g @anthropic-ai/claude-code && claude auth (no API key needed)' }
+        'claude-code': { url: 'https://docs.anthropic.com/en/docs/claude-code', text: 'Install Claude Code globally, run claude auth on this machine, then Detect here. ArmaraOS will run the official CLI for chat (no ANTHROPIC_API_KEY).' }
       };
       return help[id] || null;
     },
 
     providerIsConfigured(p) {
       return p && p.auth_status === 'configured';
+    },
+
+    /** True when the wizard-selected provider should drive the new agent's `[model]` (not the template default). */
+    wizardSelectedProviderDrivesAgent() {
+      var p = this.selectedProviderObj;
+      if (!p) return false;
+      if (this.providerIsConfigured(p)) return true;
+      // Claude Code: catalog auth can lag; after a successful Detect we still need to create with claude-code.
+      if (p.id === 'claude-code' && this.claudeCodeDetected) return true;
+      return false;
     },
 
     async saveKey() {
@@ -694,6 +730,8 @@ function wizardPage() {
           this.step2ConnectionVerified = true;
           this.setupSummary.provider = 'Claude Code';
           OpenFangToast.success('Claude Code detected (' + (result.latency_ms || '?') + 'ms)');
+          await this.loadProviders();
+          await this.loadModels();
         } else {
           this.step2ConnectionVerified = false;
           this.testResult = { status: 'error', error: 'Claude Code CLI not detected' };
@@ -729,7 +767,7 @@ function wizardPage() {
       // Use the provider the user just configured, or the template default
       var provider = tpl.provider;
       var model = tpl.model;
-      if (this.selectedProviderObj && this.providerIsConfigured(this.selectedProviderObj)) {
+      if (this.selectedProviderObj && this.wizardSelectedProviderDrivesAgent()) {
         provider = this.selectedProviderObj.id;
         // Use a sensible default model for the provider
         model = this.defaultModelForProvider(provider) || tpl.model;
@@ -757,6 +795,17 @@ function wizardPage() {
         OpenFangToast.error('Failed to create agent: ' + openFangErrText(e));
       }
       this.creatingAgent = false;
+    },
+
+    /** Provider/model line on template cards (step 3) — mirrors createAgent() selection. */
+    wizardTemplateCardProviderLine(tpl) {
+      var prov = tpl.provider;
+      var mod = tpl.model;
+      if (this.selectedProviderObj && this.wizardSelectedProviderDrivesAgent()) {
+        prov = this.selectedProviderObj.id;
+        mod = this.defaultModelForProvider(prov) || tpl.model;
+      }
+      return prov + ' / ' + mod;
     },
 
     defaultModelForProvider(providerId) {

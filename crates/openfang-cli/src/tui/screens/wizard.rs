@@ -504,8 +504,8 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut WizardState) {
 
 fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let chunks = Layout::vertical([
-        Constraint::Length(4), // prompt + tip
-        Constraint::Min(3),    // list
+        Constraint::Length(5), // prompt + tips
+        Constraint::Min(3),     // list
         Constraint::Length(1), // hints
     ])
     .split(area);
@@ -513,7 +513,11 @@ fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let prompt = Paragraph::new(vec![
         Line::from(vec![Span::raw("  Choose your LLM provider:")]),
         Line::from(vec![Span::styled(
-            "  Tip: OpenRouter first — key at openrouter.com; bundled default model nvidia/nemotron-3-super-120b-a12b:free (OpenRouter :free).",
+            "  Tip: OpenRouter — key at openrouter.com; default nvidia/nemotron-3-super-120b-a12b:free (:free tier).",
+            theme::dim_style(),
+        )]),
+        Line::from(vec![Span::styled(
+            "  Claude Code / Max: pick claude-code if `claude --version` works (CLI auth, no ANTHROPIC_API_KEY). See docs/providers.md (Claude Code).",
             theme::dim_style(),
         )]),
     ]);
@@ -526,9 +530,9 @@ fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
             let p = &PROVIDERS[idx];
             let hint = if p.name == "claude-code" {
                 if openfang_runtime::drivers::claude_code::claude_code_available() {
-                    "CLI detected".to_string()
+                    "CLI on PATH".to_string()
                 } else {
-                    "no API key needed".to_string()
+                    "install CLI + claude auth".to_string()
                 }
             } else if !p.needs_key {
                 "local, no key needed".to_string()

@@ -402,9 +402,20 @@ impl ModelCatalog {
 
     /// Merge dynamically discovered models from a local provider.
     ///
-    /// Adds models not already in the catalog with `Local` tier and zero cost.
+    /// Adds models not already in the catalog with [`ModelTier::Local`] and zero cost.
     /// Also updates the provider's `model_count`.
     pub fn merge_discovered_models(&mut self, provider: &str, model_ids: &[String]) {
+        self.merge_discovered_models_with_tier(provider, model_ids, ModelTier::Local);
+    }
+
+    /// Like [`Self::merge_discovered_models`], but sets the tier for new rows (e.g. cloud
+    /// OpenAI-compatible catalogs such as NVIDIA NIM use [`ModelTier::Balanced`]).
+    pub fn merge_discovered_models_with_tier(
+        &mut self,
+        provider: &str,
+        model_ids: &[String],
+        tier: ModelTier,
+    ) {
         let existing_ids: std::collections::HashSet<String> = self
             .models
             .iter()
@@ -423,7 +434,7 @@ impl ModelCatalog {
                 id: id.clone(),
                 display_name: display,
                 provider: provider.to_string(),
-                tier: ModelTier::Local,
+                tier,
                 context_window: 131_072,
                 max_output_tokens: 16_384,
                 input_cost_per_m: 0.0,
@@ -4313,6 +4324,21 @@ mod tests {
         catalog.merge_discovered_models("ollama", &["new-model:latest".to_string()]);
         let after_count = catalog.get_provider("ollama").unwrap().model_count;
         assert_eq!(after_count, before_count + 1);
+    }
+
+    #[test]
+    fn test_merge_with_tier_balanced_for_cloud_catalog() {
+        let mut catalog = ModelCatalog::new();
+        let before = catalog.models_by_provider("nvidia").len();
+        catalog.merge_discovered_models_with_tier(
+            "nvidia",
+            &["nim-only-model-xyz-123".to_string()],
+            ModelTier::Balanced,
+        );
+        let m = catalog.find_model_for_provider("nim-only-model-xyz-123", "nvidia")
+            .expect("merged model");
+        assert_eq!(m.tier, ModelTier::Balanced);
+        assert_eq!(catalog.models_by_provider("nvidia").len(), before + 1);
     }
 
     #[test]

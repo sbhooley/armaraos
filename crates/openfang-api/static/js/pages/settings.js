@@ -1317,24 +1317,30 @@ function settingsPage() {
     },
 
     providerAuthClass(p) {
-      if (p.auth_status === 'configured') return 'auth-configured';
+      if (p.auth_status === 'configured' || p.auth_status === 'not_required') return 'auth-configured';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'auth-not-set';
       return 'auth-no-key';
     },
 
     providerAuthText(p) {
       if (p.auth_status === 'configured') return 'Configured';
+      if (p.auth_status === 'not_required') return 'No Key Needed';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') {
-        if (p.id === 'claude-code') return 'Not Installed';
+        if (p.id === 'claude-code' || p.id === 'qwen-code') return 'Not Installed';
         return 'Not Set';
       }
       return 'No Key Needed';
     },
 
     providerCardClass(p) {
-      if (p.auth_status === 'configured') return 'configured';
+      if (p.auth_status === 'configured' || p.auth_status === 'not_required') return 'configured';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'not-configured';
       return 'no-key';
+    },
+
+    /** Subprocess LLM drivers (no API key in ArmaraOS; readiness = CLI on PATH + auth). */
+    isCliLlmProvider(p) {
+      return !!(p && (p.id === 'claude-code' || p.id === 'qwen-code'));
     },
 
     isCustomProvider(p) {
@@ -1466,6 +1472,8 @@ function settingsPage() {
         this.providerTestResults[provider.id] = result;
         if (result.status === 'ok') {
           OpenFangToast.success(provider.display_name + ' connected (' + (result.latency_ms || '?') + 'ms)');
+          await this.loadProviders();
+          await this.loadModels();
         } else {
           OpenFangToast.error(provider.display_name + ': ' + (result.error || 'Connection failed'));
         }
@@ -1474,6 +1482,11 @@ function settingsPage() {
         OpenFangToast.error('Test failed: ' + openFangErrText(e));
       }
       this.providerTesting[provider.id] = false;
+    },
+
+    /** Same as Test; primary label on Settings for CLI providers before first success. */
+    async detectCliProvider(provider) {
+      await this.testProvider(provider);
     },
 
     async saveProviderUrl(provider) {

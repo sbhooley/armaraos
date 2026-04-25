@@ -28,7 +28,7 @@ On finish, the wizard sets `localStorage` **`openfang-onboarded`** to **`true`**
 
 The **Next** button on the provider step is enabled when the selected provider is considered **ready**:
 
-- **Claude Code:** CLI detected or already configured.
+- **Claude Code:** CLI detected or already configured (subscription via official `claude` CLI — see **[providers.md — Claude Code (CLI)](providers.md#2-claude-code-cli)**).
 - **Providers without an API-key env:** configured in the kernel.
 - **Providers with an API key:** after a connection test completes, if the provider is already **configured** (key present), the user may proceed even when the test reports a failure (e.g. free-tier model quota, transient API errors). The UI still shows the test result; a failed test uses a warning style with short guidance.
 
@@ -42,7 +42,7 @@ The TOML must match the **`AgentManifest`** shape: **`name`**, **`description`**
 
 **`profile`** must be a valid **`ToolProfile`** variant: `minimal`, `coding`, `research`, `messaging`, `automation`, `full`, or `custom`. Wizard templates map each archetype to one of these (for example general assistant → `automation`, coding templates → `coding`).
 
-Default models per provider in the wizard (e.g. OpenRouter’s bundled free default, Anthropic’s default id) are defined in `wizard.js` (`defaultModelForProvider`). The OpenRouter default id and rate-limit fallback list are also documented in **[openrouter.md](openrouter.md)** (`DEFAULT_OPENROUTER_MODEL_ID`, `OPENROUTER_FREE_FALLBACK_MODELS` in `openfang-types`). Template cards show the **effective** provider and default model when a provider is already configured.
+Default models per provider in the wizard (e.g. OpenRouter’s bundled free default, Anthropic’s default id) are defined in `wizard.js` (`defaultModelForProvider`). The OpenRouter default id and rate-limit fallback list are also documented in **[openrouter.md](openrouter.md)** (`DEFAULT_OPENROUTER_MODEL_ID`, `OPENROUTER_FREE_FALLBACK_MODELS` in `openfang-types`). Template cards and the agent preview use the **effective** provider/model when step 2 is ready: `wizardSelectedProviderDrivesAgent()` treats **Claude Code** as ready after a successful **Detect** (not only when the catalog already shows `auth_status: configured`), so **`[model]`** is written with `provider = "claude-code"`. Chat completions still run inside the **kernel/runtime** via **`ClaudeCodeDriver`** (subprocess `claude -p`); agents do not shell out to the CLI themselves.
 
 ## Step 6: Summary
 
