@@ -423,11 +423,21 @@ mod tests {
 [exec_policy]
 mode = "full"
 timeout_secs = 60
+shell_path_guard = "warn"
+shell_pid_guard = "off"
 "#;
         let parsed: TestExecPolicy = toml::from_str(toml_str).unwrap();
         let policy = parsed.exec_policy.unwrap();
         assert_eq!(policy.mode, crate::config::ExecSecurityMode::Full);
         assert_eq!(policy.timeout_secs, 60);
+        assert_eq!(
+            policy.shell_path_guard,
+            crate::config::ShellPathGuardMode::Warn
+        );
+        assert_eq!(
+            policy.shell_pid_guard,
+            crate::config::ShellPidGuardMode::Off
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ Guidance for **reliable agent workflows** across browser scraping, file I/O, she
 - [Symptom: "Missing path/command parameter"](#symptom-missing-pathcommand-parameter)
 - [Why agents restart expensive work](#why-agents-restart-expensive-work)
 - [Loop guard vs malformed tools](#loop-guard-vs-malformed-tools)
+- [AINL MCP soft failures (`ok: false` is a tool error)](#ainl-mcp-soft-failures-ok-false-is-a-tool-error)
 - [Phase model: acquire, extract, persist, verify](#phase-model-acquire-extract-persist-verify)
 - [Persistence patterns that scale](#persistence-patterns-that-scale)
 - [Workspace and cross-session habits](#workspace-and-cross-session-habits)
@@ -65,6 +66,50 @@ OpenFang's **loop guard** (`crates/openfang-runtime/src/loop_guard.rs`) tracks r
 **v0.6.5+:** After **3 consecutive iterations** where every tool call was blocked, the loop exits early with a diagnostic summary rather than running until the iteration limit.
 
 That protects the system but does **not** replace **correct tool arguments**. See [troubleshooting.md](troubleshooting.md) → *Agent stuck in a loop*.
+
+---
+
+## AINL MCP soft failures (`ok: false` is a tool error)
+
+The `mcp_ainl_*` tools (`ainl_validate`, `ainl_compile`, `ainl_run`, `ainl_security_report`, `ainl_ir_diff`, `ainl_ptc_signature_check`) return a structured envelope. On invalid AINL syntax the **wire call still succeeds** (HTTP 200, valid JSON), but the body looks like:
+
+```json
+{
+  "ok": false,
+  "errors": [
+    "Line 10: label-only op 'Loop' used at top-level",
+    "Line 13: Label '_analyze': node 'n1' uses unknown adapter.verb 'llm.CHAT'"
+  ],
+  "primary_diagnostic": { "...": "..." },
+  "agent_repair_steps": ["..."]
+}
+```
+
+Without intervention this is a **classic confabulation trap**: the LLM sees “tool call ✓” in the trace, then narrates a successful run on top of broken AINL.
+
+**Fix (v0.7.8+, [crates/openfang-runtime/src/mcp_ainl_session.rs](../crates/openfang-runtime/src/mcp_ainl_session.rs) → [tool_runner.rs](../crates/openfang-runtime/src/tool_runner.rs)):** the runtime detects `ok: false` in any `mcp_ainl_*` body and **promotes it to a real tool error** — `ToolResult.is_error = true`. As a result:
+
+1. The model sees a clearly-flagged failure with all `errors[]`, `primary_diagnostic`, and `agent_repair_steps` from the envelope, plus an explicit instruction:
+   > *Edit the AINL source to address the errors above, then re-run `ainl_validate`. Only after `ainl_validate` returns `ok: true` may you proceed to `ainl_compile` / `ainl_run`.*
+2. **`loop_guard`** counts repeated bad-validate calls (so a model that keeps re-submitting unchanged broken AINL gets blocked, not stuck in an infinite loop).
+3. **`failure_learning`** captures the failure as a `Failure` graph node ([`graph_memory_learning::record_tool_execution_failure_with_source`](../crates/openfang-runtime/src/graph_memory_learning.rs)), which feeds the next turn's `## FailureRecall` prompt block — the agent can recall *why this AINL pattern failed last time*.
+4. The capabilities / `recommended_next_tools` snapshot cache is **not poisoned** with a failure body.
+
+**What does NOT change:**
+
+- `ainl_capabilities` (no `ok` field) is unaffected.
+- Non-AINL MCP tools are unaffected (their `ok` semantics may differ; we deliberately scope this to `mcp_ainl_*`).
+- A successful `{ "ok": true, … }` body is still recorded as a successful tool call.
+
+**What an agent should do** when it sees this error:
+
+1. Read the `errors[]` carefully — they include line numbers and structural issues.
+2. Inspect `primary_diagnostic` and `agent_repair_steps` for guided fixes.
+3. **Edit the source file** (`file_write`) — do not invent the result of a re-run.
+4. Re-call `mcp_ainl_ainl_validate` until it returns `ok: true`.
+5. Then proceed to `mcp_ainl_ainl_compile` / `mcp_ainl_ainl_run`.
+
+If the same broken AINL is re-submitted unchanged, `loop_guard` will eventually block — fix the source, do not re-call.
 
 ---
 

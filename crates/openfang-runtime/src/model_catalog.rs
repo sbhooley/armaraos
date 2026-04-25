@@ -4335,7 +4335,8 @@ mod tests {
             &["nim-only-model-xyz-123".to_string()],
             ModelTier::Balanced,
         );
-        let m = catalog.find_model_for_provider("nim-only-model-xyz-123", "nvidia")
+        let m = catalog
+            .find_model_for_provider("nim-only-model-xyz-123", "nvidia")
             .expect("merged model");
         assert_eq!(m.tier, ModelTier::Balanced);
         assert_eq!(catalog.models_by_provider("nvidia").len(), before + 1);

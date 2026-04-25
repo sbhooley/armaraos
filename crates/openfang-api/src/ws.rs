@@ -9,7 +9,8 @@
 //! Server → Client: `{"type":"response","content":"...","input_tokens":N,"output_tokens":N,"iterations":N,"turn_wall_ms":N,"skill_draft_path":?}`
 //! Server → Client: `{"type":"error","content":"..."}`
 //! Server → Client: `{"type":"agents_updated","agents":[...]}`
-//! Server → Client: `{"type":"silent_complete",...,"skill_draft_path":?}` (agent chose NO_REPLY; optional skill draft from `[learn]`)
+//! Server → Client: `{"type":"silent_complete",...,"turn_outcome":"user_silent",...}` (intentional NO_REPLY / `[[silent]]`; not used for tool-only turns with no streamed text)
+//! Server → Client: `{"type":"response",...,"turn_outcome":"completed"|...}` — same taxonomy as `POST /api/agents/:id/message`
 //! Server → Client: `{"type":"canvas","canvas_id":"...","html":"...","title":"..."}`
 
 use crate::middleware::RequestId;
@@ -639,8 +640,8 @@ async fn handle_text_message(
                     let stream_task = tokio::spawn(async move {
                         let mut text_buffer = String::new();
                         let mut accumulated_text = String::new();
-                        let mut stream_usage: Option<openfang_types::message::TokenUsage> = None;
-                        let mut is_silent = false;
+                        let mut stream_usage_total: openfang_types::message::TokenUsage =
+                            openfang_types::message::TokenUsage::default();
                         let mut compression_savings_pct: u8 = 0;
                         let mut compressed_input: Option<String> = None;
                         let mut compression_semantic_score: Option<f32> = None;
@@ -676,7 +677,13 @@ async fn handle_text_message(
                                         Some(ev) => {
                                             // Capture ContentComplete for immediate response
                                             if let StreamEvent::ContentComplete { usage, .. } = &ev {
-                                                stream_usage = Some(*usage);
+                                                stream_usage_total.input_tokens += usage.input_tokens;
+                                                stream_usage_total.output_tokens +=
+                                                    usage.output_tokens;
+                                                stream_usage_total.cache_creation_input_tokens +=
+                                                    usage.cache_creation_input_tokens;
+                                                stream_usage_total.cache_read_input_tokens +=
+                                                    usage.cache_read_input_tokens;
                                                 // Don't forward — handled below
                                                 continue;
                                             }
@@ -775,19 +782,9 @@ async fn handle_text_message(
                             }
                         }
 
-                        // Check if the agent signalled NO_REPLY via the stream
-                        // (PhaseChange with a "silent" marker — currently the
-                        // kernel sets result.silent after the loop, so we detect
-                        // it from empty accumulated text when ContentComplete
-                        // had no text deltas at all).
-                        if accumulated_text.is_empty() && stream_usage.is_some() {
-                            is_silent = true;
-                        }
-
                         (
                             accumulated_text,
-                            stream_usage,
-                            is_silent,
+                            stream_usage_total,
                             compression_savings_pct,
                             compressed_input,
                             compression_semantic_score,
@@ -844,7 +841,6 @@ async fn handle_text_message(
                         Ok((
                             accumulated_text,
                             stream_usage,
-                            is_silent,
                             compression_savings_pct,
                             compressed_input,
                             compression_semantic_score,
@@ -868,8 +864,17 @@ async fn handle_text_message(
                             )
                             .await;
 
-                            let usage = stream_usage.unwrap_or_default();
+                            let usage = stream_usage;
                             let turn_wall_ms = turn_wall_t0.elapsed().as_millis() as u64;
+
+                            let cleaned = strip_think_tags(&accumulated_text);
+                            let (directive_visible, directive_set) =
+                                openfang_runtime::reply_directives::parse_directives(&cleaned);
+                            let is_silent =
+                                openfang_runtime::reply_directives::assistant_intended_silent(
+                                    &directive_visible,
+                                    &directive_set,
+                                );
 
                             if is_silent {
                                 let skill_path = skill_draft_path_for_learn_message(
@@ -881,6 +886,7 @@ async fn handle_text_message(
                                 );
                                 let mut silent_payload = serde_json::json!({
                                     "type": "silent_complete",
+                                    "turn_outcome": openfang_types::agent::TurnOutcome::UserSilent,
                                     "input_tokens": usage.input_tokens,
                                     "output_tokens": usage.output_tokens,
                                     "turn_wall_ms": turn_wall_ms,
@@ -921,10 +927,7 @@ async fn handle_text_message(
                                 return;
                             }
 
-                            // Strip <think>...</think> blocks
-                            let cleaned = strip_think_tags(&accumulated_text);
-
-                            let response_text = if cleaned.trim().is_empty() {
+                            let response_text = if directive_visible.trim().is_empty() {
                                 if usage.input_tokens == 0 && usage.output_tokens == 0 {
                                     "[No assistant text (0 tokens). The model call did not complete — usually a missing or invalid provider API key. For OpenRouter: Settings → Providers, or set OPENROUTER_API_KEY for the daemon. If an error line appears below, that is the real cause.]".to_string()
                                 } else {
@@ -934,8 +937,11 @@ async fn handle_text_message(
                                     )
                                 }
                             } else {
-                                cleaned
+                                directive_visible
                             };
+
+                            let turn_outcome =
+                                openfang_types::agent::TurnOutcome::classify(&response_text, false);
 
                             let skill_path = skill_draft_path_for_learn_message(
                                 home,
@@ -961,6 +967,7 @@ async fn handle_text_message(
                             let mut response_payload = serde_json::json!({
                                 "type": "response",
                                 "content": response_text,
+                                "turn_outcome": turn_outcome,
                                 "input_tokens": usage.input_tokens,
                                 "output_tokens": usage.output_tokens,
                                 "iterations": 0, // Not available from stream; handle updates later if needed

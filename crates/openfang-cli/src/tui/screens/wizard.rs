@@ -505,7 +505,7 @@ pub fn draw(f: &mut Frame, area: Rect, state: &mut WizardState) {
 fn draw_provider(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let chunks = Layout::vertical([
         Constraint::Length(5), // prompt + tips
-        Constraint::Min(3),     // list
+        Constraint::Min(3),    // list
         Constraint::Length(1), // hints
     ])
     .split(area);

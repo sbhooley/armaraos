@@ -235,10 +235,7 @@ fn failure_fts_body(node: &AinlMemoryNode) -> Option<String> {
             "{} {} {} {} {}",
             failure.source,
             failure.tool_name.as_deref().unwrap_or(""),
-            failure
-                .source_namespace
-                .as_deref()
-                .unwrap_or(""),
+            failure.source_namespace.as_deref().unwrap_or(""),
             failure.source_tool.as_deref().unwrap_or(""),
             failure.message
         )),

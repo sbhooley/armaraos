@@ -44,9 +44,7 @@ fn finalize_within_root(candidate: PathBuf, root: &Path) -> Result<PathBuf, Stri
                     existing = parent.to_path_buf();
                 }
                 _ => {
-                    return Err(
-                        "Invalid path: cannot walk up to an existing ancestor".to_string()
-                    );
+                    return Err("Invalid path: cannot walk up to an existing ancestor".to_string());
                 }
             }
         }
@@ -274,8 +272,7 @@ mod tests {
         // The resolver should walk up to the existing root and let `tool_file_write`
         // create the intermediate directories.
         let dir = TempDir::new().unwrap();
-        let result =
-            resolve_sandbox_path("apollo-x-bot/modules/common/retry.ainl", dir.path());
+        let result = resolve_sandbox_path("apollo-x-bot/modules/common/retry.ainl", dir.path());
         assert!(
             result.is_ok(),
             "expected nested-missing-parent path to resolve, got: {:?}",
@@ -295,7 +292,10 @@ mod tests {
         // The walk-up must not be exploited via `..` to escape the workspace root.
         let dir = TempDir::new().unwrap();
         let result = resolve_sandbox_path("foo/../../etc/passwd", dir.path());
-        assert!(result.is_err(), "dotdot must still be blocked even when path doesn't exist");
+        assert!(
+            result.is_err(),
+            "dotdot must still be blocked even when path doesn't exist"
+        );
         assert!(result.unwrap_err().contains("Path traversal denied"));
     }
 

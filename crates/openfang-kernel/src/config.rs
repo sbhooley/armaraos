@@ -143,6 +143,7 @@ pub fn load_config(path: Option<&Path>) -> KernelConfig {
                         match root_value.try_into::<KernelConfig>() {
                             Ok(mut config) => {
                                 apply_config_schema_migrations(&mut config, &config_path);
+                                config.apply_security_shell_guard_overrides();
                                 info!(path = %config_path.display(), "Loaded configuration");
                                 return config;
                             }
@@ -498,7 +499,33 @@ pub fn apply_desktop_bundled_llm_defaults(config: &mut KernelConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openfang_types::config::{ShellPathGuardMode, ShellPidGuardMode};
     use std::io::Write;
+
+    #[test]
+    fn test_security_table_overrides_shell_path_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"
+[exec_policy]
+shell_path_guard = "off"
+shell_pid_guard = "off"
+
+[security]
+shell_path_guard = "enforce"
+"#
+        )
+        .unwrap();
+        let cfg = load_config(Some(&path));
+        assert_eq!(
+            cfg.exec_policy.shell_path_guard,
+            ShellPathGuardMode::Enforce
+        );
+        assert_eq!(cfg.exec_policy.shell_pid_guard, ShellPidGuardMode::Off);
+    }
 
     #[test]
     fn test_load_config_defaults() {

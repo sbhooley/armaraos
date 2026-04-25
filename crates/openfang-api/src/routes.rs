@@ -1038,6 +1038,9 @@ pub async fn send_message(
                 cleaned
             };
 
+            let turn_outcome =
+                openfang_types::agent::TurnOutcome::classify(response.as_str(), result.silent);
+
             let skill_draft_path = if let Some(intent) =
                 openfang_kernel::skills_staging::learn_prefixed_intent(&req.message)
             {
@@ -1122,6 +1125,7 @@ pub async fn send_message(
                 StatusCode::OK,
                 Json(serde_json::json!(MessageResponse {
                     response,
+                    turn_outcome,
                     input_tokens: result.total_usage.input_tokens,
                     output_tokens: result.total_usage.output_tokens,
                     iterations: result.iterations,
@@ -1722,6 +1726,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let memory_contract_metrics = openfang_runtime::ainl_inbox_reader::inbox_contract_metrics();
     let graph_memory_learning_metrics = openfang_runtime::graph_memory_learning_metrics();
     let improvement_proposals_metrics = openfang_runtime::improvement_proposals_metrics();
+    let shell_guard_metrics = openfang_runtime::shell_guard_metrics::shell_guard_metrics_snapshot();
     Json(serde_json::json!({
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1742,6 +1747,7 @@ pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "graph_memory_contract_metrics": memory_contract_metrics,
         "graph_memory_learning_metrics": graph_memory_learning_metrics,
         "improvement_proposals": improvement_proposals_metrics,
+        "shell_guard_metrics": shell_guard_metrics,
         "eco_compression": eco_compression,
         "quota_enforcement": quota_enforcement,
         "adaptive_eco": {
@@ -5067,6 +5073,8 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> impl Into
         "openfang_ainl_runtime_bridge_run_failures_total {run_failures}\n\n"
     ));
 
+    out.push_str(&openfang_runtime::shell_guard_metrics::render_prometheus_counters());
+
     // Version info
     out.push_str("# HELP openfang_info ArmaraOS version and build info.\n");
     out.push_str("# TYPE openfang_info gauge\n");
@@ -8273,7 +8281,10 @@ pub async fn post_google_workspace_oauth(
     };
     audit_credential_mutation(
         state.kernel.as_ref(),
-        format!("integration:google_workspace_oauth:save {sec_note} request_id={}", rid.0),
+        format!(
+            "integration:google_workspace_oauth:save {sec_note} request_id={}",
+            rid.0
+        ),
         "ok",
     );
 
@@ -12756,7 +12767,10 @@ pub async fn set_provider_key(
 
     audit_credential_mutation(
         state.kernel.as_ref(),
-        format!("provider:key:set provider={name} env_var={env_var} request_id={}", rid.0),
+        format!(
+            "provider:key:set provider={name} env_var={env_var} request_id={}",
+            rid.0
+        ),
         "ok",
     );
 
@@ -12835,7 +12849,10 @@ pub async fn delete_provider_key(
 
     audit_credential_mutation(
         state.kernel.as_ref(),
-        format!("provider:key:remove provider={name} env_var={env_var} request_id={}", rid.0),
+        format!(
+            "provider:key:remove provider={name} env_var={env_var} request_id={}",
+            rid.0
+        ),
         "ok",
     );
 
@@ -13403,7 +13420,11 @@ pub async fn create_skill(
 /// On Windows, `std::fs::write` can fail with "Access denied" if any other process
 /// (antivirus, the daemon itself during a hot-reload) has the file open. Writing to
 /// a sibling temp file and renaming avoids the lock window.
-pub(crate) fn write_secret_env(path: &std::path::Path, key: &str, value: &str) -> Result<(), std::io::Error> {
+pub(crate) fn write_secret_env(
+    path: &std::path::Path,
+    key: &str,
+    value: &str,
+) -> Result<(), std::io::Error> {
     // Avoid corrupting the KEY=value line format if the user accidentally pasted
     // with trailing newlines/spaces (common on Windows).
     let value = value.trim();
@@ -18502,18 +18523,25 @@ pub async fn webhook_agent(
 
     // Actually send the message to the agent and get the response
     match state.kernel.send_message(agent_id, &body.message).await {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "completed",
-                "agent_id": agent_id.to_string(),
-                "response": result.response,
-                "usage": {
-                    "input_tokens": result.total_usage.input_tokens,
-                    "output_tokens": result.total_usage.output_tokens,
-                },
-            })),
-        ),
+        Ok(result) => {
+            let turn_outcome = openfang_types::agent::TurnOutcome::classify(
+                result.response.as_str(),
+                result.silent,
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "completed",
+                    "agent_id": agent_id.to_string(),
+                    "response": result.response,
+                    "turn_outcome": turn_outcome,
+                    "usage": {
+                        "input_tokens": result.total_usage.input_tokens,
+                        "output_tokens": result.total_usage.output_tokens,
+                    },
+                })),
+            )
+        }
         Err(e) => api_json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &rid,

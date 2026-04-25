@@ -237,10 +237,19 @@ const SUBAGENT_DENY_ALWAYS: &[&str] = &[
     "cron_create",
     "cron_cancel",
     "schedule_create",
+    "schedule_action_create",
     "schedule_delete",
     "hand_activate",
     "hand_deactivate",
     "process_start",
+    // script_run can launch daemons via `mode: "daemon"`, so it deserves the same
+    // subagent restriction as `process_start` — only the top-level agent should be
+    // starting long-lived services.
+    "script_run",
+    // Mutates shared workspace contract (`armaraos.toml`); keep as top-level action.
+    "workspace_action_set",
+    "workspace_action_delete",
+    "workspace_action",
 ];
 
 /// Tools denied to leaf subagents (depth >= max_depth - 1). Prevents deep spawn chains.

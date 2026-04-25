@@ -15,8 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::middleware::RequestId;
 use crate::routes::{
-    api_json_error, audit_credential_mutation, remove_secret_env, resolve_request_id, write_secret_env,
-    AppState,
+    api_json_error, audit_credential_mutation, remove_secret_env, resolve_request_id,
+    write_secret_env, AppState,
 };
 
 const TELEMETRY_FILE: &str = "secret_center_telemetry.json";
@@ -111,12 +111,18 @@ fn now_unix() -> u64 {
 fn load_telemetry(home: &Path) -> TelemetryFile {
     let p = telemetry_path(home);
     if !p.exists() {
-        return TelemetryFile { v: 1, keys: HashMap::new() };
+        return TelemetryFile {
+            v: 1,
+            keys: HashMap::new(),
+        };
     }
     std::fs::read_to_string(&p)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| TelemetryFile { v: 1, keys: HashMap::new() })
+        .unwrap_or_else(|| TelemetryFile {
+            v: 1,
+            keys: HashMap::new(),
+        })
 }
 
 fn save_telemetry(home: &Path, mut t: TelemetryFile) -> Result<(), String> {
@@ -182,7 +188,10 @@ pub async fn get_secrets_dependencies(
             notes: "Provider API keys are listed per provider; see Settings → Vault entries matching each provider’s env var.",
         },
     ];
-    (StatusCode::OK, Json(serde_json::json!({ "request_id": rid.0, "items": items })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "request_id": rid.0, "items": items })),
+    )
 }
 
 #[derive(Deserialize, Default)]
@@ -242,22 +251,22 @@ pub async fn get_secrets_catalog(
     let skip_provider_rows = q.for_tool.as_deref() == Some("github_subtree_download");
     if let Ok(cat) = state.kernel.model_catalog.read() {
         if !skip_provider_rows {
-        for p in cat.list_providers() {
-            if p.api_key_env.is_empty() {
-                continue;
-            }
-            let key = &p.api_key_env;
-            if !agent_filter_passes(&state, &q, key) {
-                continue;
-            }
-            let layer = state.kernel.credential_first_layer(key);
-            let present = layer.is_some();
-            let t = telem.keys.entry(key.clone()).or_default();
-            t.rotation_suggested = t
-                .last_set_at
-                .map(|t0| now.saturating_sub(t0) > STALE_SECS)
-                .unwrap_or(false);
-            rows.push(serde_json::json!({
+            for p in cat.list_providers() {
+                if p.api_key_env.is_empty() {
+                    continue;
+                }
+                let key = &p.api_key_env;
+                if !agent_filter_passes(&state, &q, key) {
+                    continue;
+                }
+                let layer = state.kernel.credential_first_layer(key);
+                let present = layer.is_some();
+                let t = telem.keys.entry(key.clone()).or_default();
+                t.rotation_suggested = t
+                    .last_set_at
+                    .map(|t0| now.saturating_sub(t0) > STALE_SECS)
+                    .unwrap_or(false);
+                rows.push(serde_json::json!({
                 "id": format!("provider-{}", p.id),
                 "key": key,
                 "title": format!("{} API key", p.display_name),
@@ -271,7 +280,7 @@ pub async fn get_secrets_catalog(
                 "last_test": t.last_test,
                 "stale_suggested": t.rotation_suggested,
             }));
-        }
+            }
         }
     }
 
@@ -295,11 +304,7 @@ fn tool_filter_passes(_q: &CatalogQuery, _d: &StaticSecretDef) -> bool {
     true
 }
 
-fn agent_filter_passes(
-    state: &AppState,
-    q: &CatalogQuery,
-    key: &str,
-) -> bool {
+fn agent_filter_passes(state: &AppState, q: &CatalogQuery, key: &str) -> bool {
     let Some(agent_id) = q.for_agent.as_ref() else {
         return true;
     };
@@ -395,9 +400,7 @@ pub async fn post_secret(
         let kernel = state.kernel.clone();
         let key_owned = key.to_string();
         tokio::spawn(async move {
-            let _ = kernel
-                .reconnect_mcp_servers_with_env_var(&key_owned)
-                .await;
+            let _ = kernel.reconnect_mcp_servers_with_env_var(&key_owned).await;
         });
     }
 
@@ -407,7 +410,9 @@ pub async fn post_secret(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "request_id": rid.0, "key": key, "message": "saved" })),
+        Json(
+            serde_json::json!({ "ok": true, "request_id": rid.0, "key": key, "message": "saved" }),
+        ),
     )
 }
 
@@ -462,7 +467,9 @@ pub async fn delete_secret(
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "request_id": rid.0, "key": key, "message": "removed" })),
+        Json(
+            serde_json::json!({ "ok": true, "request_id": rid.0, "key": key, "message": "removed" }),
+        ),
     )
 }
 
@@ -486,7 +493,11 @@ pub async fn post_secret_test(
         );
     }
     let token = state.kernel.resolve_credential(key);
-    if token.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+    if token
+        .as_deref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         return (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -499,17 +510,12 @@ pub async fn post_secret_test(
     }
     let token = token.unwrap();
     let t0 = std::time::Instant::now();
-    let provider_for_key = state
-        .kernel
-        .model_catalog
-        .read()
-        .ok()
-        .and_then(|cat| {
-            cat.list_providers()
-                .iter()
-                .find(|p| p.api_key_env == key)
-                .map(|p| (p.id.clone(), p.display_name.clone()))
-        });
+    let provider_for_key = state.kernel.model_catalog.read().ok().and_then(|cat| {
+        cat.list_providers()
+            .iter()
+            .find(|p| p.api_key_env == key)
+            .map(|p| (p.id.clone(), p.display_name.clone()))
+    });
 
     enum TestOutcome {
         Ran(bool, Option<String>),
@@ -540,7 +546,10 @@ pub async fn post_secret_test(
     if let TestOutcome::Ran(probe_ok, _) = &test_flow {
         audit_credential_mutation(
             state.kernel.as_ref(),
-            format!("vault:test key={key} probe=github_api_user request_id={}", rid.0),
+            format!(
+                "vault:test key={key} probe=github_api_user request_id={}",
+                rid.0
+            ),
             if *probe_ok { "ok" } else { "failed" },
         );
     }
@@ -594,6 +603,9 @@ async fn test_github_user_api(token: &str) -> Result<(), String> {
     } else {
         let s = r.status();
         let body = r.text().await.unwrap_or_default();
-        Err(format!("GitHub returned {s}: {}", body.chars().take(200).collect::<String>()))
+        Err(format!(
+            "GitHub returned {s}: {}",
+            body.chars().take(200).collect::<String>()
+        ))
     }
 }

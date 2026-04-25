@@ -63,6 +63,8 @@ pub struct MessageRequest {
 #[derive(Debug, Serialize)]
 pub struct MessageResponse {
     pub response: String,
+    /// How the turn finished for telemetry / learning (orthogonal to HTTP status).
+    pub turn_outcome: openfang_types::agent::TurnOutcome,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub iterations: u32,
@@ -178,6 +180,7 @@ mod message_response_contract_tests {
     fn message_response_serializes_adaptive_eco_explainability_fields() {
         let msg = MessageResponse {
             response: "ok".to_string(),
+            turn_outcome: openfang_types::agent::TurnOutcome::Completed,
             input_tokens: 1,
             output_tokens: 2,
             iterations: 1,
@@ -204,6 +207,7 @@ mod message_response_contract_tests {
         };
 
         let v = serde_json::to_value(&msg).expect("serialize MessageResponse");
+        assert_eq!(v["turn_outcome"], "completed");
         assert_eq!(v["adaptive_eco_effective_mode"], "balanced");
         assert_eq!(v["adaptive_eco_recommended_mode"], "aggressive");
         let codes = v["adaptive_eco_reason_codes"]

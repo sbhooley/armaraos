@@ -6,6 +6,7 @@
 use crate::agent::AgentId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Maximum number of scheduled jobs per agent.
@@ -153,6 +154,23 @@ pub enum CronAction {
         /// [`crate::learning_frame::LearningFrameV1`] JSON). Serialized size capped in validation.
         #[serde(default)]
         frame: Option<serde_json::Value>,
+    },
+    /// Run a named workspace action declared in `<agent_workspace>/armaraos.toml`.
+    WorkspaceAction {
+        /// Name under `[actions.<name>]`.
+        action_name: String,
+        /// Optional args appended to contract args.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Optional env overrides merged over contract env.
+        #[serde(default)]
+        env: HashMap<String, String>,
+        /// Optional mode override (`oneshot` or `daemon`).
+        #[serde(default)]
+        mode: Option<String>,
+        /// Optional oneshot timeout override.
+        #[serde(default)]
+        timeout_secs: Option<u64>,
     },
 }
 
@@ -389,6 +407,35 @@ impl CronJob {
                     const MAX: usize = 256 * 1024;
                     if n > MAX {
                         return Err(format!("ainl frame JSON too large ({n} bytes, max {MAX})"));
+                    }
+                }
+            }
+            CronAction::WorkspaceAction {
+                action_name,
+                mode,
+                timeout_secs,
+                ..
+            } => {
+                if action_name.trim().is_empty() {
+                    return Err("workspace action_name must not be empty".into());
+                }
+                if action_name.len() > 128 {
+                    return Err("workspace action_name too long (max 128 chars)".into());
+                }
+                if let Some(m) = mode {
+                    let m = m.trim().to_ascii_lowercase();
+                    if m != "oneshot" && m != "daemon" {
+                        return Err("workspace action mode must be oneshot or daemon".into());
+                    }
+                }
+                if let Some(t) = timeout_secs {
+                    if *t < MIN_TIMEOUT_SECS {
+                        return Err(format!(
+                            "timeout_secs too small ({t}, min {MIN_TIMEOUT_SECS})"
+                        ));
+                    }
+                    if *t > 3600 {
+                        return Err(format!("timeout_secs too large ({t}, max 3600)"));
                     }
                 }
             }
@@ -1081,6 +1128,26 @@ mod tests {
             assert!(json_output);
         } else {
             panic!("expected AinlRun variant");
+        }
+    }
+
+    #[test]
+    fn serde_workspace_action_tag() {
+        let action = CronAction::WorkspaceAction {
+            action_name: "gateway".into(),
+            args: vec!["--port".into(), "8080".into()],
+            env: HashMap::from([(String::from("PORT"), String::from("8080"))]),
+            mode: Some("daemon".into()),
+            timeout_secs: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("\"kind\":\"workspace_action\""));
+        let back: CronAction = serde_json::from_str(&json).unwrap();
+        if let CronAction::WorkspaceAction { action_name, mode, .. } = back {
+            assert_eq!(action_name, "gateway");
+            assert_eq!(mode.as_deref(), Some("daemon"));
+        } else {
+            panic!("expected WorkspaceAction variant");
         }
     }
 }

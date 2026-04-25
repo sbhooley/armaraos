@@ -574,7 +574,11 @@ pub async fn execute_tool_with_trajectory(
                 input,
                 allowed_env_vars.unwrap_or(&[]),
                 workspace_root,
+                ainl_library_root,
+                caller_agent_id,
+                process_manager,
                 exec_policy,
+                kernel,
             )
             .await
         }
@@ -618,6 +622,7 @@ pub async fn execute_tool_with_trajectory(
 
         // Scheduling tools (aliases for kernel cron — persisted in ~/.armaraos/cron_jobs.json)
         "schedule_create" => tool_schedule_create(input, kernel, caller_agent_id).await,
+        "schedule_action_create" => tool_schedule_action_create(input, kernel, caller_agent_id).await,
         "schedule_list" => tool_schedule_list(kernel, caller_agent_id).await,
         "schedule_delete" => tool_schedule_delete(input, kernel).await,
         "channels_list" => Ok(tool_channels_list(kernel)),
@@ -665,10 +670,43 @@ pub async fn execute_tool_with_trajectory(
 
         // Persistent process tools
         "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
-        "process_poll" => tool_process_poll(input, process_manager).await,
-        "process_write" => tool_process_write(input, process_manager).await,
-        "process_kill" => tool_process_kill(input, process_manager).await,
+        "process_poll" => tool_process_poll(input, process_manager, caller_agent_id).await,
+        "process_write" => tool_process_write(input, process_manager, caller_agent_id).await,
+        "process_kill" => tool_process_kill(input, process_manager, caller_agent_id).await,
         "process_list" => tool_process_list(process_manager, caller_agent_id).await,
+        "workspace_actions_list" => tool_workspace_actions_list(workspace_root).await,
+        "workspace_action_set" => tool_workspace_action_set(input, workspace_root).await,
+        "workspace_action_delete" => tool_workspace_action_delete(input, workspace_root).await,
+        "workspace_action" => {
+            tool_workspace_action(
+                input,
+                allowed_env_vars.unwrap_or(&[]),
+                workspace_root,
+                ainl_library_root,
+                caller_agent_id,
+                process_manager,
+                exec_policy,
+            )
+            .await
+        }
+
+        // Deterministic script runner — picks venv / tsx / bun / etc. so the model never
+        // has to compose `source venv && python …` or `nohup node … &` itself.
+        "script_run" => {
+            tool_script_run(
+                input,
+                allowed_env_vars.unwrap_or(&[]),
+                workspace_root,
+                ainl_library_root,
+                caller_agent_id,
+                process_manager,
+                exec_policy,
+            )
+            .await
+        }
+
+        // Read-only “what should I run?” helper — returns ranked script candidates.
+        "script_detect" => tool_script_detect(input, workspace_root).await,
 
         // Hand tools (curated autonomous capability packages)
         "hand_list" => tool_hand_list(kernel).await,
@@ -854,11 +892,33 @@ pub async fn execute_tool_with_trajectory(
     };
 
     match result {
-        Ok(content) => finish_traj(ToolResult {
-            tool_use_id: tool_use_id.to_string(),
-            content,
-            is_error: false,
-        }),
+        Ok(content) => {
+            // For AINL MCP tools, the wire call may succeed (HTTP 200, well-formed JSON) while
+            // the body itself reports `ok: false` (e.g. invalid AINL syntax from `ainl_validate`,
+            // compile failure from `ainl_compile`, or pre-execution policy/runtime rejection from
+            // `ainl_run`). Convert these into real tool errors so the LLM sees a clear failure,
+            // `loop_guard` can detect repeated calls, and `failure_learning` records the issue.
+            // Non-AINL MCP tools and tools without an `ok` field are unaffected.
+            if let Some(err_msg) =
+                crate::mcp_ainl_session::ainl_mcp_soft_failure_message(tool_name, &content)
+            {
+                debug!(
+                    tool_name,
+                    "AINL MCP tool reported ok: false in body — promoting to tool error"
+                );
+                finish_traj(ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: err_msg,
+                    is_error: true,
+                })
+            } else {
+                finish_traj(ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error: false,
+                })
+            }
+        }
         Err(err) => finish_traj(ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: format!("Error: {err}"),
@@ -1314,6 +1374,25 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "enabled": { "type": "boolean" }
                 },
                 "required": ["description", "schedule"]
+            }),
+        },
+        ToolDefinition {
+            name: "schedule_action_create".to_string(),
+            description: "Create a recurring kernel schedule that runs a named workspace action from armaraos.toml. Wrapper around schedule_create with action.kind='workspace_action'.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "description": { "type": "string", "description": "Short label for the job (used as cron job name)." },
+                    "schedule": { "type": "string", "description": "Natural language or 5-field cron." },
+                    "action": { "type": "string", "description": "Workspace action name under [actions.<name>] in armaraos.toml." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Optional args appended at runtime." },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional env overrides merged at runtime." },
+                    "mode": { "type": "string", "enum": ["oneshot", "daemon"], "description": "Optional mode override for this schedule." },
+                    "timeout_secs": { "type": "integer", "description": "Optional oneshot timeout in seconds." },
+                    "delivery": { "type": "object", "description": "Optional delivery object (same as schedule_create)." },
+                    "enabled": { "type": "boolean", "description": "Whether the job starts enabled (default true)." }
+                },
+                "required": ["description", "schedule", "action"]
             }),
         },
         ToolDefinition {
@@ -1789,7 +1868,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Persistent process tools ---
         ToolDefinition {
             name: "process_start".to_string(),
-            description: "Start a long-running or slow process (REPL, server, watcher, Playwright scraper, npm install, build step, Python script). Returns a process_id; then call process_poll repeatedly to read buffered output until the job finishes. Use this instead of shell_exec whenever the command might take more than 30 s. Max 5 processes per agent.".to_string(),
+            description: "Start a long-running or slow process (REPL, HTTP gateway, watcher, Playwright scraper, npm install, build step, Python script). Returns a process_id; then call process_poll repeatedly to read buffered output until the job finishes. Use this instead of shell_exec when the command may exceed ~30s **or** when you need a daemon/listener (do not use shell_exec with `nohup … &` — use process_start + poll). Max 5 processes per agent.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1798,6 +1877,11 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "Command-line arguments (e.g. ['bot.py'] or ['-i'])"
+                    },
+                    "env": {
+                        "type": "object",
+                        "description": "Optional environment variables to set for the process (string→string). Use this for ports, API base URLs, feature flags, etc.",
+                        "additionalProperties": { "type": "string" }
                     },
                     "cwd": { "type": "string", "description": "Working directory for the process. Use an absolute path. Required when the script uses relative imports, reads local .env files, or relies on os.getcwd(). Example: '/Users/me/.armaraos/workspaces/MyBot'" }
                 },
@@ -1844,6 +1928,143 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "workspace_actions_list".to_string(),
+            description: "List named workspace actions from `<workspace>/armaraos.toml` (`[actions.<name>]`).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "workspace_action_set".to_string(),
+            description: "Create or update a named workspace action in `<workspace>/armaraos.toml`. Use this when an action is missing/outdated so future runs use `workspace_action` deterministically.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "description": "Action name under `[actions.<name>]`." },
+                    "description": { "type": "string", "description": "Optional human-friendly description." },
+                    "script": { "type": "string", "description": "Script path (relative to workspace, or allowed absolute path)." },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+                    "cwd": { "type": "string" },
+                    "language": { "type": "string" },
+                    "mode": { "type": "string", "enum": ["oneshot", "daemon"] },
+                    "timeout_seconds": { "type": "number" },
+                    "health_check": {
+                        "type": "object",
+                        "properties": {
+                            "url": { "type": "string" },
+                            "timeout_seconds": { "type": "number" },
+                            "expect_status": { "type": "number" }
+                        }
+                    }
+                },
+                "required": ["action", "script"]
+            }),
+        },
+        ToolDefinition {
+            name: "workspace_action_delete".to_string(),
+            description: "Delete a named workspace action from `<workspace>/armaraos.toml`. If it was the last action, removes the contract file.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "description": "Action name to remove." }
+                },
+                "required": ["action"]
+            }),
+        },
+        ToolDefinition {
+            name: "workspace_action".to_string(),
+            description: "Execute a named action from `<workspace>/armaraos.toml` deterministically (via script_run). Use this for stable 'start gateway/run script' workflows.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "description": "Action name under `[actions.<name>]`." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Optional extra args appended to contract args." },
+                    "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional env overrides merged over contract env." },
+                    "mode": { "type": "string", "enum": ["oneshot", "daemon"], "description": "Optional mode override." },
+                    "timeout_seconds": { "type": "number", "description": "Optional oneshot timeout override." }
+                },
+                "required": ["action"]
+            }),
+        },
+        // --- Deterministic script runner (preferred over hand-rolled shell_exec) ---
+        ToolDefinition {
+            name: "script_run".to_string(),
+            description: "Run a project script (.py / .sh / .ts / .js / .mjs / .cjs / .tsx) by file path. \
+                          The runtime auto-selects the right interpreter: prefers a project venv (`.venv/bin/python3`, \
+                          `venv/bin/python3`) for Python; `node_modules/.bin/tsx` (then `npx --yes tsx`) for TypeScript; \
+                          `bun`/`deno` when their lockfiles are present. \
+                          **Use this instead of composing `source venv && python ...` or `nohup node ... &` in `shell_exec`.** \
+                          `mode: \"oneshot\"` (default) runs to completion (~30s, max 600s) and returns stdout/stderr. \
+                          `mode: \"daemon\"` launches a managed background process (returns `process_id`; use `process_poll` / \
+                          `process_kill` to follow up). For services, also pass `health_check.url` (e.g. \
+                          `http://127.0.0.1:8080/health`) and the runtime will probe it until ready so you don't have to \
+                          chain `curl` calls yourself.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "script": {
+                        "type": "string",
+                        "description": "Path to the script. Either workspace-relative (e.g. 'server.py', 'scripts/start.sh') or absolute under the workspace / AINL library."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional positional args passed to the script after the file path."
+                    },
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "Optional environment variables (string→string). Use this for ports, API base URLs, feature flags, etc. Strongly preferred over wrapping with `export FOO=…` in shell_exec."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory override (absolute path). Defaults to the script's parent directory, which is usually correct."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["oneshot", "daemon"],
+                        "description": "'oneshot' (default) runs to completion and returns stdout/stderr. 'daemon' launches as a managed background process and returns a process_id."
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Optional override of auto-detected language. Supported: 'python', 'shell', 'bash', 'zsh', 'node', 'typescript', 'bun', 'deno'."
+                    },
+                    "timeout_seconds": {
+                        "type": "number",
+                        "description": "Override timeout for oneshot mode (default 30, max 600). Ignored in daemon mode."
+                    },
+                    "health_check": {
+                        "type": "object",
+                        "description": "Daemon-mode readiness probe. The runtime will GET this URL until it returns the expected status, with backoff.",
+                        "properties": {
+                            "url": { "type": "string", "description": "URL to probe (e.g. 'http://127.0.0.1:8080/health')." },
+                            "timeout_seconds": { "type": "number", "description": "Total wait budget (default 15, max 60)." },
+                            "expect_status": { "type": "number", "description": "Expected HTTP status code (default 200)." }
+                        },
+                        "required": ["url"]
+                    }
+                },
+                "required": ["script"]
+            }),
+        },
+        ToolDefinition {
+            name: "script_detect".to_string(),
+            description: "Detect what script to run in the current workspace. Read-only: scans for likely entrypoints \
+                          (gateway/server/start scripts) and `package.json` scripts, returns ranked candidates. \
+                          Use this when the user says \"start the gateway\" but doesn't provide a filename. \
+                          Next: pick a `file` result and call `script_run`; or pick a `package_script` and run it via \
+                          `process_start` (e.g. command: 'npm', args: ['run', '<name>']).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "What you're looking for (e.g. 'gateway', 'server', 'dev', 'api'). Used to rank results." },
+                    "max_results": { "type": "number", "description": "Maximum results to return (default 20, max 20)." }
+                }
             }),
         },
         // --- System time tool ---
@@ -2302,11 +2523,16 @@ async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, Str
 // Shell tool
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn tool_shell_exec(
     input: &serde_json::Value,
     allowed_env: &[String],
     workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+    caller_agent_id: Option<&str>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
     exec_policy: Option<&openfang_types::config::ExecPolicy>,
+    kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<String, String> {
     let command = input["command"]
         .as_str()
@@ -2326,6 +2552,31 @@ async fn tool_shell_exec(
     let use_direct_exec = exec_policy
         .map(|p| p.mode == openfang_types::config::ExecSecurityMode::Allowlist)
         .unwrap_or(true); // Default to safe mode
+
+    let path_mode = exec_policy
+        .map(|p| p.shell_path_guard)
+        .unwrap_or(openfang_types::config::ShellPathGuardMode::Enforce);
+    let pid_mode = exec_policy
+        .map(|p| p.shell_pid_guard)
+        .unwrap_or(openfang_types::config::ShellPidGuardMode::Enforce);
+    let extra_allowed_path_prefixes = exec_policy
+        .map(|p| p.extra_allowed_path_prefixes.as_slice())
+        .unwrap_or(&[]);
+
+    crate::shell_job_guard::preflight_shell_job_control(command, use_direct_exec)?;
+
+    crate::shell_argv_guard::preflight_shell_exec(
+        command,
+        use_direct_exec,
+        workspace_root,
+        ainl_library_root,
+        extra_allowed_path_prefixes,
+        path_mode,
+        pid_mode,
+        caller_agent_id,
+        process_manager,
+        kernel,
+    )?;
 
     let mut cmd = if use_direct_exec {
         // SAFE PATH: Split command into argv using POSIX shell lexer rules,
@@ -2391,6 +2642,10 @@ async fn tool_shell_exec(
 
     // Prevent child from inheriting stdin (avoids blocking on Windows)
     cmd.stdin(std::process::Stdio::null());
+
+    // Best-effort: if this looks like a local dev server, ensure candidate listen ports are free
+    // on loopback before spawning (avoids opaque EADDRINUSE loops).
+    crate::shell_port_preflight::preflight_shell_listen_ports(command)?;
 
     let result =
         tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
@@ -4130,7 +4385,8 @@ async fn tool_hermes_a2a_status() -> Result<String, String> {
         match crate::hermes_a2a::load_hermes_a2a_config() {
             Ok(cfg) => {
                 out["base_url"] = serde_json::Value::String(cfg.base_url);
-                out["send_binding"] = serde_json::Value::String(cfg.send_binding.as_str().to_string());
+                out["send_binding"] =
+                    serde_json::Value::String(cfg.send_binding.as_str().to_string());
                 out["ok"] = serde_json::json!(true);
             }
             Err(e) => {
@@ -4177,10 +4433,7 @@ async fn tool_a2a_send_hermes(
     );
     if try_jsonrpc {
         match crate::hermes_a2a::assert_hermes_rpc_matches_base(&cfg.base_url, &card.url) {
-            Ok(()) => match client
-                .send_task(&card.url, message, session_id)
-                .await
-            {
+            Ok(()) => match client.send_task(&card.url, message, session_id).await {
                 Ok(task) => {
                     if let Some(caller_id) = caller_agent_id {
                         if let Ok(gm) =
@@ -4889,9 +5142,19 @@ async fn tool_process_start(
                 .collect()
         })
         .unwrap_or_default();
+    let env: Option<std::collections::HashMap<String, String>> = input
+        .get("env")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        });
     let cwd = input["cwd"].as_str();
 
-    let proc_id = pm.start(agent_id, command, &args, cwd).await?;
+    let proc_id = pm
+        .start(agent_id, command, &args, env.as_ref(), cwd)
+        .await?;
     Ok(serde_json::json!({
         "process_id": proc_id,
         "status": "started"
@@ -4903,12 +5166,14 @@ async fn tool_process_start(
 async fn tool_process_poll(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.unwrap_or("default");
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
-    let (stdout, stderr) = pm.read(proc_id).await?;
+    let (stdout, stderr) = pm.read_for_agent(proc_id, agent_id).await?;
     Ok(serde_json::json!({
         "stdout": stdout,
         "stderr": stderr,
@@ -4920,8 +5185,10 @@ async fn tool_process_poll(
 async fn tool_process_write(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.unwrap_or("default");
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
@@ -4932,7 +5199,7 @@ async fn tool_process_write(
     } else {
         format!("{data}\n")
     };
-    pm.write(proc_id, &data).await?;
+    pm.write_for_agent(proc_id, agent_id, &data).await?;
     Ok(r#"{"status": "written"}"#.to_string())
 }
 
@@ -4940,12 +5207,14 @@ async fn tool_process_write(
 async fn tool_process_kill(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
+    let agent_id = caller_agent_id.unwrap_or("default");
     let proc_id = input["process_id"]
         .as_str()
         .ok_or("Missing 'process_id' parameter")?;
-    pm.kill(proc_id).await?;
+    pm.kill_for_agent(proc_id, agent_id).await?;
     Ok(r#"{"status": "killed"}"#.to_string())
 }
 
@@ -4969,6 +5238,1001 @@ async fn tool_process_list(
         })
         .collect();
     Ok(serde_json::Value::Array(list).to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Script run tool — deterministic interpreter selection (Python / shell / TS / JS)
+// ---------------------------------------------------------------------------
+
+/// Hard caps for `script_detect` (read-only workspace scan).
+const SCRIPT_DETECT_MAX_RESULTS: usize = 20;
+const SCRIPT_DETECT_MAX_FILES_SCANNED: usize = 8_000;
+const SCRIPT_DETECT_MAX_DEPTH: usize = 8;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+enum ScriptDetectCandidate {
+    /// A runnable file path (preferred; feed directly into `script_run`).
+    #[serde(rename = "file")]
+    File {
+        path: String,
+        score: i32,
+        reason: String,
+        language_hint: Option<String>,
+    },
+    /// A `package.json` script name + its command (use `process_start` with `npm`/`pnpm`/`yarn`).
+    #[serde(rename = "package_script")]
+    PackageScript {
+        name: String,
+        command: String,
+        score: i32,
+        reason: String,
+    },
+}
+
+fn is_script_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "py" | "sh" | "bash" | "zsh" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts"
+    )
+}
+
+fn should_skip_walk_entry(path: &Path) -> bool {
+    // Keep this list small and obvious; we want deterministic behavior and fast scans.
+    // (node_modules + target dominate; .git is never relevant.)
+    path.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        matches!(
+            s.as_ref(),
+            "node_modules" | "target" | ".git" | ".next" | "dist" | "build" | "output"
+        )
+    })
+}
+
+fn score_file_candidate(path: &Path, query_lc: &str) -> Option<(i32, String, Option<String>)> {
+    let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !is_script_extension(&ext) {
+        return None;
+    }
+
+    let mut score: i32 = 0;
+    let mut reasons: Vec<&str> = Vec::new();
+
+    // Base score by extension family (gateway/server scripts tend to be TS/JS/PY).
+    match ext.as_str() {
+        "ts" | "tsx" | "js" | "mjs" | "cjs" => {
+            score += 25;
+            reasons.push("js/ts entrypoint");
+        }
+        "py" => {
+            score += 20;
+            reasons.push("python entrypoint");
+        }
+        "sh" | "bash" | "zsh" => {
+            score += 12;
+            reasons.push("shell script");
+        }
+        _ => {}
+    }
+
+    // Filename heuristics.
+    for (needle, bump, why) in [
+        ("gateway", 40, "filename contains 'gateway'"),
+        ("server", 30, "filename contains 'server'"),
+        ("api", 12, "filename contains 'api'"),
+        ("start", 10, "filename contains 'start'"),
+        ("main", 8, "filename contains 'main'"),
+        ("index", 5, "filename contains 'index'"),
+    ] {
+        if file_name.contains(needle) {
+            score += bump;
+            reasons.push(why);
+        }
+    }
+
+    // Query match bump.
+    if !query_lc.is_empty() {
+        if file_name.contains(query_lc) {
+            score += 50;
+            reasons.push("matches query");
+        } else {
+            // Tokenized query: "gateway server" etc.
+            let tokens: Vec<&str> = query_lc.split_whitespace().collect();
+            let hits = tokens.iter().filter(|t| file_name.contains(**t)).count() as i32;
+            if hits > 0 {
+                score += 15 * hits;
+                reasons.push("partially matches query");
+            }
+        }
+    }
+
+    // Prefer scripts under conventional dirs.
+    let path_lc = path.to_string_lossy().to_ascii_lowercase();
+    if path_lc.contains("/scripts/") || path_lc.contains("\\scripts\\") {
+        score += 6;
+        reasons.push("under scripts/");
+    }
+    if path_lc.contains("/src/") || path_lc.contains("\\src\\") {
+        score += 4;
+        reasons.push("under src/");
+    }
+
+    let language_hint = match ext.as_str() {
+        "py" => Some("python".to_string()),
+        "ts" | "tsx" | "mts" | "cts" => Some("typescript".to_string()),
+        "js" | "mjs" | "cjs" => Some("node".to_string()),
+        "sh" => Some("shell".to_string()),
+        "bash" => Some("bash".to_string()),
+        "zsh" => Some("zsh".to_string()),
+        _ => None,
+    };
+
+    Some((
+        score,
+        reasons
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", "),
+        language_hint,
+    ))
+}
+
+async fn try_read_package_json_scripts(
+    workspace_root: &Path,
+    query_lc: &str,
+) -> Vec<ScriptDetectCandidate> {
+    let pkg = workspace_root.join("package.json");
+    let Ok(bytes) = tokio::fs::read(&pkg).await else {
+        return vec![];
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return vec![];
+    };
+    let Some(scripts) = v.get("scripts").and_then(|s| s.as_object()) else {
+        return vec![];
+    };
+
+    let mut out = Vec::new();
+    for (name, cmd) in scripts.iter() {
+        let Some(cmd) = cmd.as_str() else { continue };
+        let name_lc = name.to_ascii_lowercase();
+        let cmd_lc = cmd.to_ascii_lowercase();
+
+        let mut score = 0i32;
+        let mut reasons = Vec::new();
+
+        // Common dev/start scripts.
+        if matches!(name_lc.as_str(), "dev" | "start" | "serve" | "gateway") {
+            score += 45;
+            reasons.push("common start script");
+        }
+        if name_lc.contains("gateway") || cmd_lc.contains("gateway") {
+            score += 35;
+            reasons.push("mentions gateway");
+        }
+        if name_lc.contains("server") || cmd_lc.contains("server") {
+            score += 20;
+            reasons.push("mentions server");
+        }
+
+        if !query_lc.is_empty() && (name_lc.contains(query_lc) || cmd_lc.contains(query_lc)) {
+            score += 40;
+            reasons.push("matches query");
+        }
+
+        if score > 0 {
+            out.push(ScriptDetectCandidate::PackageScript {
+                name: name.clone(),
+                command: cmd.to_string(),
+                score,
+                reason: reasons.join(", "),
+            });
+        }
+    }
+    out
+}
+
+/// Read-only helper for “what should I run?” questions.
+///
+/// Returns a ranked list of candidate runnable files (preferred) and `package.json` scripts.
+async fn tool_script_detect(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let ws = workspace_root.ok_or("script_detect: workspace_root is required")?;
+    let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let query_lc = query.to_ascii_lowercase();
+    let max_results = input
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(SCRIPT_DETECT_MAX_RESULTS)
+        .min(SCRIPT_DETECT_MAX_RESULTS);
+
+    let mut candidates: Vec<ScriptDetectCandidate> = Vec::new();
+
+    // package.json scripts (fast, high signal)
+    candidates.extend(try_read_package_json_scripts(ws, &query_lc).await);
+
+    // bounded filesystem walk
+    let mut scanned = 0usize;
+    for entry in walkdir::WalkDir::new(ws)
+        .follow_links(false)
+        .max_depth(SCRIPT_DETECT_MAX_DEPTH)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        if scanned >= SCRIPT_DETECT_MAX_FILES_SCANNED {
+            break;
+        }
+        scanned += 1;
+        let path = entry.path();
+        if entry.file_type().is_dir() {
+            if should_skip_walk_entry(path) {
+                // WalkDir doesn't support dynamic prune without `filter_entry`; keep it simple:
+                // we'll still visit children but they will be quickly skipped by the same check.
+            }
+            continue;
+        }
+        if should_skip_walk_entry(path) {
+            continue;
+        }
+        if let Some((score, reason, language_hint)) = score_file_candidate(path, &query_lc) {
+            // Prefer workspace-relative paths in output.
+            let rel = path.strip_prefix(ws).unwrap_or(path).to_string_lossy().to_string();
+            candidates.push(ScriptDetectCandidate::File {
+                path: rel,
+                score,
+                reason,
+                language_hint,
+            });
+        }
+    }
+
+    // Sort by score desc, stable tie-break by name.
+    candidates.sort_by(|a, b| {
+        let (sa, ka) = match a {
+            ScriptDetectCandidate::File { score, path, .. } => (*score, format!("file:{path}")),
+            ScriptDetectCandidate::PackageScript { score, name, .. } => (*score, format!("pkg:{name}")),
+        };
+        let (sb, kb) = match b {
+            ScriptDetectCandidate::File { score, path, .. } => (*score, format!("file:{path}")),
+            ScriptDetectCandidate::PackageScript { score, name, .. } => (*score, format!("pkg:{name}")),
+        };
+        sb.cmp(&sa).then_with(|| ka.cmp(&kb))
+    });
+
+    candidates.truncate(max_results);
+
+    let payload = serde_json::json!({
+        "query": query,
+        "workspace": ws.to_string_lossy(),
+        "scanned_entries": scanned,
+        "results": candidates,
+        "next_step_hint": "Pick a `file` result and call `script_run` with that path. If you pick a `package_script`, run it with `process_start` (e.g. command: 'npm', args: ['run', '<name>'])."
+    });
+    Ok(payload.to_string())
+}
+
+/// List declarative workspace actions from `<workspace>/armaraos.toml`.
+async fn tool_workspace_actions_list(
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let ws = workspace_root.ok_or("workspace_actions_list: workspace_root is required")?;
+    let contract = crate::workspace_action_contract::load_workspace_contract(ws)?;
+    let actions = crate::workspace_action_contract::summarize_actions(&contract);
+    Ok(serde_json::json!({
+        "workspace": ws.to_string_lossy(),
+        "contract_path": crate::workspace_action_contract::contract_path(ws).to_string_lossy(),
+        "actions": actions,
+    })
+    .to_string())
+}
+
+/// Create/update a named workspace action in `<workspace>/armaraos.toml`.
+async fn tool_workspace_action_set(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let ws = workspace_root.ok_or("workspace_action_set: workspace_root is required")?;
+    let action_name = input
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("workspace_action_set: missing required `action` parameter")?;
+    let script = input
+        .get("script")
+        .and_then(|v| v.as_str())
+        .ok_or("workspace_action_set: missing required `script` parameter")?;
+
+    let action = crate::workspace_action_contract::WorkspaceAction {
+        description: input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        script: script.to_string(),
+        args: input
+            .get("args")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(ToString::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        env: input
+            .get("env")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect::<std::collections::HashMap<_, _>>()
+            })
+            .unwrap_or_default(),
+        cwd: input
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        language: input
+            .get("language")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        mode: input
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        timeout_seconds: input.get("timeout_seconds").and_then(|v| v.as_u64()),
+        health_check: input
+            .get("health_check")
+            .filter(|v| v.is_object())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("workspace_action_set: invalid health_check object: {e}"))?,
+    };
+
+    let contract = crate::workspace_action_contract::upsert_workspace_action(ws, action_name, action)?;
+    let actions = crate::workspace_action_contract::summarize_actions(&contract);
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "updated",
+        "action": action_name,
+        "contract_path": crate::workspace_action_contract::contract_path(ws).to_string_lossy(),
+        "actions": actions,
+    })
+    .to_string())
+}
+
+/// Delete a named workspace action from `<workspace>/armaraos.toml`.
+async fn tool_workspace_action_delete(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let ws = workspace_root.ok_or("workspace_action_delete: workspace_root is required")?;
+    let action_name = input
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("workspace_action_delete: missing required `action` parameter")?;
+
+    let outcome = crate::workspace_action_contract::delete_workspace_action(ws, action_name)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "action": action_name,
+        "status": match outcome {
+            crate::workspace_action_contract::DeleteWorkspaceActionOutcome::Deleted => "deleted",
+            crate::workspace_action_contract::DeleteWorkspaceActionOutcome::DeletedAndRemovedContract => "deleted_last_action_removed_contract",
+        },
+        "contract_path": crate::workspace_action_contract::contract_path(ws).to_string_lossy(),
+    })
+    .to_string())
+}
+
+/// Execute a named workspace action declared in `<workspace>/armaraos.toml`.
+///
+/// This is intentionally a thin, deterministic layer over `script_run`.
+/// The model chooses `action` by name; the runtime maps it to script/cwd/env/mode.
+#[allow(clippy::too_many_arguments)]
+async fn tool_workspace_action(
+    input: &serde_json::Value,
+    allowed_env: &[String],
+    workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+    caller_agent_id: Option<&str>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    exec_policy: Option<&openfang_types::config::ExecPolicy>,
+) -> Result<String, String> {
+    let ws = workspace_root.ok_or("workspace_action: workspace_root is required")?;
+    let action_name = input
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("workspace_action: missing required `action` parameter")?;
+
+    execute_workspace_action_direct(
+        ws,
+        action_name,
+        input.get("args").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        }),
+        input.get("env").and_then(|v| v.as_object()).map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<std::collections::HashMap<String, String>>()
+        }),
+        input
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
+        input
+            .get("timeout_seconds")
+            .and_then(|v| v.as_u64())
+            .or_else(|| input.get("timeout_secs").and_then(|v| v.as_u64())),
+        allowed_env,
+        ainl_library_root,
+        caller_agent_id,
+        process_manager,
+        exec_policy,
+    )
+    .await
+}
+
+/// Shared implementation used both by the `workspace_action` tool and kernel cron
+/// (`CronAction::workspace_action`) so scheduled actions run deterministically without LLM turns.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_workspace_action_direct(
+    workspace_root: &Path,
+    action_name: &str,
+    args_override: Option<Vec<String>>,
+    env_override: Option<std::collections::HashMap<String, String>>,
+    mode_override: Option<String>,
+    timeout_secs_override: Option<u64>,
+    allowed_env: &[String],
+    ainl_library_root: Option<&Path>,
+    caller_agent_id: Option<&str>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    exec_policy: Option<&openfang_types::config::ExecPolicy>,
+) -> Result<String, String> {
+    let contract = crate::workspace_action_contract::load_workspace_contract(workspace_root)?;
+    let action = contract
+        .actions
+        .get(action_name)
+        .ok_or_else(|| format!("workspace_action: action `{action_name}` not found in armaraos.toml"))?;
+
+    // Merge args/env: contract defaults first, call-site overrides appended/overridden.
+    let mut merged_args = action.args.clone();
+    if let Some(extra) = args_override {
+        merged_args.extend(extra);
+    }
+    let mut merged_env = action.env.clone();
+    if let Some(ovr) = env_override {
+        for (k, v) in ovr {
+            merged_env.insert(k, v);
+        }
+    }
+
+    let mut run_input = serde_json::json!({
+        "script": action.script,
+    });
+    if !merged_args.is_empty() {
+        run_input["args"] = serde_json::to_value(merged_args).unwrap_or_default();
+    }
+    if !merged_env.is_empty() {
+        run_input["env"] = serde_json::to_value(merged_env).unwrap_or_default();
+    }
+    if let Some(cwd) = &action.cwd {
+        run_input["cwd"] = serde_json::Value::String(cwd.clone());
+    }
+    if let Some(lang) = &action.language {
+        run_input["language"] = serde_json::Value::String(lang.clone());
+    }
+    if let Some(hc) = &action.health_check {
+        run_input["health_check"] = serde_json::to_value(hc).unwrap_or_default();
+    }
+
+    let mode = mode_override
+        .or_else(|| action.mode.clone())
+        .unwrap_or_else(|| "oneshot".to_string());
+    run_input["mode"] = serde_json::Value::String(mode);
+
+    if let Some(t) = timeout_secs_override.or(action.timeout_seconds) {
+        run_input["timeout_seconds"] = serde_json::Value::Number(serde_json::Number::from(t));
+    }
+
+    let result = tool_script_run(
+        &run_input,
+        allowed_env,
+        Some(workspace_root),
+        ainl_library_root,
+        caller_agent_id,
+        process_manager,
+        exec_policy,
+    )
+    .await?;
+
+    // Add action metadata to payload for easier downstream auditing.
+    let mut parsed = serde_json::from_str::<serde_json::Value>(&result).unwrap_or_else(|_| {
+        serde_json::json!({
+            "raw": result
+        })
+    });
+    parsed["workspace_action"] = serde_json::json!({
+        "name": action_name,
+        "contract_path": crate::workspace_action_contract::contract_path(workspace_root)
+            .to_string_lossy(),
+    });
+    Ok(parsed.to_string())
+}
+
+/// Convenience wrapper around `schedule_create` for declarative workspace actions.
+///
+/// Accepts the same `schedule` / `description` / `delivery` shape as `schedule_create`,
+/// but generates:
+/// `action = { kind = "workspace_action", action_name, args?, env?, mode?, timeout_secs? }`.
+async fn tool_schedule_action_create(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let action_name = input
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("schedule_action_create: missing required `action` parameter")?;
+
+    let mut action_obj = serde_json::json!({
+        "kind": "workspace_action",
+        "action_name": action_name,
+    });
+    if let Some(args) = input.get("args").and_then(|v| v.as_array()) {
+        action_obj["args"] = serde_json::Value::Array(args.clone());
+    }
+    if let Some(env) = input.get("env").and_then(|v| v.as_object()) {
+        action_obj["env"] = serde_json::Value::Object(env.clone());
+    }
+    if let Some(mode) = input.get("mode").and_then(|v| v.as_str()) {
+        action_obj["mode"] = serde_json::Value::String(mode.to_string());
+    }
+    if let Some(t) = input.get("timeout_secs").and_then(|v| v.as_u64()) {
+        action_obj["timeout_secs"] = serde_json::Value::Number(serde_json::Number::from(t));
+    }
+
+    let mut forwarded = input.clone();
+    forwarded["action"] = action_obj;
+    tool_schedule_create(&forwarded, kernel, caller_agent_id).await
+}
+
+/// Cap how long a oneshot script may run inside the agent loop. Mirrors `shell_exec`'s
+/// default upper bound — if the model needs longer than this, it should pass `mode: "daemon"`
+/// instead of cranking the timeout.
+const SCRIPT_RUN_ONESHOT_MAX_TIMEOUT_SECS: u64 = 600;
+
+/// Default oneshot timeout when the model omits `timeout_seconds` — matches `shell_exec`.
+const SCRIPT_RUN_ONESHOT_DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// Default daemon health-probe budget when the model passes `health_check.url` without a
+/// `timeout_seconds`. Long enough for cold-start (venv import, `tsx` first-run, etc.) but
+/// short enough that the agent loop doesn't wait forever.
+const SCRIPT_RUN_DAEMON_HEALTH_DEFAULT_TIMEOUT_SECS: u64 = 15;
+
+/// Maximum stdout/stderr bytes captured per stream for oneshot mode. Same cap as
+/// `shell_exec` so the resulting tool message stays within token budgets.
+const SCRIPT_RUN_OUTPUT_MAX_BYTES: usize = 100_000;
+
+/// Implementation of the `script_run` builtin tool.
+///
+/// **Why this exists:** the LLM should not be composing
+/// `source venv/bin/activate && python script.py …` or `nohup node server.js &`.
+/// Those compositions are where models hallucinate file paths, get shell quoting wrong,
+/// and end up dumping copy-paste-Terminal blocks back at the user. With `script_run` the
+/// model only states **intent** (`script`, optional `args` / `env` / `cwd` / `mode`) and
+/// the runtime decides **how** — picking a project venv when present, `node_modules/.bin/tsx`
+/// over `npx`, `bun`/`deno` when their lockfiles are detected, etc.
+///
+/// `mode: "oneshot"` runs to completion under the same env sandbox as `shell_exec`.
+/// `mode: "daemon"` hands off to [`crate::process_manager::ProcessManager`] (the same
+/// path as `process_start`) and optionally probes a `health_check.url` until ready —
+/// so agents that start an HTTP gateway no longer need to invent `lsof`/`curl` calls
+/// just to confirm it bound a port.
+#[allow(clippy::too_many_arguments)]
+async fn tool_script_run(
+    input: &serde_json::Value,
+    allowed_env: &[String],
+    workspace_root: Option<&Path>,
+    ainl_library_root: Option<&Path>,
+    caller_agent_id: Option<&str>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    exec_policy: Option<&openfang_types::config::ExecPolicy>,
+) -> Result<String, String> {
+    let script = input
+        .get("script")
+        .and_then(|v| v.as_str())
+        .ok_or("script_run: missing required `script` parameter")?;
+
+    let caller_args: Vec<String> = input
+        .get("args")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let env_overrides: std::collections::HashMap<String, String> = input
+        .get("env")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let cwd_override = input.get("cwd").and_then(|v| v.as_str()).map(PathBuf::from);
+
+    let explicit_mode = input
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_ascii_lowercase());
+    let mode = explicit_mode
+        .clone()
+        .unwrap_or_else(|| infer_script_run_mode(script, &caller_args, input));
+
+    let language_hint = input
+        .get("language")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty());
+
+    // Resolve runner deterministically.
+    let mut allowed_prefixes: Vec<PathBuf> = Vec::new();
+    if let Some(lib) = ainl_library_root {
+        allowed_prefixes.push(lib.to_path_buf());
+    }
+    if let Some(policy) = exec_policy {
+        for raw in &policy.extra_allowed_path_prefixes {
+            let p = PathBuf::from(raw);
+            if p.is_absolute() && !p.as_os_str().is_empty() {
+                allowed_prefixes.push(p);
+            }
+        }
+    }
+
+    let probe = crate::script_runner::FsProbe;
+    let resolved = match crate::script_runner::resolve_runner(
+        script,
+        workspace_root,
+        language_hint,
+        &allowed_prefixes,
+        &probe,
+    ) {
+        Ok(r) => r,
+        Err(err) => return Err(err.user_message()),
+    };
+
+    // Effective cwd: caller override > script's parent > workspace root.
+    let effective_cwd = cwd_override.unwrap_or_else(|| resolved.default_cwd.clone());
+
+    let runner_meta = serde_json::json!({
+        "interpreter": resolved.interpreter,
+        "interpreter_args": resolved.interpreter_args,
+        "script_path": resolved.script_path.to_string_lossy(),
+        "language": resolved.language.as_str(),
+        "decision_source": resolved.decision_source,
+        "mode_source": if explicit_mode.is_some() { "explicit" } else { "inferred" },
+        "cwd": effective_cwd.to_string_lossy(),
+    });
+
+    match mode.as_str() {
+        "oneshot" => {
+            run_oneshot(
+                &resolved,
+                &caller_args,
+                &env_overrides,
+                &effective_cwd,
+                allowed_env,
+                input,
+                &runner_meta,
+            )
+            .await
+        }
+        "daemon" => {
+            let pm = process_manager.ok_or(
+                "script_run: process_manager not available — daemon mode requires the persistent \
+                 process subsystem to be enabled",
+            )?;
+            run_daemon(
+                &resolved,
+                &caller_args,
+                &env_overrides,
+                &effective_cwd,
+                input,
+                &runner_meta,
+                pm,
+                caller_agent_id,
+            )
+            .await
+        }
+        other => Err(format!(
+            "script_run: unknown `mode` value `{other}`. Supported: 'oneshot' (default), 'daemon'."
+        )),
+    }
+}
+
+/// Execute the resolved script to completion under the same env sandbox as `shell_exec`.
+#[allow(clippy::too_many_arguments)]
+async fn run_oneshot(
+    resolved: &crate::script_runner::ResolvedRunner,
+    caller_args: &[String],
+    env_overrides: &std::collections::HashMap<String, String>,
+    effective_cwd: &Path,
+    allowed_env: &[String],
+    input: &serde_json::Value,
+    runner_meta: &serde_json::Value,
+) -> Result<String, String> {
+    let timeout_secs = input
+        .get("timeout_seconds")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SCRIPT_RUN_ONESHOT_DEFAULT_TIMEOUT_SECS)
+        .min(SCRIPT_RUN_ONESHOT_MAX_TIMEOUT_SECS);
+
+    let argv = resolved.full_argv(caller_args);
+    let mut cmd = tokio::process::Command::new(&resolved.interpreter);
+    if !argv.is_empty() {
+        cmd.args(&argv);
+    }
+    cmd.current_dir(effective_cwd);
+    cmd.stdin(std::process::Stdio::null());
+
+    crate::subprocess_sandbox::sandbox_command(&mut cmd, allowed_env);
+    for (k, v) in env_overrides {
+        cmd.env(k, v);
+    }
+    #[cfg(windows)]
+    cmd.env("PYTHONIOENCODING", "utf-8");
+
+    debug!(
+        interpreter = %resolved.interpreter,
+        argv = ?argv,
+        cwd = %effective_cwd.display(),
+        timeout_secs,
+        "script_run oneshot spawn"
+    );
+
+    let started = std::time::Instant::now();
+    let outcome =
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
+
+    match outcome {
+        Ok(Ok(out)) => {
+            let stdout = truncate_stream(&String::from_utf8_lossy(&out.stdout));
+            let stderr = truncate_stream(&String::from_utf8_lossy(&out.stderr));
+            let exit_code = out.status.code().unwrap_or(-1);
+            let payload = serde_json::json!({
+                "mode": "oneshot",
+                "ok": exit_code == 0,
+                "exit_code": exit_code,
+                "duration_ms": started.elapsed().as_millis() as u64,
+                "stdout": stdout,
+                "stderr": stderr,
+                "runner": runner_meta,
+            });
+            Ok(payload.to_string())
+        }
+        Ok(Err(e)) => Err(format!(
+            "script_run: failed to spawn `{}`: {e}. Hint: check the interpreter exists \
+             (the runner picked `{}`); pass `language` to override or install the missing tool.",
+            resolved.interpreter, resolved.interpreter
+        )),
+        Err(_) => Err(format!(
+            "script_run: oneshot timed out after {timeout_secs}s. Hint: pass `mode: \"daemon\"` \
+             for long-running services, or raise `timeout_seconds` (max \
+             {SCRIPT_RUN_ONESHOT_MAX_TIMEOUT_SECS}s)."
+        )),
+    }
+}
+
+/// Infer a safer default when the caller omits `mode`.
+///
+/// Heuristic:
+/// - `health_check` present => daemon
+/// - script/args mention server-ish terms (`gateway`, `server`, `serve`, etc.) => daemon
+/// - otherwise oneshot
+fn infer_script_run_mode(script: &str, args: &[String], input: &serde_json::Value) -> String {
+    if input
+        .get("health_check")
+        .map(|v| v.is_object())
+        .unwrap_or(false)
+    {
+        return "daemon".to_string();
+    }
+    let mut haystack = script.to_ascii_lowercase();
+    if !args.is_empty() {
+        haystack.push(' ');
+        haystack.push_str(&args.join(" ").to_ascii_lowercase());
+    }
+    let service_markers = [
+        "gateway", "server", "serve", "daemon", "watch", "uvicorn", "gunicorn", "flask run",
+    ];
+    if service_markers.iter().any(|m| haystack.contains(m)) {
+        "daemon".to_string()
+    } else {
+        "oneshot".to_string()
+    }
+}
+
+/// Truncate stdout/stderr like `shell_exec` does so the tool reply stays within token budgets.
+fn truncate_stream(s: &str) -> String {
+    if s.len() > SCRIPT_RUN_OUTPUT_MAX_BYTES {
+        format!(
+            "{}...\n[truncated, {} total bytes]",
+            crate::str_utils::safe_truncate_str(s, SCRIPT_RUN_OUTPUT_MAX_BYTES),
+            s.len()
+        )
+    } else {
+        s.to_string()
+    }
+}
+
+/// Hand off to `ProcessManager` and optionally probe `health_check.url` until ready.
+#[allow(clippy::too_many_arguments)]
+async fn run_daemon(
+    resolved: &crate::script_runner::ResolvedRunner,
+    caller_args: &[String],
+    env_overrides: &std::collections::HashMap<String, String>,
+    effective_cwd: &Path,
+    input: &serde_json::Value,
+    runner_meta: &serde_json::Value,
+    pm: &crate::process_manager::ProcessManager,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let agent_id = caller_agent_id.unwrap_or("default");
+    let argv = resolved.full_argv(caller_args);
+
+    debug!(
+        interpreter = %resolved.interpreter,
+        argv = ?argv,
+        cwd = %effective_cwd.display(),
+        agent = %agent_id,
+        "script_run daemon spawn"
+    );
+
+    let env_for_pm = if env_overrides.is_empty() {
+        None
+    } else {
+        Some(env_overrides.clone())
+    };
+
+    let cwd_str = effective_cwd.to_string_lossy().to_string();
+    let proc_id = pm
+        .start(
+            agent_id,
+            &resolved.interpreter,
+            &argv,
+            env_for_pm.as_ref(),
+            Some(cwd_str.as_str()),
+        )
+        .await?;
+
+    let mut payload = serde_json::json!({
+        "mode": "daemon",
+        "ok": true,
+        "process_id": proc_id,
+        "status": "started",
+        "runner": runner_meta,
+        "next_steps": "Call `process_poll` with this process_id to drain stdout/stderr; \
+                       `process_kill` to stop.",
+    });
+
+    if let Some(hc) = input.get("health_check").and_then(|v| v.as_object()) {
+        if let Some(url) = hc.get("url").and_then(|v| v.as_str()) {
+            let timeout_secs = hc
+                .get("timeout_seconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(SCRIPT_RUN_DAEMON_HEALTH_DEFAULT_TIMEOUT_SECS)
+                .min(60);
+            let expect_status = hc
+                .get("expect_status")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200) as u16;
+
+            let probe = probe_http_until_ready(url, timeout_secs, expect_status).await;
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("health".to_string(), serde_json::to_value(&probe).unwrap_or_default());
+                obj.insert(
+                    "status".to_string(),
+                    serde_json::Value::String(if probe.ready { "ready" } else { "unreachable" }.to_string()),
+                );
+            }
+        }
+    }
+
+    Ok(payload.to_string())
+}
+
+/// Outcome of the optional daemon-mode HTTP readiness probe.
+#[derive(Debug, serde::Serialize)]
+struct HealthProbe {
+    url: String,
+    ready: bool,
+    attempts: u32,
+    elapsed_ms: u64,
+    last_status: Option<u16>,
+    last_error: Option<String>,
+}
+
+/// Repeatedly GET `url` until we see `expect_status` (or `timeout_secs` elapses).
+/// Uses an increasing backoff (250ms → 500ms → 1s, capped) so a fast-starting service
+/// returns immediately while a slow one (cold venv import, vite dev server) gets some grace.
+async fn probe_http_until_ready(url: &str, timeout_secs: u64, expect_status: u16) -> HealthProbe {
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(timeout_secs);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return HealthProbe {
+                url: url.to_string(),
+                ready: false,
+                attempts: 0,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                last_status: None,
+                last_error: Some(format!("failed to build http client: {e}")),
+            };
+        }
+    };
+
+    let mut attempts: u32 = 0;
+    // Initial `None` values are immediately overwritten on the first probe attempt;
+    // we keep them so the deadline-exit path (which reads both) sees defined values
+    // even when the very first iteration short-circuits.
+    #[allow(unused_assignments)]
+    let mut last_status: Option<u16> = None;
+    #[allow(unused_assignments)]
+    let mut last_error: Option<String> = None;
+    let mut backoff = std::time::Duration::from_millis(250);
+
+    loop {
+        attempts += 1;
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                last_status = Some(status);
+                last_error = None;
+                if status == expect_status {
+                    return HealthProbe {
+                        url: url.to_string(),
+                        ready: true,
+                        attempts,
+                        elapsed_ms: started.elapsed().as_millis() as u64,
+                        last_status,
+                        last_error,
+                    };
+                }
+            }
+            Err(e) => {
+                last_status = None;
+                last_error = Some(e.to_string());
+            }
+        }
+
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return HealthProbe {
+                url: url.to_string(),
+                ready: false,
+                attempts,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                last_status,
+                last_error,
+            };
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        tokio::time::sleep(backoff.min(remaining)).await;
+        backoff = (backoff * 2).min(std::time::Duration::from_secs(1));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5449,6 +6713,14 @@ pub fn tool_execution_timeout(tool_name: &str) -> std::time::Duration {
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
             Duration::from_secs(30)
         }
+        "workspace_actions_list" => Duration::from_secs(30),
+        "workspace_action_set" | "workspace_action_delete" => Duration::from_secs(30),
+        "workspace_action" => Duration::from_secs(SCRIPT_RUN_ONESHOT_MAX_TIMEOUT_SECS),
+        "schedule_action_create" => Duration::from_secs(30),
+        "script_detect" => Duration::from_secs(30),
+        // script_run oneshot can take up to its 600s upper bound; daemon mode plus
+        // health-probe budget tops out around 60s. Cap at the larger to be safe.
+        "script_run" => Duration::from_secs(SCRIPT_RUN_ONESHOT_MAX_TIMEOUT_SECS),
         "shell_exec" => Duration::from_secs(PLANNER_TOOL_TIMEOUT_SECS),
         _ => Duration::from_secs(PLANNER_TOOL_TIMEOUT_SECS),
     }
@@ -6451,11 +7723,19 @@ mod tests {
             "content": "# test\nLENTRY:\n  R core.ADD 1 1 ->x\n  J x\n",
         });
         let res = tool_file_write(&payload, Some(dir.path())).await;
-        assert!(res.is_ok(), "expected nested write to succeed, got: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "expected nested write to succeed, got: {:?}",
+            res.err()
+        );
         let summary = res.unwrap();
         assert!(summary.contains("Successfully wrote"), "{}", summary);
         let written = dir.path().join("apollo-x-bot/modules/common/retry.ainl");
-        assert!(written.exists(), "expected file to be created: {}", written.display());
+        assert!(
+            written.exists(),
+            "expected file to be created: {}",
+            written.display()
+        );
     }
 
     #[tokio::test]
@@ -6468,8 +7748,16 @@ mod tests {
         assert!(res.is_ok(), "{:?}", res.err());
         let body = res.unwrap();
         assert!(body.contains("file_read was given a directory"), "{}", body);
-        assert!(body.contains("README.md"), "listing must include files: {}", body);
-        assert!(body.contains("modules/"), "listing must include subdirs with /: {}", body);
+        assert!(
+            body.contains("README.md"),
+            "listing must include files: {}",
+            body
+        );
+        assert!(
+            body.contains("modules/"),
+            "listing must include subdirs with /: {}",
+            body
+        );
     }
 
     #[tokio::test]
@@ -6483,11 +7771,16 @@ mod tests {
             "content": "# modules/common/record_decision.ainl\n[... full content truncated for brevity ...]",
         });
         let res = tool_file_write(&payload, Some(dir.path())).await;
-        assert!(res.is_err(), "expected truncation placeholder to be rejected");
+        assert!(
+            res.is_err(),
+            "expected truncation placeholder to be rejected"
+        );
         let err = res.err().unwrap();
         assert!(err.contains("placeholder/truncation"), "{}", err);
         assert!(
-            !dir.path().join("modules_common_record_decision.ainl").exists(),
+            !dir.path()
+                .join("modules_common_record_decision.ainl")
+                .exists(),
             "broken file must not land on disk"
         );
     }
@@ -6495,10 +7788,288 @@ mod tests {
     #[test]
     fn test_detect_truncation_placeholder_negatives() {
         // Real prose mentioning the word "truncated" should not trip the guard.
-        assert!(detect_truncation_placeholder("function clamp(x) { /* clamps not truncated */ }").is_none());
-        assert!(detect_truncation_placeholder("def parse():\n    # parse JSON\n    pass\n").is_none());
+        assert!(
+            detect_truncation_placeholder("function clamp(x) { /* clamps not truncated */ }")
+                .is_none()
+        );
+        assert!(
+            detect_truncation_placeholder("def parse():\n    # parse JSON\n    pass\n").is_none()
+        );
         // Positive controls.
-        assert!(detect_truncation_placeholder("hello\n[... full content truncated for brevity ...]\n").is_some());
+        assert!(detect_truncation_placeholder(
+            "hello\n[... full content truncated for brevity ...]\n"
+        )
+        .is_some());
         assert!(detect_truncation_placeholder("// ... rest of file ...").is_some());
+    }
+
+    // -------------------------------------------------------------------------
+    // script_run: deterministic interpreter selection (Phase 1 of the long-term
+    // "model decides intent, runtime decides how" architecture).
+    // -------------------------------------------------------------------------
+
+    /// Oneshot mode runs a real `.sh` script to completion and returns structured JSON
+    /// with stdout/stderr + exit_code + a `runner` block describing the interpreter pick.
+    /// Skipped on Windows because it relies on a POSIX shell being on PATH.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_script_run_oneshot_shell_returns_stdout_and_runner_meta() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("hello.sh");
+        std::fs::write(&script, "#!/bin/sh\necho hi-from-script\n").unwrap();
+
+        let payload = serde_json::json!({ "script": "hello.sh" });
+        let res =
+            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+
+        assert!(res.is_ok(), "expected oneshot success, got: {:?}", res.err());
+        let body = res.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["mode"], "oneshot");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["exit_code"], 0);
+        assert!(
+            v["stdout"].as_str().unwrap().contains("hi-from-script"),
+            "stdout should contain the echo: {body}"
+        );
+        let runner = &v["runner"];
+        assert_eq!(runner["language"], "shell");
+        assert_eq!(runner["decision_source"], "extension");
+        assert!(
+            runner["script_path"]
+                .as_str()
+                .unwrap()
+                .ends_with("hello.sh"),
+            "script_path must point at the resolved file: {body}"
+        );
+    }
+
+    /// Missing script returns a structured error message that names the path and tells
+    /// the agent how to recover (use `file_list`, etc.) — never a bare "command not found".
+    #[tokio::test]
+    async fn test_script_run_missing_file_returns_actionable_hint() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let payload = serde_json::json!({ "script": "no-such.py" });
+        let res =
+            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+
+        let err = res.expect_err("missing script must error");
+        assert!(
+            err.contains("script_run: script not found"),
+            "must surface the structured prefix: {err}"
+        );
+        assert!(
+            err.contains("no-such.py"),
+            "must echo the requested path: {err}"
+        );
+        assert!(
+            err.contains("file_list") || err.contains("workspace"),
+            "must include a recovery hint: {err}"
+        );
+    }
+
+    /// Unknown / unsupported `mode` is rejected with a clear list of accepted values.
+    #[tokio::test]
+    async fn test_script_run_unknown_mode_rejected() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("noop.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+
+        let payload = serde_json::json!({ "script": "noop.sh", "mode": "spawn-and-pray" });
+        let res =
+            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+
+        let err = res.expect_err("invalid mode must error");
+        assert!(err.contains("script_run: unknown `mode`"), "{err}");
+        assert!(err.contains("oneshot"), "must list accepted modes: {err}");
+        assert!(err.contains("daemon"), "must list accepted modes: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_script_run_infers_daemon_for_gateway_scripts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = dir.path().join("gateway_server.py");
+        std::fs::write(&script, "print('x')\n").unwrap();
+
+        // No explicit mode, but "gateway_server.py" should infer daemon.
+        // Without a process manager, that means a deterministic error.
+        let payload = serde_json::json!({ "script": "gateway_server.py" });
+        let err = tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None)
+            .await
+            .expect_err("daemon inference requires process manager");
+        assert!(err.contains("process_manager not available"), "{err}");
+    }
+
+    /// `script_run` must be in the public `builtin_tool_definitions()` list and have
+    /// a non-empty schema so the LLM actually sees it as an option.
+    #[test]
+    fn test_script_run_is_registered_as_builtin() {
+        let tools = builtin_tool_definitions();
+        let def = tools
+            .iter()
+            .find(|t| t.name == "script_run")
+            .expect("script_run must be registered");
+        assert!(
+            def.description.contains("script_run") || def.description.contains("project script"),
+            "description must mention the tool's purpose: {}",
+            def.description
+        );
+        let required = def
+            .input_schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .expect("script_run schema must declare `required`");
+        assert!(
+            required.iter().any(|v| v.as_str() == Some("script")),
+            "`script` must be required"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_script_detect_finds_files_and_package_scripts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/gateway.ts"), "console.log('hi')\n").unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"x","scripts":{"dev":"tsx src/gateway.ts","start":"node src/gateway.ts"}}"#,
+        )
+        .unwrap();
+
+        let payload = serde_json::json!({ "query": "gateway" });
+        let body = tool_script_detect(&payload, Some(dir.path())).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let results = v["results"].as_array().unwrap();
+        assert!(!results.is_empty(), "expected some results: {body}");
+        // Expect at least one file match.
+        assert!(
+            results.iter().any(|r| r["kind"] == "file" && r["path"].as_str().unwrap().contains("gateway.ts")),
+            "expected gateway.ts file candidate: {body}"
+        );
+        // Expect at least one package script match.
+        assert!(
+            results.iter().any(|r| r["kind"] == "package_script" && r["name"] == "dev"),
+            "expected dev package_script candidate: {body}"
+        );
+    }
+
+    #[test]
+    fn test_script_detect_is_registered_as_builtin() {
+        let tools = builtin_tool_definitions();
+        tools
+            .iter()
+            .find(|t| t.name == "script_detect")
+            .expect("script_detect must be registered");
+    }
+
+    #[tokio::test]
+    async fn test_workspace_actions_list_reads_contract() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("armaraos.toml"),
+            r#"
+[actions.gateway]
+description = "Start gateway"
+script = "gateway.sh"
+mode = "oneshot"
+"#,
+        )
+        .unwrap();
+        let out = tool_workspace_actions_list(Some(dir.path())).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let actions = v["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["name"], "gateway");
+    }
+
+    #[tokio::test]
+    async fn test_workspace_action_set_creates_contract() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let input = serde_json::json!({
+            "action": "gateway",
+            "description": "Start gateway",
+            "script": "gateway_server.py",
+            "mode": "daemon",
+            "env": { "PROMOTER_GATEWAY_PORT": "9011" },
+            "health_check": {
+                "url": "http://127.0.0.1:9011/v1/promoter.stats",
+                "expect_status": 200
+            }
+        });
+        let out = tool_workspace_action_set(&input, Some(dir.path())).await.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["action"], "gateway");
+        let raw = std::fs::read_to_string(dir.path().join("armaraos.toml")).unwrap();
+        assert!(raw.contains("[actions.gateway]"), "{raw}");
+        assert!(raw.contains("gateway_server.py"), "{raw}");
+    }
+
+    #[tokio::test]
+    async fn test_workspace_action_delete_removes_last_contract() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let set_input = serde_json::json!({
+            "action": "gateway",
+            "script": "gateway_server.py",
+        });
+        tool_workspace_action_set(&set_input, Some(dir.path()))
+            .await
+            .unwrap();
+        assert!(dir.path().join("armaraos.toml").exists());
+
+        let del_input = serde_json::json!({ "action": "gateway" });
+        let out = tool_workspace_action_delete(&del_input, Some(dir.path()))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["status"], "deleted_last_action_removed_contract");
+        assert!(!dir.path().join("armaraos.toml").exists());
+    }
+
+    #[test]
+    fn test_workspace_action_set_delete_are_registered_as_builtins() {
+        let tools = builtin_tool_definitions();
+        tools
+            .iter()
+            .find(|t| t.name == "workspace_action_set")
+            .expect("workspace_action_set must be registered");
+        tools
+            .iter()
+            .find(|t| t.name == "workspace_action_delete")
+            .expect("workspace_action_delete must be registered");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_workspace_action_executes_named_contract_action() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("run.sh"), "#!/bin/sh\necho hi-from-contract\n").unwrap();
+        std::fs::write(
+            dir.path().join("armaraos.toml"),
+            r#"
+[actions.gateway]
+script = "run.sh"
+mode = "oneshot"
+"#,
+        )
+        .unwrap();
+
+        let input = serde_json::json!({ "action": "gateway" });
+        let out = tool_workspace_action(
+            &input,
+            &[],
+            Some(dir.path()),
+            None,
+            Some("agent-1"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["stdout"].as_str().unwrap().contains("hi-from-contract"));
+        assert_eq!(v["workspace_action"]["name"], "gateway");
     }
 }

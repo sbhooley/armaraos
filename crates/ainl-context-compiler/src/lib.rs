@@ -45,11 +45,11 @@
 
 pub mod budget;
 pub mod capability;
+pub mod mcp_ainl_prompt;
 pub mod metrics;
 pub mod orchestrator;
 pub mod relevance;
 pub mod segment;
-pub mod mcp_ainl_prompt;
 pub mod summarizer;
 
 pub mod embedder;
@@ -63,13 +63,13 @@ pub use capability::{CapabilityProbe, Tier};
 pub use embedder::{cosine, Embedder, EmbedderError, PlaceholderEmbedder};
 #[cfg(feature = "sources-failure-warnings")]
 pub use failure_recall::memory_block_for_user_query;
+pub use mcp_ainl_prompt::{
+    mcp_ainl_run_adapters_cheatsheet_segment, MCP_AINL_RUN_ADAPTERS_CHEATSHEET,
+};
 pub use metrics::{ContextCompilerMetrics, SegmentMetrics};
 pub use orchestrator::{ComposedPrompt, ContextCompiler};
 pub use relevance::{HeuristicScorer, RelevanceScore, RelevanceScorer};
 pub use segment::{Role, Segment, SegmentKind};
-pub use mcp_ainl_prompt::{
-    mcp_ainl_run_adapters_cheatsheet_segment, MCP_AINL_RUN_ADAPTERS_CHEATSHEET,
-};
 pub use summarizer::{AnchoredSummary, AnchoredSummarySection, Summarizer, SummarizerError};
 #[cfg(feature = "sources-trajectory-recap")]
 pub use trajectory_recap::format_trajectory_recap_lines;

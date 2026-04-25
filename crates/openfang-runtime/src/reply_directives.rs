@@ -136,6 +136,19 @@ pub fn parse_directives(text: &str) -> (String, DirectiveSet) {
     (cleaned.trim().to_string(), acc.directives)
 }
 
+/// Whether assistant output should suppress the user-visible reply.
+///
+/// Kept in sync with `agent_loop` EndTurn handling: `NO_REPLY`, `[silent]`, or `[[silent]]`
+/// (with or without trailing text — the directive is sticky once parsed).
+pub fn assistant_intended_silent(
+    visible_without_directives: &str,
+    directives: &DirectiveSet,
+) -> bool {
+    let t = visible_without_directives.trim();
+    let no_reply_body = t == "NO_REPLY" || t.eq_ignore_ascii_case("[silent]");
+    no_reply_body || directives.silent
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +259,42 @@ mod tests {
         // Unknown directives are stripped from output but don't set any field
         assert_eq!(text, "visible");
         assert_eq!(dirs, DirectiveSet::default());
+    }
+
+    #[test]
+    fn test_assistant_intended_silent_no_reply() {
+        let (text, dirs) = parse_directives("NO_REPLY");
+        assert!(assistant_intended_silent(&text, &dirs));
+    }
+
+    #[test]
+    fn test_assistant_intended_silent_directive_only() {
+        let (text, dirs) = parse_directives("[[silent]]");
+        assert!(text.is_empty());
+        assert!(assistant_intended_silent(&text, &dirs));
+    }
+
+    #[test]
+    fn test_assistant_intended_silent_not_tool_only_empty() {
+        let (text, dirs) = parse_directives("");
+        assert!(!assistant_intended_silent(&text, &dirs));
+    }
+
+    #[test]
+    fn test_assistant_intended_silent_bracket_variants() {
+        let (t, d) = parse_directives("[SILENT]");
+        assert!(assistant_intended_silent(&t, &d));
+        let (t, d) = parse_directives("  [silent]  ");
+        assert!(assistant_intended_silent(&t, &d));
+        let (t, d) = parse_directives("[Silent]");
+        assert!(assistant_intended_silent(&t, &d));
+    }
+
+    #[test]
+    fn test_assistant_intended_silent_rejects_substrings() {
+        let (t, d) = parse_directives("SILENT");
+        assert!(!assistant_intended_silent(&t, &d));
+        let (t, d) = parse_directives("Hello, how can I help?");
+        assert!(!assistant_intended_silent(&t, &d));
     }
 }

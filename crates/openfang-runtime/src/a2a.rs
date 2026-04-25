@@ -622,7 +622,9 @@ mod tests {
         .unwrap();
         let eps = A2aClient::message_send_endpoints("https://ex.com", &card);
         assert!(eps.iter().any(|e| e == "https://ex.com/message:send"));
-        assert!(eps.iter().any(|e| e == "https://ex.com/a2a/v1/message:send"));
+        assert!(eps
+            .iter()
+            .any(|e| e == "https://ex.com/a2a/v1/message:send"));
     }
 
     #[test]

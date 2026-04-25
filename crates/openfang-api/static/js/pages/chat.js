@@ -1836,6 +1836,7 @@ function chatPage() {
             meta += pct > 0 ? ' | ⚡ eco ↓' + pct + '%' : ' | ⚡ eco';
           }
           meta += this._buildEcoMetaSuffix(data);
+          if (data.turn_outcome) meta += ' | outcome: ' + data.turn_outcome;
           var ecoTip = this._buildEcoMetaTooltip(data);
           // Use server response if non-empty, otherwise preserve accumulated streamed text
           var finalText = (data.content && data.content.trim()) ? data.content : streamedText;
@@ -1893,6 +1894,7 @@ function chatPage() {
             silentMeta += sPct > 0 ? ' | ⚡ eco ↓' + sPct + '%' : ' | ⚡ eco';
           }
           silentMeta += this._buildEcoMetaSuffix(data);
+          if (data.turn_outcome) silentMeta += ' | outcome: ' + data.turn_outcome;
           var silentEcoTip = this._buildEcoMetaTooltip(data);
           this.messages.push({ id: ++msgId, role: 'system', text: '*(No reply — agent processed the message but determined no response was needed.)*', meta: silentMeta, tools: [], ts: Date.now(), ecoMetaTooltip: silentEcoTip || null });
           if (this.currentAgent) _agentMsgCache[this.currentAgent.id] = this.messages.slice();
@@ -2399,6 +2401,7 @@ function chatPage() {
           httpMeta += hPct > 0 ? ' | ⚡ eco ↓' + hPct + '%' : ' | ⚡ eco';
         }
         httpMeta += this._buildEcoMetaSuffix(res);
+        if (res.turn_outcome) httpMeta += ' | outcome: ' + res.turn_outcome;
         var httpEcoTip = this._buildEcoMetaTooltip(res);
         var httpCompressedInput = (res.compressed_input && res.compression_savings_pct > 0) ? res.compressed_input : null;
         this._recordEcoSaving(res.compression_savings_pct);

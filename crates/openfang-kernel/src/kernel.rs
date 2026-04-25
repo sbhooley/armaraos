@@ -59,6 +59,16 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     "file_write",
     "file_read",
     "shell_exec",
+    "workspace_actions_list",
+    "workspace_action_set",
+    "workspace_action_delete",
+    "workspace_action",
+    "script_detect",
+    "script_run",
+    "process_start",
+    "process_poll",
+    "process_write",
+    "apply_patch",
     "web_search",
     "channel_send",
     "event_publish",
@@ -77,6 +87,7 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
     // register recurring work (e.g. agent_turn / ainl_run) without hand-editing
     // manifests. Block via tool_blocklist if a sandbox should not schedule.
     "schedule_create",
+    "schedule_action_create",
     "schedule_list",
     "schedule_delete",
     "channels_list",
@@ -87,6 +98,7 @@ const DEFAULT_AGENT_ALLOWLIST_TOOLS: &[&str] = &[
 /// duplicating the same tool names in every `agent.toml` / `AGENT.json`.
 const DEFAULT_AGENT_SCHEDULING_BUILTINS: &[&str] = &[
     "schedule_create",
+    "schedule_action_create",
     "schedule_list",
     "schedule_delete",
     "channels_list",
@@ -2643,6 +2655,13 @@ impl OpenFangKernel {
         if !manifest_had_explicit_exec_policy {
             apply_shell_caps_to_exec_policy(&mut manifest);
         }
+        if let Some(ref mut p) = manifest.exec_policy {
+            for pref in &self.config.exec_policy.extra_allowed_path_prefixes {
+                if !p.extra_allowed_path_prefixes.iter().any(|e| e == pref) {
+                    p.extra_allowed_path_prefixes.push(pref.clone());
+                }
+            }
+        }
         info!(agent = %name, id = %agent_id, exec_mode = ?manifest.exec_policy.as_ref().map(|p| &p.mode), "Agent exec_policy resolved");
 
         // Overlay kernel default_model onto agent if agent didn't explicitly choose.
@@ -3322,6 +3341,14 @@ impl OpenFangKernel {
                     String::new()
                 },
                 workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
+                ainl_library_host_path: Some(
+                    self.config
+                        .home_dir
+                        .join("ainl-library")
+                        .display()
+                        .to_string(),
+                ),
+                shell_path_guard_mode: manifest.exec_policy.as_ref().map(|p| p.shell_path_guard),
                 soul_md: manifest
                     .workspace
                     .as_ref()
@@ -4286,6 +4313,14 @@ impl OpenFangKernel {
                     String::new()
                 },
                 workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
+                ainl_library_host_path: Some(
+                    self.config
+                        .home_dir
+                        .join("ainl-library")
+                        .display()
+                        .to_string(),
+                ),
+                shell_path_guard_mode: manifest.exec_policy.as_ref().map(|p| p.shell_path_guard),
                 soul_md: manifest
                     .workspace
                     .as_ref()
@@ -9188,6 +9223,147 @@ impl OpenFangKernel {
                     }
                 }
             }
+            CronAction::WorkspaceAction {
+                action_name,
+                args,
+                env,
+                mode,
+                timeout_secs,
+            } => {
+                let (workspace, exec_policy, hand_allowed_env): (
+                    std::path::PathBuf,
+                    Option<openfang_types::config::ExecPolicy>,
+                    Vec<String>,
+                ) = {
+                    let Some(entry) = self.registry.get(agent_id) else {
+                        let err_msg = format!(
+                            "workspace action `{action_name}` failed: agent `{agent_id}` not found"
+                        );
+                        self.cron_scheduler.record_failure(job_id, &err_msg);
+                        return Err(err_msg);
+                    };
+                    let Some(ws) = entry.manifest.workspace.clone() else {
+                        let err_msg = format!(
+                            "workspace action `{action_name}` failed: agent has no workspace configured"
+                        );
+                        self.cron_scheduler.record_failure(job_id, &err_msg);
+                        return Err(err_msg);
+                    };
+                    let allowed_env = entry
+                        .manifest
+                        .metadata
+                        .get("hand_allowed_env")
+                        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+                        .unwrap_or_default();
+                    (ws, entry.manifest.exec_policy.clone(), allowed_env)
+                };
+                let ainl_library_root = self.config.home_dir.join("ainl-library");
+                let agent_id_s = agent_id.to_string();
+
+                match openfang_runtime::tool_runner::execute_workspace_action_direct(
+                    workspace.as_path(),
+                    action_name,
+                    if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.clone())
+                    },
+                    if env.is_empty() {
+                        None
+                    } else {
+                        Some(env.clone())
+                    },
+                    mode.clone(),
+                    *timeout_secs,
+                    &hand_allowed_env,
+                    Some(ainl_library_root.as_path()),
+                    Some(agent_id_s.as_str()),
+                    Some(&self.process_manager),
+                    exec_policy.as_ref(),
+                )
+                .await
+                {
+                    Ok(output) => {
+                        let delivery = job.delivery.clone();
+                        match cron_deliver_response(self, agent_id, output.trim(), &delivery).await {
+                            Ok(()) => {
+                                self.cron_scheduler.record_success(job_id);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobOutput,
+                                    format!(
+                                        "job={job_name}, id={job_id}, workspace_action={action_name}"
+                                    ),
+                                    openfang_types::truncate_str(output.trim(), 400),
+                                );
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobCompleted {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        output_preview: openfang_types::truncate_str(
+                                            output.trim(),
+                                            220,
+                                        )
+                                        .to_string(),
+                                        action_kind: Some("workspace_action".to_string()),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
+                                Ok(output)
+                            }
+                            Err(e) => {
+                                self.cron_scheduler.record_failure(job_id, &e);
+                                self.audit_log.record(
+                                    agent_id.to_string(),
+                                    openfang_runtime::audit::AuditAction::CronJobFailure,
+                                    format!(
+                                        "job={job_name}, id={job_id}, workspace_action={action_name}"
+                                    ),
+                                    openfang_types::truncate_str(&e, 400),
+                                );
+                                let evt = Event::new(
+                                    AgentId::new(),
+                                    EventTarget::Broadcast,
+                                    EventPayload::System(SystemEvent::CronJobFailed {
+                                        job_id: job_id.to_string(),
+                                        job_name: job_name.clone(),
+                                        agent_id,
+                                        error: openfang_types::truncate_str(&e, 220).to_string(),
+                                        action_kind: Some("workspace_action".to_string()),
+                                    }),
+                                );
+                                self.publish_event(evt).await;
+                                Err(e)
+                            }
+                        }
+                    }
+                    Err(err_msg) => {
+                        self.cron_scheduler.record_failure(job_id, &err_msg);
+                        self.audit_log.record(
+                            agent_id.to_string(),
+                            openfang_runtime::audit::AuditAction::CronJobFailure,
+                            format!("job={job_name}, id={job_id}, workspace_action={action_name}"),
+                            openfang_types::truncate_str(&err_msg, 400),
+                        );
+                        let evt = Event::new(
+                            AgentId::new(),
+                            EventTarget::Broadcast,
+                            EventPayload::System(SystemEvent::CronJobFailed {
+                                job_id: job_id.to_string(),
+                                job_name: job_name.clone(),
+                                agent_id,
+                                error: openfang_types::truncate_str(&err_msg, 220).to_string(),
+                                action_kind: Some("workspace_action".to_string()),
+                            }),
+                        );
+                        self.publish_event(evt).await;
+                        Err(err_msg)
+                    }
+                }
+            }
         }
     }
 }
@@ -10269,6 +10445,23 @@ impl KernelHandle for OpenFangKernel {
         if let Ok(id) = agent_id.parse::<AgentId>() {
             self.registry.touch(id);
         }
+    }
+
+    fn record_shell_guard_event(
+        &self,
+        agent_id: Option<&str>,
+        guard_kind: &str,
+        detail: &str,
+        outcome: &str,
+    ) {
+        let aid = agent_id.unwrap_or("unknown").to_string();
+        let body = openfang_types::truncate_str(detail, 1200);
+        self.audit_log.record(
+            aid,
+            openfang_runtime::audit::AuditAction::ShellExec,
+            format!("shell_guard:{guard_kind}"),
+            format!("{outcome}: {body}"),
+        );
     }
 
     fn live_llm_config(&self) -> Option<openfang_types::config::LlmConfig> {

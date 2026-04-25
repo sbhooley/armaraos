@@ -71,6 +71,7 @@ impl ProcessManager {
         agent_id: &str,
         command: &str,
         args: &[String],
+        env: Option<&std::collections::HashMap<String, String>>,
         cwd: Option<&str>,
     ) -> Result<ProcessId, String> {
         // Check per-agent limit
@@ -92,12 +93,44 @@ impl ProcessManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(env) = env {
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+        }
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to start process '{}': {}", command, e))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            let es = e.to_string();
+            let mut msg = if args.is_empty() {
+                format!("Failed to start process `{command}`: {es}")
+            } else {
+                format!(
+                    "Failed to start process `{command}` with args `{}`: {es}",
+                    args.join(" ")
+                )
+            };
+            if es.contains("No such file or directory")
+                || es.contains("entity not found")
+                || es.contains("cannot find the file")
+                || es.contains("The system cannot find the file")
+            {
+                msg.push_str(
+                    " Hint: the executable was not found on PATH for this working directory — \
+                     pass an absolute path to the interpreter (e.g. `/path/to/venv/bin/python3`) \
+                     and set `cwd` to the directory that contains your script, `venv/`, or `.env`.",
+                );
+            } else if es.to_lowercase().contains("permission denied")
+                || es.contains("access is denied")
+            {
+                msg.push_str(
+                    " Hint: permission denied when spawning — check file mode (chmod +x) or \
+                     Gatekeeper / antivirus blocks on the binary path.",
+                );
+            }
+            msg
+        })?;
 
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
@@ -166,6 +199,56 @@ impl ProcessManager {
         );
 
         Ok(id)
+    }
+
+    fn err_not_found_or_wrong_owner(process_id: &str) -> String {
+        format!("Process '{process_id}' not found or not owned by this agent")
+    }
+
+    /// True when `pid` is the live OS pid of a `process_start` child owned by `agent_id`.
+    pub fn agent_owns_os_pid(&self, agent_id: &str, pid: u32) -> bool {
+        self.processes
+            .iter()
+            .any(|e| e.value().agent_id == agent_id && e.value().child.id() == Some(pid))
+    }
+
+    /// Returns `Ok(())` only if `process_id` exists and is owned by `agent_id`.
+    pub fn ensure_agent_owns(&self, process_id: &str, agent_id: &str) -> Result<(), String> {
+        let entry = self
+            .processes
+            .get(process_id)
+            .ok_or_else(|| Self::err_not_found_or_wrong_owner(process_id))?;
+        if entry.value().agent_id != agent_id {
+            return Err(Self::err_not_found_or_wrong_owner(process_id));
+        }
+        Ok(())
+    }
+
+    /// Read stdout/stderr only if `agent_id` owns the process (tool path).
+    pub async fn read_for_agent(
+        &self,
+        process_id: &str,
+        agent_id: &str,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        self.ensure_agent_owns(process_id, agent_id)?;
+        self.read(process_id).await
+    }
+
+    /// Write stdin only if `agent_id` owns the process (tool path).
+    pub async fn write_for_agent(
+        &self,
+        process_id: &str,
+        agent_id: &str,
+        data: &str,
+    ) -> Result<(), String> {
+        self.ensure_agent_owns(process_id, agent_id)?;
+        self.write(process_id, data).await
+    }
+
+    /// Kill only if `agent_id` owns the process (tool path). Internal [`Self::kill`] skips ownership.
+    pub async fn kill_for_agent(&self, process_id: &str, agent_id: &str) -> Result<(), String> {
+        self.ensure_agent_owns(process_id, agent_id)?;
+        self.kill(process_id).await
     }
 
     /// Write data to a process's stdin.
@@ -282,7 +365,7 @@ mod tests {
             vec![]
         };
 
-        let id = pm.start("agent1", cmd, &args, None).await.unwrap();
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
         assert!(id.starts_with("proc_"));
 
         let list = pm.list("agent1");
@@ -309,8 +392,8 @@ mod tests {
             vec![]
         };
 
-        let id1 = pm.start("agent1", cmd, &args, None).await.unwrap();
-        let result = pm.start("agent1", cmd, &args, None).await;
+        let id1 = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        let result = pm.start("agent1", cmd, &args, None, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("max: 1"));
 
@@ -336,5 +419,113 @@ mod tests {
         let pm = ProcessManager::default();
         assert_eq!(pm.max_per_agent, 5);
         assert_eq!(pm.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_for_agent_owner_ok() {
+        let pm = ProcessManager::new(5);
+        let cmd = if cfg!(windows) { "cmd" } else { "cat" };
+        let args: Vec<String> = if cfg!(windows) {
+            vec![
+                "/C".to_string(),
+                "timeout".to_string(),
+                "/t".to_string(),
+                "60".to_string(),
+            ]
+        } else {
+            vec![]
+        };
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        assert!(pm.read_for_agent(&id, "agent1").await.is_ok());
+        pm.kill_for_agent(&id, "agent1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_read_for_agent_cross_agent_denied() {
+        let pm = ProcessManager::new(5);
+        let cmd = if cfg!(windows) { "cmd" } else { "cat" };
+        let args: Vec<String> = if cfg!(windows) {
+            vec![
+                "/C".to_string(),
+                "timeout".to_string(),
+                "/t".to_string(),
+                "60".to_string(),
+            ]
+        } else {
+            vec![]
+        };
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        let err = pm.read_for_agent(&id, "agent2").await.unwrap_err();
+        assert!(err.contains("not found or not owned"));
+        pm.kill_for_agent(&id, "agent1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_write_for_agent_cross_agent_denied() {
+        let pm = ProcessManager::new(5);
+        let cmd = if cfg!(windows) { "cmd" } else { "cat" };
+        let args: Vec<String> = if cfg!(windows) {
+            vec![
+                "/C".to_string(),
+                "timeout".to_string(),
+                "/t".to_string(),
+                "60".to_string(),
+            ]
+        } else {
+            vec![]
+        };
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        let err = pm.write_for_agent(&id, "agent2", "x\n").await.unwrap_err();
+        assert!(err.contains("not found or not owned"));
+        pm.kill_for_agent(&id, "agent1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_kill_for_agent_cross_agent_denied_owner_can_still_kill() {
+        let pm = ProcessManager::new(5);
+        let cmd = if cfg!(windows) { "cmd" } else { "cat" };
+        let args: Vec<String> = if cfg!(windows) {
+            vec![
+                "/C".to_string(),
+                "timeout".to_string(),
+                "/t".to_string(),
+                "60".to_string(),
+            ]
+        } else {
+            vec![]
+        };
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        let err = pm.kill_for_agent(&id, "agent2").await.unwrap_err();
+        assert!(err.contains("not found or not owned"));
+        assert_eq!(pm.count(), 1);
+        pm.kill_for_agent(&id, "agent1").await.unwrap();
+        assert_eq!(pm.count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_for_agent_nonexistent_unified_message() {
+        let pm = ProcessManager::new(5);
+        let err = pm.read_for_agent("proc_99999", "agent1").await.unwrap_err();
+        assert!(err.contains("not found or not owned"));
+    }
+
+    #[tokio::test]
+    async fn test_start_missing_executable_includes_hint() {
+        let pm = ProcessManager::new(5);
+        let err = pm
+            .start(
+                "agent1",
+                "/nonexistent/openfang_test_binary_9f3a2c1d",
+                &[],
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.contains("Failed to start process"));
+        assert!(
+            err.to_lowercase().contains("hint"),
+            "expected PATH/cwd hint in: {err}"
+        );
     }
 }

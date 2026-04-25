@@ -127,7 +127,7 @@ SQLite database schema (`~/.armaraos/memory.db`):
 - **Integration (`openfang-runtime`)**
   - `graph_memory_writer.rs` — `GraphMemoryWriter` (`Arc<Mutex<GraphMemory>>`); open is non-fatal; `run_persona_evolution_pass`, export path for Python refresh.
   - `agent_loop.rs` — `record_turn` on EndTurn (with optional semantic tags), fact/pattern extraction via **`ainl_graph_extractor_bridge`** (on by default; opt out with **`AINL_EXTRACTOR_ENABLED=0`**) falling back to **`graph_extractor.rs`** when the crate path yields no candidates; spawned post-turn **`run_persona_evolution_pass`** + **`persona_evolution::PersonaEvolutionHook`** (on by default; opt out with **`AINL_PERSONA_EVOLUTION=0`**); persona lines merged into system prompt each LLM call.
-  - `ainl_semantic_tagger_bridge.rs` — optional episode/fact tags when **`ainl-tagger`** feature + **`AINL_TAGGER_ENABLED=1`**.
+  - `ainl_semantic_tagger_bridge.rs` — optional episode/fact tags when **`ainl-tagger`** feature is compiled in (default on); opt out via **`AINL_TAGGER_ENABLED=0`**.
   - `tool_runner.rs` — `tool_agent_delegate`: after successful send, `record_turn` with optional serialized `OrchestrationTraceEvent` JSON; `tool_a2a_send`: `record_delegation` after `A2aClient::send_task` (stays in `tool_runner` so `caller_agent_id` exists).
   - **`graph_extractor.rs` (local heuristic):** Fallback post-turn **regex / structural** extraction when the crate path (`ainl_graph_extractor_bridge`) yields no candidates, or when the **`ainl-extractor`** feature is off, or when opted out via **`AINL_EXTRACTOR_ENABLED=0`**. The published **`ainl-graph-extractor`** crate runs by default when the feature is compiled in; set **`AINL_EXTRACTOR_ENABLED=0`** to force heuristics-only without recompiling.
 
@@ -140,11 +140,11 @@ Operator reference: **`docs/graph-memory.md`**, **`docs/graph-memory-sync.md`** 
 1. **Episode**: What happened during an agent turn
    - `turn_id`, `timestamp`, `tool_calls`, `delegation_to`
    - Optional `trace_event` (OrchestrationTraceEvent as JSON)
-   - Optional `tags` (string list): e.g. deterministic **`ainl-semantic-tagger`** tool labels when **`AINL_TAGGER_ENABLED=1`** (see **`docs/graph-memory.md`**)
+   - Optional `tags` (string list): e.g. deterministic **`ainl-semantic-tagger`** tool labels when the feature is present (opt out via **`AINL_TAGGER_ENABLED=0`**; see **`docs/graph-memory.md`**)
 
 2. **Semantic**: Facts learned with confidence scores
    - `fact`, `confidence` (0.0-1.0), `source_turn_id`
-   - Optional `tags` (string list): orchestration correlation strings plus optional tagger output when **`AINL_TAGGER_ENABLED=1`**
+   - Optional `tags` (string list): orchestration correlation strings plus optional tagger output (opt out via **`AINL_TAGGER_ENABLED=0`**)
 
 3. **Procedural**: Reusable compiled workflow patterns
    - `pattern_name`, `compiled_graph` (binary format)
@@ -233,7 +233,7 @@ ArmaraOS maintains API compatibility with OpenFang:
 | ainl-memory | 3 | Graph-memory substrate (standalone); SQLite `GraphMemory` | **Integrated** — primary graph store for `GraphMemoryWriter` |
 | ainl-persona | 3 | Persona model + evolution APIs (`EvolutionEngine`, etc.) | **Integrated** — feature `ainl-persona-evolution` (**default ON**); post-turn evolution + prompt merge in `agent_loop.rs` / `graph_memory_writer.rs` |
 | ainl-graph-extractor | 3 | Structured graph extraction (published / workspace crate) | **Integrated** — feature `ainl-extractor` (**default ON**); `ainl_graph_extractor_bridge.rs` is the **primary path** (on by default); `graph_extractor.rs` heuristics are the **fallback** (opt out via `AINL_EXTRACTOR_ENABLED=0`) |
-| ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Integrated** — feature `ainl-tagger` (**default ON**); `ainl_semantic_tagger_bridge.rs`; runtime gate `AINL_TAGGER_ENABLED` |
+| ainl-semantic-tagger | 3 | Semantic tagging for extraction pipeline | **Integrated** — feature `ainl-tagger` (**default ON**); `ainl_semantic_tagger_bridge.rs`; runtime opt-out `AINL_TAGGER_ENABLED=0` |
 | ainl-runtime | 3 | Standalone AINL execution stack (workspace + **crates.io**); procedural **`PatchAdapter`** registry + **`GraphPatchAdapter`** fallback JSON (`label`, `patch_version`, `frame_keys`); topic-ranked **`MemoryContext::relevant_semantic`**; nested **`run_turn`** depth enforced internally (**`DelegationDepthExceeded`**); **`TurnOutcome`** / **`TurnWarning`** / **`TurnPhase`**; docs in **`docs/ainl-runtime-graph-patch.md`**, **`docs/ainl-runtime-integration.md`**, **`crates/ainl-runtime/README.md`** | **Enabled by default** in `openfang-runtime` feature set; per-agent `ainl_runtime_engine` (or env `AINL_RUNTIME_ENGINE=1`) selects path at runtime; `ainl_runtime_bridge.rs`; approval gate pseudo-tool `ainl_runtime_engine`; step-based `cost_estimate` + kernel metering rollup |
 
 ---

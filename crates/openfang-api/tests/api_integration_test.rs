@@ -396,20 +396,10 @@ async fn test_agent_llm_tools_includes_github_subtree_by_named_profile() {
         );
     }
 
-    assert_github_subtree_in_llm_tools(
-        &server,
-        &client,
-        CODING_PROFILE_LLM_TOOLS_MANIFEST,
-        true,
-    )
-    .await;
-    assert_github_subtree_in_llm_tools(
-        &server,
-        &client,
-        RESEARCH_PROFILE_LLM_TOOLS_MANIFEST,
-        true,
-    )
-    .await;
+    assert_github_subtree_in_llm_tools(&server, &client, CODING_PROFILE_LLM_TOOLS_MANIFEST, true)
+        .await;
+    assert_github_subtree_in_llm_tools(&server, &client, RESEARCH_PROFILE_LLM_TOOLS_MANIFEST, true)
+        .await;
     assert_github_subtree_in_llm_tools(
         &server,
         &client,
@@ -417,13 +407,8 @@ async fn test_agent_llm_tools_includes_github_subtree_by_named_profile() {
         true,
     )
     .await;
-    assert_github_subtree_in_llm_tools(
-        &server,
-        &client,
-        MINIMAL_PROFILE_LLM_TOOLS_MANIFEST,
-        false,
-    )
-    .await;
+    assert_github_subtree_in_llm_tools(&server, &client, MINIMAL_PROFILE_LLM_TOOLS_MANIFEST, false)
+        .await;
     assert_github_subtree_in_llm_tools(
         &server,
         &client,
@@ -2974,7 +2959,9 @@ async fn providers_list_includes_cli_llm_providers_with_expected_fields() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let providers = body["providers"].as_array().expect("providers must be an array");
+    let providers = body["providers"]
+        .as_array()
+        .expect("providers must be an array");
 
     fn provider_by_id<'a>(providers: &'a [serde_json::Value], id: &str) -> &'a serde_json::Value {
         providers
@@ -3045,17 +3032,20 @@ async fn secrets_catalog_and_dependencies_json_shape() {
         .unwrap();
     assert_eq!(cat.status(), 200);
     let body: serde_json::Value = cat.json().await.unwrap();
-    assert!(body.get("request_id").is_some(), "expected request_id: {body}");
+    assert!(
+        body.get("request_id").is_some(),
+        "expected request_id: {body}"
+    );
     assert!(body.get("home_dir").is_some());
     assert!(body.get("generated_at").is_some());
     let rows = body["rows"].as_array().expect("rows must be array");
-    assert!(!rows.is_empty(), "catalog should include static + provider rows");
+    assert!(
+        !rows.is_empty(),
+        "catalog should include static + provider rows"
+    );
     let row0 = &rows[0];
     for key in ["id", "key", "title", "present", "category"] {
-        assert!(
-            row0.get(key).is_some(),
-            "row should include {key}: {row0}"
-        );
+        assert!(row0.get(key).is_some(), "row should include {key}: {row0}");
     }
 
     let dep = client

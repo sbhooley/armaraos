@@ -83,11 +83,11 @@ pub mod ainl_bridge_telemetry;
 pub use ainl_bridge_telemetry::{AinlBridgeTelemetry, AinlBridgeTurnStatus};
 
 pub mod a2a;
-pub mod hermes_a2a;
 pub mod agent_loop;
 pub mod ainl_graph_extractor_bridge;
 #[cfg(feature = "ainl-runtime-engine")]
 pub mod ainl_runtime_bridge;
+pub mod hermes_a2a;
 
 pub mod ainl_semantic_tagger_bridge;
 
@@ -114,8 +114,8 @@ pub mod eco_counterfactual;
 pub mod eco_mode_resolver;
 pub(crate) mod eco_telemetry;
 pub mod embedding;
-pub mod graceful_shutdown;
 pub mod github_subtree;
+pub mod graceful_shutdown;
 pub mod graph_extractor;
 pub mod graph_memory_context;
 pub mod graph_memory_learning;
@@ -139,6 +139,7 @@ pub mod mcp_server;
 pub mod media_understanding;
 pub mod memory_project_scope;
 pub mod model_catalog;
+mod path_canon_cache;
 pub mod persona_evolution;
 pub mod plan_executor;
 pub mod planner_metrics;
@@ -152,8 +153,13 @@ pub mod reply_directives;
 pub mod retry;
 pub mod routing;
 pub mod sandbox;
+pub mod script_runner;
 pub mod session_repair;
+mod shell_argv_guard;
 pub mod shell_bleed;
+pub mod shell_guard_metrics;
+mod shell_job_guard;
+mod shell_port_preflight;
 pub mod str_utils;
 pub mod subprocess_sandbox;
 #[cfg(all(test, feature = "ainl-extractor"))]
@@ -169,5 +175,6 @@ pub mod web_cache;
 pub mod web_content;
 pub mod web_fetch;
 pub mod web_search;
+pub mod workspace_action_contract;
 pub mod workspace_context;
 pub mod workspace_sandbox;

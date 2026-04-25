@@ -36,7 +36,9 @@ impl HermesSendBinding {
             Some(s) => {
                 let sl = s.to_ascii_lowercase();
                 match sl.as_str() {
-                    "armaraos" | "armaraos_jsonrpc" | "jsonrpc" | "tasks_send" => Self::ArmaraosJsonRpc,
+                    "armaraos" | "armaraos_jsonrpc" | "jsonrpc" | "tasks_send" => {
+                        Self::ArmaraosJsonRpc
+                    }
                     "a2a_http" | "http" | "http+json" | "message_send" => Self::A2aHttp,
                     "auto" => Self::Auto,
                     _ => Self::Auto,

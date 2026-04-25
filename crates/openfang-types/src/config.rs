@@ -1038,6 +1038,28 @@ impl Default for CanvasConfig {
     }
 }
 
+/// argv absolute-path containment for `shell_exec` in direct (allowlist) mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellPathGuardMode {
+    /// No argv path checks.
+    Off,
+    /// Log violations at `warn` but still execute (ops visibility).
+    Warn,
+    /// Reject absolute paths outside allowed roots.
+    #[default]
+    Enforce,
+}
+
+/// Restrict `kill` / `pkill` / `killall` / `taskkill` so agents cannot signal arbitrary OS PIDs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellPidGuardMode {
+    Off,
+    #[default]
+    Enforce,
+}
+
 /// Shell/exec security mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1073,6 +1095,19 @@ pub struct ExecPolicy {
     /// produce no stdout/stderr output for this duration. Default: 30.
     #[serde(default = "default_no_output_timeout")]
     pub no_output_timeout_secs: u64,
+    /// Scan argv in direct (`allowlist`) mode for absolute paths; keep them inside the
+    /// workspace, AINL library root, ArmaraOS home, or a small OS utility prefix.
+    #[serde(default)]
+    pub shell_path_guard: ShellPathGuardMode,
+    /// Block `kill`/`pkill`/`killall`/`taskkill` unless targets are managed `process_start` PIDs
+    /// for the same agent (direct mode), plus conservative checks in `full` mode.
+    #[serde(default)]
+    pub shell_pid_guard: ShellPidGuardMode,
+    /// Additional absolute path prefixes (host paths) that `shell_path_guard` treats as
+    /// allowed, merged with the workspace, AINL library, ArmaraOS home, and built-in OS
+    /// utility prefixes. Operator / manifest; use for SDK or mono-repo checkouts.
+    #[serde(default)]
+    pub extra_allowed_path_prefixes: Vec<String>,
 }
 
 fn default_no_output_timeout() -> u64 {
@@ -1106,6 +1141,9 @@ impl Default for ExecPolicy {
             timeout_secs: 60,
             max_output_bytes: 512 * 1024,
             no_output_timeout_secs: default_no_output_timeout(),
+            shell_path_guard: ShellPathGuardMode::Enforce,
+            shell_pid_guard: ShellPidGuardMode::Enforce,
+            extra_allowed_path_prefixes: Vec::new(),
         }
     }
 }
@@ -1320,6 +1358,19 @@ impl LlmConfig {
 /// Bump when the file format or migration steps change; document in `docs/data-directory.md`.
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 
+/// Optional `[security]` overrides for shell argv guards (merged into [`ExecPolicy`] after load).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SecurityShellGuards {
+    /// When set, overrides [`ExecPolicy::shell_path_guard`] after `config.toml` is parsed.
+    pub shell_path_guard: Option<ShellPathGuardMode>,
+    /// When set, overrides [`ExecPolicy::shell_pid_guard`].
+    pub shell_pid_guard: Option<ShellPidGuardMode>,
+    /// Merged (appended) into [`ExecPolicy::extra_allowed_path_prefixes`] after load.
+    #[serde(default)]
+    pub extra_allowed_path_prefixes: Vec<String>,
+}
+
 /// Top-level kernel configuration.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1414,6 +1465,10 @@ pub struct KernelConfig {
     /// Shell/exec security policy.
     #[serde(default)]
     pub exec_policy: ExecPolicy,
+    /// Optional `[security]` table: when `shell_*_guard` keys are set here, they override the
+    /// corresponding fields on [`ExecPolicy`] after load (enterprise / operator centralization).
+    #[serde(default)]
+    pub security: SecurityShellGuards,
     /// Agent bindings for multi-account routing.
     #[serde(default)]
     pub bindings: Vec<AgentBinding>,
@@ -1823,6 +1878,7 @@ impl Default for KernelConfig {
             max_cron_jobs: default_max_cron_jobs(),
             include: Vec::new(),
             exec_policy: ExecPolicy::default(),
+            security: SecurityShellGuards::default(),
             bindings: Vec::new(),
             broadcast: BroadcastConfig::default(),
             auto_reply: AutoReplyConfig::default(),
@@ -1853,6 +1909,21 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
+    /// Apply `[security]` shell guard overrides onto [`ExecPolicy`] (call after TOML deserialize).
+    pub fn apply_security_shell_guard_overrides(&mut self) {
+        if let Some(m) = self.security.shell_path_guard {
+            self.exec_policy.shell_path_guard = m;
+        }
+        if let Some(m) = self.security.shell_pid_guard {
+            self.exec_policy.shell_pid_guard = m;
+        }
+        for p in &self.security.extra_allowed_path_prefixes {
+            if !p.is_empty() && !self.exec_policy.extra_allowed_path_prefixes.contains(p) {
+                self.exec_policy.extra_allowed_path_prefixes.push(p.clone());
+            }
+        }
+    }
+
     /// Resolved workspaces root directory.
     pub fn effective_workspaces_dir(&self) -> PathBuf {
         self.workspaces_dir
@@ -1944,6 +2015,7 @@ impl std::fmt::Debug for KernelConfig {
             .field("max_cron_jobs", &self.max_cron_jobs)
             .field("include", &format!("{} file(s)", self.include.len()))
             .field("exec_policy", &self.exec_policy.mode)
+            .field("security", &self.security)
             .field("bindings", &format!("{} binding(s)", self.bindings.len()))
             .field(
                 "broadcast",

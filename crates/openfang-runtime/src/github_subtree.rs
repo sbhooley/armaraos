@@ -149,8 +149,7 @@ pub fn parse_repo_slug(input: &str) -> Result<RepoSlug, String> {
             break;
         }
     }
-    if !matched_github_prefix
-        && (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+    if !matched_github_prefix && (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
     {
         return Err(format!(
             "`{input}` is not a github.com URL — this tool only mirrors GitHub repos"
@@ -204,15 +203,14 @@ pub fn filter_tree_entries(
             continue;
         }
         // Subpath gate — exact match counts when caller passed a single file.
-        if !prefix.is_empty()
-            && !entry.path.starts_with(&prefix)
-            && entry.path != normalized_sub
-        {
+        if !prefix.is_empty() && !entry.path.starts_with(&prefix) && entry.path != normalized_sub {
             continue;
         }
         // Exclude-substring filter (cheap; not a full glob to keep the surface
         // small — agents have repeatedly invented their own glob shapes).
-        if let Some(needle) = exclude.iter().find(|n| !n.is_empty() && entry.path.contains(n.as_str()))
+        if let Some(needle) = exclude
+            .iter()
+            .find(|n| !n.is_empty() && entry.path.contains(n.as_str()))
         {
             skipped.push(SkippedFile {
                 repo_path: entry.path.clone(),
@@ -383,9 +381,7 @@ async fn fetch_tree(
     name: &str,
     branch: &str,
 ) -> Result<TreeResponse, String> {
-    let url = format!(
-        "{api_base}/repos/{owner}/{name}/git/trees/{branch}?recursive=1"
-    );
+    let url = format!("{api_base}/repos/{owner}/{name}/git/trees/{branch}?recursive=1");
     debug!(url, "github_subtree: fetching tree");
     let resp = client
         .get(&url)
@@ -801,10 +797,8 @@ mod tests {
 
     #[test]
     fn parses_url_with_tree_suffix() {
-        let s = parse_repo_slug(
-            "https://github.com/sbhooley/ainativelang/tree/main/apollo-x-bot",
-        )
-        .unwrap();
+        let s = parse_repo_slug("https://github.com/sbhooley/ainativelang/tree/main/apollo-x-bot")
+            .unwrap();
         assert_eq!(s.owner, "sbhooley");
         assert_eq!(s.name, "ainativelang");
     }
@@ -835,13 +829,16 @@ mod tests {
     fn filter_keeps_only_blobs_under_subpath() {
         let entries = vec![
             entry("apollo-x-bot/README.md", "blob", Some(100)),
-            entry("apollo-x-bot/modules/apollo/follow_manager.ainl", "blob", Some(200)),
+            entry(
+                "apollo-x-bot/modules/apollo/follow_manager.ainl",
+                "blob",
+                Some(200),
+            ),
             entry("apollo-x-bot", "tree", None),
             entry("apollo-x-bot/modules", "tree", None),
             entry("other/file.txt", "blob", Some(50)),
         ];
-        let (kept, skipped) =
-            filter_tree_entries(&entries, "apollo-x-bot", &[], &[]);
+        let (kept, skipped) = filter_tree_entries(&entries, "apollo-x-bot", &[], &[]);
         let kept_paths: Vec<_> = kept.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(
             kept_paths,
@@ -882,12 +879,8 @@ mod tests {
             entry("apollo-x-bot/secrets.env", "blob", Some(10)),
             entry("apollo-x-bot/keep.ainl", "blob", Some(10)),
         ];
-        let (kept, skipped) = filter_tree_entries(
-            &entries,
-            "apollo-x-bot",
-            &[],
-            &["secrets".into()],
-        );
+        let (kept, skipped) =
+            filter_tree_entries(&entries, "apollo-x-bot", &[], &["secrets".into()]);
         let kept_paths: Vec<_> = kept.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(kept_paths, vec!["apollo-x-bot/keep.ainl"]);
         assert_eq!(skipped[0].repo_path, "apollo-x-bot/secrets.env");
@@ -926,10 +919,7 @@ mod tests {
             "apollo-x-bot",
             "apollo-x-bot",
         );
-        assert_eq!(
-            p,
-            PathBuf::from("apollo-x-bot/modules/apollo/follow.ainl")
-        );
+        assert_eq!(p, PathBuf::from("apollo-x-bot/modules/apollo/follow.ainl"));
     }
 
     #[test]
@@ -1055,8 +1045,14 @@ mod tests {
         // Verify both files actually landed on disk under the workspace.
         let readme = workspace.join("apollo-x-bot/README.md");
         let follow = workspace.join("apollo-x-bot/modules/follow.ainl");
-        assert_eq!(tokio::fs::read_to_string(&readme).await.unwrap(), "hello world");
-        assert_eq!(tokio::fs::read_to_string(&follow).await.unwrap(), "graph {}");
+        assert_eq!(
+            tokio::fs::read_to_string(&readme).await.unwrap(),
+            "hello world"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&follow).await.unwrap(),
+            "graph {}"
+        );
 
         // The file outside the requested subpath must not have been written.
         assert!(!workspace.join("other/file.txt").exists());

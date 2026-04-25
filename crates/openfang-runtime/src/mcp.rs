@@ -10,8 +10,8 @@
 use http::{HeaderName, HeaderValue};
 use openfang_types::tool::ToolDefinition;
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation, ReadResourceRequestParams,
-    ResourceContents,
+    CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
+    ReadResourceRequestParams, ResourceContents,
 };
 use rmcp::service::RunningService;
 use rmcp::{RoleClient, ServiceExt};

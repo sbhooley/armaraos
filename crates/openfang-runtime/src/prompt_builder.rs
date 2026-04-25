@@ -12,6 +12,11 @@
 //! before each LLM run (AINL awareness, host environment, tools, safety, etc.).
 //! The registry keeps the **base** text; the expanded string is not persisted.
 
+use lru::LruCache;
+use openfang_types::config::ShellPathGuardMode;
+use std::num::NonZeroUsize;
+use std::sync::{Mutex, OnceLock};
+
 /// Metadata key: kernel set this to `true` after replacing the manifest's base
 /// `system_prompt` with [`build_system_prompt`] output for the current request.
 pub const KERNEL_EXPANDED_SYSTEM_PROMPT_META_KEY: &str = "kernel_expanded_system_prompt_v1";
@@ -40,6 +45,10 @@ pub struct PromptContext {
     pub mcp_summary: String,
     /// Agent workspace path.
     pub workspace_path: Option<String>,
+    /// Host `…/ainl-library` path for workspace-contract text (optional).
+    pub ainl_library_host_path: Option<String>,
+    /// Effective `shell_path_guard` for workspace-contract copy (`None` → describe as enforce default).
+    pub shell_path_guard_mode: Option<ShellPathGuardMode>,
     /// SOUL.md content (persona).
     pub soul_md: Option<String>,
     /// USER.md content.
@@ -94,6 +103,24 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 1.5 — Current Date/Time (always present when set)
     if let Some(ref date) = ctx.current_date {
         sections.push(format!("## Current Date\nToday is {date}."));
+    }
+
+    // Section 1.55 — Workspace contract (top-level agents with a workspace; LRU-cached)
+    if !ctx.is_subagent {
+        if let Some(key) = workspace_contract_cache_key(ctx) {
+            let mut cache = workspace_contract_cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let ws_contract = if let Some(s) = cache.get(&key) {
+                s.clone()
+            } else {
+                let s = build_workspace_contract_section_uncached(ctx)
+                    .expect("cache key requires workspace_path");
+                cache.put(key, s.clone());
+                s
+            };
+            sections.push(ws_contract);
+        }
     }
 
     // Section 1.6 — AINL product awareness (ArmaraOS hosts AINL graphs / tooling; include for subagents too)
@@ -249,6 +276,50 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 // Section builders
 // ---------------------------------------------------------------------------
 
+fn workspace_contract_cache() -> &'static Mutex<LruCache<String, String>> {
+    static CACHE: OnceLock<Mutex<LruCache<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(256).expect("nonzero workspace contract LRU cap"),
+        ))
+    })
+}
+
+fn workspace_contract_cache_key(ctx: &PromptContext) -> Option<String> {
+    let ws = ctx.workspace_path.as_deref()?;
+    let mode = ctx
+        .shell_path_guard_mode
+        .map(|m| format!("{m:?}"))
+        .unwrap_or_else(|| "default".to_string());
+    let lib = ctx.ainl_library_host_path.as_deref().unwrap_or("");
+    Some(format!("{}|{ws}|{mode}|{lib}", ctx.agent_name))
+}
+
+fn build_workspace_contract_section_uncached(ctx: &PromptContext) -> Option<String> {
+    let ws = ctx.workspace_path.as_deref()?;
+    let mode = ctx
+        .shell_path_guard_mode
+        .unwrap_or(ShellPathGuardMode::Enforce);
+    let path_policy = match mode {
+        ShellPathGuardMode::Off => "The operator set **shell_path_guard** to **off**: `shell_exec` does **not** auto-reject absolute paths outside the workspace by policy (still prefer workspace-relative paths and `ainl-library/...` for reads).".to_string(),
+        ShellPathGuardMode::Warn => "**shell_path_guard** is **warn** mode: disallowed absolute paths may still execute but are logged for operators; prefer workspace-relative paths and documented read roots.".to_string(),
+        ShellPathGuardMode::Enforce => "**shell_path_guard** is **enforce** (default): `shell_exec` rejects absolute paths outside this workspace, the AINL library tree, ArmaraOS home, optional `extra_allowed_path_prefixes` (manifest + config merge), and a small OS utility prefix (including embedded `--flag=/path` and `-I/path` in splittable commands). `shell_pid_guard: off` in the manifest opts out of PID checks.".to_string(),
+    };
+    let lib_line = match ctx.ainl_library_host_path.as_deref() {
+        Some(p) => format!(
+            "Read-only AINL ecosystem/stdlib material: use the virtual prefix **`ainl-library/...`** in `file_read` / `file_list` (resolved under host `{p}`)."
+        ),
+        None => "Read-only AINL ecosystem/stdlib material: use **`ainl-library/...`** in `file_read` / `file_list` (resolved by the daemon against the host AINL library).".to_string(),
+    };
+    Some(format!(
+        "## Workspace contract\n\
+- **Isolated workspace:** durable project files live under `{ws}`. Prefer `file_*`, `apply_patch`, and `shell_exec` paths relative to this directory.\n\
+- **Path policy:** {path_policy}\n\
+- {lib_line}\n\
+- **Bridges and bots:** custom Node/Python services, Apollo-style trees, or third-party checkouts should live **inside this workspace** (or another path the operator assigned as the workspace). Avoid ad-hoc dependencies on unrelated app folders or sibling repos unless the user explicitly asked for them."
+    ))
+}
+
 fn build_identity_section(ctx: &PromptContext) -> String {
     if ctx.base_system_prompt.is_empty() {
         format!(
@@ -278,6 +349,7 @@ const AINL_AUTHORING_WORKFLOW_SECTION: &str = "\
 For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or similar **repeatable workflows**, prefer **AINL** `.ainl` graphs over ad-hoc scripts unless the user clearly needs a general-purpose language.
 
 - **Treat AINL as built-in in this host:** if `mcp_ainl_*` tools are in **Your Tools**, use them directly; do **not** pause to install `ainativelang` with `pip`/`python -m pip` as a prerequisite.
+- **Package-first policy (all agents):** when a Python setup needs AINL modules/adapters/runtime behavior, prefer the installed **`ainativelang`** package in the active venv (or install it there) rather than copying files from `ainativelang/` source trees. Do **not** vendor/copy random repo modules or edit upstream source files in-place unless the user explicitly asked for source-level debugging or patching.
 - **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, fix the graph using fields in the tool response (e.g. **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`**) — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
 - **Tool-call shape matters:** for `mcp_ainl_*` tools, pass the graph text in the `code` field (legacy `ainl` may work but `code` is canonical), and call the MCP tool directly — do not wrap MCP tool names inside `shell_exec`.
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
@@ -403,9 +475,14 @@ Quote specific facts, numbers, or passages from the fetched content. Never say y
 without sharing what you found.
 - Start with the answer, not meta-commentary about how you'll help.
 - **Native tools vs prompt text:** The host attaches the **full** tool list for native tool-calling. If the **Your Tools** section above summarizes MCP tools to save tokens, that summary is **not** exhaustive — do **not** claim Google Workspace or other MCP tools are unavailable based only on a short list. When you need Gmail, Drive, Calendar, etc., use the `mcp_google_workspace_mcp_*` tools from the native tool set when present.
-- IMPORTANT: If your instructions or persona mention a shell command, script path, or code snippet, \
-execute it via the appropriate tool call (shell_exec, file_write, etc.). Never output commands as \
-code blocks — always call the tool instead.";
+- **Run commands yourself:** You execute on the ArmaraOS host. For installs, probes, `curl`, `git`, `python`/`venv`, file edits, and AINL graphs, **call the matching tools** (`shell_exec`, `process_start`, `file_*`, `mcp_ainl_*`, …) in the same turn whenever they appear in **Your Tools**. Do **not** end with \"paste into Terminal\", \"Copy:\", or long fenced shell blocks aimed at the user unless they explicitly asked for copy-paste instructions, or a capability is **actually** missing or denied — then state the missing tool or policy in one short sentence (e.g. binary not in allowlist, approval required).
+- **`apply_patch` formatting is strict:** patch text must start with `*** Begin Patch` and end with `*** End Patch`, and each file edit needs `*** Update File: <path>` (or `*** Add File:`). Do **not** emit unified diff (`---` / `+++`) without the begin/end markers; that fails parser validation.
+- IMPORTANT: If your instructions or persona mention a shell command, script path, or code snippet, execute it via the appropriate tool call — do not substitute assistant markdown for tool execution when the tool exists.
+- **Long-lived / background processes:** Use **`process_start`** with `command` + `args`, optional `env`, and optional **`cwd`**, then **`process_poll`** / **`process_kill`**. Avoid `nohup … &` and shell background operators inside **`shell_exec`** — they are unreliable under safe argv parsing and do not return a managed `process_id`.\n\
+- **Running a project script (.py / .sh / .ts / .js / .mjs / .tsx):** Prefer **`script_run`** with just the file path. The runtime auto-picks the right interpreter — a project venv (`.venv/bin/python3`, `venv/bin/python3`) for Python, **`node_modules/.bin/tsx`** (else `npx --yes tsx`) for TypeScript, **`bun`**/**`deno`** when their lockfiles are present, **`bash`** for shell scripts. **Do not** compose `source venv/bin/activate && python script.py …`, `nohup node server.js &`, or `export FOO=bar && …` yourself — pass `env`, `args`, and `mode` to **`script_run`** instead. For services, use **`mode: \"daemon\"`** plus **`health_check.url`** (e.g. `http://127.0.0.1:8080/health`) so the runtime probes readiness for you and you don't need to chain `lsof`/`curl` calls. If `script_run` errors, **read its hint** — it will tell you exactly what's missing (file not found, missing extension, outside workspace) and fix it directly; do **not** fall back to a long `shell_exec` pipeline.\n\
+- **If armaraos.toml defines actions:** prefer **`workspace_action`** over raw script paths. First call **`workspace_actions_list`**, then run the named action. If the contract is missing/outdated for the user’s intent, use **`workspace_action_set`** to create/update the entry, then run it. For recurring jobs, prefer **`schedule_action_create`** so scheduler runs the same named action deterministically.\n\
+- **If the user didn't give a filename:** call **`script_detect`** first (read-only) with a short `query` like \"gateway\" or \"server\". Then pick the top `file` result and call **`script_run`**. Avoid asking the user to manually locate files or to paste terminal commands.\n\
+";
 
 /// One-line digest when many MCP tools would make "## Your Tools" unreadable.
 fn mcp_tools_digest_lines(mcp_rows: &[(&str, &str)]) -> String {
@@ -785,6 +862,7 @@ const SAFETY_SECTION: &str = "\
 /// Static operational guidelines (replaces STABILITY_GUIDELINES).
 const OPERATIONAL_GUIDELINES: &str = "\
 ## Operational Guidelines
+- Prefer **tool execution** over asking the user to run terminal steps yourself — duplicate instructions waste turns; operators expect the agent to act when policy allows.
 - Do NOT retry a tool call with identical parameters if it failed. Try a different approach.
 - If a tool returns an error, analyze the error before calling it again.
 - When editing AINL (`.ainl`), if **`mcp_ainl_ainl_validate`** fails, fix the graph from the structured fields in the response (`primary_diagnostic`, `agent_repair_steps`, etc.) and re-validate — do not rely on hunting random example `.ainl` files across the repo as your main syntax source.
@@ -836,10 +914,20 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "web_search" | "web_fetch" => "Web",
 
-        "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
-        | "browser_read_page" | "browser_close" | "browser_scroll" | "browser_wait"
-        | "browser_evaluate" | "browser_select" | "browser_back" | "browser_run_js"
-        | "browser_session_start" | "browser_session_status" => "Browser",
+        "browser_navigate"
+        | "browser_click"
+        | "browser_type"
+        | "browser_screenshot"
+        | "browser_read_page"
+        | "browser_close"
+        | "browser_scroll"
+        | "browser_wait"
+        | "browser_evaluate"
+        | "browser_select"
+        | "browser_back"
+        | "browser_run_js"
+        | "browser_session_start"
+        | "browser_session_status" => "Browser",
 
         "shell_exec" | "shell_background" => "Shell",
 
@@ -851,10 +939,22 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "docker_exec" | "docker_build" | "docker_run" => "Docker",
 
-        "cron_create" | "cron_list" | "cron_cancel" | "schedule_create" | "schedule_list"
-        | "schedule_delete" | "channels_list" => "Scheduling & channels",
+        "cron_create"
+        | "cron_list"
+        | "cron_cancel"
+        | "schedule_create"
+        | "schedule_action_create"
+        | "schedule_list"
+        | "schedule_delete"
+        | "channels_list" => "Scheduling & channels",
 
-        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
+        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list"
+        | "script_run"
+        | "script_detect"
+        | "workspace_actions_list"
+        | "workspace_action"
+        | "workspace_action_set"
+        | "workspace_action_delete" => {
             "Processes"
         }
 
@@ -875,6 +975,7 @@ pub fn tool_hint(name: &str) -> &'static str {
         "file_move" => "move or rename a file",
         "file_copy" => "copy a file",
         "file_search" => "search files by name pattern",
+        "apply_patch" => "edit files using *** Begin Patch / *** End Patch format",
 
         // Web
         "web_search" => "search the web for information",
@@ -940,6 +1041,15 @@ pub fn tool_hint(name: &str) -> &'static str {
         "process_write" => "write to a process's stdin",
         "process_kill" => "terminate a running process",
         "process_list" => "list active processes",
+        "script_run" => {
+            "run a project script (.py/.sh/.ts/.js) — auto-picks venv / tsx / bun / deno"
+        }
+        "script_detect" => "detect which script to run in the workspace",
+        "workspace_actions_list" => "list named actions from armaraos.toml",
+        "workspace_action" => "execute a named action from armaraos.toml",
+        "workspace_action_set" => "create or update a named action in armaraos.toml",
+        "workspace_action_delete" => "delete a named action from armaraos.toml",
+        "schedule_action_create" => "schedule a named workspace action on a recurring cadence",
 
         "mcp_resource_read" => {
             "read MCP resource by URI (mcp_server + uri) e.g. ainl://authoring-cheatsheet on server ainl"
@@ -1037,6 +1147,7 @@ mod tests {
         assert!(prompt.contains("## Host environment (ArmaraOS, not OpenClaw)"));
         assert!(prompt.contains("https://ainativelang.com"));
         assert!(prompt.contains("https://github.com/sbhooley/ainativelang"));
+        assert!(!prompt.contains("## Workspace contract"));
         assert!(prompt.contains("## Tool Call Behavior"));
         assert!(prompt.contains("## Your Tools"));
         assert!(prompt.contains("## ArmaraOS kernel scheduler (recurring / timed work)"));
@@ -1048,7 +1159,13 @@ mod tests {
 
     #[test]
     fn test_section_ordering() {
-        let prompt = build_system_prompt(&basic_ctx());
+        let mut ctx = basic_ctx();
+        ctx.workspace_path = Some("/tmp/armaraos-ws-contract-test".into());
+        ctx.current_date = Some("Monday".into());
+        let prompt = build_system_prompt(&ctx);
+        let date_pos = prompt.find("## Current Date").unwrap();
+        let ws_contract_pos = prompt.find("## Workspace contract").unwrap();
+        let ainl_pos = prompt.find("## AI Native Language (AINL)").unwrap();
         let tool_behavior_pos = prompt.find("## Tool Call Behavior").unwrap();
         let tools_pos = prompt.find("## Your Tools").unwrap();
         let scheduler_pos = prompt
@@ -1058,6 +1175,9 @@ mod tests {
         let safety_pos = prompt.find("## Safety").unwrap();
         let guidelines_pos = prompt.find("## Operational Guidelines").unwrap();
 
+        assert!(date_pos < ws_contract_pos);
+        assert!(ws_contract_pos < ainl_pos);
+        assert!(ainl_pos < tool_behavior_pos);
         assert!(tool_behavior_pos < tools_pos);
         assert!(tools_pos < scheduler_pos);
         assert!(scheduler_pos < memory_pos);
@@ -1454,9 +1574,24 @@ mod tests {
     fn test_workspace_in_persona() {
         let mut ctx = basic_ctx();
         ctx.workspace_path = Some("/home/user/project".to_string());
+        ctx.ainl_library_host_path = Some("/home/user/.armaraos/ainl-library".into());
         let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## Workspace contract"));
+        assert!(prompt.contains("/home/user/project"));
+        assert!(prompt.contains("ainl-library/"));
+        assert!(prompt.contains("**Path policy:**"));
+        assert!(prompt.contains("**shell_path_guard** is **enforce**"));
         assert!(prompt.contains("## Workspace"));
         assert!(prompt.contains("/home/user/project"));
+    }
+
+    #[test]
+    fn test_workspace_contract_path_policy_off() {
+        let mut ctx = basic_ctx();
+        ctx.workspace_path = Some("/w".into());
+        ctx.shell_path_guard_mode = Some(ShellPathGuardMode::Off);
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("**shell_path_guard** to **off**"));
     }
 
     #[test]

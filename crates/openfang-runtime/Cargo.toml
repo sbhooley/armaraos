@@ -68,6 +68,8 @@ rust_xlsxwriter = "0.94.0"
 zip = { workspace = true }
 lru = "0.12"
 jsonschema = "0.28"
+walkdir = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

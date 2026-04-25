@@ -440,4 +440,18 @@ pub trait KernelHandle: Send + Sync {
         let _ = (agent_id, ctx);
         Err("set_pending_orchestration_ctx not available".to_string())
     }
+
+    /// Best-effort audit trail for `shell_exec` argv guards (`path_guard`, `pid_guard`).
+    ///
+    /// `guard_kind` is a short stable token (e.g. `path_enforce`, `path_warn`, `pid_enforce`).
+    /// `outcome` is a one-line summary (`denied`, `warn_only`, etc.).
+    fn record_shell_guard_event(
+        &self,
+        agent_id: Option<&str>,
+        guard_kind: &str,
+        detail: &str,
+        outcome: &str,
+    ) {
+        let _ = (agent_id, guard_kind, detail, outcome);
+    }
 }

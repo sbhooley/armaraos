@@ -990,7 +990,9 @@ impl BrowserManager {
         cmd: BrowserCommand,
         requested_mode: Option<BrowserMode>,
     ) -> Result<BrowserResponse, String> {
-        let session = self.get_or_create_with_mode(agent_id, requested_mode).await?;
+        let session = self
+            .get_or_create_with_mode(agent_id, requested_mode)
+            .await?;
         let mut guard = session.lock().await;
         let resp = guard.execute(cmd).await;
 
@@ -1061,8 +1063,12 @@ impl BrowserManager {
                 drop(entry);
                 drop(arc);
                 self.close_session(agent_id).await;
-                info!(agent_id, from = current.as_str(), to = want.as_str(),
-                      "Restarting browser session in new mode");
+                info!(
+                    agent_id,
+                    from = current.as_str(),
+                    to = want.as_str(),
+                    "Restarting browser session in new mode"
+                );
             } else {
                 return Ok(arc);
             }
@@ -1099,9 +1105,7 @@ fn parse_mode_arg(input: &serde_json::Value) -> Result<Option<BrowserMode>, Stri
         _ => return Ok(None),
     };
     BrowserMode::parse(raw).map(Some).ok_or_else(|| {
-        format!(
-            "Invalid browser mode: {raw:?}. Use one of \"headless\", \"headed\", \"attach\"."
-        )
+        format!("Invalid browser mode: {raw:?}. Use one of \"headless\", \"headed\", \"attach\".")
     })
 }
 
@@ -1283,11 +1287,7 @@ pub async fn tool_browser_scroll(
     let amount = input["amount"].as_i64().unwrap_or(600) as i32;
 
     let resp = mgr
-        .send_command(
-            agent_id,
-            BrowserCommand::Scroll { direction, amount },
-            None,
-        )
+        .send_command(agent_id, BrowserCommand::Scroll { direction, amount }, None)
         .await?;
     if !resp.success {
         return Err(resp.error.unwrap_or_else(|| "Scroll failed".to_string()));

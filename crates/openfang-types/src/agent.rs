@@ -108,6 +108,45 @@ pub enum HookEvent {
     AgentLoopEnd,
 }
 
+/// High-level outcome of an agent turn (HTTP/WebSocket JSON + telemetry / learning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnOutcome {
+    /// Normal completion with user-visible assistant text (may include step-limit explanations).
+    Completed,
+    /// The model produced no useful final text (empty completion, overload heuristics, tool-only placeholders).
+    EmptyModel,
+    /// Upstream LLM / connectivity / billing failure surfaced as a system-style message.
+    ProviderError,
+    /// Intentional suppress via `NO_REPLY`, `[[silent]]`, etc.
+    UserSilent,
+}
+
+impl TurnOutcome {
+    /// Derive outcome from the **assistant text shown to the client** (after silent → empty) and `silent`.
+    pub fn classify(display_response: &str, silent: bool) -> Self {
+        if silent {
+            return Self::UserSilent;
+        }
+        let r = display_response;
+        if r.contains("inference backend returned empty responses repeatedly")
+            || r.contains("No assistant text (0 tokens)")
+            || r.contains("model call did not complete")
+        {
+            return Self::ProviderError;
+        }
+        if r.starts_with(
+            "[Task completed — the agent executed tools but did not produce a text summary.]",
+        ) || r.starts_with("[The model returned an empty response.")
+            || r.starts_with("[Partial response — token limit reached with no text output.]")
+            || r.starts_with("[The agent completed processing but returned no text response.")
+        {
+            return Self::EmptyModel;
+        }
+        Self::Completed
+    }
+}
+
 /// Unique identifier for an agent instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AgentId(pub Uuid);
@@ -1484,5 +1523,71 @@ memory_write = ["self.*"]
             manifest.capabilities.memory_write,
             vec!["self.*".to_string()]
         );
+    }
+
+    #[test]
+    fn turn_outcome_classify_user_silent() {
+        assert_eq!(
+            TurnOutcome::classify("anything", true),
+            TurnOutcome::UserSilent
+        );
+        assert_eq!(TurnOutcome::classify("", true), TurnOutcome::UserSilent);
+    }
+
+    #[test]
+    fn turn_outcome_classify_provider_error() {
+        assert_eq!(
+            TurnOutcome::classify(
+                "[No assistant text (0 tokens). The model call did not complete — usually a missing or invalid provider API key.",
+                false
+            ),
+            TurnOutcome::ProviderError
+        );
+        assert_eq!(
+            TurnOutcome::classify(
+                "[The inference backend returned empty responses repeatedly. Check logs.",
+                false
+            ),
+            TurnOutcome::ProviderError
+        );
+    }
+
+    #[test]
+    fn turn_outcome_classify_empty_model_placeholders() {
+        assert_eq!(
+            TurnOutcome::classify(
+                "[The model returned an empty response. This usually means the model is overloaded.",
+                false
+            ),
+            TurnOutcome::EmptyModel
+        );
+        assert_eq!(
+            TurnOutcome::classify(
+                "[The agent completed processing but returned no text response. (1 in / 0 out | 3 iter)]",
+                false
+            ),
+            TurnOutcome::EmptyModel
+        );
+        assert_eq!(
+            TurnOutcome::classify(
+                "[Task completed — the agent executed tools but did not produce a text summary.]",
+                false
+            ),
+            TurnOutcome::EmptyModel
+        );
+    }
+
+    #[test]
+    fn turn_outcome_classify_completed() {
+        assert_eq!(
+            TurnOutcome::classify("Here is the summary you asked for.", false),
+            TurnOutcome::Completed
+        );
+    }
+
+    #[test]
+    fn turn_outcome_serializes_snake_case() {
+        let j = serde_json::to_string(&TurnOutcome::EmptyModel).unwrap();
+        assert_eq!(j, "\"empty_model\"");
     }
 }
