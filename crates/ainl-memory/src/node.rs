@@ -433,6 +433,12 @@ pub struct FailureNode {
     pub source: String,
     #[serde(default)]
     pub tool_name: Option<String>,
+    /// MCP server namespace when the failure came from a namespaced tool (e.g. `ainl` for `mcp_ainl_*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_namespace: Option<String>,
+    /// Logical tool identifier for analytics (often the full host tool name, e.g. `mcp_ainl_ainl_run`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_tool: Option<String>,
     pub message: String,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -752,6 +758,8 @@ impl AinlMemoryNode {
             recorded_at,
             source,
             tool_name: tool_name.map(str::to_string),
+            source_namespace: None,
+            source_tool: None,
             message: message.into(),
             session_id: session_id.map(str::to_string),
         };
@@ -771,12 +779,31 @@ impl AinlMemoryNode {
         message: impl Into<String>,
         session_id: Option<&str>,
     ) -> Self {
+        Self::new_tool_execution_failure_with_source(
+            tool_name,
+            message,
+            session_id,
+            None::<&str>,
+            None::<&str>,
+        )
+    }
+
+    /// Like [`Self::new_tool_execution_failure`], with optional MCP-style source metadata for analytics / recall.
+    pub fn new_tool_execution_failure_with_source(
+        tool_name: &str,
+        message: impl Into<String>,
+        session_id: Option<&str>,
+        source_namespace: Option<&str>,
+        source_tool: Option<&str>,
+    ) -> Self {
         let recorded_at = chrono::Utc::now().timestamp();
         let source = "tool_runner:error".to_string();
         let failure = FailureNode {
             recorded_at,
             source,
             tool_name: Some(tool_name.to_string()),
+            source_namespace: source_namespace.map(str::to_string),
+            source_tool: source_tool.map(str::to_string),
             message: message.into(),
             session_id: session_id.map(str::to_string),
         };
@@ -803,6 +830,8 @@ impl AinlMemoryNode {
             recorded_at,
             source,
             tool_name: Some(tool_name.to_string()),
+            source_namespace: None,
+            source_tool: None,
             message: message.into(),
             session_id: session_id.map(str::to_string),
         };
@@ -826,6 +855,8 @@ impl AinlMemoryNode {
             recorded_at,
             source,
             tool_name: None,
+            source_namespace: None,
+            source_tool: None,
             message: message.into(),
             session_id: session_id.map(str::to_string),
         };

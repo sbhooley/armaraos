@@ -627,6 +627,36 @@ impl<'a> GraphQuery<'a> {
         load_nodes_from_payload_rows(rows)
     }
 
+    /// Latest semantic fact whose `tags` include `tag` (see `SemanticNode::tags`), by node `timestamp` desc.
+    pub fn latest_semantic_with_tag(&self, tag: &str) -> Result<Option<AinlMemoryNode>, String> {
+        let mut stmt = self
+            .conn()
+            .prepare(
+                "SELECT payload FROM ainl_graph_nodes
+                 WHERE node_type = 'semantic'
+                   AND COALESCE(json_extract(payload, '$.agent_id'), '') = ?1
+                   AND EXISTS (
+                     SELECT 1 FROM json_each(json_extract(payload, '$.node_type.tags')) j
+                     WHERE j.value = ?2
+                   )
+                 ORDER BY timestamp DESC, id DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let row = stmt
+            .query_row(params![&self.agent_id, tag], |row| row.get::<_, String>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match row {
+            Some(payload) => {
+                let node: AinlMemoryNode =
+                    serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+                Ok(Some(node))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn by_topic_cluster(&self, cluster: &str) -> Result<Vec<AinlMemoryNode>, String> {
         let like = format!("%{cluster}%");
         let mut stmt = self

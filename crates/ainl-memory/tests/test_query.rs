@@ -147,3 +147,20 @@ fn test_query_pattern_by_name() {
         .expect("one");
     assert_eq!(got.id, p.id);
 }
+
+#[test]
+fn test_latest_semantic_with_tag() {
+    let (store, _path) = open();
+    let mut n = AinlMemoryNode::new_fact("cap-snap".into(), 0.95, Uuid::new_v4());
+    n.agent_id = AGENT.into();
+    if let AinlNodeType::Semantic { ref mut semantic } = n.node_type {
+        semantic.tags = vec!["mcp:ainl:capabilities".into(), "v:abc123".into()];
+    }
+    store.write_node(&n).unwrap();
+    let latest = store
+        .query(AGENT)
+        .latest_semantic_with_tag("mcp:ainl:capabilities")
+        .unwrap()
+        .expect("row");
+    assert_eq!(latest.semantic().map(|s| s.fact.as_str()), Some("cap-snap"));
+}

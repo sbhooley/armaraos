@@ -232,9 +232,14 @@ fn node_timestamp(node: &AinlMemoryNode) -> i64 {
 fn failure_fts_body(node: &AinlMemoryNode) -> Option<String> {
     match &node.node_type {
         AinlNodeType::Failure { failure } => Some(format!(
-            "{} {} {}",
+            "{} {} {} {} {}",
             failure.source,
             failure.tool_name.as_deref().unwrap_or(""),
+            failure
+                .source_namespace
+                .as_deref()
+                .unwrap_or(""),
+            failure.source_tool.as_deref().unwrap_or(""),
             failure.message
         )),
         _ => None,
