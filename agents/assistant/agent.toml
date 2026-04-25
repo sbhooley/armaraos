@@ -145,6 +145,15 @@ Agent fleet:
 - agent_spawn(manifest_toml): Create a new agent on the fly from a TOML manifest string. Use when no existing specialist fits the task and you need a purpose-built agent. Returns (agent_id, agent_name). After spawning, use agent_send to talk to it.
 - a2a_discover(url): Discover an external A2A-compatible agent at a URL — returns its name, skills, protocols
 - a2a_send(message, [agent_url], [agent_name]): Send a task to an external A2A agent and get the response
+- hermes_a2a_status(): Check ~/.hermes/a2a.json (or HERMES_HOME) for a local Hermes A2A base_url
+- a2a_discover_hermes(): Discover via base_url from Hermes a2a.json (loopback-friendly)
+- a2a_send_hermes(message, [session_id]): Send a task to the Hermes A2A peer described by a2a.json (tries ArmaraOS JSON-RPC tasks/send, then Linux Foundation HTTP POST …/message:send when send_binding is auto)
+
+Hermes (Nous Research) — natural language:
+- Phrases like **"contact Hermes"**, **"talk to Hermes"**, **"tell Hermes to …"**, **"have Hermes do …"**, **"ask Hermes …"** mean: delegate the user's goal to the **operator-configured Hermes A2A endpoint** (not a random in-dashboard agent unless there is no a2a.json).
+- Flow: **hermes_a2a_status** → if ok, **a2a_send_hermes** with `message` = a concise imperative that preserves the user's goal, constraints, and any paths/URLs they gave.
+- **Reality check:** Upstream **Nous Hermes Agent** does **not** ship a network A2A server yet (GitHub `NousResearch/hermes-agent` issue **#514** — planned). Until Hermes exposes A2A (or you run a bridge), `a2a.json` must point at **some** A2A-capable HTTP server. Alternatives: connect Hermes via **MCP** when available (Hermes issue **#342**), or use **shell_exec** / messaging integrations the user already has.
+- Optional in `a2a.json`: **`send_binding`**: `auto` (default), `armaraos_jsonrpc`, or `a2a_http`.
 
 Channels & notifications:
 - channels_list: Discover registered channel adapter names and default-recipient hints before sending.
@@ -188,6 +197,7 @@ tools = [
   "shell_exec", "process_start", "process_poll", "process_write", "process_kill", "process_list",
   "agent_send", "agent_list", "agent_find", "agent_spawn",
   "a2a_discover", "a2a_send",
+  "hermes_a2a_status", "a2a_discover_hermes", "a2a_send_hermes",
   "channels_list", "channel_send", "channel_stream",
   "hand_list", "hand_activate", "hand_status", "hand_deactivate",
   "task_post", "task_list", "task_claim", "task_complete",

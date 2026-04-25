@@ -19,6 +19,18 @@ use tracing::{debug, info, warn};
 // A2A Agent Card
 // ---------------------------------------------------------------------------
 
+/// Declared HTTP+JSON interface base (Linux Foundation A2A spec).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupportedInterface {
+    /// Base URL for this binding (e.g. `https://host/a2a/v1`).
+    pub url: String,
+    #[serde(default)]
+    pub protocol_binding: Option<String>,
+    #[serde(default)]
+    pub protocol_version: Option<String>,
+}
+
 /// A2A Agent Card — describes an agent's capabilities to external systems.
 ///
 /// Served at `/.well-known/agent.json` per the A2A specification.
@@ -43,6 +55,9 @@ pub struct AgentCard {
     /// Supported output content types.
     #[serde(default)]
     pub default_output_modes: Vec<String>,
+    /// Optional declared HTTP interfaces (`POST …/message:send` per spec).
+    #[serde(default)]
+    pub supported_interfaces: Vec<SupportedInterface>,
 }
 
 /// A2A agent capabilities.
@@ -386,6 +401,7 @@ pub fn build_agent_card(manifest: &AgentManifest, base_url: &str) -> AgentCard {
         skills,
         default_input_modes: vec!["text".to_string()],
         default_output_modes: vec!["text".to_string()],
+        supported_interfaces: vec![],
     }
 }
 
@@ -479,6 +495,59 @@ impl A2aClient {
         }
     }
 
+    /// Candidate URLs for A2A HTTP+JSON `POST …/message:send` (Linux Foundation binding).
+    #[must_use]
+    pub fn message_send_endpoints(hermes_base: &str, card: &AgentCard) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let base = hermes_base.trim_end_matches('/');
+        let primary = format!("{base}/message:send");
+        out.push(primary);
+        for si in &card.supported_interfaces {
+            let u = si.url.trim_end_matches('/');
+            let ep = format!("{u}/message:send");
+            if !out.iter().any(|x| x == &ep) {
+                out.push(ep);
+            }
+        }
+        out
+    }
+
+    /// `POST {endpoint}` with `application/a2a+json` body per A2A HTTP binding (v0.3-style).
+    pub async fn post_message_send(
+        &self,
+        endpoint: &str,
+        user_message: &str,
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::json!({
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{ "text": user_message }],
+            },
+        });
+        let response = self
+            .client
+            .post(endpoint)
+            .header("Content-Type", "application/a2a+json")
+            .header("A2A-Version", "0.3")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("A2A message:send transport: {e}"))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("A2A message:send read body: {e}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "A2A message:send HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(500).collect::<String>()
+            ));
+        }
+        serde_json::from_str(&text).map_err(|e| format!("A2A message:send invalid JSON: {e}"))
+    }
+
     /// Get the status of a task from an external A2A agent.
     pub async fn get_task(&self, url: &str, task_id: &str) -> Result<A2aTask, String> {
         let request = serde_json::json!({
@@ -535,6 +604,25 @@ mod tests {
         assert!(card.url.contains("/a2a"));
         assert!(card.capabilities.streaming);
         assert_eq!(card.default_input_modes, vec!["text"]);
+    }
+
+    #[test]
+    fn message_send_endpoints_dedupes_interface_urls() {
+        let card: AgentCard = serde_json::from_value(serde_json::json!({
+            "name": "x",
+            "description": "d",
+            "url": "https://ex.com/a2a",
+            "version": "1",
+            "capabilities": { "streaming": false, "pushNotifications": false, "stateTransitionHistory": false },
+            "skills": [],
+            "supportedInterfaces": [
+                { "url": "https://ex.com/a2a/v1", "protocolBinding": "HTTP+JSON" }
+            ]
+        }))
+        .unwrap();
+        let eps = A2aClient::message_send_endpoints("https://ex.com", &card);
+        assert!(eps.iter().any(|e| e == "https://ex.com/message:send"));
+        assert!(eps.iter().any(|e| e == "https://ex.com/a2a/v1/message:send"));
     }
 
     #[test]

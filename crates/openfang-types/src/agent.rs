@@ -345,6 +345,10 @@ impl ToolProfile {
                 "schedule_list",
                 "schedule_delete",
                 "channels_list",
+                // Local Hermes A2A bridge (~/.hermes/a2a.json) — same trio as default assistant
+                "hermes_a2a_status",
+                "a2a_discover_hermes",
+                "a2a_send_hermes",
             ],
             Self::Research => vec![
                 "web_fetch",
@@ -361,6 +365,9 @@ impl ToolProfile {
                 "schedule_list",
                 "schedule_delete",
                 "channels_list",
+                "hermes_a2a_status",
+                "a2a_discover_hermes",
+                "a2a_send_hermes",
             ],
             Self::Messaging => vec![
                 "agent_send",
@@ -374,6 +381,9 @@ impl ToolProfile {
                 "schedule_list",
                 "schedule_delete",
                 "channels_list",
+                "hermes_a2a_status",
+                "a2a_discover_hermes",
+                "a2a_send_hermes",
             ],
             Self::Automation => vec![
                 "file_read",
@@ -395,6 +405,9 @@ impl ToolProfile {
                 "schedule_list",
                 "schedule_delete",
                 "channels_list",
+                "hermes_a2a_status",
+                "a2a_discover_hermes",
+                "a2a_send_hermes",
             ],
             Self::Full | Self::Custom => vec!["*"],
         }
@@ -925,7 +938,10 @@ mod tests {
         assert!(tools.contains(&"schedule_list".to_string()));
         assert!(tools.contains(&"schedule_delete".to_string()));
         assert!(tools.contains(&"channels_list".to_string()));
-        assert_eq!(tools.len(), 14);
+        assert!(tools.contains(&"hermes_a2a_status".to_string()));
+        assert!(tools.contains(&"a2a_discover_hermes".to_string()));
+        assert!(tools.contains(&"a2a_send_hermes".to_string()));
+        assert_eq!(tools.len(), 17);
     }
 
     #[test]
@@ -943,7 +959,10 @@ mod tests {
         assert!(tools.contains(&"schedule_list".to_string()));
         assert!(tools.contains(&"schedule_delete".to_string()));
         assert!(tools.contains(&"channels_list".to_string()));
-        assert_eq!(tools.len(), 12);
+        assert!(tools.contains(&"hermes_a2a_status".to_string()));
+        assert!(tools.contains(&"a2a_discover_hermes".to_string()));
+        assert!(tools.contains(&"a2a_send_hermes".to_string()));
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]
@@ -960,7 +979,10 @@ mod tests {
         assert!(tools.contains(&"schedule_list".to_string()));
         assert!(tools.contains(&"schedule_delete".to_string()));
         assert!(tools.contains(&"channels_list".to_string()));
-        assert_eq!(tools.len(), 11);
+        assert!(tools.contains(&"hermes_a2a_status".to_string()));
+        assert!(tools.contains(&"a2a_discover_hermes".to_string()));
+        assert!(tools.contains(&"a2a_send_hermes".to_string()));
+        assert_eq!(tools.len(), 14);
     }
 
     #[test]
@@ -971,7 +993,10 @@ mod tests {
         assert!(tools.contains(&"agent_send".to_string()));
         assert!(tools.contains(&"schedule_create".to_string()));
         assert!(tools.contains(&"channels_list".to_string()));
-        assert_eq!(tools.len(), 19);
+        assert!(tools.contains(&"hermes_a2a_status".to_string()));
+        assert!(tools.contains(&"a2a_discover_hermes".to_string()));
+        assert!(tools.contains(&"a2a_send_hermes".to_string()));
+        assert_eq!(tools.len(), 22);
     }
 
     #[test]

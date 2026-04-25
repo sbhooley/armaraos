@@ -83,6 +83,7 @@ pub mod ainl_bridge_telemetry;
 pub use ainl_bridge_telemetry::{AinlBridgeTelemetry, AinlBridgeTurnStatus};
 
 pub mod a2a;
+pub mod hermes_a2a;
 pub mod agent_loop;
 pub mod ainl_graph_extractor_bridge;
 #[cfg(feature = "ainl-runtime-engine")]

@@ -738,6 +738,14 @@ When an agent invokes the built-in **`a2a_send`** tool, **`openfang-runtime`** c
 
 See **[graph-memory.md](graph-memory.md)** for paths, node types, and how this differs from **orchestration traces** (`#orchestration-traces`).
 
+#### Local Hermes (`a2a.json`)
+
+Built-in tools **`hermes_a2a_status`**, **`a2a_discover_hermes`**, and **`a2a_send_hermes`** read **`HERMES_HOME/a2a.json`** (default **`~/.hermes/a2a.json`**). The file must include **`base_url`** (HTTP origin for **`GET {base_url}/.well-known/agent.json`**). Optional **`send_binding`**: **`auto`** (default), **`armaraos_jsonrpc`**, or **`a2a_http`**.
+
+**Upstream Nous Hermes Agent** (`NousResearch/hermes-agent`): as of the open feature issue **#514**, stock Hermes **does not yet expose** the A2A protocol on the wire (MCP client and in-process delegation exist; A2A is planned). Until Hermes ships an A2A server, `base_url` should point at **another** A2A-capable listener or a **small bridge** you control. **`a2a_send_hermes`** implements **dual interoperability**: (1) ArmaraOS-style JSON-RPC **`tasks/send`** to **`AgentCard.url`** when it is **same-origin** with `base_url`; (2) Linux Foundation HTTP binding **`POST {base_url}/message:send`** (and **`POST {supportedInterfaces[i].url}/message:send`** when the Agent Card declares interfaces) with **`Content-Type: application/a2a+json`**. URLs from `a2a.json` bypass **`web_fetch::check_ssrf`** on tool entry (operator trust on disk). Resolver: **`openfang-runtime/src/hermes_a2a.rs`**. Example: AINL **`skills/hermes/a2a.example.json`** → copy to **`~/.hermes/a2a.json`**.
+
+ArmaraOS-style JSON-RPC (when used):
+
 The client sends a JSON-RPC request:
 
 ```json
