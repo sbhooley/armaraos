@@ -61,6 +61,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "shell_exec"
             | "web_search"
             | "web_fetch"
+            | "github_subtree_download"
             | "browser_navigate"
             | "memory_recall"
             | "memory_store"
@@ -99,6 +100,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "email_search"
             | "email_reply"
             | "email_draft"
+            | "mcp_resource_read"
     )
 }
 

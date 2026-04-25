@@ -338,6 +338,11 @@ impl ToolProfile {
                 "spreadsheet_build",
                 "shell_exec",
                 "web_fetch",
+                // Single-call subdir mirror for GitHub repos. Profile already
+                // grants web_fetch; this is the same trust boundary but with a
+                // manifest-backed completeness guarantee instead of agents
+                // looping web_fetch and "claiming success on partial".
+                "github_subtree_download",
                 "channel_send",
                 "event_publish",
                 "media_transcribe",
@@ -353,6 +358,9 @@ impl ToolProfile {
             Self::Research => vec![
                 "web_fetch",
                 "web_search",
+                // Same rationale as Coding: research workflows frequently
+                // need to mirror a docs subdir or example tree from a repo.
+                "github_subtree_download",
                 "file_read",
                 "file_write",
                 "document_extract",
@@ -394,6 +402,7 @@ impl ToolProfile {
                 "shell_exec",
                 "web_fetch",
                 "web_search",
+                "github_subtree_download",
                 "agent_send",
                 "agent_list",
                 "memory_store",
@@ -931,6 +940,7 @@ mod tests {
         assert!(tools.contains(&"spreadsheet_build".to_string()));
         assert!(tools.contains(&"shell_exec".to_string()));
         assert!(tools.contains(&"web_fetch".to_string()));
+        assert!(tools.contains(&"github_subtree_download".to_string()));
         assert!(tools.contains(&"channel_send".to_string()));
         assert!(tools.contains(&"event_publish".to_string()));
         assert!(tools.contains(&"media_transcribe".to_string()));
@@ -941,7 +951,7 @@ mod tests {
         assert!(tools.contains(&"hermes_a2a_status".to_string()));
         assert!(tools.contains(&"a2a_discover_hermes".to_string()));
         assert!(tools.contains(&"a2a_send_hermes".to_string()));
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]
@@ -949,6 +959,7 @@ mod tests {
         let tools = ToolProfile::Research.tools();
         assert!(tools.contains(&"web_fetch".to_string()));
         assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"github_subtree_download".to_string()));
         assert!(tools.contains(&"file_read".to_string()));
         assert!(tools.contains(&"file_write".to_string()));
         assert!(tools.contains(&"document_extract".to_string()));
@@ -962,7 +973,7 @@ mod tests {
         assert!(tools.contains(&"hermes_a2a_status".to_string()));
         assert!(tools.contains(&"a2a_discover_hermes".to_string()));
         assert!(tools.contains(&"a2a_send_hermes".to_string()));
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 16);
     }
 
     #[test]
@@ -990,13 +1001,14 @@ mod tests {
         let tools = ToolProfile::Automation.tools();
         assert!(tools.contains(&"shell_exec".to_string()));
         assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"github_subtree_download".to_string()));
         assert!(tools.contains(&"agent_send".to_string()));
         assert!(tools.contains(&"schedule_create".to_string()));
         assert!(tools.contains(&"channels_list".to_string()));
         assert!(tools.contains(&"hermes_a2a_status".to_string()));
         assert!(tools.contains(&"a2a_discover_hermes".to_string()));
         assert!(tools.contains(&"a2a_send_hermes".to_string()));
-        assert_eq!(tools.len(), 22);
+        assert_eq!(tools.len(), 23);
     }
 
     #[test]
