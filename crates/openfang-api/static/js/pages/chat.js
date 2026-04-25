@@ -11,6 +11,26 @@
 var _agentMsgCache = {};
 
 /**
+ * Per-agent lazy-load pagination state for chat history.
+ * Keyed by agent UUID. Lives outside the Alpine component so a navigation
+ * away from #agents and back doesn't lose the user's scroll-back depth.
+ *
+ *   oldestIndex   – server-side index of the oldest message currently visible
+ *                   (== the `before` value the next prepend should send)
+ *   hasMore       – whether the server says there are older messages on disk
+ *   totalVisible  – total visible-message count reported by the server
+ *   loadingOlder  – true while a prepend fetch is in flight (debounce guard)
+ *   version       – bumped on each agent switch / fresh load; older fetches
+ *                   that complete after a switch must throw away their result
+ */
+var _agentSessionState = {};
+
+/** Page size for the initial latest-history load and each scroll-up prepend. */
+var CHAT_HISTORY_PAGE_SIZE = 50;
+/** Trigger lazy-load when within this many px of the messages container top. */
+var CHAT_HISTORY_TOP_THRESHOLD_PX = 120;
+
+/**
  * Turn raw provider/daemon errors into calm, actionable copy for the chat UI.
  * Technical text is returned separately for tooltips / support.
  * @returns {{ text: string, rateLimited: boolean, rawForDebug: string }}
@@ -1276,54 +1296,161 @@ function chatPage() {
       });
     },
 
+    /**
+     * Map a single server-shaped message (`{role, content, tools?, images?}`)
+     * into the local UI shape the chat renderer expects. Shared by both the
+     * initial latest-page load and the scroll-up prepend so historical
+     * tool-cards and embedded images look identical regardless of how/when
+     * they arrived.
+     */
+    _mapServerMessage(m) {
+      var self = this;
+      var role = m.role === 'User' ? 'user' : (m.role === 'System' ? 'system' : 'agent');
+      var text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      text = self.sanitizeToolText(text);
+      var tools = (m.tools || []).map(function(t, idx) {
+        var card = {
+          id: (t.name || 'tool') + '-hist-' + idx,
+          name: t.name || 'unknown',
+          running: false,
+          expanded: false,
+          input: t.input || '',
+          result: t.result || '',
+          is_error: !!t.is_error
+        };
+        card.expanded = self.shouldAutoExpandTool(card);
+        return card;
+      });
+      var images = (m.images || []).map(function(img) {
+        return { file_id: img.file_id, filename: img.filename || 'image' };
+      });
+      return { id: ++msgId, role: role, text: text, meta: '', tools: tools, images: images };
+    },
+
     async loadSession(agentId) {
       var self = this;
+      // Bump the per-agent version so any in-flight older-history fetches
+      // for the *same* agent that complete after this call are discarded.
+      var prevState = _agentSessionState[agentId];
+      var version = ((prevState && prevState.version) || 0) + 1;
+      _agentSessionState[agentId] = {
+        oldestIndex: 0,
+        hasMore: false,
+        totalVisible: 0,
+        loadingOlder: false,
+        version: version
+      };
       try {
-        var data = await OpenFangAPI.get('/api/agents/' + agentId + '/session');
+        // Latest page only on first load. Server returns the tail of the
+        // session when `before` is omitted; `limit` clamps the page size.
+        var url = '/api/agents/' + agentId + '/session?limit=' + CHAT_HISTORY_PAGE_SIZE;
+        var data = await OpenFangAPI.get(url);
         // Only replace messages from the server when the agent isn't currently
         // streaming — we don't want to clobber an in-progress live turn.
         if (self.sending) return;
         // Guard: don't apply stale load to a different agent (user switched while request was in flight)
         if (!self.currentAgent || self.currentAgent.id !== agentId) return;
+        // Guard: another loadSession started after us (rapid agent toggle)
+        var stateNow = _agentSessionState[agentId];
+        if (!stateNow || stateNow.version !== version) return;
+
+        var totalVisible = (typeof data.total_visible_messages === 'number')
+          ? data.total_visible_messages
+          : ((data.messages || []).length);
+        var oldestIndex = (typeof data.oldest_index === 'number')
+          ? data.oldest_index
+          : 0;
+        var hasMore = !!data.has_more;
 
         if (data.messages && data.messages.length) {
-          var mapped = data.messages.map(function(m) {
-            var role = m.role === 'User' ? 'user' : (m.role === 'System' ? 'system' : 'agent');
-            var text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-            // Sanitize any raw function-call text from history
-            text = self.sanitizeToolText(text);
-            // Build tool cards from historical tool data — match live turns (collapsed unless error/auth)
-            var tools = (m.tools || []).map(function(t, idx) {
-              var card = {
-                id: (t.name || 'tool') + '-hist-' + idx,
-                name: t.name || 'unknown',
-                running: false,
-                expanded: false,
-                input: t.input || '',
-                result: t.result || '',
-                is_error: !!t.is_error
-              };
-              card.expanded = self.shouldAutoExpandTool(card);
-              return card;
-            });
-            var images = (m.images || []).map(function(img) {
-              return { file_id: img.file_id, filename: img.filename || 'image' };
-            });
-            return { id: ++msgId, role: role, text: text, meta: '', tools: tools, images: images };
-          });
+          var mapped = data.messages.map(function(m) { return self._mapServerMessage(m); });
           self.messages = mapped;
-          // Update the cache with authoritative server data
           _agentMsgCache[agentId] = mapped.slice();
           self.$nextTick(function() { self.scrollToBottom(true); });
         } else if (!self.messages.length) {
-          // Server has no history and we have no cache — clear the cache entry too
           delete _agentMsgCache[agentId];
         }
+
+        _agentSessionState[agentId] = {
+          oldestIndex: oldestIndex,
+          hasMore: hasMore,
+          totalVisible: totalVisible,
+          loadingOlder: false,
+          version: version
+        };
       } catch(e) {
-        // Only show an error if we have no cached messages to fall back on
         if (self.currentAgent && self.currentAgent.id === agentId && !self.messages.length) {
           self.messages.push({ id: ++msgId, role: 'system', text: '⚠ Could not load chat history. ' + (e && e.message ? e.message : ''), meta: '', tools: [] });
         }
+      }
+    },
+
+    /**
+     * Lazy-load: prepend the next batch of older messages when the user
+     * scrolls near the top of the chat scroll container. Idempotent + race-
+     * safe: the version field on _agentSessionState ensures a stale fetch
+     * (because the user switched agents mid-request) does not pollute the
+     * new agent's view.
+     *
+     * Scroll preservation: we measure scrollHeight before the prepend and
+     * restore (newScrollHeight - oldScrollHeight + oldScrollTop) afterwards
+     * so the message the user was reading stays anchored under their cursor.
+     */
+    async loadOlderMessages() {
+      var self = this;
+      if (!self.currentAgent) return;
+      var agentId = self.currentAgent.id;
+      var state = _agentSessionState[agentId];
+      if (!state) return;
+      if (!state.hasMore) return;
+      if (state.loadingOlder) return;
+      if (state.oldestIndex <= 0) return;
+      // Capture version up front; if it changes during the await, we drop the
+      // result on the floor (user has switched agents or restarted history).
+      var version = state.version;
+      state.loadingOlder = true;
+      var el = document.getElementById('messages');
+      var prevScrollHeight = el ? el.scrollHeight : 0;
+      var prevScrollTop = el ? el.scrollTop : 0;
+      try {
+        var url = '/api/agents/' + agentId + '/session?limit=' + CHAT_HISTORY_PAGE_SIZE
+          + '&before=' + state.oldestIndex;
+        var data = await OpenFangAPI.get(url);
+        var stateAfter = _agentSessionState[agentId];
+        if (!stateAfter || stateAfter.version !== version) return;
+        if (!self.currentAgent || self.currentAgent.id !== agentId) return;
+        var batch = (data.messages || []).map(function(m) { return self._mapServerMessage(m); });
+        if (batch.length) {
+          self.messages = batch.concat(self.messages);
+          _agentMsgCache[agentId] = self.messages.slice();
+          // Restore scroll anchor on the NEXT animation frame so Alpine has
+          // rendered the prepended nodes and scrollHeight reflects them.
+          self.$nextTick(function() {
+            var el2 = document.getElementById('messages');
+            if (!el2) return;
+            var delta = el2.scrollHeight - prevScrollHeight;
+            // Stay pinned to whatever the user was reading; don't jump to top.
+            el2.scrollTop = prevScrollTop + delta;
+            self._chatPinnedToBottom = false;
+          });
+        }
+        var newOldest = (typeof data.oldest_index === 'number')
+          ? data.oldest_index
+          : Math.max(0, stateAfter.oldestIndex - batch.length);
+        var hasMore = !!data.has_more;
+        var totalVisible = (typeof data.total_visible_messages === 'number')
+          ? data.total_visible_messages
+          : stateAfter.totalVisible;
+        _agentSessionState[agentId] = {
+          oldestIndex: newOldest,
+          hasMore: hasMore,
+          totalVisible: totalVisible,
+          loadingOlder: false,
+          version: version
+        };
+      } catch(e) {
+        var s = _agentSessionState[agentId];
+        if (s && s.version === version) s.loadingOlder = false;
       }
     },
 
@@ -2404,6 +2531,16 @@ function chatPage() {
       var threshold = 72;
       var dist = el.scrollHeight - el.scrollTop - el.clientHeight;
       this._chatPinnedToBottom = dist <= threshold;
+      // Lazy-load older history when the user is near the top of the chat
+      // and the server reported `has_more: true` for this agent. Cheap and
+      // idempotent (loadOlderMessages no-ops when nothing more is available
+      // or a fetch is already in flight).
+      if (el.scrollTop <= CHAT_HISTORY_TOP_THRESHOLD_PX && this.currentAgent) {
+        var st = _agentSessionState[this.currentAgent.id];
+        if (st && st.hasMore && !st.loadingOlder) {
+          this.loadOlderMessages();
+        }
+      }
     },
 
     /** @param {boolean} [force] - If true, always scroll (user action or new session). If omitted, only scroll when user is already near the bottom (avoids fighting scroll while reading history during streaming). */

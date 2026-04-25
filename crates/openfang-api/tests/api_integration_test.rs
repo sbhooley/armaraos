@@ -1299,6 +1299,52 @@ async fn test_agent_session_empty() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["message_count"], 0);
     assert_eq!(body["messages"].as_array().unwrap().len(), 0);
+    // Pagination metadata is always present so the dashboard can branch on
+    // `has_more` without checking for `undefined` first.
+    assert_eq!(body["total_visible_messages"], 0);
+    assert_eq!(body["oldest_index"], 0);
+    assert_eq!(body["has_more"], false);
+}
+
+#[tokio::test]
+async fn test_agent_session_pagination_metadata_no_messages() {
+    // Even an empty session must surface limit/before-friendly metadata.
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    // ?limit=10&before=0 against an empty session returns an empty page.
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}/session?limit=10&before=0",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["messages"].as_array().unwrap().len(), 0);
+    assert_eq!(body["has_more"], false);
+    assert_eq!(body["oldest_index"], 0);
+
+    // Garbage values must not 500 the route — they fall back to defaults.
+    let resp = client
+        .get(format!(
+            "{}/api/agents/{}/session?limit=not-a-number&before=foo",
+            server.base_url, agent_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
@@ -2707,4 +2753,75 @@ async fn test_dashboard_html_includes_adaptive_eco_budget_section() {
         html.contains("adaptive_confidence_p50") && html.contains("effective_mode_flip_rate"),
         "budget adaptive strip should expose confidence + flip-rate bindings"
     );
+}
+
+/// Settings / spawn wizard rely on CLI-backed rows in `GET /api/providers` (no API key env, snake_case auth).
+#[tokio::test]
+async fn providers_list_includes_cli_llm_providers_with_expected_fields() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/providers", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let providers = body["providers"].as_array().expect("providers must be an array");
+
+    fn provider_by_id<'a>(providers: &'a [serde_json::Value], id: &str) -> &'a serde_json::Value {
+        providers
+            .iter()
+            .find(|p| p["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("catalog must include provider {id}"))
+    }
+
+    for id in ["claude-code", "qwen-code"] {
+        let p = provider_by_id(providers, id);
+        assert_eq!(
+            p["key_required"], false,
+            "{id}: dashboard treats CLI providers as keyless"
+        );
+        assert_eq!(
+            p["api_key_env"].as_str().unwrap_or(""),
+            "",
+            "{id}: no vault API key env (CLI auth)"
+        );
+        let st = p["auth_status"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: auth_status must be a string"));
+        assert!(
+            matches!(st, "configured" | "missing"),
+            "{id}: unexpected auth_status {st} (expected configured or missing from CLI probe)"
+        );
+    }
+}
+
+/// `POST /api/providers/:name/test` is used by Settings Detect and wizard Detect; shape must stay stable.
+#[tokio::test]
+async fn providers_cli_test_endpoints_return_ok_json_shape() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    for id in ["claude-code", "qwen-code"] {
+        let url = format!("{}/api/providers/{id}/test", server.base_url);
+        let resp = client.post(url).send().await.unwrap();
+        assert_eq!(resp.status(), 200, "POST {id}/test should return 200 body");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(
+            body["provider"].as_str(),
+            Some(id),
+            "response should echo provider id"
+        );
+        let status = body["status"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: status field missing"));
+        assert!(
+            matches!(status, "ok" | "error"),
+            "{id}: status must be ok or error, got {status}"
+        );
+        assert!(
+            body.get("network_hints").is_some(),
+            "{id}: network_hints should be present for dashboard VPN hints"
+        );
+    }
 }

@@ -50,9 +50,9 @@ pub struct AppState {
     /// ClawHub response cache — prevents 429 rate limiting on rapid dashboard refreshes.
     /// Maps cache key → (fetched_at, response_json) with 120s TTL.
     pub clawhub_cache: DashMap<String, (Instant, serde_json::Value)>,
-    /// Probe cache for local provider health checks (ollama/vllm/lmstudio).
-    /// Avoids blocking the `/api/providers` endpoint on TCP timeouts to
-    /// unreachable local services. 60-second TTL.
+    /// Probe cache for provider model discovery (local ollama/vllm/lmstudio and
+    /// authenticated NVIDIA NIM `GET /v1/models`). Avoids blocking `/api/providers`
+    /// on slow or unreachable endpoints. 60-second TTL.
     pub provider_probe_cache: openfang_runtime::provider_health::ProbeCache,
     /// Thread-safe mutable budget config. Updated via PUT /api/budget.
     /// Initialized from `kernel.config.budget` at startup.
@@ -1164,11 +1164,32 @@ pub async fn send_message(
 pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
     ext: Option<Extension<RequestId>>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let rid = resolve_request_id(ext);
     const PATH: &str = "/api/agents/:id/session";
+
+    // ---- Pagination (lazy-load for the dashboard chat) -----------------------
+    // Optional query params:
+    //   ?limit=N    → return at most N visible messages (default = full session
+    //                 to preserve the legacy contract for non-paginated callers)
+    //   ?before=I   → return only messages with built index < I (i.e. older than
+    //                 the message at position I in the visible-message list).
+    // The visible-message list is built first (with full tool correlation) and
+    // sliced *after*, so tool_use ↔ tool_result pairing is never broken by a
+    // page boundary. Response always includes `total_visible_messages`,
+    // `oldest_index` and `has_more` so the client can decide whether to keep
+    // scrolling.
+    const DEFAULT_LIMIT: usize = usize::MAX;
+    const MAX_LIMIT: usize = 1000;
+    let req_limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .map(|n| n.clamp(1, MAX_LIMIT))
+        .unwrap_or(DEFAULT_LIMIT);
+    let req_before = params.get("before").and_then(|s| s.parse::<usize>().ok());
     if let Err(resp) = crate::premium_ainl::require_premium_wallet_holdings_when_wallet_session(
         &state, &headers, &rid, PATH,
     )
@@ -1340,16 +1361,31 @@ pub async fn get_agent_session(
                 }
             }
 
-            let messages = built_messages;
+            // Slice the fully-built list. `before` is exclusive; `limit` caps
+            // the page size. Both default to "give me everything" so the
+            // legacy single-shot fetch still works unchanged.
+            let total_visible = built_messages.len();
+            let upper = req_before.unwrap_or(total_visible).min(total_visible);
+            let lower = upper.saturating_sub(req_limit);
+            let page: Vec<serde_json::Value> = if upper > lower {
+                built_messages[lower..upper].to_vec()
+            } else {
+                Vec::new()
+            };
+            let oldest_index = lower;
+            let has_more = lower > 0;
             (
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "session_id": session.id.0.to_string(),
                     "agent_id": session.agent_id.0.to_string(),
                     "message_count": session.messages.len(),
+                    "total_visible_messages": total_visible,
+                    "oldest_index": oldest_index,
+                    "has_more": has_more,
                     "context_window_tokens": session.context_window_tokens,
                     "label": session.label,
-                    "messages": messages,
+                    "messages": page,
                 })),
             )
         }
@@ -1359,6 +1395,9 @@ pub async fn get_agent_session(
                 "session_id": entry.session_id.0.to_string(),
                 "agent_id": agent_id.to_string(),
                 "message_count": 0,
+                "total_visible_messages": 0,
+                "oldest_index": 0,
+                "has_more": false,
                 "context_window_tokens": 0,
                 "messages": [],
             })),
@@ -6723,6 +6762,7 @@ pub async fn hand_instance_browser(
         .send_command(
             &agent_id_str,
             openfang_runtime::browser::BrowserCommand::ReadPage,
+            None,
         )
         .await
     {
@@ -6753,6 +6793,7 @@ pub async fn hand_instance_browser(
         .send_command(
             &agent_id_str,
             openfang_runtime::browser::BrowserCommand::Screenshot,
+            None,
         )
         .await
     {
@@ -10433,6 +10474,10 @@ pub async fn get_model(
 /// For local providers (ollama, vllm, lmstudio), also probes reachability and
 /// discovers available models via their health endpoints.
 ///
+/// For **NVIDIA NIM** (`nvidia`), when an API key is configured, fetches the OpenAI-compatible
+/// `GET /v1/models` catalog and merges new model IDs into the in-memory registry so Settings →
+/// Models can browse the full NIM offering.
+///
 /// Probes run **concurrently** and results are **cached for 60 seconds** so the
 /// endpoint responds instantly on repeated dashboard loads even when local
 /// providers are unreachable (fixes #474).
@@ -10460,6 +10505,25 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
         .map(|(i, p)| (i, p.id.clone(), p.base_url.clone()))
         .collect();
 
+    // NVIDIA NIM: OpenAI-style model list (requires Bearer API key).
+    let nvidia_catalog_args: Option<(usize, String, String)> = provider_list
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.id == "nvidia")
+        .and_then(|(i, p)| {
+            if p.auth_status != openfang_types::model_catalog::AuthStatus::Configured {
+                return None;
+            }
+            let url = p.base_url.trim();
+            if url.is_empty() {
+                return None;
+            }
+            let key = std::env::var(&p.api_key_env)
+                .ok()
+                .filter(|s| !s.trim().is_empty())?;
+            Some((i, url.to_string(), key))
+        });
+
     // Fire all probes concurrently (cached results return instantly)
     let cache = &state.provider_probe_cache;
     let probe_futures: Vec<_> = local_providers
@@ -10468,7 +10532,34 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             openfang_runtime::provider_health::probe_provider_cached(id, url, cache)
         })
         .collect();
-    let probe_results = futures::future::join_all(probe_futures).await;
+
+    let nim_future = async {
+        let (_, url, key) = nvidia_catalog_args.as_ref()?;
+        Some(
+            openfang_runtime::provider_health::probe_openai_models_authenticated_cached(
+                "nvidia-nim-models",
+                url,
+                key,
+                cache,
+            )
+            .await,
+        )
+    };
+
+    let (probe_results, nim_probe) =
+        tokio::join!(futures::future::join_all(probe_futures), nim_future);
+
+    if let (Some(_), Some(nim_res)) = (nvidia_catalog_args.as_ref(), nim_probe.as_ref()) {
+        if nim_res.reachable && !nim_res.discovered_models.is_empty() {
+            if let Ok(mut catalog) = state.kernel.model_catalog.write() {
+                catalog.merge_discovered_models_with_tier(
+                    "nvidia",
+                    &nim_res.discovered_models,
+                    openfang_types::model_catalog::ModelTier::Balanced,
+                );
+            }
+        }
+    }
 
     // Index probe results by provider list position for O(1) lookup
     let mut probe_map: HashMap<usize, openfang_runtime::provider_health::ProbeResult> =
@@ -10476,6 +10567,8 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
     for ((idx, _, _), result) in local_providers.iter().zip(probe_results.into_iter()) {
         probe_map.insert(*idx, result);
     }
+
+    let nim_idx = nvidia_catalog_args.as_ref().map(|(i, _, _)| *i);
 
     let mut providers: Vec<serde_json::Value> = Vec::with_capacity(provider_list.len());
 
@@ -10511,7 +10604,39 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             entry["is_local"] = serde_json::json!(true);
         }
 
+        // NVIDIA NIM cloud catalog (same UX fields as local discovery, without is_local)
+        if nim_idx == Some(i) {
+            if let Some(ref nim_res) = nim_probe {
+                entry["nim_catalog"] = serde_json::json!(true);
+                entry["reachable"] = serde_json::json!(nim_res.reachable);
+                entry["latency_ms"] = serde_json::json!(nim_res.latency_ms);
+                if !nim_res.discovered_models.is_empty() {
+                    entry["discovered_models"] = serde_json::json!(nim_res.discovered_models);
+                }
+                if let Some(err) = &nim_res.error {
+                    entry["error"] = serde_json::json!(err);
+                }
+            }
+        }
+
         providers.push(entry);
+    }
+
+    // Refresh model_count after merges (stale counts came from the pre-merge snapshot).
+    {
+        let catalog = state
+            .kernel
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        for entry in &mut providers {
+            let Some(id) = entry.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if let Some(pi) = catalog.get_provider(id) {
+                entry["model_count"] = serde_json::json!(pi.model_count);
+            }
+        }
     }
 
     let total = providers.len();
