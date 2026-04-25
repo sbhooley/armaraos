@@ -5142,10 +5142,8 @@ async fn tool_process_start(
                 .collect()
         })
         .unwrap_or_default();
-    let env: Option<std::collections::HashMap<String, String>> = input
-        .get("env")
-        .and_then(|v| v.as_object())
-        .map(|obj| {
+    let env: Option<std::collections::HashMap<String, String>> =
+        input.get("env").and_then(|v| v.as_object()).map(|obj| {
             obj.iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect()
@@ -5291,7 +5289,11 @@ fn should_skip_walk_entry(path: &Path) -> bool {
 
 fn score_file_candidate(path: &Path, query_lc: &str) -> Option<(i32, String, Option<String>)> {
     let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if !is_script_extension(&ext) {
         return None;
     }
@@ -5443,7 +5445,11 @@ async fn tool_script_detect(
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     let ws = workspace_root.ok_or("script_detect: workspace_root is required")?;
-    let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let query = input
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
     let query_lc = query.to_ascii_lowercase();
     let max_results = input
         .get("max_results")
@@ -5482,7 +5488,11 @@ async fn tool_script_detect(
         }
         if let Some((score, reason, language_hint)) = score_file_candidate(path, &query_lc) {
             // Prefer workspace-relative paths in output.
-            let rel = path.strip_prefix(ws).unwrap_or(path).to_string_lossy().to_string();
+            let rel = path
+                .strip_prefix(ws)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
             candidates.push(ScriptDetectCandidate::File {
                 path: rel,
                 score,
@@ -5496,11 +5506,15 @@ async fn tool_script_detect(
     candidates.sort_by(|a, b| {
         let (sa, ka) = match a {
             ScriptDetectCandidate::File { score, path, .. } => (*score, format!("file:{path}")),
-            ScriptDetectCandidate::PackageScript { score, name, .. } => (*score, format!("pkg:{name}")),
+            ScriptDetectCandidate::PackageScript { score, name, .. } => {
+                (*score, format!("pkg:{name}"))
+            }
         };
         let (sb, kb) = match b {
             ScriptDetectCandidate::File { score, path, .. } => (*score, format!("file:{path}")),
-            ScriptDetectCandidate::PackageScript { score, name, .. } => (*score, format!("pkg:{name}")),
+            ScriptDetectCandidate::PackageScript { score, name, .. } => {
+                (*score, format!("pkg:{name}"))
+            }
         };
         sb.cmp(&sa).then_with(|| ka.cmp(&kb))
     });
@@ -5518,9 +5532,7 @@ async fn tool_script_detect(
 }
 
 /// List declarative workspace actions from `<workspace>/armaraos.toml`.
-async fn tool_workspace_actions_list(
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
+async fn tool_workspace_actions_list(workspace_root: Option<&Path>) -> Result<String, String> {
     let ws = workspace_root.ok_or("workspace_actions_list: workspace_root is required")?;
     let contract = crate::workspace_action_contract::load_workspace_contract(ws)?;
     let actions = crate::workspace_action_contract::summarize_actions(&contract);
@@ -5592,7 +5604,8 @@ async fn tool_workspace_action_set(
             .map_err(|e| format!("workspace_action_set: invalid health_check object: {e}"))?,
     };
 
-    let contract = crate::workspace_action_contract::upsert_workspace_action(ws, action_name, action)?;
+    let contract =
+        crate::workspace_action_contract::upsert_workspace_action(ws, action_name, action)?;
     let actions = crate::workspace_action_contract::summarize_actions(&contract);
     Ok(serde_json::json!({
         "ok": true,
@@ -5695,10 +5708,9 @@ pub async fn execute_workspace_action_direct(
     exec_policy: Option<&openfang_types::config::ExecPolicy>,
 ) -> Result<String, String> {
     let contract = crate::workspace_action_contract::load_workspace_contract(workspace_root)?;
-    let action = contract
-        .actions
-        .get(action_name)
-        .ok_or_else(|| format!("workspace_action: action `{action_name}` not found in armaraos.toml"))?;
+    let action = contract.actions.get(action_name).ok_or_else(|| {
+        format!("workspace_action: action `{action_name}` not found in armaraos.toml")
+    })?;
 
     // Merge args/env: contract defaults first, call-site overrides appended/overridden.
     let mut merged_args = action.args.clone();
@@ -6052,7 +6064,14 @@ fn infer_script_run_mode(script: &str, args: &[String], input: &serde_json::Valu
         haystack.push_str(&args.join(" ").to_ascii_lowercase());
     }
     let service_markers = [
-        "gateway", "server", "serve", "daemon", "watch", "uvicorn", "gunicorn", "flask run",
+        "gateway",
+        "server",
+        "serve",
+        "daemon",
+        "watch",
+        "uvicorn",
+        "gunicorn",
+        "flask run",
     ];
     if service_markers.iter().any(|m| haystack.contains(m)) {
         "daemon".to_string()
@@ -6138,10 +6157,15 @@ async fn run_daemon(
 
             let probe = probe_http_until_ready(url, timeout_secs, expect_status).await;
             if let Some(obj) = payload.as_object_mut() {
-                obj.insert("health".to_string(), serde_json::to_value(&probe).unwrap_or_default());
+                obj.insert(
+                    "health".to_string(),
+                    serde_json::to_value(&probe).unwrap_or_default(),
+                );
                 obj.insert(
                     "status".to_string(),
-                    serde_json::Value::String(if probe.ready { "ready" } else { "unreachable" }.to_string()),
+                    serde_json::Value::String(
+                        if probe.ready { "ready" } else { "unreachable" }.to_string(),
+                    ),
                 );
             }
         }
@@ -7819,10 +7843,13 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\necho hi-from-script\n").unwrap();
 
         let payload = serde_json::json!({ "script": "hello.sh" });
-        let res =
-            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+        let res = tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
 
-        assert!(res.is_ok(), "expected oneshot success, got: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "expected oneshot success, got: {:?}",
+            res.err()
+        );
         let body = res.unwrap();
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["mode"], "oneshot");
@@ -7850,8 +7877,7 @@ mod tests {
     async fn test_script_run_missing_file_returns_actionable_hint() {
         let dir = tempfile::TempDir::new().unwrap();
         let payload = serde_json::json!({ "script": "no-such.py" });
-        let res =
-            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+        let res = tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
 
         let err = res.expect_err("missing script must error");
         assert!(
@@ -7876,8 +7902,7 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
 
         let payload = serde_json::json!({ "script": "noop.sh", "mode": "spawn-and-pray" });
-        let res =
-            tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
+        let res = tool_script_run(&payload, &[], Some(dir.path()), None, None, None, None).await;
 
         let err = res.expect_err("invalid mode must error");
         assert!(err.contains("script_run: unknown `mode`"), "{err}");
@@ -7937,18 +7962,24 @@ mod tests {
         .unwrap();
 
         let payload = serde_json::json!({ "query": "gateway" });
-        let body = tool_script_detect(&payload, Some(dir.path())).await.unwrap();
+        let body = tool_script_detect(&payload, Some(dir.path()))
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         let results = v["results"].as_array().unwrap();
         assert!(!results.is_empty(), "expected some results: {body}");
         // Expect at least one file match.
         assert!(
-            results.iter().any(|r| r["kind"] == "file" && r["path"].as_str().unwrap().contains("gateway.ts")),
+            results
+                .iter()
+                .any(|r| r["kind"] == "file" && r["path"].as_str().unwrap().contains("gateway.ts")),
             "expected gateway.ts file candidate: {body}"
         );
         // Expect at least one package script match.
         assert!(
-            results.iter().any(|r| r["kind"] == "package_script" && r["name"] == "dev"),
+            results
+                .iter()
+                .any(|r| r["kind"] == "package_script" && r["name"] == "dev"),
             "expected dev package_script candidate: {body}"
         );
     }
@@ -7996,7 +8027,9 @@ mode = "oneshot"
                 "expect_status": 200
             }
         });
-        let out = tool_workspace_action_set(&input, Some(dir.path())).await.unwrap();
+        let out = tool_workspace_action_set(&input, Some(dir.path()))
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["ok"], true);
         assert_eq!(v["action"], "gateway");
@@ -8044,7 +8077,11 @@ mode = "oneshot"
     #[cfg(unix)]
     async fn test_workspace_action_executes_named_contract_action() {
         let dir = tempfile::TempDir::new().unwrap();
-        std::fs::write(dir.path().join("run.sh"), "#!/bin/sh\necho hi-from-contract\n").unwrap();
+        std::fs::write(
+            dir.path().join("run.sh"),
+            "#!/bin/sh\necho hi-from-contract\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join("armaraos.toml"),
             r#"

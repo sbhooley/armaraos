@@ -73,6 +73,40 @@ impl BackgroundExecutor {
 
                 let handle = tokio::spawn(async move {
                     loop {
+                        // Send the first autonomous self-prompt immediately on startup/restore,
+                        // then wait `interval` between subsequent attempts. This keeps long
+                        // intervals cheap without making restored autonomous agents appear inert.
+                        if busy
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_err()
+                        {
+                            debug!(agent = %name, "Continuous loop: skipping tick (busy)");
+                        } else {
+                            // SECURITY: Acquire global LLM concurrency permit
+                            let permit = match semaphore.clone().acquire_owned().await {
+                                Ok(p) => p,
+                                Err(_) => {
+                                    busy.store(false, Ordering::SeqCst);
+                                    break; // Semaphore closed
+                                }
+                            };
+
+                            let prompt = format!(
+                                "[AUTONOMOUS TICK] You are running in continuous mode. \
+                                 Check your goals, review shared memory for pending tasks, \
+                                 and take any necessary actions. Agent: {name}"
+                            );
+                            debug!(agent = %name, "Continuous loop: sending self-prompt");
+                            let busy_clone = busy.clone();
+                            let jh = (send_message)(agent_id, prompt);
+                            // Spawn a watcher that clears the busy flag and drops permit when done
+                            tokio::spawn(async move {
+                                let _ = jh.await;
+                                drop(permit);
+                                busy_clone.store(false, Ordering::SeqCst);
+                            });
+                        }
+
                         tokio::select! {
                             _ = tokio::time::sleep(interval) => {}
                             _ = shutdown.changed() => {
@@ -80,39 +114,6 @@ impl BackgroundExecutor {
                                 break;
                             }
                         }
-
-                        // Skip if previous tick is still running
-                        if busy
-                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                            .is_err()
-                        {
-                            debug!(agent = %name, "Continuous loop: skipping tick (busy)");
-                            continue;
-                        }
-
-                        // SECURITY: Acquire global LLM concurrency permit
-                        let permit = match semaphore.clone().acquire_owned().await {
-                            Ok(p) => p,
-                            Err(_) => {
-                                busy.store(false, Ordering::SeqCst);
-                                break; // Semaphore closed
-                            }
-                        };
-
-                        let prompt = format!(
-                            "[AUTONOMOUS TICK] You are running in continuous mode. \
-                             Check your goals, review shared memory for pending tasks, \
-                             and take any necessary actions. Agent: {name}"
-                        );
-                        debug!(agent = %name, "Continuous loop: sending self-prompt");
-                        let busy_clone = busy.clone();
-                        let jh = (send_message)(agent_id, prompt);
-                        // Spawn a watcher that clears the busy flag and drops permit when done
-                        tokio::spawn(async move {
-                            let _ = jh.await;
-                            drop(permit);
-                            busy_clone.store(false, Ordering::SeqCst);
-                        });
                     }
                 });
 
@@ -360,6 +361,36 @@ mod tests {
     fn test_parse_condition_unknown() {
         assert!(parse_condition("event:unknown_thing").is_none());
         assert!(parse_condition("badprefix:foo").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_continuous_ticks_immediately_on_start() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let executor = BackgroundExecutor::new(shutdown_rx);
+        let agent_id = AgentId::new();
+
+        let tick_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let tick_clone = tick_count.clone();
+
+        let schedule = ScheduleMode::Continuous {
+            check_interval_secs: 60,
+        };
+
+        executor.start_agent(agent_id, "restored-agent", &schedule, move |_id, _msg| {
+            let tc = tick_clone.clone();
+            tokio::spawn(async move {
+                tc.fetch_add(1, Ordering::SeqCst);
+            })
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            tick_count.load(Ordering::SeqCst),
+            1,
+            "continuous agents should wake once immediately after startup"
+        );
+
+        executor.stop_agent(agent_id);
     }
 
     #[tokio::test]

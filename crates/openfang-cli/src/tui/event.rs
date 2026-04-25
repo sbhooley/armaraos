@@ -1,7 +1,7 @@
 //! Event system: crossterm polling, tick timer, streaming bridges.
 
 use openfang_kernel::OpenFangKernel;
-use openfang_runtime::agent_loop::AgentLoopResult;
+use openfang_runtime::agent_loop::{AgentLoopOutcome, AgentLoopResult};
 use openfang_runtime::llm_driver::StreamEvent;
 use openfang_types::agent::AgentId;
 use ratatui::crossterm::event::{self, Event as CtEvent, KeyEvent, KeyEventKind};
@@ -442,6 +442,7 @@ pub fn spawn_daemon_stream(
             iterations: 0,
             cost_usd: None,
             silent: false,
+            outcome: AgentLoopOutcome::Completed,
             directives: Default::default(),
             latency_ms: None,
             llm_fallback_note: None,
@@ -492,6 +493,7 @@ fn daemon_fallback(
             iterations: body["iterations"].as_u64().unwrap_or(0) as u32,
             cost_usd: body["cost_usd"].as_f64(),
             silent: false,
+            outcome: AgentLoopOutcome::Completed,
             directives: Default::default(),
             compression_savings_pct: body["compression_savings_pct"].as_u64().unwrap_or(0) as u8,
             compressed_input: body["compressed_input"].as_str().map(|s| s.to_string()),

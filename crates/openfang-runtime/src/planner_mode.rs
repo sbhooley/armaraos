@@ -93,7 +93,10 @@ pub fn native_infer_base_url() -> Option<String> {
 /// Strip trailing `/v1` from provider OpenAI-style URLs so native infer can append `/armara/v1/infer`.
 pub fn normalize_infer_base_url(raw: &str) -> String {
     let t = raw.trim().trim_end_matches('/');
-    t.trim_end_matches("/v1").to_string()
+    t.trim_end_matches("/armara/v1/infer")
+        .trim_end_matches("/armara/v1")
+        .trim_end_matches("/v1")
+        .to_string()
 }
 
 /// Detect whether `(provider_name, optional configured URL)` refers to the
@@ -119,6 +122,8 @@ pub fn provider_is_ainl_inference_server(provider: &str, url: Option<&str>) -> b
             | "armara"
             | "armara-inference"
             | "armara-infer"
+            | "openfang-inference"
+            | "openfang-infer"
     ) {
         return true;
     }
@@ -146,7 +151,7 @@ pub fn effective_native_infer_base_url(
     provider_url: Option<&str>,
 ) -> Option<String> {
     if let Some(env) = native_infer_base_url() {
-        return Some(env);
+        return Some(normalize_infer_base_url(&env));
     }
     if provider_is_ainl_inference_server(provider, provider_url) {
         if let Some(u) = provider_url {
@@ -175,6 +180,8 @@ mod tests {
             "armara",
             "armara-infer",
             "armara_inference",
+            "openfang-inference",
+            "openfang_infer",
         ] {
             assert!(
                 provider_is_ainl_inference_server(p, None),
@@ -223,9 +230,19 @@ mod tests {
             effective_native_infer_base_url("ainl-inference", Some("http://127.0.0.1:8787/v1")),
             Some("http://127.0.0.1:8787".to_string())
         );
+        assert_eq!(
+            effective_native_infer_base_url(
+                "openai",
+                Some("http://127.0.0.1:8787/armara/v1/infer")
+            ),
+            Some("http://127.0.0.1:8787".to_string())
+        );
 
         // 3. Env override always wins.
-        std::env::set_var("ARMARA_NATIVE_INFER_URL", "http://override:9000");
+        std::env::set_var(
+            "ARMARA_NATIVE_INFER_URL",
+            "http://override:9000/armara/v1/infer",
+        );
         assert_eq!(
             effective_native_infer_base_url("ainl-inference", Some("http://127.0.0.1:8787/v1")),
             Some("http://override:9000".to_string())

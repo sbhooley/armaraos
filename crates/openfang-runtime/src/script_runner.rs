@@ -126,19 +126,13 @@ impl RunnerError {
                 hint,
             } => {
                 let ws = workspace.as_deref().unwrap_or("<no workspace>");
-                format!(
-                    "script_run: script `{path}` is outside the agent workspace `{ws}`. {hint}"
-                )
+                format!("script_run: script `{path}` is outside the agent workspace `{ws}`. {hint}")
             }
             Self::UnknownExtension { ext, hint } => {
-                format!(
-                    "script_run: cannot auto-detect a runner for extension `{ext}`. {hint}"
-                )
+                format!("script_run: cannot auto-detect a runner for extension `{ext}`. {hint}")
             }
             Self::UnknownLanguageHint { hint_value, hint } => {
-                format!(
-                    "script_run: unknown `language` hint `{hint_value}`. {hint}"
-                )
+                format!("script_run: unknown `language` hint `{hint_value}`. {hint}")
             }
             Self::Io { error, path } => {
                 format!("script_run: I/O error reading `{path}`: {error}")
@@ -203,9 +197,7 @@ pub fn resolve_runner(
         ws.join(&raw)
     } else {
         // No workspace and not absolute — treat as cwd-relative (best effort).
-        std::env::current_dir()
-            .map(|c| c.join(&raw))
-            .unwrap_or(raw)
+        std::env::current_dir().map(|c| c.join(&raw)).unwrap_or(raw)
     };
 
     if !probe.is_file(&absolute) {
@@ -319,9 +311,7 @@ fn language_from_extension(
         "bash" => Some(ScriptLanguage::Bash),
         "zsh" => Some(ScriptLanguage::Zsh),
         "js" | "mjs" | "cjs" => Some(detect_js_runtime(absolute, workspace_root, probe)),
-        "ts" | "tsx" | "mts" | "cts" => {
-            Some(detect_ts_runtime(absolute, workspace_root, probe))
-        }
+        "ts" | "tsx" | "mts" | "cts" => Some(detect_ts_runtime(absolute, workspace_root, probe)),
         _ => None,
     }
 }
@@ -409,7 +399,10 @@ fn pick_interpreter(
 ) -> (String, Vec<String>) {
     match lang {
         ScriptLanguage::Python => pick_python(workspace_root, probe),
-        ScriptLanguage::Shell => (pick_first_existing(&["/bin/sh", "/usr/bin/sh"], probe, "sh"), vec![]),
+        ScriptLanguage::Shell => (
+            pick_first_existing(&["/bin/sh", "/usr/bin/sh"], probe, "sh"),
+            vec![],
+        ),
         ScriptLanguage::Bash => (
             pick_first_existing(
                 &[
@@ -511,10 +504,7 @@ fn pick_node(workspace_root: Option<&Path>, probe: &dyn PathProbe) -> String {
     )
 }
 
-fn pick_typescript(
-    workspace_root: Option<&Path>,
-    probe: &dyn PathProbe,
-) -> (String, Vec<String>) {
+fn pick_typescript(workspace_root: Option<&Path>, probe: &dyn PathProbe) -> (String, Vec<String>) {
     if let Some(ws) = workspace_root {
         // Project-pinned tsx is the most reliable — no network, no "npm install -g".
         for rel in ["node_modules/.bin/tsx", "node_modules/.bin/ts-node"] {
@@ -527,7 +517,11 @@ fn pick_typescript(
     // Fall back to `npx --yes tsx` (zero-config, but may fetch on first run).
     (
         pick_first_existing(
-            &["/usr/local/bin/npx", "/opt/homebrew/bin/npx", "/usr/bin/npx"],
+            &[
+                "/usr/local/bin/npx",
+                "/opt/homebrew/bin/npx",
+                "/usr/bin/npx",
+            ],
             probe,
             "npx",
         ),
@@ -564,8 +558,7 @@ mod tests {
             }
         }
         fn with_shebang(mut self, path: &str, line: &str) -> Self {
-            self.shebangs
-                .insert(PathBuf::from(path), line.to_string());
+            self.shebangs.insert(PathBuf::from(path), line.to_string());
             self.existing_files.insert(PathBuf::from(path));
             self
         }
@@ -582,10 +575,7 @@ mod tests {
 
     #[test]
     fn resolves_python_with_workspace_venv() {
-        let probe = MockProbe::new(&[
-            "/ws/start.py",
-            "/ws/.venv/bin/python3",
-        ]);
+        let probe = MockProbe::new(&["/ws/start.py", "/ws/.venv/bin/python3"]);
         let r = resolve_runner("start.py", Some(Path::new("/ws")), None, &[], &probe).unwrap();
         assert_eq!(r.language, ScriptLanguage::Python);
         assert_eq!(r.interpreter, "/ws/.venv/bin/python3");
@@ -611,10 +601,7 @@ mod tests {
 
     #[test]
     fn resolves_typescript_prefers_local_tsx() {
-        let probe = MockProbe::new(&[
-            "/ws/server.ts",
-            "/ws/node_modules/.bin/tsx",
-        ]);
+        let probe = MockProbe::new(&["/ws/server.ts", "/ws/node_modules/.bin/tsx"]);
         let r = resolve_runner("server.ts", Some(Path::new("/ws")), None, &[], &probe).unwrap();
         assert_eq!(r.language, ScriptLanguage::TypeScript);
         assert_eq!(r.interpreter, "/ws/node_modules/.bin/tsx");
@@ -659,16 +646,14 @@ mod tests {
         assert_eq!(r.language, ScriptLanguage::Shell);
         // .sh defaults to /bin/sh, not bash, even if bash is present.
         assert!(
-            r.interpreter == "sh"
-                || r.interpreter == "/bin/sh"
-                || r.interpreter == "/usr/bin/sh"
+            r.interpreter == "sh" || r.interpreter == "/bin/sh" || r.interpreter == "/usr/bin/sh"
         );
     }
 
     #[test]
     fn shebang_overrides_unknown_extension() {
-        let probe = MockProbe::new(&["/ws/runner"])
-            .with_shebang("/ws/runner", "#!/usr/bin/env python3\n");
+        let probe =
+            MockProbe::new(&["/ws/runner"]).with_shebang("/ws/runner", "#!/usr/bin/env python3\n");
         let r = resolve_runner("runner", Some(Path::new("/ws")), None, &[], &probe).unwrap();
         assert_eq!(r.language, ScriptLanguage::Python);
         assert_eq!(r.decision_source, "shebang");
@@ -739,14 +724,8 @@ mod tests {
     #[test]
     fn errors_on_unknown_extension_without_shebang() {
         let probe = MockProbe::new(&["/ws/script.weird"]);
-        let err = resolve_runner(
-            "script.weird",
-            Some(Path::new("/ws")),
-            None,
-            &[],
-            &probe,
-        )
-        .unwrap_err();
+        let err =
+            resolve_runner("script.weird", Some(Path::new("/ws")), None, &[], &probe).unwrap_err();
         match err {
             RunnerError::UnknownExtension { ext, .. } => assert_eq!(ext, "weird"),
             other => panic!("expected UnknownExtension, got {other:?}"),
@@ -775,10 +754,7 @@ mod tests {
         assert_eq!(argv.last(), Some(&"arg2".to_string()));
         assert_eq!(argv[argv.len() - 2], "arg1");
         // The script must come before any caller args.
-        let script_pos = argv
-            .iter()
-            .position(|s| s.ends_with("run.sh"))
-            .unwrap();
+        let script_pos = argv.iter().position(|s| s.ends_with("run.sh")).unwrap();
         let arg1_pos = argv.iter().position(|s| s == "arg1").unwrap();
         assert!(script_pos < arg1_pos);
     }

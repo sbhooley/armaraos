@@ -1143,7 +1143,10 @@ mod tests {
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("\"kind\":\"workspace_action\""));
         let back: CronAction = serde_json::from_str(&json).unwrap();
-        if let CronAction::WorkspaceAction { action_name, mode, .. } = back {
+        if let CronAction::WorkspaceAction {
+            action_name, mode, ..
+        } = back
+        {
             assert_eq!(action_name, "gateway");
             assert_eq!(mode.as_deref(), Some("daemon"));
         } else {

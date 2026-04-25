@@ -65,16 +65,22 @@ pub fn contract_path(workspace_root: &Path) -> PathBuf {
 /// Load and validate the workspace action contract.
 pub fn load_workspace_contract(workspace_root: &Path) -> Result<WorkspaceContract, String> {
     let path = contract_path(workspace_root);
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("workspace action contract not found at `{}`: {e}", path.display()))?;
-    let parsed: WorkspaceContract = toml::from_str(&raw)
-        .map_err(|e| format!("invalid `{}` TOML: {e}", path.display()))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "workspace action contract not found at `{}`: {e}",
+            path.display()
+        )
+    })?;
+    let parsed: WorkspaceContract =
+        toml::from_str(&raw).map_err(|e| format!("invalid `{}` TOML: {e}", path.display()))?;
     validate_contract(&parsed, &path)?;
     Ok(parsed)
 }
 
 /// Like [`load_workspace_contract`], but returns an empty contract when file is missing.
-pub fn load_workspace_contract_or_empty(workspace_root: &Path) -> Result<WorkspaceContract, String> {
+pub fn load_workspace_contract_or_empty(
+    workspace_root: &Path,
+) -> Result<WorkspaceContract, String> {
     let path = contract_path(workspace_root);
     if !path.exists() {
         return Ok(WorkspaceContract::default());
@@ -138,7 +144,10 @@ pub fn delete_workspace_action(
 
 fn validate_contract(contract: &WorkspaceContract, path: &Path) -> Result<(), String> {
     if contract.actions.is_empty() {
-        return Err(format!("`{}` has no [actions.<name>] entries", path.display()));
+        return Err(format!(
+            "`{}` has no [actions.<name>] entries",
+            path.display()
+        ));
     }
     for (name, action) in &contract.actions {
         validate_action_entry(name, action, path)?;
@@ -148,7 +157,10 @@ fn validate_contract(contract: &WorkspaceContract, path: &Path) -> Result<(), St
 
 fn validate_action_entry(name: &str, action: &WorkspaceAction, path: &Path) -> Result<(), String> {
     if name.trim().is_empty() {
-        return Err(format!("`{}` contains an empty action name", path.display()));
+        return Err(format!(
+            "`{}` contains an empty action name",
+            path.display()
+        ));
     }
     if action.script.trim().is_empty() {
         return Err(format!(
@@ -275,8 +287,10 @@ mode = "forever"
         )
         .unwrap();
         let outcome = delete_workspace_action(tmp.path(), "gateway").unwrap();
-        assert_eq!(outcome, DeleteWorkspaceActionOutcome::DeletedAndRemovedContract);
+        assert_eq!(
+            outcome,
+            DeleteWorkspaceActionOutcome::DeletedAndRemovedContract
+        );
         assert!(!contract_path(tmp.path()).exists());
     }
 }
-

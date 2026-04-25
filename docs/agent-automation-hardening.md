@@ -10,6 +10,7 @@ Guidance for **reliable agent workflows** across browser scraping, file I/O, she
 - [Why agents restart expensive work](#why-agents-restart-expensive-work)
 - [Loop guard vs malformed tools](#loop-guard-vs-malformed-tools)
 - [AINL MCP soft failures (`ok: false` is a tool error)](#ainl-mcp-soft-failures-ok-false-is-a-tool-error)
+- [Post-turn learning background work](#post-turn-learning-background-work)
 - [Phase model: acquire, extract, persist, verify](#phase-model-acquire-extract-persist-verify)
 - [Persistence patterns that scale](#persistence-patterns-that-scale)
 - [Workspace and cross-session habits](#workspace-and-cross-session-habits)
@@ -87,13 +88,15 @@ The `mcp_ainl_*` tools (`ainl_validate`, `ainl_compile`, `ainl_run`, `ainl_secur
 
 Without intervention this is a **classic confabulation trap**: the LLM sees “tool call ✓” in the trace, then narrates a successful run on top of broken AINL.
 
-**Fix (v0.7.8+, [crates/openfang-runtime/src/mcp_ainl_session.rs](../crates/openfang-runtime/src/mcp_ainl_session.rs) → [tool_runner.rs](../crates/openfang-runtime/src/tool_runner.rs)):** the runtime detects `ok: false` in any `mcp_ainl_*` body and **promotes it to a real tool error** — `ToolResult.is_error = true`. As a result:
+**Fix (v0.7.8+, [crates/openfang-runtime/src/mcp_ainl_session.rs](../crates/openfang-runtime/src/mcp_ainl_session.rs) → [tool_runner.rs](../crates/openfang-runtime/src/tool_runner.rs)):** the runtime detects `ok: false` in any `mcp_ainl_*` body and **promotes it to a real tool error** — `ToolResult.is_error = true`. For authoring tools (`ainl_validate`, `ainl_compile`, `ainl_run`), malformed JSON or a missing boolean `ok` field is also treated as unsafe unless the tool is `ainl_capabilities`. As a result:
 
 1. The model sees a clearly-flagged failure with all `errors[]`, `primary_diagnostic`, and `agent_repair_steps` from the envelope, plus an explicit instruction:
    > *Edit the AINL source to address the errors above, then re-run `ainl_validate`. Only after `ainl_validate` returns `ok: true` may you proceed to `ainl_compile` / `ainl_run`.*
 2. **`loop_guard`** counts repeated bad-validate calls (so a model that keeps re-submitting unchanged broken AINL gets blocked, not stuck in an infinite loop).
 3. **`failure_learning`** captures the failure as a `Failure` graph node ([`graph_memory_learning::record_tool_execution_failure_with_source`](../crates/openfang-runtime/src/graph_memory_learning.rs)), which feeds the next turn's `## FailureRecall` prompt block — the agent can recall *why this AINL pattern failed last time*.
 4. The capabilities / `recommended_next_tools` snapshot cache is **not poisoned** with a failure body.
+
+**Additional guard:** a failed `mcp_ainl_ainl_validate`, `mcp_ainl_ainl_compile`, or `mcp_ainl_ainl_run` also creates a pending repair obligation in the agent loop. A later assistant text or silent response is not allowed to finish the turn until the model edits the source/arguments and re-runs the same tool successfully (`ok: true`). If the model tries to claim the workflow is ready, executed, or “strict=false ready” after a failed strict validate, the loop injects a corrective system message and continues. After repeated premature final attempts or near-limit exhaustion, the runtime returns a safe failure summary instead of a false success and records the turn as a failure outcome.
 
 **What does NOT change:**
 
@@ -110,6 +113,14 @@ Without intervention this is a **classic confabulation trap**: the LLM sees “t
 5. Then proceed to `mcp_ainl_ainl_compile` / `mcp_ainl_ainl_run`.
 
 If the same broken AINL is re-submitted unchanged, `loop_guard` will eventually block — fix the source, do not re-call.
+
+---
+
+## Post-turn learning background work
+
+Graph-memory episode, fact, pattern, and trajectory writes are awaited before the turn is saved. Persona evolution, background memory consolidation, and ArmaraOS graph export refresh run after those writes in a spawned post-turn task so chat latency stays low.
+
+The spawned work is best-effort but observable: `GET /api/status` includes `post_turn_learning_metrics` counters for started, succeeded, and failed persona/background learning tasks. Failures are logged with agent id and streaming/non-streaming path context; they do not turn a completed user-facing reply into an error after the fact.
 
 ---
 

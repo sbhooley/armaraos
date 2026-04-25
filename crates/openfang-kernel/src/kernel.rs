@@ -15,7 +15,8 @@ use crate::workflow::{StepAgent, StepMode, Workflow, WorkflowEngine, WorkflowId,
 
 use openfang_memory::MemorySubstrate;
 use openfang_runtime::agent_loop::{
-    run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopResult, LoopPhase,
+    run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopOutcome,
+    AgentLoopResult, LoopPhase,
 };
 use openfang_runtime::audit::AuditLog;
 use openfang_runtime::drivers;
@@ -3010,13 +3011,20 @@ impl OpenFangKernel {
                 // Update last active time
                 let _ = self.registry.set_state(agent_id, AgentState::Running);
 
-                let _ = self.registry.record_turn_success(
-                    agent_id,
-                    result.latency_ms,
-                    result.llm_fallback_note.clone(),
-                    result.total_usage.input_tokens,
-                    result.total_usage.output_tokens,
-                );
+                if result.outcome.is_task_success() {
+                    let _ = self.registry.record_turn_success(
+                        agent_id,
+                        result.latency_ms,
+                        result.llm_fallback_note.clone(),
+                        result.total_usage.input_tokens,
+                        result.total_usage.output_tokens,
+                    );
+                } else {
+                    let _ = self.registry.record_turn_failure(
+                        agent_id,
+                        format!("agent loop outcome: {:?}", result.outcome),
+                    );
+                }
 
                 // SECURITY: Record successful message in audit trail
                 self.audit_log.record(
@@ -3026,7 +3034,11 @@ impl OpenFangKernel {
                         "tokens_in={}, tokens_out={}",
                         result.total_usage.input_tokens, result.total_usage.output_tokens
                     ),
-                    "ok",
+                    if result.outcome.is_task_success() {
+                        "ok"
+                    } else {
+                        "failure"
+                    },
                 );
 
                 self.maybe_emit_agent_assistant_reply_notification(
@@ -3143,13 +3155,20 @@ impl OpenFangKernel {
                         let _ = kernel_clone
                             .registry
                             .set_state(agent_id, AgentState::Running);
-                        let _ = kernel_clone.registry.record_turn_success(
-                            agent_id,
-                            result.latency_ms,
-                            result.llm_fallback_note.clone(),
-                            result.total_usage.input_tokens,
-                            result.total_usage.output_tokens,
-                        );
+                        if result.outcome.is_task_success() {
+                            let _ = kernel_clone.registry.record_turn_success(
+                                agent_id,
+                                result.latency_ms,
+                                result.llm_fallback_note.clone(),
+                                result.total_usage.input_tokens,
+                                result.total_usage.output_tokens,
+                            );
+                        } else {
+                            let _ = kernel_clone.registry.record_turn_failure(
+                                agent_id,
+                                format!("agent loop outcome: {:?}", result.outcome),
+                            );
+                        }
                         kernel_clone.audit_log.record(
                             agent_id.to_string(),
                             openfang_runtime::audit::AuditAction::AgentMessage,
@@ -3157,7 +3176,11 @@ impl OpenFangKernel {
                                 "tokens_in={}, tokens_out={}",
                                 result.total_usage.input_tokens, result.total_usage.output_tokens
                             ),
-                            "ok",
+                            if result.outcome.is_task_success() {
+                                "ok"
+                            } else {
+                                "failure"
+                            },
                         );
                         kernel_clone
                             .maybe_emit_agent_assistant_reply_notification(
@@ -3731,13 +3754,20 @@ impl OpenFangKernel {
                         .registry
                         .set_state(agent_id, AgentState::Running);
 
-                    let _ = kernel_clone.registry.record_turn_success(
-                        agent_id,
-                        result.latency_ms,
-                        result.llm_fallback_note.clone(),
-                        result.total_usage.input_tokens,
-                        result.total_usage.output_tokens,
-                    );
+                    if result.outcome.is_task_success() {
+                        let _ = kernel_clone.registry.record_turn_success(
+                            agent_id,
+                            result.latency_ms,
+                            result.llm_fallback_note.clone(),
+                            result.total_usage.input_tokens,
+                            result.total_usage.output_tokens,
+                        );
+                    } else {
+                        let _ = kernel_clone.registry.record_turn_failure(
+                            agent_id,
+                            format!("agent loop outcome: {:?}", result.outcome),
+                        );
+                    }
                     kernel_clone.audit_log.record(
                         agent_id.to_string(),
                         openfang_runtime::audit::AuditAction::AgentMessage,
@@ -3745,7 +3775,11 @@ impl OpenFangKernel {
                             "tokens_in={}, tokens_out={}",
                             result.total_usage.input_tokens, result.total_usage.output_tokens
                         ),
-                        "ok",
+                        if result.outcome.is_task_success() {
+                            "ok"
+                        } else {
+                            "failure"
+                        },
                     );
 
                     kernel_clone
@@ -3885,6 +3919,7 @@ impl OpenFangKernel {
                     iterations: 1,
                     cost_usd: None,
                     silent: false,
+                    outcome: AgentLoopOutcome::Completed,
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
@@ -3974,6 +4009,7 @@ impl OpenFangKernel {
                     cost_usd: None,
                     iterations: 1,
                     silent: false,
+                    outcome: AgentLoopOutcome::Completed,
                     directives: Default::default(),
                     latency_ms: None,
                     llm_fallback_note: None,
@@ -9285,7 +9321,8 @@ impl OpenFangKernel {
                 {
                     Ok(output) => {
                         let delivery = job.delivery.clone();
-                        match cron_deliver_response(self, agent_id, output.trim(), &delivery).await {
+                        match cron_deliver_response(self, agent_id, output.trim(), &delivery).await
+                        {
                             Ok(()) => {
                                 self.cron_scheduler.record_success(job_id);
                                 self.audit_log.record(

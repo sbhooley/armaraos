@@ -270,23 +270,48 @@ pub fn ainl_mcp_soft_failure_message(tool_name: &str, content: &str) -> Option<S
     if !tool_name.starts_with("mcp_ainl_") {
         return None;
     }
-    let v: JsonValue = serde_json::from_str(content).ok()?;
-    if v.get("ok")?.as_bool()? {
-        return None;
-    }
 
     const MAX_ERRORS: usize = 20;
     const MAX_REPAIR_STEPS: usize = 10;
     const MAX_PRIMARY_CHARS: usize = 600;
     const MAX_TOTAL_CHARS: usize = 4_000;
 
+    let v: JsonValue = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(_) => {
+            if tool_name == "mcp_ainl_ainl_capabilities" {
+                return None;
+            }
+            let preview: String = content.chars().take(800).collect();
+            return Some(format!(
+                "AINL MCP tool `{tool_name}` returned a non-JSON body, so the runtime cannot \
+                 prove the operation succeeded. Treat this as a tool failure; do not claim success.\
+                 \nbody_preview: {preview}\n\nNext step: retry the AINL MCP call or fix the source/tool arguments, then continue only after the tool returns a valid `ok: true` JSON envelope."
+            ));
+        }
+    };
+    match v.get("ok").and_then(|ok| ok.as_bool()) {
+        Some(true) => return None,
+        Some(false) => {}
+        None => {
+            if tool_name == "mcp_ainl_ainl_capabilities" {
+                return None;
+            }
+            let preview = serde_json::to_string(&v).unwrap_or_else(|_| content.to_string());
+            let preview: String = preview.chars().take(800).collect();
+            return Some(format!(
+                "AINL MCP tool `{tool_name}` returned JSON without a boolean `ok` field, so the \
+                 runtime cannot prove the operation succeeded. Treat this as a tool failure; do \
+                 not claim success.\nbody_preview: {preview}\n\nNext step: retry the AINL MCP call or fix the source/tool arguments, then continue only after the tool returns `ok: true`."
+            ));
+        }
+    }
+
     let header = match tool_name {
         "mcp_ainl_ainl_validate" => "ainl_validate reports the AINL source is INVALID",
         "mcp_ainl_ainl_compile" => "ainl_compile failed to compile the AINL source",
         "mcp_ainl_ainl_run" => "ainl_run failed before execution (compile/policy/runtime error)",
-        "mcp_ainl_ainl_security_report" => {
-            "ainl_security_report failed (invalid AINL source)"
-        }
+        "mcp_ainl_ainl_security_report" => "ainl_security_report failed (invalid AINL source)",
         "mcp_ainl_ainl_ir_diff" => "ainl_ir_diff failed (one or both files have errors)",
         "mcp_ainl_ainl_ptc_signature_check" => "ainl_ptc_signature_check failed (invalid source)",
         _ => "AINL MCP tool reported ok: false",
@@ -311,7 +336,12 @@ pub fn ainl_mcp_soft_failure_message(tool_name: &str, content: &str) -> Option<S
         msg.push('\n');
     }
     push_string_array(&mut msg, "errors", v.get("errors"), MAX_ERRORS);
-    push_string_array(&mut msg, "policy_errors", v.get("policy_errors"), MAX_ERRORS);
+    push_string_array(
+        &mut msg,
+        "policy_errors",
+        v.get("policy_errors"),
+        MAX_ERRORS,
+    );
     push_string_array(&mut msg, "file1_errors", v.get("file1_errors"), MAX_ERRORS);
     push_string_array(&mut msg, "file2_errors", v.get("file2_errors"), MAX_ERRORS);
 
@@ -486,15 +516,27 @@ mod tests {
     }
 
     #[test]
-    fn soft_failure_returns_none_when_body_not_json() {
-        assert!(ainl_mcp_soft_failure_message("mcp_ainl_ainl_validate", "not json").is_none());
+    fn soft_failure_treats_non_json_ainl_body_as_error() {
+        let m = ainl_mcp_soft_failure_message("mcp_ainl_ainl_validate", "not json")
+            .expect("non-json AINL MCP body is unsafe");
+        assert!(m.contains("non-JSON"));
+        assert!(m.contains("do not claim success"));
     }
 
     #[test]
-    fn soft_failure_returns_none_when_ok_field_missing() {
+    fn soft_failure_returns_none_when_capabilities_ok_field_missing() {
         // `ainl_capabilities` body has no `ok` field; must not be flagged.
         let body = r#"{"adapters": {}, "mcp_resources": []}"#;
         assert!(ainl_mcp_soft_failure_message("mcp_ainl_ainl_capabilities", body).is_none());
+    }
+
+    #[test]
+    fn soft_failure_treats_missing_ok_on_authoring_tool_as_error() {
+        let body = r#"{"errors":[],"warnings":[]}"#;
+        let m = ainl_mcp_soft_failure_message("mcp_ainl_ainl_validate", body)
+            .expect("missing ok is unsafe for authoring tools");
+        assert!(m.contains("without a boolean `ok` field"));
+        assert!(m.contains("do not claim success"));
     }
 
     #[test]

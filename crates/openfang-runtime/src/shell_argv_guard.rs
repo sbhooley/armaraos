@@ -816,7 +816,11 @@ mod tests {
 
     #[test]
     fn path_guard_ignores_regex_like_tokens() {
-        let argv = vec!["rg".into(), "/promoter\\.".into(), "gateway_server.py".into()];
+        let argv = vec![
+            "rg".into(),
+            "/promoter\\.".into(),
+            "gateway_server.py".into(),
+        ];
         let p = PathCheckContext::new(None, None, &[]);
         let r = check_paths_for_argv(&argv, &p, ShellPathGuardMode::Enforce, None);
         assert!(r.is_ok());
