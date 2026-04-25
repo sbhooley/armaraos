@@ -632,6 +632,9 @@ pub async fn execute_tool_with_trajectory(
         // A2A outbound tools (cross-instance agent communication)
         "a2a_discover" => tool_a2a_discover(input).await,
         "a2a_send" => tool_a2a_send(input, kernel, caller_agent_id).await,
+        "hermes_a2a_status" => tool_hermes_a2a_status().await,
+        "a2a_discover_hermes" => tool_a2a_discover_hermes().await,
+        "a2a_send_hermes" => tool_a2a_send_hermes(input, kernel, caller_agent_id).await,
 
         // Browser automation tools
         "browser_navigate" => {
@@ -733,6 +736,24 @@ pub async fn execute_tool_with_trajectory(
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
             }
+        },
+        "browser_session_start" => match browser_ctx {
+            Some(mgr) => {
+                let aid = caller_agent_id.unwrap_or("default");
+                crate::browser::tool_browser_session_start(input, mgr, aid).await
+            }
+            None => Err(
+                "Browser tools not available. Ensure Chrome/Chromium is installed (or, for mode=attach, that Chrome was started with --remote-debugging-port).".to_string(),
+            ),
+        },
+        "browser_session_status" => match browser_ctx {
+            Some(mgr) => {
+                let aid = caller_agent_id.unwrap_or("default");
+                crate::browser::tool_browser_session_status(input, mgr, aid).await
+            }
+            None => Err(
+                "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
+            ),
         },
 
         // Canvas / A2UI tool
@@ -1320,11 +1341,12 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Browser automation tools ---
         ToolDefinition {
             name: "browser_navigate".to_string(),
-            description: "Navigate a browser to a URL. Returns the page title and readable content as markdown. Opens a persistent browser session.".to_string(),
+            description: "Navigate a browser to a URL. Returns the page title and readable content as markdown. Opens a persistent browser session if one does not already exist. Optional `mode` selects the browser context: \"headless\" (default, fastest, no window), \"headed\" (visible Chrome — use when the user wants to watch, when sites detect headless, or for debugging), or \"attach\" (connect to a Chrome the user already started with --remote-debugging-port=9222 — preserves their real cookies, sign-ins and profile). Switching `mode` while a session is open will close and reopen the browser in the new mode.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "url": { "type": "string", "description": "The URL to navigate to (http/https only)" }
+                    "url": { "type": "string", "description": "The URL to navigate to (http/https only)" },
+                    "mode": { "type": "string", "description": "Optional browser mode: \"headless\" (default), \"headed\" (visible window), or \"attach\" (use user's running Chrome on --remote-debugging-port=9222). Leave unset to keep current session as-is." }
                 },
                 "required": ["url"]
             }),
@@ -1413,6 +1435,24 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "browser_back".to_string(),
             description: "Go back to the previous page in browser history.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "browser_session_start".to_string(),
+            description: "Open (or restart) the browser session in a specific mode without navigating. Use this when you need to switch modes deliberately — for example, start in \"headless\" for speed, then call browser_session_start with mode=\"headed\" so the user can watch the next step. \"attach\" connects to a Chrome the user started with --remote-debugging-port (default 9222) so the agent drives their real browser (existing cookies, sign-ins, profile). Returns the active mode.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode": { "type": "string", "description": "\"headless\" (no window, fastest), \"headed\" (visible window — better for sites that block headless / for letting the user watch), or \"attach\" (connect to user's running Chrome via CDP on --remote-debugging-port). Defaults to the configured default_mode." }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "browser_session_status".to_string(),
+            description: "Report this agent's current browser session: active mode (or \"none\" if no session is open) and the configured default mode. Use before driving the browser to decide whether you need browser_session_start to switch modes.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -1603,6 +1643,36 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "message": { "type": "string", "description": "The task/message to send to the remote agent" },
                     "agent_url": { "type": "string", "description": "Direct URL of the remote agent's A2A endpoint" },
                     "agent_name": { "type": "string", "description": "Name of a previously discovered A2A agent (looked up from kernel)" },
+                    "session_id": { "type": "string", "description": "Optional session ID for multi-turn conversations" }
+                },
+                "required": ["message"]
+            }),
+        },
+        ToolDefinition {
+            name: "hermes_a2a_status".to_string(),
+            description: "Check whether a local Hermes A2A config exists (~/.hermes/a2a.json or HERMES_HOME/a2a.json) and return base_url when valid.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "a2a_discover_hermes".to_string(),
+            description: "Discover an A2A agent using the base_url from local Hermes config (a2a.json). Skips generic SSRF URL checks because the URL is operator-controlled on disk; still blocks cloud metadata hosts in the file.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolDefinition {
+            name: "a2a_send_hermes".to_string(),
+            description: "Send a task to the A2A peer in Hermes a2a.json: discover Agent Card, then send via ArmaraOS JSON-RPC (tasks/send to card.url when same-origin) and/or Linux Foundation HTTP (POST …/message:send) per optional send_binding (default auto).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "Task/message for the Hermes A2A peer" },
                     "session_id": { "type": "string", "description": "Optional session ID for multi-turn conversations" }
                 },
                 "required": ["message"]
@@ -1856,12 +1926,14 @@ async fn tool_file_read(
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let resolved = resolve_file_path_read(raw_path, workspace_root, ainl_library_root)?;
 
+    // If the agent points file_read at a directory, transparently return a
+    // file_list-style listing instead of failing. This avoids a wasted turn
+    // (the previous behavior was to error out and force the agent to retry
+    // with file_list — observed repeatedly across browser-hand / collector-hand
+    // sessions). The output is clearly labelled so the model knows what it got.
     if let Ok(meta) = tokio::fs::metadata(&resolved).await {
         if meta.is_dir() {
-            return Err(
-                "Path is a directory, not a file. Use file_list on this path, then file_read a file inside it."
-                    .to_string(),
-            );
+            return list_directory_as_text(&resolved, raw_path).await;
         }
     }
 
@@ -1907,6 +1979,22 @@ async fn tool_file_write(
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
+
+    // Hard-block writes that are obviously placeholder text the agent intended
+    // to fill in but skipped (e.g. `[... full content truncated for brevity ...]`).
+    // Without this guard the file lands on disk in a broken state and downstream
+    // tools (`ainl validate`, compilers, etc.) fail in ways the agent can't trace
+    // back to the original write call. The error message tells the agent exactly
+    // what to do next.
+    if let Some(snippet) = detect_truncation_placeholder(content) {
+        return Err(format!(
+            "Refused to write file: content contains a placeholder/truncation marker \
+             ('{snippet}'). Re-emit `file_write` with the COMPLETE content of the file — \
+             do not summarize, abbreviate, or insert '...truncated...' markers. If the \
+             file is large, write it in multiple `apply_patch` chunks instead."
+        ));
+    }
+
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -1948,6 +2036,70 @@ async fn tool_file_list(
     }
     files.sort();
     Ok(files.join("\n"))
+}
+
+/// Render a directory as a labelled text listing — used when `file_read` is
+/// pointed at a directory so the agent gets the listing inline instead of
+/// having to retry with `file_list`.
+async fn list_directory_as_text(resolved: &Path, raw_path: &str) -> Result<String, String> {
+    let mut entries = tokio::fs::read_dir(resolved)
+        .await
+        .map_err(|e| format!("Failed to list directory {}: {e}", resolved.display()))?;
+    let mut files = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read entry: {e}"))?
+    {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let metadata = entry.metadata().await;
+        let suffix = match metadata {
+            Ok(m) if m.is_dir() => "/",
+            _ => "",
+        };
+        files.push(format!("{name}{suffix}"));
+    }
+    files.sort();
+    let body = if files.is_empty() {
+        "(empty)".to_string()
+    } else {
+        files.join("\n")
+    };
+    Ok(format!(
+        "[file_read was given a directory at '{raw_path}'. Returned `file_list` output below; \
+         call `file_read` again with one of these entries.]\n{body}"
+    ))
+}
+
+/// Detect content the model wrote into `file_write` that is clearly a placeholder
+/// the agent intended to fill in but skipped — e.g. literal `[... truncated for
+/// brevity ...]`. Returns the offending fragment (lower-cased, ≤80 chars) so the
+/// caller can surface it. Observed in production sessions where agents wrote a
+/// broken `record_decision.ainl` containing `[... full content truncated for
+/// brevity ...]` and downstream `validate`/`run` then failed in confusing ways.
+fn detect_truncation_placeholder(content: &str) -> Option<String> {
+    let lower = content.to_lowercase();
+    const PATTERNS: &[&str] = &[
+        "truncated for brevity",
+        "truncated for readability",
+        "[... full content",
+        "[... rest of",
+        "[... remaining",
+        "// ... rest of file ...",
+        "# ... rest of file ...",
+        "<!-- truncated -->",
+        "(content truncated)",
+        "...truncated...",
+    ];
+    for p in PATTERNS {
+        if let Some(idx) = lower.find(p) {
+            let start = idx.saturating_sub(16);
+            let end = (idx + p.len() + 16).min(content.len());
+            let slice = &content[start..end];
+            return Some(slice.replace('\n', " ").trim().to_string());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -3879,6 +4031,136 @@ async fn tool_a2a_send(
     serde_json::to_string_pretty(&task).map_err(|e| format!("Serialization error: {e}"))
 }
 
+async fn tool_hermes_a2a_status() -> Result<String, String> {
+    let root = crate::hermes_a2a::hermes_root();
+    let path = crate::hermes_a2a::hermes_a2a_config_path();
+    let mut out = serde_json::json!({
+        "hermes_root": root.display().to_string(),
+        "config_path": path.display().to_string(),
+        "config_exists": path.is_file(),
+    });
+    if path.is_file() {
+        match crate::hermes_a2a::load_hermes_a2a_config() {
+            Ok(cfg) => {
+                out["base_url"] = serde_json::Value::String(cfg.base_url);
+                out["send_binding"] = serde_json::Value::String(cfg.send_binding.as_str().to_string());
+                out["ok"] = serde_json::json!(true);
+            }
+            Err(e) => {
+                out["ok"] = serde_json::json!(false);
+                out["error"] = serde_json::Value::String(e);
+            }
+        }
+    } else {
+        out["ok"] = serde_json::json!(false);
+        out["hint"] = serde_json::Value::String(
+            "Nous Hermes Agent does not ship an A2A listener yet (see hermes-agent issue #514). When you run an A2A-capable server, create a2a.json with base_url (+ optional send_binding: auto | armaraos_jsonrpc | a2a_http).".to_string(),
+        );
+    }
+    serde_json::to_string_pretty(&out).map_err(|e| format!("Serialization error: {e}"))
+}
+
+async fn tool_a2a_discover_hermes() -> Result<String, String> {
+    let (base, _cfg_path) = crate::hermes_a2a::load_hermes_a2a_base_url()?;
+    let client = crate::a2a::A2aClient::new();
+    let card = client.discover(&base).await?;
+    serde_json::to_string_pretty(&card).map_err(|e| format!("Serialization error: {e}"))
+}
+
+async fn tool_a2a_send_hermes(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let _kh = require_kernel(kernel)?;
+    let message = input["message"]
+        .as_str()
+        .ok_or("Missing 'message' parameter")?;
+    let cfg = crate::hermes_a2a::load_hermes_a2a_config()?;
+    let session_id = input["session_id"].as_str();
+    let client = crate::a2a::A2aClient::new();
+    let card = client.discover(&cfg.base_url).await?;
+
+    let mut last_err = String::new();
+
+    let try_jsonrpc = matches!(
+        cfg.send_binding,
+        crate::hermes_a2a::HermesSendBinding::Auto
+            | crate::hermes_a2a::HermesSendBinding::ArmaraosJsonRpc
+    );
+    if try_jsonrpc {
+        match crate::hermes_a2a::assert_hermes_rpc_matches_base(&cfg.base_url, &card.url) {
+            Ok(()) => match client
+                .send_task(&card.url, message, session_id)
+                .await
+            {
+                Ok(task) => {
+                    if let Some(caller_id) = caller_agent_id {
+                        if let Ok(gm) =
+                            crate::graph_memory_writer::GraphMemoryWriter::open(caller_id)
+                        {
+                            let target = format!("hermes-a2a:{}", card.name);
+                            gm.record_delegation(&target, vec!["a2a_send_hermes".to_string()])
+                                .await;
+                        }
+                    }
+                    return serde_json::to_string_pretty(&task)
+                        .map_err(|e| format!("Serialization error: {e}"));
+                }
+                Err(e) => {
+                    if matches!(
+                        cfg.send_binding,
+                        crate::hermes_a2a::HermesSendBinding::ArmaraosJsonRpc
+                    ) {
+                        return Err(e);
+                    }
+                    last_err = e;
+                }
+            },
+            Err(e) => {
+                if matches!(
+                    cfg.send_binding,
+                    crate::hermes_a2a::HermesSendBinding::ArmaraosJsonRpc
+                ) {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    let try_http = matches!(
+        cfg.send_binding,
+        crate::hermes_a2a::HermesSendBinding::Auto | crate::hermes_a2a::HermesSendBinding::A2aHttp
+    );
+    if try_http {
+        for ep in crate::a2a::A2aClient::message_send_endpoints(&cfg.base_url, &card) {
+            match client.post_message_send(&ep, message).await {
+                Ok(v) => {
+                    if let Some(caller_id) = caller_agent_id {
+                        if let Ok(gm) =
+                            crate::graph_memory_writer::GraphMemoryWriter::open(caller_id)
+                        {
+                            let target = format!("hermes-a2a:{}", card.name);
+                            gm.record_delegation(&target, vec!["a2a_send_hermes".to_string()])
+                                .await;
+                        }
+                    }
+                    return serde_json::to_string_pretty(&v)
+                        .map_err(|e| format!("Serialization error: {e}"));
+                }
+                Err(e) => last_err = e,
+            }
+        }
+    }
+
+    Err(if last_err.is_empty() {
+        "Hermes A2A: no working send path. For Linux Foundation HTTP binding ensure POST {base_url}/message:send exists; for ArmaraOS-style peers use send_binding=armaraos_jsonrpc and matching AgentCard.url origin."
+            .to_string()
+    } else {
+        last_err
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Image analysis tool
 // ---------------------------------------------------------------------------
@@ -5072,7 +5354,10 @@ pub fn tool_execution_timeout(tool_name: &str) -> std::time::Duration {
         "channel_send" | "channel_stream" => Duration::from_secs(30),
         "image_generate" | "text_to_speech" | "speech_to_text" | "media_describe"
         | "media_transcribe" => Duration::from_secs(300),
-        "a2a_send" | "a2a_discover" => Duration::from_secs(300),
+        "a2a_send" | "a2a_discover" | "a2a_discover_hermes" | "a2a_send_hermes" => {
+            Duration::from_secs(300)
+        }
+        "hermes_a2a_status" => Duration::from_secs(30),
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
             Duration::from_secs(30)
         }
@@ -6059,5 +6344,73 @@ mod tests {
 
         let g = live.read().await;
         assert_eq!(g.shared_vars.get("k"), Some(&serde_json::json!(42)));
+    }
+
+    // -------------------------------------------------------------------------
+    // file_* refinements: deep-nested write, dir-as-file_read, placeholder block
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_file_write_into_nested_missing_dirs_succeeds() {
+        // Regression: agents asking to write `apollo-x-bot/modules/common/retry.ainl`
+        // into a workspace that only contains the root previously failed with
+        // "Failed to resolve parent directory". With the sandbox walk-up fix +
+        // the existing `create_dir_all(parent)` in `tool_file_write`, the deep
+        // path should be created and written transparently.
+        let dir = tempfile::TempDir::new().unwrap();
+        let payload = serde_json::json!({
+            "path": "apollo-x-bot/modules/common/retry.ainl",
+            "content": "# test\nLENTRY:\n  R core.ADD 1 1 ->x\n  J x\n",
+        });
+        let res = tool_file_write(&payload, Some(dir.path())).await;
+        assert!(res.is_ok(), "expected nested write to succeed, got: {:?}", res.err());
+        let summary = res.unwrap();
+        assert!(summary.contains("Successfully wrote"), "{}", summary);
+        let written = dir.path().join("apollo-x-bot/modules/common/retry.ainl");
+        assert!(written.exists(), "expected file to be created: {}", written.display());
+    }
+
+    #[tokio::test]
+    async fn test_file_read_on_directory_returns_listing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("apollo-x-bot/modules")).unwrap();
+        std::fs::write(dir.path().join("apollo-x-bot/README.md"), "hi").unwrap();
+        let payload = serde_json::json!({"path": "apollo-x-bot"});
+        let res = tool_file_read(&payload, Some(dir.path()), None).await;
+        assert!(res.is_ok(), "{:?}", res.err());
+        let body = res.unwrap();
+        assert!(body.contains("file_read was given a directory"), "{}", body);
+        assert!(body.contains("README.md"), "listing must include files: {}", body);
+        assert!(body.contains("modules/"), "listing must include subdirs with /: {}", body);
+    }
+
+    #[tokio::test]
+    async fn test_file_write_rejects_truncation_placeholder() {
+        // Real example pulled from a `browser-hand` session: agent wrote a
+        // 170-byte `record_decision.ainl` whose body was literally
+        // "[... full content truncated for brevity ...]" — silently broken.
+        let dir = tempfile::TempDir::new().unwrap();
+        let payload = serde_json::json!({
+            "path": "modules_common_record_decision.ainl",
+            "content": "# modules/common/record_decision.ainl\n[... full content truncated for brevity ...]",
+        });
+        let res = tool_file_write(&payload, Some(dir.path())).await;
+        assert!(res.is_err(), "expected truncation placeholder to be rejected");
+        let err = res.err().unwrap();
+        assert!(err.contains("placeholder/truncation"), "{}", err);
+        assert!(
+            !dir.path().join("modules_common_record_decision.ainl").exists(),
+            "broken file must not land on disk"
+        );
+    }
+
+    #[test]
+    fn test_detect_truncation_placeholder_negatives() {
+        // Real prose mentioning the word "truncated" should not trip the guard.
+        assert!(detect_truncation_placeholder("function clamp(x) { /* clamps not truncated */ }").is_none());
+        assert!(detect_truncation_placeholder("def parse():\n    # parse JSON\n    pass\n").is_none());
+        // Positive controls.
+        assert!(detect_truncation_placeholder("hello\n[... full content truncated for brevity ...]\n").is_some());
+        assert!(detect_truncation_placeholder("// ... rest of file ...").is_some());
     }
 }
