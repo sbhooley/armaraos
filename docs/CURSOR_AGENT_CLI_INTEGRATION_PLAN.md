@@ -1,6 +1,26 @@
 # Cursor Agent CLI integration — implementation plan (ArmaraOS)
 
-This document proposes how to add **Cursor Agent CLI** as a first-class LLM backend in ArmaraOS, analogous to the existing **`claude-code`** (`ClaudeCodeDriver`) path. It consolidates **Cursor’s official CLI documentation**, the **Paperclip** reference adapter, and ArmaraOS wiring points.
+This document proposes how to add **Cursor Agent CLI** as a first-class LLM backend in ArmaraOS, analogous to the existing **`claude-code`** (`ClaudeCodeDriver`) path. It consolidates **Cursor’s official CLI documentation**, the **Paperclip** reference adapter, and **current** ArmaraOS wiring points (paths and types verified against the tree at the time of writing).
+
+---
+
+## Codebase alignment (verified)
+
+Use this as a checklist so the implementation matches the repo **today**.
+
+| Area | Location | What to mirror / extend |
+| --- | --- | --- |
+| Runtime crate root | `crates/openfang-runtime/src/lib.rs` | `pub mod drivers;`, `pub mod model_catalog;`, `pub mod llm_driver;` |
+| Driver trait + config | `crates/openfang-runtime/src/llm_driver.rs` | `LlmDriver`, `CompletionRequest` / `CompletionResponse`, **`DriverConfig`** (`provider`, `api_key`, `base_url`, `skip_permissions`, `http_client`, `model_hint`). Today `skip_permissions` is documented only for Claude Code; Cursor will either **reuse** it as a generic “non-interactive trust/force” flag or add a dedicated field later. |
+| Driver factory | `crates/openfang-runtime/src/drivers/mod.rs` | **`create_driver`**, `provider_defaults`, **`effective_base_url_for_cache`**, **`known_providers()`** (static list used in tests — **`test_known_providers_list` currently expects exactly 38 providers**; adding `cursor` must bump that assertion to **39**). |
+| Claude Code CLI | `crates/openfang-runtime/src/drivers/claude_code.rs` | Subprocess template: **positional prompt**, **`stdin(Stdio::null())`**, concurrent stdout/stderr drain, **PID map**, **`message_timeout_secs`** (default 300s — **not** `LlmConfig.client_timeout_ms`, which is for the HTTP client inside `LlmDriverFactory`). |
+| Qwen Code CLI | `crates/openfang-runtime/src/drivers/qwen_code.rs` | Second subprocess driver; **`skip_permissions` → `--yolo`** on `qwen`; **`base_url`** = optional CLI path override (same overload pattern as `claude-code`). |
+| Model catalog | `crates/openfang-runtime/src/model_catalog.rs` | **`builtin_providers()`**, **`detect_auth()`** (special cases for `claude-code` / `qwen-code` today), **`builtin_aliases()`**, model entries, tests at bottom of file. |
+| Kernel | `crates/openfang-kernel/src/kernel.rs` | Builds `ModelCatalog`, **`detect_auth`**, **`load_custom_models`**, etc. **`infer_provider_from_model`** (~L9607): prefix match arm must include **`"cursor"`** once `cursor/...` model IDs exist (today lists `claude-code`, `codex`, `copilot`, …). |
+| HTTP API / dashboard | `crates/openfang-api/src/routes.rs` (~L10602) | Providers with **`!key_required`** and no probe get **`is_local: true`** (“Local provider with empty base_url (e.g. claude-code) — skip probing”). **`cursor`** should follow the same **`ProviderInfo`** shape as other CLI locals. |
+| CLI onboarding | `crates/openfang-cli/src/tui/screens/wizard.rs`, `init_wizard.rs` | Provider picker rows + **`claude_code::claude_code_available()`**-style detection hooks for a future **`cursor_agent_available()`**. |
+| Global LLM HTTP config | `crates/openfang-types/src/config.rs` | **`LlmConfig`**: `client_timeout_ms`, `connect_timeout_ms`, `driver_isolation`, `max_cached_drivers` — applies to **HTTP** drivers via `LlmDriverFactory`; **CLI subprocess timeouts stay inside the driver** (see `ClaudeCodeDriver`). |
+| Kernel / agent defaults | `crates/openfang-types/src/config.rs` | **`KernelConfig`**, **`DefaultModelConfig`**, **`fallback_providers`**, **`provider_urls`** — any new top-level knobs should follow existing serde + `config.toml` patterns here, not ad-hoc globals. |
 
 ---
 
@@ -25,7 +45,7 @@ Primary sources (current Cursor docs site):
 | Topic | URL | Notes for integration |
 | --- | --- | --- |
 | CLI overview, install, interactive vs print | [cursor.com/docs/cli/overview](https://cursor.com/docs/cli/overview) | Install via `curl https://cursor.com/install -fsS \| bash` (macOS/Linux/WSL). Entry binary for coding agent is **`agent`**. Modes: Agent (default), **Plan** (`--mode plan`), **Ask** (`--mode ask`). |
-| Global parameters | [cursor.com/docs/cli/reference/parameters](https://cursor.com/docs/cli/reference/parameters) | **`-p` / `--print`**: non-interactive; “has access to all tools, including write and shell.” **`--output-format`**: only with `--print` — `text`, `json`, `stream-json` (default `text`). **`--resume [chatId]`**, **`--continue`**. **`--model`**, **`--workspace`**. Auth: **`--api-key`** or **`CURSOR_API_KEY`**. **`--force`** / **`--yolo`**: “Force allow commands unless explicitly denied”; **`--yolo`** is an alias for **`--force`**. **`--trust`**: “Trust the workspace without prompting (headless mode only).” **`--sandbox enabled|disabled`**. |
+| Global parameters | [cursor.com/docs/cli/reference/parameters](https://cursor.com/docs/cli/reference/parameters) | **`-p` / `--print`**: non-interactive; “has access to all tools, including write and shell.” **`--output-format`**: only with `--print` — `text`, `json`, `stream-json` (default `text`). **`--resume [chatId]`**, **`--continue`**. **`--model`**, **`--workspace`**. Auth: **`--api-key`** or **`CURSOR_API_KEY`**. **`--force`** / **`--yolo`**: “Force allow commands unless explicitly denied”; **`--yolo`** is an alias for **`--force`**. **`--trust`**: “Trust the workspace without prompting (headless mode only).” **`--sandbox enabled|disabled`**. Model listing: subcommand **`agent models`** (not `--list-models`). |
 | Output formats | [cursor.com/docs/cli/reference/output-format](https://cursor.com/docs/cli/reference/output-format) | **`json`**: single JSON object on success; on failure, stderr, non-zero exit, may omit JSON. **`stream-json`**: NDJSON; terminal **`result`** event on success; events include **`system`**, **`user`**, **`assistant`**, **`tool_call`**, **`result`**. Optional **`--stream-partial-output`** with `stream-json` for delta streaming; docs describe duplicate/skippable `assistant` events when partial streaming is on. **Thinking events are suppressed in print mode.** |
 | Headless / automation | [cursor.com/docs/cli/headless](https://cursor.com/docs/cli/headless) | **Without `--force`**, “changes are only proposed, not applied.” For real file edits in scripts: `agent -p --force "..."`. Examples use positional prompt after `-p`. |
 
@@ -43,20 +63,22 @@ Primary sources (current Cursor docs site):
 
 - **Command**: configurable, default **`agent`** (not `cursor` — the Agent CLI binary name).
 - **Arguments**: `agent -p --output-format stream-json --workspace <cwd> [--resume <id>] [--model …] [--mode plan|ask] [--yolo] …`
-- **Prompt delivery**: passed via **stdin** to the child process (avoids huge argv / shell escaping). ArmaraOS should validate whether we prefer **stdin** vs **positional prompt** ([Parameters](https://cursor.com/docs/cli/reference/parameters) documents a positional `prompt` argument). Recommendation: **default stdin** for large prompts; optional path to pass a single positional argument if we need to match Cursor examples exactly.
+- **Prompt delivery**: Paperclip passes the prompt via **stdin**. **ArmaraOS today** passes the Claude Code prompt as a **positional argv** and **`stdin(Stdio::null())`** (`claude_code.rs`). For Cursor, **either** approach is valid; choose one after a short spike (positional matches Cursor docs examples; stdin matches Paperclip and avoids argv size limits).
 - **Parsing**: custom NDJSON parser (see Paperclip `server/parse.ts`) — extract **`session_id`**, assistant **`result`**, **`usage`**, costs, errors; retry without **`--resume`** if session is unknown.
 - **Skills**: inject symlinks under **`~/.cursor/skills`** for Paperclip skills — ArmaraOS may or may not replicate; if we have first-party skills, mirror the same hook.
 
 ---
 
-## Current ArmaraOS baseline
+## Current ArmaraOS baseline (accurate)
 
-- **`claude-code`**: `ClaudeCodeDriver` — subprocess, **`claude -p`**, JSON/stream handling, `skip_permissions`, env hygiene, timeouts, PID tracking (`crates/openfang-runtime/src/drivers/claude_code.rs`).
-- **Driver registration**: `create_driver` in `crates/openfang-runtime/src/drivers/mod.rs` branches on `provider == "claude-code"`.
-- **Catalog / auth UI**: `ProviderInfo` and **`detect_auth`** special-case CLI providers (`crates/openfang-runtime/src/model_catalog.rs`).
-- **Cache key**: `effective_base_url_for_cache` uses `cli:<path>` style for CLI backends.
+- **`claude-code`**: `ClaudeCodeDriver` — subprocess **`claude`**, **`-p`**, **`--output-format json`** (non-streaming path in `complete`), **`--dangerously-skip-permissions`** when `skip_permissions`, env stripping, **PID tracking**, **tokio timeout + kill**, **concurrent stdout/stderr drain** (`claude_code.rs`).
+- **`qwen-code`**: `QwenCodeDriver` — subprocess **`qwen`**, **`-p`**, **`json` / `stream-json`**, **`--yolo`** when `skip_permissions`, **`base_url`** = optional binary override (`qwen_code.rs`).
+- **Driver registration**: `create_driver` in `drivers/mod.rs` branches on `provider == "claude-code"` and `provider == "qwen-code"`.
+- **Catalog / auth UI**: `ProviderInfo` + **`detect_auth`** in `model_catalog.rs` special-case **`claude-code`** and **`qwen-code`** (CLI probe, no API key).
+- **Cache key**: `effective_base_url_for_cache` uses **`cli:`** prefix for `claude-code` and **`qwen-cli:`** for `qwen-code` (add **`cursor-cli:`** or similar for `cursor`).
+- **Instrumented factory**: `LlmDriverFactory::get_driver` wraps drivers with `InstrumentingLlmDriver`; CLI drivers still go through **`create_driver`** the same way.
 
-The Cursor integration should follow the same structural seams.
+The Cursor integration should follow the same structural seams as **`claude-code`** (timeouts + drain + PID) rather than the lighter **`qwen`** `output().await` path, unless we explicitly accept blocking risk on large streams.
 
 ---
 
@@ -65,22 +87,23 @@ The Cursor integration should follow the same structural seams.
 ### 1. Provider ID and model IDs
 
 - **Provider id**: `cursor` (aligns with Paperclip and is short for config).
-- **Model id scheme**: `cursor/<cursor-model-id>` where `<cursor-model-id>` matches what **`agent --list-models`** / Cursor docs list (e.g. `auto`, `gpt-5.3-codex`, composer IDs). Exact catalogue can start as a **static list** plus `auto`, refreshed periodically from **`agent models`** / docs.
+- **Model id scheme**: `cursor/<cursor-model-id>` where `<cursor-model-id>` matches **`agent models`** / Cursor docs (e.g. `auto`, composer / codex ids). Seed a static catalog; operators can also use **`load_custom_models`** paths already supported by the kernel.
 
-### 2. New driver crate module
+### 2. New driver module
 
 Add **`crates/openfang-runtime/src/drivers/cursor_agent.rs`** (name TBD) implementing `LlmDriver`:
 
-- **Binary resolution**: default `agent` on `PATH`; optional override via `DriverConfig.base_url` (same pattern as `claude-code` reusing `base_url` for CLI path) — or introduce a dedicated optional field later; **minimize schema churn** by reusing existing `base_url`/config patterns used for CLI overrides.
+- **Binary resolution**: default **`agent`** on `PATH`; optional override via **`DriverConfig.base_url`** (same overload as `claude-code` / `qwen-code`: empty `None` → default binary name).
 - **Invocation (MVP)**:
   - `agent -p --output-format stream-json --workspace <abs cwd> --model <id>`
   - Append `--resume <session_id>` when resuming (see session persistence below).
-  - Append **`--mode ask`** or **`--mode plan`** only when the ArmaraOS request explicitly requests those modes (future: map from agent profile or graph metadata).
-  - **Force / trust**: configurable strategy:
-    - **Recommended default for autonomous agents**: `--yolo` *or* `--force` (docs: same effect) **or** `--trust`** depending on whether we need workspace trust vs command force — Cursor distinguishes `--trust` (workspace, headless) vs `--force` / `--yolo` (command execution). Paperclip adds `--yolo` when user did not pass trust flags. ArmaraOS should document the matrix and default to the least surprising option for “daemon applies edits.”
-- **Stdin**: feed **serialized prompt** (same string construction as other drivers: system + messages → one text blob, or structured per product conventions).
-- **Stdout/stderr**: read fully with timeout + PID tracking (reuse Claude Code’s **concurrent stdout/stderr drain** pattern to avoid pipe deadlocks on large output).
-- **Timeouts**: reuse `LlmConfig` / per-driver timeout constants like Claude Code.
+  - Append **`--mode ask`** or **`--mode plan`** only when the request explicitly requests those modes (future: map from agent profile).
+  - **Force / trust**: configurable strategy; map carefully to Cursor flags (**`--force`/`--yolo`** vs **`--trust`** per [Parameters](https://cursor.com/docs/cli/reference/parameters)). Do **not** blindly overload `skip_permissions` without documenting semantics for Cursor vs Claude vs Qwen.
+- **Prompt**: positional vs stdin — **spike** (see Paperclip vs `claude_code.rs` above).
+- **Stdout/stderr**: **Claude-style** concurrent drain + **process wait timeout** + optional PID map.
+- **Timeouts**: **driver-internal** seconds (like `ClaudeCodeDriver`); do not assume `LlmConfig.client_timeout_ms` applies to subprocess lifetime.
+
+**`drivers/mod.rs`:** `pub mod cursor_agent;`, new **`create_driver`** branch, **`provider_defaults`** / cache URL branch, append **`"cursor"`** to **`known_providers()`** and **update `test_known_providers_list` expected length**.
 
 ### 3. Parsing strategy
 
@@ -88,64 +111,59 @@ Two phases:
 
 **Phase A (MVP)** — parse **`stream-json`** NDJSON (Paperclip-compatible):
 
-- Scan lines; for each JSON object, handle **`type`**: `assistant`, `result`, `error`, `system`, `tool_call` (optional for cost estimation), per [Output format](https://cursor.com/docs/cli/reference/output-format).
-- Final assistant-visible **`summary`**: concatenate **`assistant`** message text and/or terminal **`result.result`** field (docs show full text in terminal `result`).
-- Extract **`session_id`** from **`system`** / **`result`** / line events (Cursor documents `session_id` on multiple event types).
-- **Usage / cost**: map **`result`** events’ usage fields if present (Paperclip aggregates `input_tokens`, `output_tokens`, cached fields, optional cost). Cursor field names may vary — implement **lenient** serde with defaults like Paperclip.
+- Scan lines; handle **`type`**: `assistant`, `result`, `error`, `system`, `tool_call` per [Output format](https://cursor.com/docs/cli/reference/output-format).
+- Final text: **`assistant`** segments and/or terminal **`result.result`**.
+- **`session_id`** from **`system`** / **`result`** / other events as documented.
+- **Usage / cost**: lenient parsing (field names may vary by CLI version).
 
-**Phase B (optional)** — switch or fallback to **`--output-format json`** for simpler “single blob” parsing when streaming telemetry is not needed (smaller parser, but no incremental events).
+**Phase B (optional)** — **`--output-format json`** for single-blob completion.
 
-**Partial streaming**: optionally support **`--stream-partial-output`** only if the kernel exposes streaming to the UI; Cursor warns about **duplicate assistant events** — must implement [their filtering rules](https://cursor.com/docs/cli/reference/output-format) if we turn this on.
+**Partial streaming**: optional **`--stream-partial-output`** only if we implement Cursor’s duplicate-filter rules in the doc.
 
 ### 4. Session persistence
 
-- Cursor **`--resume [chatId]`** and **`--continue`** are documented in [Parameters](https://cursor.com/docs/cli/reference/parameters).
-- ArmaraOS should store **`session_id`** + **`cwd`** (and optionally workspace identity) in the same layer that already stores runtime session params for other CLI tools, only resuming when **`cwd` matches** (Paperclip’s behavior).
-- On “unknown session” errors, **retry once without `--resume`** (Paperclip pattern).
+- Cursor **`--resume [chatId]`** / **`--continue`** per [Parameters](https://cursor.com/docs/cli/reference/parameters).
+- Store **`session_id` + cwd** in the same persistence layer used for other multi-turn runtimes (investigate where `claude-code` / agent runtime stores session today — may be agent-scoped state outside the LLM driver; document during M5).
+- On unknown session, **retry once without `--resume`** (Paperclip pattern).
 
 ### 5. `create_driver` wiring
 
-In **`drivers/mod.rs`**:
-
-- Add branch: `if provider == "cursor" { ... CursorAgentDriver::new(...) }`.
-- Extend **`effective_base_url_for_cache`** with a stable key, e.g. `cursor-cli:<override or agent>`.
+Already covered: **`drivers/mod.rs`** + **`effective_base_url_for_cache`** stable key (e.g. `cursor-cli:<resolved binary>`).
 
 ### 6. Model catalog & detection
 
 In **`model_catalog.rs`**:
 
-- **`ProviderInfo`**: `cursor`, display name **Cursor Agent CLI**, `key_required: false` **if** we only support subscription/local login — *or* set `key_required: true` when we require **`CURSOR_API_KEY`** for unattended operation. Product decision: support both and set **`AuthStatus`** based on `agent status` / presence of `CURSOR_API_KEY` (mirror Paperclip’s `api` vs `subscription` split).
-- **`detect_auth`**: probe **`agent --version`** or **`agent status`** (needs spike) to mark Configured vs Missing.
-- **Models list**: seed from Paperclip’s public list in `cursor-local/src/index.ts` as a starting point, trim to models we are willing to support; document **`agent models`** as the source of truth for operators.
+- **`ProviderInfo`**: `cursor`, display name **Cursor Agent CLI**, `key_required` / **`detect_auth`** logic: e.g. **`agent --version`** or **`agent status`** when implemented; treat **`CURSOR_API_KEY`** as optional “API billing” path (Paperclip-style split).
+- **Aliases**: e.g. `cursor` → `cursor/auto` if product agrees.
+- **Tests**: follow **`test_claude_code_*`** / **`test_qwen_code_*`** blocks in the same file.
 
-### 7. Kernel allowlists
+### 7. Kernel, API, CLI
 
-Any provider allowlist that currently includes **`claude-code`** should be extended to **`cursor`** where CLI backends are permitted (`openfang-kernel` grep for provider checks).
+- **`infer_provider_from_model`** in **`kernel.rs`**: add **`"cursor"`** to the delimited-prefix match list alongside **`claude-code`**.
+- **`routes.rs`**: no change needed if **`key_required: false`** mirrors other CLI locals; update the inline comment to mention **`cursor`** when added.
+- **`wizard.rs` / `init_wizard.rs`**: add provider row + availability probe for **`agent`**.
 
 ### 8. Security & environment
 
-- **Strip or isolate secrets** in child env (pattern from `ClaudeCodeDriver`: remove unrelated cloud API keys where appropriate so subprocesses do not accidentally use wrong credentials).
-- **Document** that **`--force`/`--yolo`/`--trust`** are **high privilege** and should be gated by ArmaraOS RBAC / capability flags.
-- **`HOME`**: ensure set so Cursor can find login state (`~/.cursor/…`) when the service runs without a login shell.
+- **Env stripping**: extend the same allowlist/denylist pattern as `claude_code.rs` / `qwen_code.rs` (add **`CURSOR_API_KEY`** handling policy — likely **keep** for headless, strip unrelated provider keys).
+- **Document** high-privilege flags (**`--force`/`--yolo`/`--trust`**).
+- **`HOME`**: set like `claude_code.rs` so `~/.cursor/` auth state resolves when the daemon has no login shell.
 
 ### 9. Configuration surface (proposal)
 
-Minimal additions to agent/runtime config (exact shape follows existing TOML/JSON patterns in repo):
-
-- `cursor_cli_path` (optional; maps to driver path override).
-- `cursor_force_mode`: `none` | `yolo` | `force` | `trust` | `yolo_and_trust` (names TBD — must map 1:1 to Cursor flags).
-- `cursor_output_format`: `stream-json` | `json` (default `stream-json`).
-- `cursor_timeout_sec`: number.
+- Prefer **minimal** first step: **`DriverConfig`** + catalog only.
+- Optional later: typed fields on **`KernelConfig`** / agent defaults in **`openfang-types/src/config.rs`** (`cursor_cli_path`, force/trust mode enum, output format, subprocess timeout seconds) — follow serde patterns used by existing LLM-related sections.
 
 ### 10. Testing
 
-- **Unit tests**: NDJSON parser fixtures copied from Cursor doc **Example sequence** in [output-format](https://cursor.com/docs/cli/reference/output-format) and Paperclip tests if any.
-- **Integration tests** (optional, CI-gated): skip if `agent` not installed; if present, `agent -p --output-format json "ping"` smoke test.
+- **Unit tests**: NDJSON fixtures from Cursor’s **Example sequence** in [output-format](https://cursor.com/docs/cli/reference/output-format).
+- **Integration** (optional): `agent -p --output-format json "ping"` when `agent` exists on CI runner.
 
 ### 11. Documentation updates
 
-- Extend **`docs/providers.md`** with a **Cursor Agent CLI** section: install link, env vars, model selection, force/trust warning, link to this plan.
-- Mention **`CURSOR_API_KEY`** for headless per [headless doc](https://cursor.com/docs/cli/headless).
+- Extend **`docs/providers.md`** with **Cursor Agent CLI** (install, env, force/trust warning, link here).
+- Mention **`CURSOR_API_KEY`** per [headless doc](https://cursor.com/docs/cli/headless).
 
 ---
 
@@ -153,30 +171,36 @@ Minimal additions to agent/runtime config (exact shape follows existing TOML/JSO
 
 | Milestone | Deliverable |
 | --- | --- |
-| M1 — Spike | Confirm **`agent`** invocations from a Rust `tokio::process::Command` with **`-p`**, **`--workspace`**, **`--output-format stream-json`**, stdin prompt; verify exit codes and stderr on failure per docs. |
-| M2 — Parser | Implement NDJSON parser + unit tests from doc samples. |
-| M3 — Driver | `CursorAgentDriver` implements `complete` (+ optional streaming hook later). |
-| M4 — Registry | `create_driver`, catalog provider, aliases, `detect_auth`. |
-| M5 — Session resume | Persist `session_id` + cwd; resume + unknown-session fallback. |
-| M6 — UX & docs | Wizard strings, `providers.md`, operational runbook. |
+| M1 — Spike | `tokio::process::Command`: **`agent -p`**, **`--workspace`**, **`--output-format stream-json`**, prompt via chosen stdin/argv; verify exit codes / stderr on failure. |
+| M2 — Parser | NDJSON parser + unit tests from doc samples. |
+| M3 — Driver | `CursorAgentDriver` + `complete` (+ optional `stream` later). |
+| M4 — Registry | `create_driver`, **`known_providers` + test len**, catalog, **`detect_auth`**. |
+| M5 — Session resume | Persist ids + cwd; resume + unknown-session fallback (wire into existing session store if any). |
+| M6 — UX & docs | Wizards, **`infer_provider_from_model`**, `providers.md`, runbook. |
 
 ---
 
 ## Risks and open questions
 
-1. **CLI stability**: Cursor may add fields or rename events; parser must be **tolerant** (unknown fields ignored).
-2. **Binary name**: Docs use **`agent`**; some systems might use a shim. Spikes should confirm **`which agent`** after official install.
-3. **Prompt path**: Positional vs stdin — verify on Windows and Linux CI; document the chosen approach ([Parameters](https://cursor.com/docs/cli/reference/parameters) suggests positional prompt exists).
-4. **Billing / subscription**: Usage and “cost” reporting may differ between API key and subscription login; Paperclip infers **biller** from env — ArmaraOS cost accounting should align with existing **`LlmCallMetrics`** without double-counting.
-5. **Tool calls in output**: Full `tool_call` stream may be large; for LLM driver **completion** we might only need **`result`** + **`assistant`** summaries unless we expose tooling traces to the UI in a later iteration.
+1. **CLI stability**: tolerate unknown JSON fields.
+2. **Binary name**: **`agent`** on PATH after official install; confirm in spike.
+3. **Prompt path**: positional vs stdin — argv limits vs Paperclip parity ([Parameters](https://cursor.com/docs/cli/reference/parameters)).
+4. **Billing / subscription**: align usage with existing **`InstrumentingLlmDriver`** / metrics.
+5. **Tool call volume**: `stream-json` logs can be large; consider summarizing for storage.
 
 ---
 
 ## Related files (existing)
 
-- `crates/openfang-runtime/src/drivers/claude_code.rs` — subprocess + JSON handling patterns.
-- `crates/openfang-runtime/src/drivers/mod.rs` — `create_driver`, cache keys.
-- `crates/openfang-runtime/src/model_catalog.rs` — providers, aliases, `detect_auth`.
+- `crates/openfang-runtime/src/drivers/claude_code.rs` — subprocess + timeout + drain + PID pattern (**gold reference**).
+- `crates/openfang-runtime/src/drivers/qwen_code.rs` — second CLI driver, **`--yolo`**, argv builder tests.
+- `crates/openfang-runtime/src/drivers/mod.rs` — **`create_driver`**, **`known_providers`**, cache keys.
+- `crates/openfang-runtime/src/llm_driver.rs` — **`DriverConfig`**, **`LlmDriver`**.
+- `crates/openfang-runtime/src/model_catalog.rs` — providers, aliases, **`detect_auth`**, tests.
+- `crates/openfang-kernel/src/kernel.rs` — catalog init, **`infer_provider_from_model`**.
+- `crates/openfang-api/src/routes.rs` — provider list / local probe behavior.
+- `crates/openfang-cli/src/tui/screens/wizard.rs`, `init_wizard.rs` — onboarding provider list.
+- `crates/openfang-types/src/config.rs` — **`LlmConfig`**, **`KernelConfig`**, defaults.
 - Paperclip: `packages/adapters/cursor-local/src/server/execute.ts`, `server/parse.ts`.
 
 ---
@@ -185,4 +209,4 @@ Minimal additions to agent/runtime config (exact shape follows existing TOML/JSO
 
 - Cursor: [CLI overview](https://cursor.com/docs/cli/overview), [Parameters](https://cursor.com/docs/cli/reference/parameters), [Output format](https://cursor.com/docs/cli/reference/output-format), [Headless CLI](https://cursor.com/docs/cli/headless)
 - Paperclip adapter: [github.com/paperclipai/paperclip](https://github.com/paperclipai/paperclip) — `packages/adapters/cursor-local`
-- ArmaraOS: existing Claude Code driver and provider plumbing (see paths above).
+- ArmaraOS: paths listed in **Codebase alignment** above.
