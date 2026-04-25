@@ -19,6 +19,7 @@ All responses include security headers (CSP, X-Frame-Options, X-Content-Type-Opt
 - [System Endpoints](#system-endpoints)
 - [Model Catalog Endpoints](#model-catalog-endpoints)
 - [Provider Configuration Endpoints](#provider-configuration-endpoints)
+- [Vault and credentials](#vault-and-credentials)
 - [Skills & Marketplace Endpoints](#skills--marketplace-endpoints)
 - [Hands (App Store) Endpoints](#hands-app-store-endpoints)
 - [ClawHub Endpoints](#clawhub-endpoints)
@@ -64,6 +65,8 @@ If `api_key` is empty or not set, the API is accessible without authentication. 
 
 - `GET /api/health`
 - `GET /` (WebChat UI)
+
+**Also public (read-only, no secret values in responses):** the auth middleware whitelists many dashboard `GET` routes (agents list, models, providers, etc.). For secrets, **`GET /api/secrets/catalog`** and **`GET /api/secrets/dependencies`** return only metadata (key names, presence, **source layer**, optional telemetry) — use **`POST` / `DELETE` / `POST .../test`** to change or exercise values (those require a Bearer API key or dashboard session when `api_key` is set). See [Vault and credentials](#vault-and-credentials).
 
 ---
 
@@ -350,7 +353,7 @@ Update visual / personality identity only. Uses the **same merge rules** as the 
 
 Returns the agent’s explicit tool **allowlist** and **blocklist** (manifest fields). An empty allowlist means “no extra restriction” — effective tools come from the agent’s named **profile** and capabilities.
 
-**Non-empty allowlists (kernel merge):** When an allowlist is **non-empty**, the kernel merges a fixed “just works” set into the in-memory manifest (case-insensitive dedupe) so operators do not have to wire these by hand: **`file_write`**, **`file_read`**, **`shell_exec`**, **`web_search`**, **`channel_send`**, **`event_publish`**, **`web_fetch`**, **`mcp_ainl_ainl_list_ecosystem`**, **`mcp_ainl_ainl_capabilities`**, **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_compile`**, **`mcp_ainl_ainl_run`**, and a wildcard entry **`mcp_ainl_*`** so every **`mcp_ainl_…`** tool from the connected MCP server stays eligible when operators use a restricted allowlist. An **empty** allowlist skips this merge (profile defaults apply).
+**Non-empty allowlists (kernel merge):** When an allowlist is **non-empty**, the kernel merges a fixed “just works” set into the in-memory manifest (case-insensitive dedupe) so operators do not have to wire these by hand: **`file_write`**, **`file_read`**, **`shell_exec`**, **`web_search`**, **`channel_send`**, **`event_publish`**, **`web_fetch`**, **`mcp_ainl_ainl_list_ecosystem`**, **`mcp_ainl_ainl_capabilities`**, **`mcp_ainl_ainl_validate`**, **`mcp_ainl_ainl_compile`**, **`mcp_ainl_ainl_run`**, **`mcp_resource_read`** (host **`resources/read`** to MCP servers — e.g. **`ainl://…`** URIs from the **`mcp_resources`** list on **`mcp_ainl_ainl_capabilities`**; arguments **`mcp_server`** / **`server`**, **`uri`**, optional **`max_bytes`** (default **65536** UTF-8 **bytes** of body after offset, cap **2000000**; truncation suffix may add a few bytes), **`offset`** / **`char_offset`** (Unicode-scalar skip), **`allow_binary`**), and a wildcard entry **`mcp_ainl_*`** so every **`mcp_ainl_…`** tool from the connected MCP server stays eligible when operators use a restricted allowlist. An **empty** allowlist skips this merge (profile defaults apply).
 
 **Glob-style filters:** For both allowlist and blocklist, entries are matched **case-insensitively**. A pattern may include **`*`** as a wildcard (for example **`mcp_github_*`** or **`mcp_ainl_*`**). This matches how the kernel filters tools sent to the LLM and how delegation maps tools to agents.
 
@@ -1686,6 +1689,134 @@ Test provider connectivity by making a minimal API call. Verifies that the confi
   "status": "failed",
   "provider": "anthropic",
   "error": "Invalid API key"
+}
+```
+
+---
+
+## Vault and credentials
+
+**Dashboard:** **Settings → Vault** — inventory of environment keys the daemon and tools can resolve (in-process vault, **`~/.armaraos/secrets.env`**, and process environment), plus optional **Test** (e.g. GitHub PAT) and **Remove**. Provider LLM API keys are also listed here; use **Settings → Providers** to run a provider **Test** call.
+
+**Telemetry (no secret values):** `~/{home}/secret_center_telemetry.json` stores per-key `last_set_at`, last test result, and a **~90 day** “rotation suggested” heuristic.
+
+**Audit trail (no secret values):** successful **save** / **remove** on this API, **GitHub PAT test** runs (when applicable), **POST /api/providers/{name}/key** (and key removal), **POST /api/integrations/google-workspace/oauth**, and **GitHub Copilot device-flow** token storage each append a **`CredentialChange`** row to the Merkle audit log (`GET /api/audit/recent`, live logs stream). Details include only the env **key name**, provider id, or flow label — never the secret material. See [security.md](security.md#4-merkle-hash-chain-audit-trail).
+
+### GET /api/secrets/catalog
+
+**Query (optional):**
+
+- `for_tool` — e.g. `github_subtree_download` narrows static rows to GitHub token entries.
+- `for_agent` — best-effort filter when the agent’s effective tool set implies certain keys (e.g. GitHub token rows only if `github_subtree_download` is in the allowlist).
+
+**Response** `200 OK`:
+
+```json
+{
+  "request_id": "…",
+  "home_dir": "/Users/me/.armaraos",
+  "generated_at": 1710000000,
+  "rows": [
+    {
+      "id": "github-token",
+      "key": "GITHUB_TOKEN",
+      "title": "GitHub personal access token",
+      "description": "…",
+      "category": "github",
+      "optional": true,
+      "used_by": ["github_subtree_download", "…"],
+      "source_layer": "vault",
+      "present": true,
+      "last_set_at": 1709000000,
+      "last_test": { "ok": true, "at": 1709100000, "ms": 120, "detail": "…" },
+      "stale_suggested": false
+    }
+  ]
+}
+```
+
+`source_layer` is the **first** resolution layer for that key: `vault`, `dotenv`, or `process_env` (or `null` if not set). Provider rows use ids like `provider-<provider_id>` and `category` **`llm`**.
+
+### GET /api/secrets/dependencies
+
+Static + curated map of which product features use which env keys (for help text and the Vault UI).
+
+**Response** `200 OK`:
+
+```json
+{
+  "request_id": "…",
+  "items": [
+    {
+      "feature": "github_subtree_download",
+      "keys": ["GITHUB_TOKEN", "GH_TOKEN"],
+      "optional": true,
+      "notes": "…"
+    }
+  ]
+}
+```
+
+### POST /api/secrets
+
+Set or rotate a **catalog** key (static list + all provider `api_key_env` values from the live model catalog). Writes the credential store, updates **`secrets.env`**, sets the process environment, may reconnect MCP children that list the var, and refreshes provider auth detection.
+
+**Request body:**
+
+```json
+{ "key": "GITHUB_TOKEN", "value": "ghp_…" }
+```
+
+**Response** `200 OK`:
+
+```json
+{ "ok": true, "request_id": "…", "key": "GITHUB_TOKEN", "message": "saved" }
+```
+
+### DELETE /api/secrets/{key}
+
+Remove a managed key from the vault, `secrets.env`, and the process environment. Requires auth when `api_key` is set.
+
+**Response** `200 OK`:
+
+```json
+{ "ok": true, "request_id": "…", "key": "GITHUB_TOKEN", "message": "removed" }
+```
+
+### POST /api/secrets/{key}/test
+
+Best-effort connectivity check. **`GITHUB_TOKEN` / `GH_TOKEN`:** `GET https://api.github.com/user` with the resolved credential. Other keys return a “no automated test” message; LLM provider keys should use **POST /api/providers/{id}/test** from **Settings → Providers**.
+
+**Response** `200 OK` always (the body — including failures — lets the UI render the human-readable detail without an HTTP error code).
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `ok` | bool | True only when an actual test ran **and** succeeded. |
+| `applicable` | bool | False when no automated test is wired for this key (LLM providers, OAuth client pieces). When false, telemetry is **not** updated, so a non-applicable test never marks the row as “last test failed”. |
+| `key` | string | Echoed back. |
+| `ms` | int | Wall-clock duration in milliseconds. |
+| `detail` | string \| null | Short human-readable detail (success message, error body, or “use Providers → Test”). |
+| `request_id` | string | Correlation id from the request middleware. |
+
+```json
+{
+  "ok": true,
+  "applicable": true,
+  "request_id": "…",
+  "key": "GITHUB_TOKEN",
+  "ms": 132,
+  "detail": "GitHub API GET /user succeeded"
+}
+```
+
+```json
+{
+  "ok": false,
+  "applicable": false,
+  "request_id": "…",
+  "key": "OPENROUTER_API_KEY",
+  "ms": 0,
+  "detail": "No standalone API test for `openrouter` here. Use Settings → Providers → Test for live request validation."
 }
 ```
 
@@ -3510,7 +3641,7 @@ The `Retry-After` header indicates the window duration in seconds.
 
 ## Endpoint Summary
 
-**90+ endpoints total** across 15+ groups (approximate; generated list may lag new routes).
+**90+ endpoints total** across 16+ groups (approximate; generated list may lag new routes).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -3596,6 +3727,12 @@ The `Retry-After` header indicates the window duration in seconds.
 | POST | `/api/providers/{name}/key` | Set provider API key |
 | DELETE | `/api/providers/{name}/key` | Remove provider API key |
 | POST | `/api/providers/{name}/test` | Test provider connectivity |
+| **Vault (credentials)** | | |
+| GET | `/api/secrets/catalog` | Catalog of managed env keys + presence / telemetry (no values; public when unauthenticated) |
+| GET | `/api/secrets/dependencies` | Feature → env key dependency map (public) |
+| POST | `/api/secrets` | Set/rotate a catalog key (vault + `secrets.env` + process) |
+| DELETE | `/api/secrets/{key}` | Remove a managed key |
+| POST | `/api/secrets/{key}/test` | Best-effort test (e.g. GitHub PAT) |
 | **Skills & Marketplace** | | |
 | GET | `/api/skills` | List installed skills (60 bundled) |
 | POST | `/api/skills/install` | Install skill |

@@ -68,7 +68,7 @@ Welcome to the ArmaraOS documentation. ArmaraOS is the open-source Agent Operati
 | [AINL graph memory](graph-memory.md) | Runtime wiring: `GraphMemoryWriter`, per-agent `ainl_memory.db`, Python inbox drain, post-turn **`ExtractionReport`** (per-phase errors + **`warn!`** slots), optional **`runtime_state`** when **`ainl-runtime`** shares the DB; **`AINL_EXTRACTOR_ENABLED`** (opt-out) / **`AINL_TAGGER_ENABLED`** (**tagger: only** `1`, opt-in) / **`AINL_PERSONA_EVOLUTION`** (opt-out); vs orchestration traces |
 | [Persona evolution (axis hook)](persona-evolution.md) | **`PersonaEvolutionHook`** (on by default; opt out via **`AINL_PERSONA_EVOLUTION=0`**), axis snapshot growth/decay |
 | [ainl-runtime crate](ainl-runtime.md) | Standalone graph orchestration (`run_turn` / optional `run_turn_async`), **Orientation FAQ**, delegation depth (**`DelegationDepthExceeded`**), Tokio `async` feature, verification vs daemon path |
-| [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes) |
+| [API Reference](api-reference.md) | REST/WebSocket/SSE endpoints (see doc + quick-reference table; includes audit/daemon log routes, **Settings → Vault** [`/api/secrets`](api-reference.md#vault-and-credentials)) |
 | [Ultra Cost-Efficient Mode](prompt-compression-efficient-mode.md) | Input prompt compression (`efficient_mode`), preserve rules, dashboard/API/telemetry, Eco Diff |
 | [Desktop App](desktop.md) | Tauri 2.0 native app -- build, features, architecture |
 | [Desktop code signing](desktop-code-signing.md) | Install-time trust (macOS / Windows), Tauri updater vs OS signing, Azure / SignPath notes |

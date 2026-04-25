@@ -36,6 +36,8 @@ export OPENAI_API_KEY="your-key"
 
 ArmaraOS auto-detects which providers have API keys configured at boot. Any model whose provider is authenticated becomes immediately available. Local providers (Ollama, vLLM, LM Studio) require no key at all.
 
+**Dashboard — Vault:** **Settings → Vault** lists every provider `api_key_env` (same resolution path as the providers hub: vault, `~/.armaraos/secrets.env`, process environment). You can set shared integration keys (e.g. `GITHUB_TOKEN`, Google OAuth client env vars) there; use **Settings → Providers** to **Test** a specific LLM provider connection. See [api-reference.md](api-reference.md#vault-and-credentials).
+
 For Gemini specifically, either `GEMINI_API_KEY` or `GOOGLE_API_KEY` will work.
 
 **Claude Code (CLI):** no env var in this list — install the [Claude Code](https://code.claude.com/docs) CLI, run `claude auth`, then choose provider **`claude-code`** in the setup wizard or `[default_model]` (full walkthrough: **[Claude Code (CLI)](#2-claude-code-cli)** below).

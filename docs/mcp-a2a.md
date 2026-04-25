@@ -143,10 +143,26 @@ ArmaraOS classifies connected MCP `tools/list` entries with **`ainl-repo-intel`*
 MCP tools are merged into the agent's available tool set via `available_tools()`:
 
 ```
-built-in tools (23) + skill tools + MCP tools = full tool list
+built-in host tools + skill tools + MCP tools = full tool list
 ```
 
 When an agent calls an MCP tool during its loop, the tool runner recognizes the `mcp_` prefix, finds the appropriate `McpConnection`, strips the namespace prefix, and forwards the `tools/call` request to the external MCP server.
+
+#### Host `mcp_resource_read` (MCP `resources/read`)
+
+In addition to namespaced `mcp_{server}_*` tools from `tools/list`, ArmaraOS exposes a **built-in** tool **`mcp_resource_read`** that reads a resource **URI** from a **connected** MCP client connection using the server’s JSON-RPC **`resources/read`** (implemented on `McpConnection` in `openfang-runtime::mcp`). Agents use it to load integration text advertised under **`mcp_resources`** on **`mcp_ainl_ainl_capabilities`** (for example `ainl://authoring-cheatsheet`, `ainl://integrations-http-machine-payments`) without paste‑outsourcing.
+
+**Arguments** (see `tool_runner::tool_mcp_resource_read` and the tool schema in `builtin_tool_definitions()`):
+
+| Field | Required | Default | Notes |
+|-------|----------|---------|--------|
+| `mcp_server` or `server` | yes | — | Configured MCP server id (e.g. `ainl`). |
+| `uri` | yes | — | Resource URI from `resources/list` / `mcp_resources`. |
+| `max_bytes` | no | `65536` | Max UTF-8 **bytes** of resource text returned after offset; hard cap `2000000`. Truncation ends on a char boundary; a one-line `… [truncated…]` suffix may be appended. |
+| `offset` or `char_offset` | no | `0` | Skip this many leading **Unicode scalar values** before applying the byte cap. |
+| `allow_binary` | no | `false` | When `false`, binary-only resources are rejected instead of returning placeholder text. |
+
+**AINL MCP digest + `recommended_next_tools` in graph memory:** On successful **`mcp_ainl_*`** calls, the loop may persist **semantic** facts (visible under graph memory / FTS) when the payload **hash** changes: tags **`mcp:ainl:capabilities`** and **`mcp:ainl:recommended_next`**, each with a companion **`v:<sha16>`** tag for dedupe. Prompt assembly prefers the **latest** of those rows for the agent (then falls back to the in-process **`mcp_ainl_session`** cache). **`recommended_next_tools`** is only re-injected into the prompt when its content hash changes (same for the capabilities digest), to avoid steady token tax. **Failures** from **`mcp_ainl_*`** tools are recorded on **`Failure`** nodes with optional **`source_namespace`** / **`source_tool`** fields (no `[MCP-AINL:…]` message prefix).
 
 #### Connection Lifecycle
 
@@ -208,7 +224,7 @@ The MCP server uses `McpBackend` which supports two modes:
 
 ArmaraOS also exposes an MCP endpoint over HTTP at `POST /mcp`. Unlike the stdio server (which only exposes agents), the HTTP endpoint exposes the full tool set (built-in + skills + MCP tools) and executes tools via the kernel's `execute_tool()` pipeline. This means the HTTP MCP endpoint supports:
 
-- All 23 built-in tools (file_read, web_fetch, etc.)
+- All built-in host tools (file_read, web_fetch, mcp_resource_read, etc.)
 - All installed skill tools
 - All connected MCP server tools
 

@@ -192,6 +192,13 @@ Future AI agents should treat this file as **mandatory policy** for dashboard de
 - If a requested design change conflicts with these rules, propose a tokenized/system-consistent alternative.
 - Do not ship ad-hoc visual styling that bypasses this system.
 
+## Settings → Vault (credentials center)
+
+- **Location:** `index_body.html` — `page === 'settings'`, `tab === 'vault'`; logic in `static/js/pages/settings.js` (`loadVaultCenter`, `saveVaultSecret`, `removeVaultSecret`, `testVaultSecret`).
+- **Layout:** Reuses the same **Settings** shell as other tabs: `settings-page-header`, `settings-page-tabs`, `info-card`, `table-wrap`, and existing **badge** / **btn** patterns (no new visual system).
+- **Content:** Read-only table of catalog keys (presence + **source** layer + telemetry line); **Feature dependencies** sub-table; set/rotate form; **Test** / **Remove** with `OpenFangToast` / confirm — same interaction vocabulary as **Providers** and **Daemon lifecycle** modals.
+- **API contract:** [api-reference.md](api-reference.md#vault-and-credentials)
+
 ## Related Docs
 
 - `docs/dashboard-overview-ui.md`

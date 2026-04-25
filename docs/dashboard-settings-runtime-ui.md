@@ -29,7 +29,7 @@ These routes reuse the same building blocks in `components.css`:
 
 | Page | Markup | Logic | Shared styles |
 |------|--------|-------|----------------|
-| **Settings** | `index_body.html` — `page === 'settings'` | `js/pages/settings.js` — `settingsPage()` (merged with `daemon_lifecycle.js`) | `components.css` — `settings-page-*` |
+| **Settings** (incl. **Vault**) | `index_body.html` — `page === 'settings'` | `js/pages/settings.js` — `settingsPage()` (merged with `daemon_lifecycle.js`); **Vault** tab: `loadVaultCenter`, `saveVaultSecret`, `testVaultSecret` | `components.css` — `settings-page-*` |
 | **Runtime** | `index_body.html` — `page === 'runtime'` | `js/pages/runtime.js` — `runtimePage()` (merged with `daemon_lifecycle.js`) | `components.css` — `runtime-page-*`, `runtime-stats-grid`, `runtime-stat-card`, `runtime-panel*` |
 | **Daemon lifecycle (shared)** | Same templates | `js/daemon_lifecycle.js` — `armaraosDaemonLifecycleControls()`; bundled in `webchat.rs` after `api.js` | Confirm modal opts: `js/api.js` — `OpenFangToast.confirm(..., opts)` |
 
@@ -38,11 +38,11 @@ Global primitives (**`.card`**, **`.tabs`**, **`.info-card`**, **`.table`**) are
 ## Settings
 
 - **Root:** `settings-page-root` on the outer `div` with `x-data="settingsPage"`.
-- **Header:** `page-header settings-page-header` — column layout with title **Settings** and a short **subtitle** (`settings-page-header-sub`) describing providers, models, config, tools, and system preferences.
+- **Header:** `page-header settings-page-header` — column layout with title **Settings** and a short **subtitle** (`settings-page-header-sub`) describing providers, models, config, tools, **credentials (Vault)**, and system preferences.
 - **Body:** `page-body settings-page-body` — radial accent wash over `var(--bg-primary)` (same family as Get started / App Store).
-- **Tab bar:** `tabs settings-page-tabs` — rounded toolbar with accent top stripe, inset shadow, pill-style tabs; active tab uses `accent-subtle` fill instead of only a bottom border. The **tabs separator** between primary and secondary tabs remains a subtle vertical rule (`tabs-separator`).
+- **Tab bar:** `tabs settings-page-tabs` — rounded toolbar with accent top stripe, inset shadow, pill-style tabs; active tab uses `accent-subtle` fill instead of only a bottom border. The **tabs separator** between primary and secondary tabs remains a subtle vertical rule (`tabs-separator`). Secondary tabs include **Vault** (after **Tools**) for shared env credentials (PATs, integration keys, and catalog-backed provider `api_key_env` names) — see [api-reference.md](api-reference.md#vault-and-credentials).
 
-Tab labels and behavior (lazy loads for Security, Network, etc.) are unchanged; only presentation is scoped.
+Tab labels and behavior (lazy loads for Security, Network, **Vault** `loadVaultCenter` on tab click, etc.) are scoped per tab; presentation matches this doc.
 
 ### At-a-glance instance summary (config schema, API, home)
 

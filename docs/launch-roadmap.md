@@ -410,6 +410,18 @@ These are features where ArmaraOS can leapfrog OpenClaw.
 
 ---
 
+## Future backlog — large chat attachments (frozen)
+
+**Status: frozen** — No further work in this area until explicitly prioritized.
+
+**Current baseline (shipped):** Chat uploads allow **`.zip`** (and existing MIME/extension allowlists); per-file cap is **128 MiB** (`MAX_UPLOAD_SIZE` in `crates/openfang-api/src/routes.rs`, mirrored in `crates/openfang-api/static/js/pages/chat.js`). The handler still buffers one full request body in memory.
+
+**When reopened, target:** Support **hundreds of MB** (and operator-tunable limits) without proportional RAM spikes: **streaming or chunked multipart**, **disk spool**, **`max_chat_upload_bytes` (or similar) in config**, clear errors for over-limit; optional org hooks (scan/quarantine) if product requires it.
+
+**Done when:** Large project archives upload reliably on modest hosts; dashboard + API docs match; integration tests cover limit + happy path.
+
+---
+
 ## Quick Reference: Status
 
 ```
@@ -449,4 +461,7 @@ Production audit:
   - All 120+ API routes ........... VERIFIED
   - All 15 JS page files .......... VERIFIED
   - 1751 tests ..................... ALL PASSING
+
+Future backlog:
+  - Large chat uploads (streaming / config) ... FROZEN (see section above)
 ```

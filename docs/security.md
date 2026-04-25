@@ -1386,6 +1386,9 @@ max_memory_bytes = 16777216 # 16 MB max WASM memory
 | `BRAVE_API_KEY` | Brave web search |
 | `TAVILY_API_KEY` | Tavily web search |
 | `PERPLEXITY_API_KEY` | Perplexity web search |
+| `GITHUB_TOKEN` / `GH_TOKEN` | Git tools, `github_subtree_download`, GitHub API (not the chat LLM key) |
+
+**Dashboard Vault:** operators can persist additional env-backed keys through **Settings → Vault** (`GET/POST/DELETE` `/api/secrets` — see [api-reference.md](api-reference.md#vault-and-credentials)). The catalog is **metadata-only** on `GET` (no secret values). **`POST`** / **`DELETE`** require the same **`api_key`** Bearer (or dashboard session) as other protected routes when authentication is enabled. Each successful **set**, **remove**, and applicable **test** (e.g. GitHub user probe) records a **`CredentialChange`** audit entry (key name and `request_id` only; no token bytes). The same action type is used for **Settings → Providers** key save/remove, **Google Workspace OAuth** app credential saves, and **GitHub Copilot** device-flow token persistence, so compliance reviews can filter one action family in `GET /api/audit/recent` or the audit SSE stream.
 
 All environment variable API keys are wrapped in `Zeroizing<String>` when
 loaded into driver structs.
