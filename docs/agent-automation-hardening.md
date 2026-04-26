@@ -99,6 +99,8 @@ Without intervention this is a **classic confabulation trap**: the LLM sees “t
 
 **Additional guard:** a failed `mcp_ainl_ainl_validate`, `mcp_ainl_ainl_compile`, or `mcp_ainl_ainl_run` also creates a pending repair obligation in the agent loop. A later assistant text or silent response is not allowed to finish the turn until the model edits the source/arguments and re-runs the same tool successfully (`ok: true`). If the model tries to claim the workflow is ready, executed, or “strict=false ready” after a failed strict validate, the loop injects a corrective system message and continues. After repeated premature final attempts or near-limit exhaustion, the runtime returns a safe failure summary instead of a false success and records the turn as a failure outcome.
 
+**Wiring vs graph repair:** if the tool body reports **`tool_call_error: true`** (or **`missing required argument: code`** from an empty `{}` call), treat it as a **host/tool-call shape** problem — re-issue the MCP call with the full `code` string. The agent loop **does not** create the same “pending AINL repair” obligation for that class of failure, because there was no AINL compile attempt yet.
+
 ---
 
 ## AINL authoring proof gates: target-bound + strict chain + provenance
@@ -134,6 +136,10 @@ For `mcp_ainl_ainl_run`, the runtime enforces a minimal proof chain:
 - `mcp_ainl_ainl_run` is blocked unless the agent previously completed a successful **strict** `mcp_ainl_ainl_validate` of the **same `code`** (matched by SHA256), unless the user explicitly requested non-strict.
 
 This ensures long runs remain honest: “run completed” implies “this exact source was strict-validated first”.
+
+### Side-effect proof (file outputs)
+
+For workflows that **write** via `fs` or shell, **`ainl_run` returning `ok: true` is not enough** to claim the log/CSV/JSONL exists or has expected bytes. Follow the [Phase model](#phase-model-acquire-extract-persist-verify): use **`file_read`** / **`file_list`** (or a bounded shell check) on the path after a successful run before summarizing file contents to the user.
 
 ### Provenance in unresolved summaries
 

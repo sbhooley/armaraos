@@ -199,6 +199,11 @@ Future AI agents should treat this file as **mandatory policy** for dashboard de
 - **Content:** Read-only table of catalog keys (presence + **source** layer + telemetry line); **Feature dependencies** sub-table; set/rotate form; **Test** / **Remove** with `OpenFangToast` / confirm — same interaction vocabulary as **Providers** and **Daemon lifecycle** modals.
 - **API contract:** [api-reference.md](api-reference.md#vault-and-credentials)
 
+## Orchestration traces (Agents → Orchestration)
+
+- **Page script:** `static/js/pages/orchestration-traces.js` (D3 Gantt, delegation graph, cost panels).
+- **Copy-only row labels:** `plan_started` segments use a single muted timeline chip string: `plan started · <steps> steps · conf <confidence>`, and when the trace event includes a non-empty `planner_follow_ups` array (from the inference control plane), the label appends ` · follow-ups N` where `N` is the **count** only — not the strings themselves. Do not add new one-off colors for this suffix; it inherits the same `plan` lane styling as other deterministic-plan segments.
+
 ## Related Docs
 
 - `docs/dashboard-overview-ui.md`

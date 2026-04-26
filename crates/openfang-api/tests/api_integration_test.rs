@@ -2234,6 +2234,7 @@ async fn test_orchestration_trace_plan_events_json_roundtrip() {
                 step_count: 3,
                 confidence: 0.91,
                 reasoning_step_ids: vec!["r1".to_string()],
+                planner_follow_ups: vec!["test follow-up line".to_string()],
             },
             timestamp: Utc::now(),
             metadata: std::collections::HashMap::new(),

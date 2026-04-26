@@ -356,12 +356,14 @@
         var lx4 = ((t - t0) / span) * 100;
         var sc = e.event_type.step_count != null ? e.event_type.step_count : '?';
         var cf = e.event_type.confidence != null ? e.event_type.confidence : '';
+        var fu = e.event_type.planner_follow_ups;
+        var fuN = Array.isArray(fu) ? fu.length : 0;
         placeSegment(
           e.agent_id,
           lx4,
           0.55,
           'plan',
-          'plan started · ' + sc + ' steps · conf ' + cf
+          'plan started · ' + sc + ' steps · conf ' + cf + (fuN ? ' · follow-ups ' + fuN : '')
         );
       } else if (typ === 'plan_step_started' && e.event_type) {
         var lx5 = ((t - t0) / span) * 100;

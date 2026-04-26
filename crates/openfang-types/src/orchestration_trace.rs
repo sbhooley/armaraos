@@ -118,6 +118,9 @@ pub enum TraceEventType {
         step_count: usize,
         confidence: f32,
         reasoning_step_ids: Vec<String>,
+        /// Post-plan reminders from the inference control plane (`structured.follow_ups`), if any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        planner_follow_ups: Vec<String>,
     },
     PlanStepStarted {
         step_id: String,

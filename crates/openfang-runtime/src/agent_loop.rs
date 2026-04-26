@@ -692,6 +692,35 @@ fn terminal_handoff_detected(
         || t.contains("post-restart")
 }
 
+/// True when an MCP `mcp_ainl_*` tool body looks like a host adapter registration / preflight
+/// failure (copyable `suggested_adapters`), as opposed to a pure AINL syntax issue.
+fn looks_like_ainl_adapter_registration_failure(content: &str) -> bool {
+    let lc = content.to_ascii_lowercase();
+    if lc.contains("adapter_registration_error")
+        || lc.contains("missing_mcp_configurable")
+        || lc.contains("\"error_kind\": \"adapter_registration\"")
+        || lc.contains("\"error_kind\":\"adapter_registration\"")
+    {
+        return true;
+    }
+    lc.contains("adapter not registered")
+        && (lc.contains("suggested_adapters") || lc.contains("runtime_readiness"))
+}
+
+/// All failing tools in this round are AINL MCP tools and at least one failure looks like
+/// adapter registration / `suggested_adapters` (used to avoid a misleading "try a different method" escalation).
+fn ainl_mcp_batch_is_adapter_registration_loop(errors: &[(&str, &str)]) -> bool {
+    if errors.is_empty() {
+        return false;
+    }
+    errors
+        .iter()
+        .all(|(name, _)| name.starts_with("mcp_ainl_"))
+        && errors
+            .iter()
+            .any(|(_, c)| looks_like_ainl_adapter_registration_failure(c))
+}
+
 /// Inspect a batch of failed `(tool_name, error_text)` pairs and, if any matches a
 /// well-known failure mode we have seen agents loop on, return a short corrective
 /// hint (single sentence) the model can act on without re-reading docs.
@@ -969,6 +998,14 @@ fn corrective_hint_for_failures(errors: &[(&str, &str)]) -> Option<&'static str>
                          re-run validate.",
                     );
                 }
+                if looks_like_ainl_adapter_registration_failure(content) {
+                    return Some(
+                        "this is an MCP runtime registration issue: copy `suggested_adapters` from \
+                         the JSON (or build `adapters.enable` + per-adapter config) and pass it on the \
+                         next `mcp_ainl_ainl_run` call. Do not delete `fs`/`http`/`cache`/`sqlite` lines \
+                         from the source just to make validate pass — fix configuration instead.",
+                    );
+                }
                 if lc.contains("adapter") && lc.contains("not registered") {
                     return Some(
                         "an adapter referenced in the IR is not registered. Pass the adapter \
@@ -1066,6 +1103,27 @@ fn sha256_hex(s: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(s.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// True when the MCP JSON body indicates a **tool-call / wiring** problem (missing `code`, etc.),
+/// not invalid AINL source — the agent should not treat this as an AINL graph repair obligation.
+fn tool_result_is_ainl_tool_wiring_error(content: &str) -> bool {
+    let trimmed = content.trim();
+    let candidate = trimmed
+        .split("\n\n[LOOP GUARD]")
+        .next()
+        .unwrap_or(trimmed)
+        .trim();
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
+        return false;
+    };
+    if v.get("tool_call_error").and_then(|x| x.as_bool()) == Some(true) {
+        return true;
+    }
+    if v.get("error").and_then(|e| e.as_str()) == Some("missing required argument: code") {
+        return true;
+    }
+    false
 }
 
 fn tool_result_json_ok_true(content: &str) -> bool {
@@ -1277,6 +1335,9 @@ fn ainl_authoring_failure_from_tool_results(
         if !is_ainl_authoring_gate_tool(tool_name) {
             return None;
         }
+        if tool_result_is_ainl_tool_wiring_error(content) {
+            return None;
+        }
         let (target_path, target_code_sha256, strict) = tool_calls_by_id
             .get(tool_use_id)
             .map(extract_ainl_target_from_tool_call)
@@ -1314,8 +1375,9 @@ fn ainl_authoring_success_in_tool_results(
                     if p.tool_name.as_str() != tool_name.as_str() {
                         return false;
                     }
-                    // If we captured a target on the failing call, only clear when the success
-                    // applies to the same target (same path and/or code hash).
+                    // If we captured no target identity at all, allow clearing (legacy inline flows).
+                    // When path and/or code hash exist on the pending failure, they must match the
+                    // success tool call — this blocks "validate a tiny mock" from clearing a real-file failure.
                     if p.target_path.is_none() && p.target_code_sha256.is_none() && p.strict.is_none() {
                         return true;
                     }
@@ -1358,6 +1420,17 @@ fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) 
     let label = ainl_authoring_tool_label(&pending.tool_name);
     let tool = &pending.tool_name;
     let summary = &pending.summary;
+    let adapter_reg_supplement = if pending.tool_name == "mcp_ainl_ainl_run"
+        && looks_like_ainl_adapter_registration_failure(summary)
+    {
+        "\n\nSupplement: If the JSON mentions `suggested_adapters` / `adapter_registration_error`, \
+         this is a **host configuration** gap, not an AINL syntax bug. Retry `mcp_ainl_ainl_run` with \
+         the same `code` and pass the suggested `adapters` object (fill in absolute `fs.root`, \
+         `http.allow_hosts`, etc.). Do not strip `fs`/`http`/`cache`/`sqlite` usage from the program \
+         just to obtain `ok:true` unless the user explicitly narrows the task."
+    } else {
+        ""
+    };
     let target_bits = {
         let mut bits = Vec::new();
         if let Some(ref id) = pending.tool_use_id {
@@ -1384,7 +1457,7 @@ fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) 
          Do not downgrade to strict=false or call the strict failure \"non-blocking\". \
          You must use file_read/file_write/apply_patch as needed to fix the diagnostic, then call \
          `{tool}` again with the updated source/arguments. Continue this repair → retry loop \
-         until `{tool}` returns `ok: true`.\n\nLast AINL {label} failure:\n{summary}]"
+         until `{tool}` returns `ok: true`.\n\nLast AINL {label} failure:\n{summary}{adapter_reg_supplement}]"
     )
 }
 
@@ -1393,13 +1466,34 @@ fn ainl_authoring_unresolved_summary(
     last_proof: Option<&AinlProof>,
 ) -> String {
     let label = ainl_authoring_tool_label(&pending.tool_name);
+    let identity_note = if pending.target_path.is_none() && pending.target_code_sha256.is_none() {
+        "\n\nNote: the failing tool call did not include a resolvable `path` or `code` identity — a later `ok:true` on a different snippet does **not** clear this obligation until you re-run the same tool with the real file source in `code`.\n"
+    } else {
+        ""
+    };
     let proof_line = last_proof
         .map(|p| format!("\n\nLast proven AINL status (provenance):\n{}", format_ainl_proof_provenance(p)))
         .unwrap_or_default();
+    let category_note = last_proof
+        .and_then(|p| {
+            pending.target_path.as_ref()?;
+            if p.category != AinlProofCategory::StrictValidMockOnly {
+                return None;
+            }
+            if pending.tool_name != "mcp_ainl_ainl_validate"
+                && pending.tool_name != "mcp_ainl_ainl_compile"
+            {
+                return None;
+            }
+            Some(
+                "\n\nThe last successful strict check was **mock-only** (no `path` on that validate/compile call) while this failure targets a **real file** — treat that as **not** satisfying repair for the on-disk workflow.\n",
+            )
+        })
+        .unwrap_or("");
     format!(
         "I could not complete the task because `{}` still reports an AINL {label} failure. \
          I will not claim it ran successfully until that tool returns `ok: true`.\n\n\
-         Last AINL {label} failure:\n{}{proof_line}",
+         Last AINL {label} failure:\n{}{identity_note}{category_note}{proof_line}",
         pending.tool_name, pending.summary
     )
 }
@@ -1516,13 +1610,27 @@ impl ToolErrorTracker {
                 }
             }
             // Second identical failure: escalate — the first guidance was not acted on.
-            2 => Some(
-                "[System: The same tool error has occurred twice in a row. \
-                 You are not making progress. Stop using the failing tool(s), \
-                 recall your original goal, and switch to a completely different method \
-                 to accomplish it.]"
-                    .to_string(),
-            ),
+            2 => {
+                if ainl_mcp_batch_is_adapter_registration_loop(&all_errors) {
+                    Some(
+                        "[System: The same AINL adapter-registration failure repeated. \
+                         This is not a reason to switch to a totally different approach: \
+                         copy `suggested_adapters` from the last MCP JSON into the next \
+                         `mcp_ainl_ainl_run` call, fill host allowlists / sandbox roots, and re-run. \
+                         Do not delete `fs`/`http`/`cache`/`sqlite` usage from the graph to \"pass\" \
+                         unless the user explicitly changes requirements.]"
+                        .to_string(),
+                    )
+                } else {
+                    Some(
+                        "[System: The same tool error has occurred twice in a row. \
+                         You are not making progress. Stop using the failing tool(s), \
+                         recall your original goal, and switch to a completely different method \
+                         to accomplish it.]"
+                        .to_string(),
+                    )
+                }
+            }
             // Third+ identical failure: silence — loop guard is blocking/warning and
             // adding more text only wastes context and derails the model further.
             _ => None,
@@ -1892,6 +2000,7 @@ fn infer_message_body(m: &Message) -> String {
 fn synthesize_plan_summary(
     plan: &ainl_agent_snapshot::DeterministicPlan,
     exec_res: &crate::plan_executor::PlanExecutionResult,
+    planner_follow_ups: &[String],
 ) -> String {
     use std::fmt::Write as _;
 
@@ -1939,6 +2048,12 @@ fn synthesize_plan_summary(
                     String::new()
                 }
             );
+        }
+    }
+    if !planner_follow_ups.is_empty() {
+        let _ = write!(out, "\n\nHost follow-ups (from inference `structured.follow_ups`):\n");
+        for line in planner_follow_ups {
+            let _ = writeln!(out, "- {line}");
         }
     }
     out
@@ -2901,6 +3016,15 @@ pub async fn run_agent_loop(
                             } else if st.get("kind").and_then(|k| k.as_str())
                                 == Some(STRUCTURED_KIND_DETERMINISTIC_PLAN)
                             {
+                                let planner_follow_ups: Vec<String> = st
+                                    .get("follow_ups")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|x| x.as_str().map(std::string::ToString::to_string))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
                                 let plan_val = st.get("plan").cloned().unwrap_or(Value::Null);
                                 if let Ok(plan) = serde_json::from_value::<
                                     ainl_agent_snapshot::DeterministicPlan,
@@ -2922,6 +3046,7 @@ pub async fn run_agent_loop(
                                         api_model.as_str(),
                                         &agent_snapshot,
                                         infer_messages,
+                                        planner_follow_ups.as_slice(),
                                         plan_trace.as_ref(),
                                     )
                                     .await
@@ -2981,6 +3106,7 @@ pub async fn run_agent_loop(
                                                 let summary = synthesize_plan_summary(
                                                     &plan,
                                                     &exec_res,
+                                                    planner_follow_ups.as_slice(),
                                                 );
                                                 session
                                                     .messages
@@ -8123,6 +8249,90 @@ mod tests {
     }
 
     #[test]
+    fn ainl_tool_wiring_error_skips_pending_authoring_obligation() {
+        let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t1".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":false,"tool_call_error":true,"errors":["missing required argument: code"]}"#
+                .to_string(),
+            is_error: true,
+        }];
+        assert!(tool_result_is_ainl_tool_wiring_error(
+            r#"{"ok":false,"tool_call_error":true}"#
+        ));
+        assert!(
+            ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id).is_none()
+        );
+    }
+
+    #[test]
+    fn looks_like_ainl_adapter_registration_failure_detects_mcp_envelope() {
+        assert!(looks_like_ainl_adapter_registration_failure(
+            r#"{"ok":false,"error_kind":"adapter_registration","adapter_registration_error":{}}"#
+        ));
+        assert!(looks_like_ainl_adapter_registration_failure(
+            "adapter not registered: fs\nsuggested_adapters: {}\nruntime_readiness"
+        ));
+        assert!(!looks_like_ainl_adapter_registration_failure("Line 2: expected label"));
+    }
+
+    #[test]
+    fn ainl_mcp_batch_is_adapter_registration_loop_requires_all_mcp_ainl() {
+        let reg = [(
+            "mcp_ainl_ainl_run",
+            r#"{"adapter_registration_error":{"suggested_adapters":{}}}"#,
+        )];
+        assert!(ainl_mcp_batch_is_adapter_registration_loop(&reg));
+        let mixed = [
+            (
+                "mcp_ainl_ainl_run",
+                r#"{"adapter_registration_error":{"suggested_adapters":{}}}"#,
+            ),
+            ("file_read", "not found"),
+        ];
+        assert!(!ainl_mcp_batch_is_adapter_registration_loop(&mixed));
+    }
+
+    #[test]
+    fn tool_error_tracker_second_streak_adapter_registration_escalation() {
+        let err = r#"{"ok":false,"error_kind":"adapter_registration","adapter_registration_error":{"suggested_adapters":{"enable":["fs"]}}}"#;
+        let blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "1".to_string(),
+            tool_name: "mcp_ainl_ainl_run".to_string(),
+            content: err.to_string(),
+            is_error: true,
+        }];
+        let mut t = ToolErrorTracker::new();
+        let g1 = t.compute_guidance(&blocks, 0);
+        assert!(g1.is_some());
+        let g2 = t.compute_guidance(&blocks, 0);
+        assert!(g2.is_some());
+        let g2s = g2.expect("g2");
+        assert!(
+            g2s.contains("suggested_adapters") || g2s.contains("adapter-registration"),
+            "expected AINL-specific second-streak text: {g2s}"
+        );
+    }
+
+    #[test]
+    fn ainl_repair_prompt_includes_adapter_registration_supplement_for_run() {
+        let pending = PendingAinlAuthoringFailure {
+            tool_name: "mcp_ainl_ainl_run".to_string(),
+            tool_use_id: None,
+            target_path: None,
+            target_code_sha256: None,
+            strict: None,
+            summary: r#"{"adapter_registration_error":{},"suggested_adapters":{}}"#.to_string(),
+            blocked_final_attempts: 0,
+        };
+        let msg = ainl_authoring_repair_required_prompt(&pending);
+        assert!(msg.contains("suggested_adapters"), "msg: {msg}");
+        assert!(msg.contains("host configuration"), "msg: {msg}");
+    }
+
+    #[test]
     fn ainl_compile_and_run_failures_set_pending_repair_obligation() {
         for tool_name in ["mcp_ainl_ainl_compile", "mcp_ainl_ainl_run"] {
             let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
@@ -8263,6 +8473,86 @@ mod tests {
             &tool_calls_by_id,
             false
         ));
+    }
+
+    /// B1c: inline / mock `ok:true` (no `path` on the success call) must not clear a pending
+    /// failure that was recorded against a real on-disk `path`.
+    #[test]
+    fn ainl_authoring_mock_only_ok_does_not_clear_pending_with_real_path() {
+        let real_path = "workspaces/demo/workflow.ainl";
+        let code_snippet = "demo:\n  out 1\n";
+        let mut tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
+        tool_calls_by_id.insert(
+            "t_fail".to_string(),
+            ToolCall {
+                id: "t_fail".to_string(),
+                name: "mcp_ainl_ainl_validate".to_string(),
+                input: serde_json::json!({"path": real_path, "code": code_snippet, "strict": true}),
+            },
+        );
+        tool_calls_by_id.insert(
+            "t_mock_ok".to_string(),
+            ToolCall {
+                id: "t_mock_ok".to_string(),
+                name: "mcp_ainl_ainl_validate".to_string(),
+                input: serde_json::json!({"code":"other:\n  out 2\n","strict": true}),
+            },
+        );
+        let fail_blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t_fail".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":false,"errors":["syntax"]}"#.to_string(),
+            is_error: true,
+        }];
+        let pending =
+            ainl_authoring_failure_from_tool_results(&fail_blocks, &tool_calls_by_id).expect("p");
+        assert_eq!(pending.target_path.as_deref(), Some(real_path));
+
+        let ok_blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t_mock_ok".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":true,"errors":[],"warnings":[]}"#.to_string(),
+            is_error: false,
+        }];
+        assert!(!ainl_authoring_success_in_tool_results(
+            &ok_blocks,
+            Some(&pending),
+            &tool_calls_by_id,
+            false
+        ));
+    }
+
+    /// B1d: when the last proof is strict mock-only but the open failure is tied to a real file,
+    /// [`ainl_authoring_unresolved_summary`] tells the model that combination does not satisfy repair.
+    #[test]
+    fn ainl_authoring_unresolved_summary_warns_on_mock_strict_proof_vs_real_path_pending() {
+        let last_proof = AinlProof {
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            tool_use_id: "t_prev".to_string(),
+            target_path: None,
+            target_code_sha256: Some(sha256_hex("mock snippet")),
+            strict: Some(true),
+            category: AinlProofCategory::StrictValidMockOnly,
+        };
+        for tool in ["mcp_ainl_ainl_validate", "mcp_ainl_ainl_compile"] {
+            let summary = ainl_authoring_unresolved_summary(
+                &PendingAinlAuthoringFailure {
+                    tool_name: tool.to_string(),
+                    tool_use_id: Some("t_cur".to_string()),
+                    target_path: Some("repo/foo.ainl".to_string()),
+                    target_code_sha256: Some(sha256_hex("on disk contents")),
+                    strict: Some(true),
+                    summary: "Line 2: still broken".to_string(),
+                    blocked_final_attempts: 0,
+                },
+                Some(&last_proof),
+            );
+            assert!(
+                summary.contains("mock-only") && summary.contains("real file"),
+                "expected mock-vs-real warning for {tool}, got: {summary}"
+            );
+        }
     }
 
     #[test]

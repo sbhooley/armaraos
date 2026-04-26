@@ -223,6 +223,7 @@ impl PlanExecutor {
         infer_model: &str,
         agent_snapshot: &ainl_agent_snapshot::AgentSnapshot,
         messages_for_infer: Vec<ChatMessage>,
+        planner_follow_ups: &[String],
         trace: Option<&PlanExecutionTrace<'_>>,
     ) -> Result<PlanExecutionResult, PlanExecutionError> {
         let started = Instant::now();
@@ -244,6 +245,7 @@ impl PlanExecutor {
                 step_count: plan.steps.len(),
                 confidence: plan.confidence,
                 reasoning_step_ids: plan.reasoning_required_at.clone(),
+                planner_follow_ups: planner_follow_ups.to_vec(),
             });
         }
 
@@ -761,6 +763,7 @@ mod tests {
             "test-model",
             &test_snapshot(),
             vec![],
+            &[],
             None,
         )
         .await
@@ -814,6 +817,7 @@ mod tests {
             "test-model",
             &test_snapshot(),
             vec![],
+            &[],
             None,
         )
         .await
@@ -889,6 +893,7 @@ mod tests {
             "test-model",
             &test_snapshot(),
             vec![],
+            &[],
             None,
         )
         .await
@@ -934,6 +939,7 @@ mod tests {
             "test-model",
             &test_snapshot(),
             vec![],
+            &[],
             None,
         )
         .await
@@ -988,6 +994,7 @@ mod tests {
             "test-model",
             &test_snapshot(),
             vec![],
+            &[],
             None,
         )
         .await
