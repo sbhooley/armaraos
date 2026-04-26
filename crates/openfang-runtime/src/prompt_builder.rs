@@ -836,10 +836,23 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "web_search" | "web_fetch" => "Web",
 
-        "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
-        | "browser_read_page" | "browser_close" | "browser_scroll" | "browser_wait"
-        | "browser_evaluate" | "browser_select" | "browser_back" | "browser_run_js"
-        | "browser_session_start" | "browser_session_status" => "Browser",
+        "browser_navigate"
+        | "browser_click"
+        | "browser_click_text"
+        | "browser_type"
+        | "browser_fill"
+        | "browser_screenshot"
+        | "browser_read_page"
+        | "browser_snapshot"
+        | "browser_close"
+        | "browser_scroll"
+        | "browser_wait"
+        | "browser_evaluate"
+        | "browser_select"
+        | "browser_back"
+        | "browser_run_js"
+        | "browser_session_start"
+        | "browser_session_status" => "Browser",
 
         "shell_exec" | "shell_background" => "Shell",
 
@@ -882,13 +895,16 @@ pub fn tool_hint(name: &str) -> &'static str {
 
         // Browser
         "browser_navigate" => "open a URL in the browser",
-        "browser_click" => "click an element on the page",
-        "browser_type" => "type text into an input field",
+        "browser_click" => "click an element by CSS selector (falls back to text match)",
+        "browser_click_text" => "click an element by its visible text (best for SPAs)",
+        "browser_type" => "type text into an input field by selector/name/placeholder",
+        "browser_fill" => "fill a form field by name/label/placeholder/testId (best for React forms)",
         "browser_screenshot" => "capture a screenshot",
         "browser_read_page" => "extract page content as text",
+        "browser_snapshot" => "accessibility snapshot: list all interactive elements with selectors",
         "browser_close" => "close the browser session",
         "browser_scroll" => "scroll the page",
-        "browser_wait" => "wait for an element or condition",
+        "browser_wait" => "wait for an element to appear (default 15s for SPAs)",
         "browser_evaluate" => "run JavaScript on the page",
         "browser_run_js" => "run JavaScript on the page",
         "browser_select" => "select a dropdown option",

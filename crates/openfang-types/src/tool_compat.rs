@@ -19,6 +19,9 @@ pub fn map_tool_name(openclaw_name: &str) -> Option<&'static str> {
         "WebSearch" | "web_search" => Some("web_search"),
         "WebFetch" | "fetch_url" | "web_fetch" => Some("web_fetch"),
         "browser_navigate" => Some("browser_navigate"),
+        "browser_clickText" | "click_text" => Some("browser_click_text"),
+        "browser_fillField" | "fill_field" | "fill_form_field" => Some("browser_fill"),
+        "browser_accessibilitySnapshot" | "browser_a11y" => Some("browser_snapshot"),
         "memory_search" | "memory_recall" => Some("memory_recall"),
         "memory_save" | "memory_store" => Some("memory_store"),
         "sessions_send" | "agent_message" => Some("agent_send"),
@@ -63,6 +66,9 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "web_fetch"
             | "github_subtree_download"
             | "browser_navigate"
+            | "browser_click_text"
+            | "browser_fill"
+            | "browser_snapshot"
             | "memory_recall"
             | "memory_store"
             | "memory_list"

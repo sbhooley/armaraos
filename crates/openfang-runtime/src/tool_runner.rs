@@ -712,10 +712,28 @@ pub async fn execute_tool_with_trajectory(
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
             }
         },
+        "browser_click_text" => match browser_ctx {
+            Some(mgr) => {
+                let aid = caller_agent_id.unwrap_or("default");
+                crate::browser::tool_browser_click_text(input, mgr, aid).await
+            }
+            None => {
+                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
+            }
+        },
         "browser_type" => match browser_ctx {
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
                 crate::browser::tool_browser_type(input, mgr, aid).await
+            }
+            None => {
+                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
+            }
+        },
+        "browser_fill" => match browser_ctx {
+            Some(mgr) => {
+                let aid = caller_agent_id.unwrap_or("default");
+                crate::browser::tool_browser_fill(input, mgr, aid).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -734,6 +752,15 @@ pub async fn execute_tool_with_trajectory(
             Some(mgr) => {
                 let aid = caller_agent_id.unwrap_or("default");
                 crate::browser::tool_browser_read_page(input, mgr, aid).await
+            }
+            None => {
+                Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
+            }
+        },
+        "browser_snapshot" => match browser_ctx {
+            Some(mgr) => {
+                let aid = caller_agent_id.unwrap_or("default");
+                crate::browser::tool_browser_snapshot(input, mgr, aid).await
             }
             None => {
                 Err("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())
@@ -1423,7 +1450,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "browser_click".to_string(),
-            description: "Click an element on the current browser page by CSS selector or visible text. Returns the resulting page state.".to_string(),
+            description: "Click an element on the current browser page by CSS selector. Falls back to matching visible text on clickable elements (buttons, links, tabs). On failure, returns the page URL, readyState, and a count of interactive elements to help diagnose the issue. For dynamic SPAs where selectors are fragile, prefer browser_click_text or browser_snapshot first.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1433,15 +1460,38 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "browser_type".to_string(),
-            description: "Type text into an input field on the current browser page.".to_string(),
+            name: "browser_click_text".to_string(),
+            description: "Click an element by its visible text content (case-insensitive partial match). More robust than CSS selectors for React/SPA pages where class names and IDs are generated or change between renders. Searches buttons, links, tabs, menu items, and other clickable elements. On failure, returns a list of available clickable element texts.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "selector": { "type": "string", "description": "CSS selector for the input field (e.g., 'input[name=\"email\"]', '#search-box')" },
+                    "text": { "type": "string", "description": "Visible text of the element to click (e.g., 'Register', 'Sign In', 'Submit', 'Next')" }
+                },
+                "required": ["text"]
+            }),
+        },
+        ToolDefinition {
+            name: "browser_type".to_string(),
+            description: "Type text into an input field by CSS selector, name attribute, placeholder text, or label text. Dispatches React-compatible synthetic events. For the most reliable form filling on SPAs, prefer browser_fill which tries even more strategies (name, label, placeholder, data-testid, aria-label, id).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "CSS selector, input name, placeholder text, or label text for the input field" },
                     "text": { "type": "string", "description": "The text to type into the field" }
                 },
                 "required": ["selector", "text"]
+            }),
+        },
+        ToolDefinition {
+            name: "browser_fill".to_string(),
+            description: "Fill a form field by name, label, placeholder, data-testid, aria-label, id, or CSS selector. The most resilient way to fill inputs on React/SPA forms — tries 7 matching strategies and dispatches React-compatible synthetic events that trigger controlled component updates. On failure, returns a list of all form fields on the page with their name/id/placeholder/aria-label. Use this instead of browser_type when CSS selectors are fragile.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "field": { "type": "string", "description": "Field identifier: input name (e.g., 'email'), label text (e.g., 'Email Address'), placeholder (e.g., 'Enter your email'), data-testid, aria-label, id, or CSS selector" },
+                    "value": { "type": "string", "description": "The value to fill into the field" }
+                },
+                "required": ["field", "value"]
             }),
         },
         ToolDefinition {
@@ -1454,7 +1504,15 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "browser_read_page".to_string(),
-            description: "Read the current browser page content as structured markdown. Use after clicking or navigating to see the updated page.".to_string(),
+            description: "Read the current browser page content as structured markdown. Use after clicking or navigating to see the updated page. For form pages or when you need to know what elements you can interact with, prefer browser_snapshot instead.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "browser_snapshot".to_string(),
+            description: "Return a structured accessibility snapshot of the current page: every interactive element (inputs, buttons, links, selects, tabs) with its role, accessible name, selector hint, and current value. Use this BEFORE clicking or typing to see exactly what elements are available and how to target them. Much more reliable than guessing CSS selectors on dynamic/SPA pages. The snapshot includes selectorHint for each element (name, id, data-testid, aria-label) which you can use directly with browser_click, browser_fill, or browser_type.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -1481,12 +1539,12 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "browser_wait".to_string(),
-            description: "Wait for a CSS selector to appear on the page. Useful for dynamic content that loads asynchronously.".to_string(),
+            description: "Wait for a CSS selector to appear on the page. Useful for dynamic content that loads asynchronously (React hydration, tab switches, lazy-loaded forms). On timeout, returns the current page URL, readyState, and element counts to help diagnose whether the page is still loading or the selector is wrong.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "selector": { "type": "string", "description": "CSS selector to wait for" },
-                    "timeout_ms": { "type": "integer", "description": "Max wait time in milliseconds (default: 5000, max: 30000)" }
+                    "timeout_ms": { "type": "integer", "description": "Max wait time in milliseconds (default: 15000, max: 60000). 15s default handles most SPA hydration delays." }
                 },
                 "required": ["selector"]
             }),
@@ -5558,12 +5616,15 @@ mod tests {
         assert!(names.contains(&"image_analyze"));
         assert!(names.contains(&"location_get"));
         assert!(names.contains(&"system_time"));
-        // 6 browser tools
+        // browser tools (core + enhanced)
         assert!(names.contains(&"browser_navigate"));
         assert!(names.contains(&"browser_click"));
+        assert!(names.contains(&"browser_click_text"));
         assert!(names.contains(&"browser_type"));
+        assert!(names.contains(&"browser_fill"));
         assert!(names.contains(&"browser_screenshot"));
         assert!(names.contains(&"browser_read_page"));
+        assert!(names.contains(&"browser_snapshot"));
         assert!(names.contains(&"browser_close"));
         assert!(names.contains(&"browser_scroll"));
         assert!(names.contains(&"browser_wait"));
