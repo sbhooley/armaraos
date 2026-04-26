@@ -10,6 +10,7 @@ Guidance for **reliable agent workflows** across browser scraping, file I/O, she
 - [Why agents restart expensive work](#why-agents-restart-expensive-work)
 - [Loop guard vs malformed tools](#loop-guard-vs-malformed-tools)
 - [AINL MCP soft failures (`ok: false` is a tool error)](#ainl-mcp-soft-failures-ok-false-is-a-tool-error)
+- [AINL authoring proof gates: target-bound + strict chain + provenance](#ainl-authoring-proof-gates-target-bound--strict-chain--provenance)
 - [Post-turn learning background work](#post-turn-learning-background-work)
 - [Phase model: acquire, extract, persist, verify](#phase-model-acquire-extract-persist-verify)
 - [Persistence patterns that scale](#persistence-patterns-that-scale)
@@ -97,6 +98,46 @@ Without intervention this is a **classic confabulation trap**: the LLM sees “t
 4. The capabilities / `recommended_next_tools` snapshot cache is **not poisoned** with a failure body.
 
 **Additional guard:** a failed `mcp_ainl_ainl_validate`, `mcp_ainl_ainl_compile`, or `mcp_ainl_ainl_run` also creates a pending repair obligation in the agent loop. A later assistant text or silent response is not allowed to finish the turn until the model edits the source/arguments and re-runs the same tool successfully (`ok: true`). If the model tries to claim the workflow is ready, executed, or “strict=false ready” after a failed strict validate, the loop injects a corrective system message and continues. After repeated premature final attempts or near-limit exhaustion, the runtime returns a safe failure summary instead of a false success and records the turn as a failure outcome.
+
+---
+
+## AINL authoring proof gates: target-bound + strict chain + provenance
+
+When an agent is writing or running AINL via `mcp_ainl_*`, the runtime treats “proof” as **target-specific** and **chain-specific**. This prevents a common failure mode where a model:
+
+- fails strict validate on the real file,
+- validates a tiny mock or different code snippet,
+- then claims the original workflow is “ready” or “executed”.
+
+### Target-bound repair obligations (real file identity)
+
+When `mcp_ainl_ainl_validate` / `mcp_ainl_ainl_compile` / `mcp_ainl_ainl_run` fails with `ok:false`, the pending repair obligation records the **tool-use id** and best-effort **target identity**:
+
+- `tool_use_id`: the failing tool call id
+- `path` (when present): which `.ainl` file was intended
+- `code_sha256`: hash of the `code` string passed to the tool
+- `strict` (when present): whether strict validation was requested
+
+A later `ok:true` only clears the obligation when it matches the same tool + target identity (not a different path or different code hash).
+
+### Strict downgrade guard (unless user explicitly requests it)
+
+After a failed strict validate, the agent cannot resolve the obligation by switching to `strict:false` and narrating success.
+
+- **Default**: strict failures require strict repair (`strict:true` → `ok:true`).
+- **Only exception**: if the **user explicitly asked** for non-strict (e.g. “strict=false”, “non-strict”), the runtime allows the agent to proceed in non-strict mode, but the final narrative must say so plainly (no “strict-valid” claims).
+
+### Validate-before-run chain (same code)
+
+For `mcp_ainl_ainl_run`, the runtime enforces a minimal proof chain:
+
+- `mcp_ainl_ainl_run` is blocked unless the agent previously completed a successful **strict** `mcp_ainl_ainl_validate` of the **same `code`** (matched by SHA256), unless the user explicitly requested non-strict.
+
+This ensures long runs remain honest: “run completed” implies “this exact source was strict-validated first”.
+
+### Provenance in unresolved summaries
+
+When a turn cannot complete (limits, blocked finalization, later failures), the runtime includes the **last proven AINL status** in the safe summary (tool name + strict + target + short hashes) so the user can see what was actually proven vs what remains unproven.
 
 **What does NOT change:**
 
