@@ -13,6 +13,13 @@ use std::sync::Arc;
 #[tokio::test]
 #[serial]
 async fn cron_run_job_ainl_run_executes_stub_binary() {
+    // `cargo test --workspace` runs multiple integration binaries in parallel; another suite may
+    // leave `ARMARAOS_AINL_BIN` pointing at a different stub. Clear first so this job always uses
+    // our fake `ainl`.
+    unsafe {
+        std::env::remove_var("ARMARAOS_AINL_BIN");
+    }
+
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = tmp.path().to_path_buf();
     let lib = home.join("ainl-library");
@@ -72,6 +79,17 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
         next_run: None,
     };
 
+    let entry = kernel
+        .registry
+        .get(assistant.id)
+        .expect("registry entry for assistant");
+    let session_before = kernel
+        .memory
+        .get_session(entry.session_id)
+        .expect("get session")
+        .expect("session exists");
+    let message_count_before = session_before.messages.len();
+
     let out = kernel.cron_run_job(&job).await.expect("cron_run_job");
     assert!(
         out.contains("\"ok\": true") || out.contains("\"ok\":true"),
@@ -79,22 +97,22 @@ async fn cron_run_job_ainl_run_executes_stub_binary() {
         out
     );
 
-    // `test-ainl-*` job names do not write scheduler output into the agent session (no chat bloat).
-    let entry = kernel
-        .registry
-        .get(assistant.id)
-        .expect("registry entry for assistant");
-    let session = kernel
+    // `test-ainl-*` job names suppress session append on success — no new chat rows.
+    let session_after = kernel
         .memory
         .get_session(entry.session_id)
         .expect("get session")
         .expect("session exists");
-    let scheduler_in_session = session
-        .messages
+    assert_eq!(
+        session_after.messages.len(),
+        message_count_before,
+        "test-ainl-stub must not append scheduler rows to the agent session (expected len unchanged)"
+    );
+    let scheduler_in_new_tail = session_after.messages[message_count_before..]
         .iter()
         .any(|m| m.content.text_content().contains("ARMARAOS_SCHEDULER_V2"));
     assert!(
-        !scheduler_in_session,
+        !scheduler_in_new_tail,
         "test-ainl-stub must not append scheduler output to agent session"
     );
 
