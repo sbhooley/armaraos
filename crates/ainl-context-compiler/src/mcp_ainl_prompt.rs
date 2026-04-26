@@ -19,7 +19,8 @@ pub const MCP_AINL_RUN_ADAPTERS_CHEATSHEET: &str = r#"mcp_ainl_ainl_run — adap
 - fs: { "root": "/abs/workspace", "allow_extensions": [".json",".csv"] }
 - cache: { "path": "/abs/workspace/cache.json" }
 - sqlite: { "db_path": "/abs/db.sqlite" }
-- Do not put `{"k":v}` inline on `R` lines — build dicts in `frame` and reference by variable name."#;
+- Do not put `{"k":v}` inline on `R` lines — build dicts in `frame` and reference by variable name.
+- Compiler-only success is not runnable proof: align `adapters` with `required_adapters` / `runtime_readiness` from validate/compile; use `mcp_ainl_ainl_get_started` plus `mcp_resource_read` on `ainl://strict-authoring-cheatsheet` / `strict-valid-examples` / `adapter-contracts` when authoring unfamiliar graphs."#;
 
 /// [`Segment::tool_definitions`] with [`MCP_AINL_RUN_ADAPTERS_CHEATSHEET`].
 #[must_use]
@@ -36,5 +37,6 @@ mod tests {
         let s = mcp_ainl_run_adapters_cheatsheet_segment();
         assert_eq!(s.kind, crate::SegmentKind::ToolDefinitions);
         assert!(s.content.contains("allow_hosts"));
+        assert!(s.content.contains("strict-authoring-cheatsheet"));
     }
 }
