@@ -160,7 +160,27 @@ pub fn format_capabilities_digest(v: &JsonValue) -> Option<String> {
     let mut out = String::from(
         "**AINL capabilities snapshot** (from last `mcp_ainl_ainl_capabilities` in this session)\n",
     );
-    out.push_str("Adapters (strict / `R` lines): ");
+    if let Some(ss) = v.get("strict_summary").and_then(|x| x.as_object()) {
+        let mut chunk = String::new();
+        if let Some(note) = ss.get("note").and_then(|n| n.as_str()) {
+            let n: String = note.chars().take(200).collect();
+            chunk.push_str(&format!("**strict_summary** (note): {n}\n"));
+        }
+        if let Some(svv) = ss.get("strict_valid_verbs").and_then(|x| x.as_object()) {
+            let mut k: Vec<&str> = svv.keys().map(|s| s.as_str()).collect();
+            k.sort_unstable();
+            chunk.push_str("**strict_valid_verbs** (adapter keys): ");
+            chunk.push_str(&k.iter().take(20).copied().collect::<Vec<_>>().join(", "));
+            if k.len() > 20 {
+                chunk.push_str(&format!(" … (+{} more)", k.len().saturating_sub(20)));
+            }
+            chunk.push('\n');
+        }
+        if !chunk.is_empty() && out.len() + chunk.len() <= MAX {
+            out.push_str(&chunk);
+        }
+    }
+    out.push_str("Adapters (for `R adapter.VERB` lines): ");
     for (i, n) in names.iter().take(32).enumerate() {
         if i > 0 {
             out.push_str(", ");
@@ -180,6 +200,15 @@ pub fn format_capabilities_digest(v: &JsonValue) -> Option<String> {
         let Some(obj) = adapters.get(*aname).and_then(|x| x.as_object()) else {
             continue;
         };
+        let strict_contract = obj
+            .get("strict_contract")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let sc_tag = if strict_contract {
+            " [strict_contract]"
+        } else {
+            ""
+        };
         let verbs = obj
             .get("verbs")
             .and_then(|v| v.as_array())
@@ -197,10 +226,10 @@ pub fn format_capabilities_digest(v: &JsonValue) -> Option<String> {
             })
             .unwrap_or_default();
         let line = if first_verbs.is_empty() {
-            format!("- `{aname}`: {verbs} verbs\n")
+            format!("- `{aname}`{sc_tag}: {verbs} verbs\n")
         } else {
             format!(
-                "- `{aname}`: {first_verbs}{}\n",
+                "- `{aname}`{sc_tag}: {first_verbs}{}\n",
                 if verbs > 8 { " …" } else { "" }
             )
         };
@@ -466,6 +495,25 @@ mod tests {
         let d = format_capabilities_digest(&v).expect("digest");
         assert!(d.contains("http"));
         assert!(d.contains("ainl://x"));
+    }
+
+    #[test]
+    fn digest_includes_strict_summary_and_contract_flags() {
+        let v = serde_json::json!({
+            "adapters": {
+                "core": { "verbs": ["ADD", "SUB"], "strict_contract": true },
+                "http": { "verbs": ["GET"] }
+            },
+            "strict_summary": {
+                "note": "strict_contract reflects compiler catalog alignment.",
+                "strict_valid_verbs": { "core": ["ADD", "SUB"] }
+            },
+            "mcp_resources": []
+        });
+        let d = format_capabilities_digest(&v).expect("digest");
+        assert!(d.contains("strict_summary"));
+        assert!(d.contains("strict_valid_verbs"));
+        assert!(d.contains("[strict_contract]"));
     }
 
     #[test]
