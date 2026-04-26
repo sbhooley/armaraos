@@ -350,9 +350,12 @@ For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or simi
 
 - **Treat AINL as built-in in this host:** if `mcp_ainl_*` tools are in **Your Tools**, use them directly; do **not** pause to install `ainativelang` with `pip`/`python -m pip` as a prerequisite.
 - **Package-first policy (all agents):** when a Python setup needs AINL modules/adapters/runtime behavior, prefer the installed **`ainativelang`** package in the active venv (or install it there) rather than copying files from `ainativelang/` source trees. Do **not** vendor/copy random repo modules or edit upstream source files in-place unless the user explicitly asked for source-level debugging or patching.
-- **Wizard first:** for unfamiliar goals or adapter-heavy workflows, call **`mcp_ainl_ainl_get_started`** with a plain-language goal before writing lots of `R` lines.
+- **Wizard first:** for unfamiliar goals or adapter-heavy workflows, call **`mcp_ainl_ainl_get_started`** with a plain-language goal before writing lots of `R` lines. Use **`planner_and_host_follow_ups`** from that response together with **`ordered_checklist`** — it explains how ArmaraOS deterministic plans (`structured.kind=deterministic_plan`, **`follow_ups`**) relate to MCP authoring.
+- **Rule-based planner (Armara inference / OS):** when the host returns **`structured.kind=deterministic_plan`**, execute **`plan.steps`** in order; read **`structured.follow_ups`** beside **`plan`** for adapter registration and file-proof reminders — that block is **not** free-form assistant prose and should stay **`output.text`-empty** on the inference path.
 - **Validate before run:** after editing `.ainl`, call **`mcp_ainl_ainl_validate`** with `strict: true` before **`mcp_ainl_ainl_run`**. On failure, use **`repair_recipe`** plus **`primary_diagnostic`**, **`source_context`**, **`llm_repair_hint`**, **`agent_repair_steps`** — do **not** use broad **`file_search`** or repo-wide greps on random `.ainl` files as your primary syntax reference.
-- **Compiler vs runnable:** `mcp_ainl_ainl_validate` / **`mcp_ainl_ainl_compile`** returning **`ok: true`** means the source compiled; it does **not** prove **`mcp_ainl_ainl_run`** will work until **`adapters=`** matches **`required_adapters`** / **`runtime_readiness`** from those responses.
+- **Compiler vs runnable:** `mcp_ainl_ainl_validate` / **`mcp_ainl_ainl_compile`** returning **`ok: true`** means the source compiled; it does **not** prove **`mcp_ainl_ainl_run`** will work until **`adapters=`** matches **`required_adapters`** / **`runtime_readiness`** from those responses. Validation success also does **not** mean every adapter was registered for the last run — treat “valid AINL” and “runnable on this MCP host” as separate checks.
+- **Syntax style:** for new or heavily edited workflows, prefer **compact** `.ainl` syntax; keep **opcode** graphs for existing opcode files or compiler-emitted IR, not for new greenfield authoring.
+- **Side-effect proof:** when the user asked for **logs, CSVs, JSONL, or saved files**, and the graph uses **`fs`** / file writes, call **`file_read`** (or otherwise inspect the path) **after** a successful **`mcp_ainl_ainl_run`** before claiming the artifact exists or showing its contents — the run result alone is not proof the file was written where the user expects.
 - **Tool-call shape matters:** for `mcp_ainl_*` tools, pass the graph text in the `code` field (legacy `ainl` may work but `code` is canonical), and call the MCP tool directly — do not wrap MCP tool names inside `shell_exec`.
 - **Real verbs only:** before writing `R adapter.VERB` lines, call **`mcp_ainl_ainl_capabilities`** (or use its output) so the verb exists for strict graphs.
 - **Do not use `mcp_ainl_ainl_capabilities` to infer other MCP servers:** its payload is **AINL adapter verbs only** (the `http` / `web` / `calendar` / … blocks you see there). It is **not** a catalog of every connected MCP server. **Google Workspace** (Gmail, Drive, Docs, …) is a **separate** MCP server. When connected, names follow **`mcp_{server_id}_*`** (hyphens in the server id become underscores); the bundled integration id is **`google-workspace-mcp`** → tools like **`mcp_google_workspace_mcp_*`**. **Use only the exact MCP tool names listed under “Your Tools”** — never invent prefixes. If Workspace is supposedly set up but none of those names appear, the Workspace MCP is not in your current tool list (subprocess did not register tools): tell the user to check **Skills → MCP** / reconnect **google-workspace-mcp**, **`GOOGLE_OAUTH_CLIENT_ID`**, that **`uvx`** is installed, and **restart the ArmaraOS app** so the daemon picks up a normal `PATH` — do not infer “no Google” from `ainl_capabilities` alone.
@@ -363,7 +366,7 @@ For scrapers, scheduled jobs, HTTP/API glue, bots, CRM-style automation, or simi
 /// Short reminder when this agent actually has `mcp_ainl_*` tools granted.
 const AINL_MCP_TOOLS_GRANTED_NOTE: &str = "\
 ## AINL MCP tools (granted)
-You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_get_started`** (new goals) → **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters. Use **`mcp_resource_read`** (`mcp_server`=`ainl`, `uri`) to fetch `ainl://…` bodies — start with **`ainl://strict-authoring-cheatsheet`** and **`ainl://strict-valid-examples`** — listed under `mcp_resources` in **`mcp_ainl_ainl_capabilities`.**";
+You have the **ainl** MCP namespace in **Your Tools**. Golden path: **`mcp_ainl_ainl_get_started`** (new goals) → **`mcp_ainl_ainl_validate`** (strict) → **`mcp_ainl_ainl_compile`** (when IR is needed) → **`mcp_ainl_ainl_run`** with correct **`adapters`** when needed. **Valid graph text ≠ successful run** until **`adapters=`** lines up with **`required_adapters`**. If the workflow **writes** files, **`file_read`** the output path after **`ok: true`** before claiming the artifact. Use **`mcp_ainl_ainl_list_ecosystem`** for importable starters. Use **`mcp_resource_read`** (`mcp_server`=`ainl`, `uri`) to fetch `ainl://…` bodies — start with **`ainl://strict-authoring-cheatsheet`** and **`ainl://strict-valid-examples`** — listed under `mcp_resources` in **`mcp_ainl_ainl_capabilities`.**";
 
 /// Short reminder when this agent has Google Workspace MCP tools (`mcp_google_workspace_mcp_*`).
 ///
@@ -918,9 +921,12 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "browser_navigate"
         | "browser_click"
+        | "browser_click_text"
         | "browser_type"
+        | "browser_fill"
         | "browser_screenshot"
         | "browser_read_page"
+        | "browser_snapshot"
         | "browser_close"
         | "browser_scroll"
         | "browser_wait"
@@ -987,13 +993,16 @@ pub fn tool_hint(name: &str) -> &'static str {
 
         // Browser
         "browser_navigate" => "open a URL in the browser",
-        "browser_click" => "click an element on the page",
-        "browser_type" => "type text into an input field",
+        "browser_click" => "click an element by CSS selector (falls back to text match)",
+        "browser_click_text" => "click an element by its visible text (best for SPAs)",
+        "browser_type" => "type text into an input field by selector/name/placeholder",
+        "browser_fill" => "fill a form field by name/label/placeholder/testId (best for React forms)",
         "browser_screenshot" => "capture a screenshot",
         "browser_read_page" => "extract page content as text",
+        "browser_snapshot" => "accessibility snapshot: list all interactive elements with selectors",
         "browser_close" => "close the browser session",
         "browser_scroll" => "scroll the page",
-        "browser_wait" => "wait for an element or condition",
+        "browser_wait" => "wait for an element to appear (default 15s for SPAs)",
         "browser_evaluate" => "run JavaScript on the page",
         "browser_run_js" => "run JavaScript on the page",
         "browser_select" => "select a dropdown option",

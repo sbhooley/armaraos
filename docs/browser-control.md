@@ -100,12 +100,15 @@ All registered through `crates/openfang-runtime/src/tool_runner.rs::builtin_tool
 | Tool | Purpose | Key args |
 |---|---|---|
 | `browser_navigate` | Open a URL. Optionally pick a `mode`. | `url`, `mode?` |
-| `browser_click` | Click an element. | `selector` |
-| `browser_type` | Type into an input. | `selector`, `text` |
+| `browser_click` | Click by CSS selector (falls back to text). On failure returns URL, readyState, match count, and interactive element count. | `selector` |
+| `browser_click_text` | Click by visible text (case-insensitive partial match). More robust than CSS for SPAs. On failure lists available clickable elements. | `text` |
+| `browser_type` | Type into an input by CSS/name/placeholder/label. Dispatches React-compatible events. | `selector`, `text` |
+| `browser_fill` | Fill a field by name, label, placeholder, data-testid, aria-label, id, or CSS. Tries 7 strategies. On failure lists all form fields on the page. **Best for React/SPA forms.** | `field`, `value` |
 | `browser_screenshot` | Return a PNG (base64). | — |
-| `browser_read_page` | Return the current rendered text content. | — |
+| `browser_read_page` | Return the current rendered text content as markdown. | — |
+| `browser_snapshot` | Return a structured accessibility snapshot: every interactive element with role, name, selector hint, and value. **Use before clicking/typing to see available targets.** | — |
 | `browser_scroll` | Scroll the viewport. | `direction?`, `amount?` |
-| `browser_wait` | Wait for a selector to appear. | `selector`, `timeout_ms?` |
+| `browser_wait` | Wait for a selector to appear. Default 15s (was 5s). On timeout returns page URL, readyState, element counts. Max 60s. | `selector`, `timeout_ms?` |
 | `browser_run_js` | Evaluate a JS expression and return the result. | `expression` |
 | `browser_back` | Go back one entry in the history stack. | — |
 | `browser_close` | Close the current session. | — |
@@ -113,6 +116,28 @@ All registered through `crates/openfang-runtime/src/tool_runner.rs::builtin_tool
 | `browser_session_status` | Return diagnostics: `agent_id`, `active`, `mode`, `chromium_available`, `chromium_path`, `available_modes`. | — |
 
 Mode strings accepted everywhere: `headless`, `headed` (aliases: `headful`, `visible`, `windowed`, `gui`), `attach` (aliases: `connect`, `existing`, `user_chrome`).
+
+### Recommended workflow for dynamic / SPA pages
+
+For React, Next.js, and other SPA sites where CSS selectors are fragile:
+
+1. **`browser_navigate`** — open the URL
+2. **`browser_snapshot`** — structured list of all interactive elements with selector hints
+3. **`browser_fill`** or **`browser_click_text`** — interact by field name/label/text
+4. **`browser_read_page`** — verify result
+
+This avoids CSS selector guessing. `browser_snapshot` returns each element's `name`, `id`, `data-testid`, `aria-label`, and `placeholder` so the agent can pick the best targeting strategy.
+
+### Error diagnostics
+
+All browser tools now return **rich error context** on failure:
+
+- **`browser_click` / `browser_click_text`**: page URL, `readyState`, count of interactive elements, available clickable texts
+- **`browser_type` / `browser_fill`**: page URL, input count, list of available fields with name/id/placeholder
+- **`browser_wait`**: page URL, `readyState`, total elements, interactive element count, selector match count
+- **`browser_read_page`**: session state hint and recovery suggestion
+
+This helps the model self-correct on the next attempt instead of retrying blindly.
 
 ## Bundled `browser` hand
 
@@ -139,11 +164,14 @@ Verb mapping (case-insensitive):
 |---|---|
 | `NAVIGATE url [mode]` | `browser_navigate` |
 | `CLICK selector` | `browser_click` |
+| `CLICK_TEXT text` | `browser_click_text` |
 | `TYPE selector text` | `browser_type` |
+| `FILL field value` | `browser_fill` |
 | `READ_PAGE` (alias `read`) | `browser_read_page` |
+| `SNAPSHOT` | `browser_snapshot` |
 | `SCREENSHOT` | `browser_screenshot` |
 | `SCROLL [direction] [amount]` | `browser_scroll` |
-| `WAIT selector [timeout_ms]` | `browser_wait` |
+| `WAIT selector [timeout_ms]` | `browser_wait` (default 15s) |
 | `RUN_JS expression` | `browser_run_js` |
 | `BACK` | `browser_back` |
 | `SESSION_START [mode]` (alias `start`) | `browser_session_start` |

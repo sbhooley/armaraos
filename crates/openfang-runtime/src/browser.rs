@@ -96,9 +96,20 @@ impl BrowserMode {
 pub enum BrowserCommand {
     Navigate { url: String },
     Click { selector: String },
+    /// Click an element by its visible text content (case-insensitive partial
+    /// match on buttons, links, and other clickable elements).
+    ClickText { text: String },
     Type { selector: String, text: String },
+    /// Fill an input by name, label, placeholder, testId, or CSS selector.
+    /// More resilient than `Type` for React/SPA forms: tries multiple
+    /// strategies and dispatches React-compatible synthetic events.
+    Fill { field: String, value: String },
     Screenshot,
     ReadPage,
+    /// Return a simplified accessibility tree of the current page: every
+    /// interactive element (inputs, buttons, links, selects) with its role,
+    /// name/label, selector hint, and current value.
+    Snapshot,
     Close,
     Scroll { direction: String, amount: i32 },
     Wait { selector: String, timeout_ms: u64 },
@@ -511,9 +522,12 @@ impl BrowserSession {
         match cmd {
             BrowserCommand::Navigate { url } => self.cmd_navigate(&url).await,
             BrowserCommand::Click { selector } => self.cmd_click(&selector).await,
+            BrowserCommand::ClickText { text } => self.cmd_click_text(&text).await,
             BrowserCommand::Type { selector, text } => self.cmd_type(&selector, &text).await,
+            BrowserCommand::Fill { field, value } => self.cmd_fill(&field, &value).await,
             BrowserCommand::Screenshot => self.cmd_screenshot().await,
             BrowserCommand::ReadPage => self.cmd_read_page().await,
+            BrowserCommand::Snapshot => self.cmd_snapshot().await,
             BrowserCommand::Close => BrowserResponse::ok(serde_json::json!({"closed": true})),
             BrowserCommand::Scroll { direction, amount } => {
                 self.cmd_scroll(&direction, amount).await
@@ -554,17 +568,49 @@ impl BrowserSession {
             r#"(() => {{
     let sel = {sel_json};
     let el = document.querySelector(sel);
+    let matchCount = document.querySelectorAll(sel).length;
+    let strategy = 'css';
     if (!el) {{
-        const all = document.querySelectorAll('a, button, [role="button"], input[type="submit"], [onclick]');
+        strategy = 'text_fallback';
+        matchCount = 0;
+        const clickable = document.querySelectorAll('a, button, [role="button"], [role="tab"], [role="menuitem"], input[type="submit"], input[type="button"], [onclick], [tabindex]');
         const lower = sel.toLowerCase();
-        for (const e of all) {{
-            if (e.textContent.trim().toLowerCase().includes(lower)) {{ el = e; break; }}
+        for (const e of clickable) {{
+            const txt = (e.textContent || '').trim().toLowerCase();
+            const ariaLabel = (e.getAttribute('aria-label') || '').toLowerCase();
+            const title = (e.getAttribute('title') || '').toLowerCase();
+            if (txt.includes(lower) || ariaLabel.includes(lower) || title.includes(lower)) {{
+                el = e;
+                matchCount = 1;
+                break;
+            }}
         }}
     }}
-    if (!el) return JSON.stringify({{success: false, error: 'Element not found: ' + sel}});
-    el.scrollIntoView({{block: 'center'}});
+    if (!el) {{
+        const url = location.href;
+        const readyState = document.readyState;
+        const interactiveCount = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [role="tab"]').length;
+        return JSON.stringify({{
+            success: false,
+            error: 'Element not found: ' + sel,
+            url: url,
+            readyState: readyState,
+            matchCount: 0,
+            interactiveElements: interactiveCount,
+            hint: interactiveCount === 0
+                ? 'Page may still be loading (0 interactive elements found). Try browser_wait first.'
+                : 'Found ' + interactiveCount + ' interactive elements but none matched. Try browser_snapshot to see available elements, or browser_click_text with visible text.'
+        }});
+    }}
+    el.scrollIntoView({{block: 'center', behavior: 'instant'}});
     el.click();
-    return JSON.stringify({{success: true, tag: el.tagName, text: el.textContent.substring(0, 100).trim()}});
+    return JSON.stringify({{
+        success: true,
+        tag: el.tagName,
+        text: el.textContent.substring(0, 100).trim(),
+        strategy: strategy,
+        matchCount: matchCount
+    }});
 }})()"#
         );
 
@@ -575,14 +621,20 @@ impl BrowserSession {
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or(val);
                 if parsed["success"].as_bool() == Some(false) {
-                    return BrowserResponse::err(
-                        parsed["error"]
-                            .as_str()
-                            .unwrap_or("Click failed")
-                            .to_string(),
-                    );
+                    let mut err_msg = parsed["error"]
+                        .as_str()
+                        .unwrap_or("Click failed")
+                        .to_string();
+                    if let Some(hint) = parsed["hint"].as_str() {
+                        err_msg.push('\n');
+                        err_msg.push_str(hint);
+                    }
+                    if let Some(url) = parsed["url"].as_str() {
+                        err_msg.push_str(&format!("\nPage: {} (readyState: {})",
+                            url, parsed["readyState"].as_str().unwrap_or("unknown")));
+                    }
+                    return BrowserResponse::err(err_msg);
                 }
-                // Wait briefly for any navigation triggered by click
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 self.wait_for_load().await;
                 match self.page_info().await {
@@ -590,24 +642,50 @@ impl BrowserSession {
                     Err(_) => BrowserResponse::ok(parsed),
                 }
             }
-            Err(e) => BrowserResponse::err(format!("Click failed: {e}")),
+            Err(e) => BrowserResponse::err(format!("Click failed (CDP error): {e}. The page may be navigating or the session may have dropped. Try browser_read_page to check page state.")),
         }
     }
 
-    async fn cmd_type(&self, selector: &str, text: &str) -> BrowserResponse {
-        let sel_json = serde_json::to_string(selector).unwrap_or_default();
+    /// Click an element by its visible text content. More robust than CSS
+    /// selectors for dynamic SPAs where class names and IDs are generated.
+    async fn cmd_click_text(&self, text: &str) -> BrowserResponse {
         let text_json = serde_json::to_string(text).unwrap_or_default();
         let js = format!(
             r#"(() => {{
-    let sel = {sel_json};
-    let txt = {text_json};
-    let el = document.querySelector(sel);
-    if (!el) return JSON.stringify({{success: false, error: 'Input not found: ' + sel}});
-    el.focus();
-    el.value = txt;
-    el.dispatchEvent(new Event('input', {{bubbles: true}}));
-    el.dispatchEvent(new Event('change', {{bubbles: true}}));
-    return JSON.stringify({{success: true, selector: sel, typed: txt.length + ' chars'}});
+    const target = {text_json}.toLowerCase();
+    const candidates = document.querySelectorAll('a, button, [role="button"], [role="tab"], [role="menuitem"], [role="link"], input[type="submit"], input[type="button"], label, summary, [onclick], [tabindex]');
+    let best = null;
+    let bestLen = Infinity;
+    for (const el of candidates) {{
+        const txt = (el.textContent || '').trim().toLowerCase();
+        const ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+        const title = (el.getAttribute('title') || '').toLowerCase();
+        const value = (el.value || '').toLowerCase();
+        for (const s of [txt, ariaLabel, title, value]) {{
+            if (s && s.includes(target) && s.length < bestLen) {{
+                best = el;
+                bestLen = s.length;
+            }}
+        }}
+    }}
+    if (!best) {{
+        const allText = Array.from(candidates).slice(0, 20).map(e => (e.textContent || '').trim().substring(0, 60));
+        return JSON.stringify({{
+            success: false,
+            error: 'No clickable element with text: ' + {text_json},
+            url: location.href,
+            readyState: document.readyState,
+            availableClickable: allText
+        }});
+    }}
+    best.scrollIntoView({{block: 'center', behavior: 'instant'}});
+    best.click();
+    return JSON.stringify({{
+        success: true,
+        tag: best.tagName,
+        text: best.textContent.substring(0, 100).trim(),
+        role: best.getAttribute('role') || ''
+    }});
 }})()"#
         );
 
@@ -618,12 +696,271 @@ impl BrowserSession {
                     .and_then(|s| serde_json::from_str(s).ok())
                     .unwrap_or(val);
                 if parsed["success"].as_bool() == Some(false) {
-                    BrowserResponse::err(parsed["error"].as_str().unwrap_or("Type failed"))
+                    let mut err_msg = parsed["error"]
+                        .as_str()
+                        .unwrap_or("Click by text failed")
+                        .to_string();
+                    if let Some(arr) = parsed["availableClickable"].as_array() {
+                        let items: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).take(10).collect();
+                        if !items.is_empty() {
+                            err_msg.push_str(&format!("\nAvailable clickable elements: {:?}", items));
+                        }
+                    }
+                    return BrowserResponse::err(err_msg);
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                self.wait_for_load().await;
+                match self.page_info().await {
+                    Ok(info) => BrowserResponse::ok(info),
+                    Err(_) => BrowserResponse::ok(parsed),
+                }
+            }
+            Err(e) => BrowserResponse::err(format!("Click by text failed (CDP error): {e}. Try browser_read_page to check page state.")),
+        }
+    }
+
+    async fn cmd_type(&self, selector: &str, text: &str) -> BrowserResponse {
+        let sel_json = serde_json::to_string(selector).unwrap_or_default();
+        let text_json = serde_json::to_string(text).unwrap_or_default();
+        // Enhanced type: tries CSS selector first, then name/placeholder/label
+        // fallback. Dispatches React-compatible synthetic events via the native
+        // input value setter to bypass React's synthetic event system.
+        let js = format!(
+            r#"(() => {{
+    const sel = {sel_json};
+    const txt = {text_json};
+    let el = document.querySelector(sel);
+    let strategy = 'css';
+    if (!el) {{
+        strategy = 'name';
+        el = document.querySelector('input[name="' + sel + '"], textarea[name="' + sel + '"]');
+    }}
+    if (!el) {{
+        strategy = 'placeholder';
+        const inputs = document.querySelectorAll('input, textarea');
+        const lower = sel.toLowerCase();
+        for (const inp of inputs) {{
+            if ((inp.placeholder || '').toLowerCase().includes(lower)) {{ el = inp; break; }}
+        }}
+    }}
+    if (!el) {{
+        strategy = 'label';
+        const labels = document.querySelectorAll('label');
+        for (const lbl of labels) {{
+            if ((lbl.textContent || '').trim().toLowerCase().includes(sel.toLowerCase())) {{
+                const forId = lbl.getAttribute('for');
+                if (forId) {{ el = document.getElementById(forId); break; }}
+                el = lbl.querySelector('input, textarea, select');
+                if (el) break;
+            }}
+        }}
+    }}
+    if (!el) {{
+        const inputCount = document.querySelectorAll('input, textarea, select').length;
+        return JSON.stringify({{
+            success: false,
+            error: 'Input not found: ' + sel,
+            url: location.href,
+            readyState: document.readyState,
+            inputCount: inputCount,
+            hint: inputCount === 0
+                ? 'No input elements on page. Page may still be loading or this is not a form page.'
+                : 'Found ' + inputCount + ' input elements but none matched selector "' + sel + '". Try browser_fill with field name/label, or browser_snapshot to see available fields.'
+        }});
+    }}
+    el.focus();
+    // Use native setter to bypass React's controlled input interception
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+    )?.set || Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, 'value'
+    )?.set;
+    if (nativeSetter) {{
+        nativeSetter.call(el, txt);
+    }} else {{
+        el.value = txt;
+    }}
+    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+    // Also fire React 16+ compatible event
+    el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+    return JSON.stringify({{
+        success: true,
+        selector: sel,
+        strategy: strategy,
+        typed: txt.length + ' chars'
+    }});
+}})()"#
+        );
+
+        match self.cdp.run_js(&js).await {
+            Ok(val) => {
+                let parsed: serde_json::Value = val
+                    .as_str()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(val);
+                if parsed["success"].as_bool() == Some(false) {
+                    let mut err_msg = parsed["error"]
+                        .as_str()
+                        .unwrap_or("Type failed")
+                        .to_string();
+                    if let Some(hint) = parsed["hint"].as_str() {
+                        err_msg.push('\n');
+                        err_msg.push_str(hint);
+                    }
+                    BrowserResponse::err(err_msg)
                 } else {
                     BrowserResponse::ok(parsed)
                 }
             }
-            Err(e) => BrowserResponse::err(format!("Type failed: {e}")),
+            Err(e) => BrowserResponse::err(format!("Type failed (CDP error): {e}. The page may be navigating. Try browser_read_page to check page state.")),
+        }
+    }
+
+    /// Fill an input field using multiple strategies: name attribute, label
+    /// text, placeholder, data-testid, aria-label, or CSS selector. Designed
+    /// for React/SPA forms where CSS selectors are fragile.
+    async fn cmd_fill(&self, field: &str, value: &str) -> BrowserResponse {
+        let field_json = serde_json::to_string(field).unwrap_or_default();
+        let value_json = serde_json::to_string(value).unwrap_or_default();
+        let js = format!(
+            r#"(() => {{
+    const field = {field_json};
+    const val = {value_json};
+    const lower = field.toLowerCase();
+    let el = null;
+    let strategy = '';
+
+    // 1. CSS selector
+    try {{ el = document.querySelector(field); strategy = 'css'; }} catch(e) {{}}
+
+    // 2. name attribute
+    if (!el) {{
+        el = document.querySelector('input[name="' + field + '"], textarea[name="' + field + '"], select[name="' + field + '"]');
+        if (el) strategy = 'name';
+    }}
+
+    // 3. data-testid
+    if (!el) {{
+        el = document.querySelector('[data-testid="' + field + '"]');
+        if (el) strategy = 'testid';
+    }}
+
+    // 4. id
+    if (!el) {{
+        el = document.getElementById(field);
+        if (el) strategy = 'id';
+    }}
+
+    // 5. aria-label
+    if (!el) {{
+        const all = document.querySelectorAll('input, textarea, select');
+        for (const inp of all) {{
+            if ((inp.getAttribute('aria-label') || '').toLowerCase().includes(lower)) {{
+                el = inp; strategy = 'aria-label'; break;
+            }}
+        }}
+    }}
+
+    // 6. placeholder
+    if (!el) {{
+        const all = document.querySelectorAll('input, textarea');
+        for (const inp of all) {{
+            if ((inp.placeholder || '').toLowerCase().includes(lower)) {{
+                el = inp; strategy = 'placeholder'; break;
+            }}
+        }}
+    }}
+
+    // 7. label text
+    if (!el) {{
+        const labels = document.querySelectorAll('label');
+        for (const lbl of labels) {{
+            if ((lbl.textContent || '').trim().toLowerCase().includes(lower)) {{
+                const forId = lbl.getAttribute('for');
+                if (forId) el = document.getElementById(forId);
+                if (!el) el = lbl.querySelector('input, textarea, select');
+                if (el) {{ strategy = 'label'; break; }}
+            }}
+        }}
+    }}
+
+    if (!el) {{
+        const fields = Array.from(document.querySelectorAll('input, textarea, select')).slice(0, 15).map(e => ({{
+            tag: e.tagName.toLowerCase(),
+            type: e.type || '',
+            name: e.name || '',
+            id: e.id || '',
+            placeholder: (e.placeholder || '').substring(0, 40),
+            ariaLabel: (e.getAttribute('aria-label') || '').substring(0, 40)
+        }}));
+        return JSON.stringify({{
+            success: false,
+            error: 'Field not found: ' + field,
+            url: location.href,
+            availableFields: fields,
+            hint: 'Use one of the name/id/placeholder/aria-label values above, or browser_snapshot for a full page map.'
+        }});
+    }}
+
+    el.scrollIntoView({{block: 'center', behavior: 'instant'}});
+    el.focus();
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+    )?.set || Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, 'value'
+    )?.set;
+    if (nativeSetter) {{
+        nativeSetter.call(el, val);
+    }} else {{
+        el.value = val;
+    }}
+    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+    el.dispatchEvent(new Event('change', {{bubbles: true}}));
+    el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+
+    return JSON.stringify({{
+        success: true,
+        field: field,
+        strategy: strategy,
+        tag: el.tagName,
+        name: el.name || '',
+        filled: val.length + ' chars'
+    }});
+}})()"#
+        );
+
+        match self.cdp.run_js(&js).await {
+            Ok(val) => {
+                let parsed: serde_json::Value = val
+                    .as_str()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(val);
+                if parsed["success"].as_bool() == Some(false) {
+                    let mut err_msg = parsed["error"]
+                        .as_str()
+                        .unwrap_or("Fill failed")
+                        .to_string();
+                    if let Some(hint) = parsed["hint"].as_str() {
+                        err_msg.push('\n');
+                        err_msg.push_str(hint);
+                    }
+                    if let Some(fields) = parsed["availableFields"].as_array() {
+                        let summary: Vec<String> = fields.iter().take(8).map(|f| {
+                            format!("{}[name={:?} id={:?} placeholder={:?}]",
+                                f["tag"].as_str().unwrap_or("?"),
+                                f["name"].as_str().unwrap_or(""),
+                                f["id"].as_str().unwrap_or(""),
+                                f["placeholder"].as_str().unwrap_or(""))
+                        }).collect();
+                        err_msg.push_str(&format!("\nFields on page: {}", summary.join(", ")));
+                    }
+                    BrowserResponse::err(err_msg)
+                } else {
+                    BrowserResponse::ok(parsed)
+                }
+            }
+            Err(e) => BrowserResponse::err(format!("Fill failed (CDP error): {e}. Try browser_snapshot to see available fields.")),
         }
     }
 
@@ -662,7 +999,74 @@ impl BrowserSession {
                     .unwrap_or(val);
                 BrowserResponse::ok(parsed)
             }
-            Err(e) => BrowserResponse::err(format!("ReadPage failed: {e}")),
+            Err(e) => BrowserResponse::err(format!(
+                "ReadPage failed: {e}. The page may be navigating or the browser session may have dropped. \
+                 Try browser_session_status to check session state, or browser_navigate to re-open the page."
+            )),
+        }
+    }
+
+    /// Return a simplified accessibility snapshot of the page: every
+    /// interactive element with its role, accessible name, selector hint,
+    /// and current value. This gives the model a structured map of
+    /// what it can interact with without relying on fragile CSS selectors.
+    async fn cmd_snapshot(&self) -> BrowserResponse {
+        let js = r#"(() => {
+    const els = document.querySelectorAll(
+        'a, button, input, textarea, select, [role="button"], [role="tab"], ' +
+        '[role="menuitem"], [role="link"], [role="checkbox"], [role="radio"], ' +
+        '[role="switch"], [role="combobox"], [role="listbox"], [role="option"], ' +
+        '[tabindex], label, summary, details'
+    );
+    const items = [];
+    for (const el of els) {
+        if (el.offsetParent === null && el.tagName !== 'INPUT' && el.getAttribute('type') !== 'hidden') continue;
+        const tag = el.tagName.toLowerCase();
+        const role = el.getAttribute('role') || '';
+        const type = el.type || '';
+        const name = el.name || '';
+        const id = el.id || '';
+        const ariaLabel = el.getAttribute('aria-label') || '';
+        const placeholder = el.placeholder || '';
+        const text = (el.textContent || '').trim().substring(0, 80);
+        const value = (tag === 'input' || tag === 'textarea' || tag === 'select') ? (el.value || '').substring(0, 60) : '';
+        const checked = el.checked;
+        const disabled = el.disabled;
+        const href = el.href || '';
+        const testId = el.getAttribute('data-testid') || '';
+
+        let selectorHint = '';
+        if (id) selectorHint = '#' + id;
+        else if (name) selectorHint = tag + '[name="' + name + '"]';
+        else if (testId) selectorHint = '[data-testid="' + testId + '"]';
+        else if (ariaLabel) selectorHint = '[aria-label="' + ariaLabel + '"]';
+
+        items.push({
+            tag, role, type, name, id, ariaLabel, placeholder,
+            text, value, checked, disabled, href: href.substring(0, 120),
+            testId, selectorHint
+        });
+    }
+    return JSON.stringify({
+        url: location.href,
+        title: document.title,
+        readyState: document.readyState,
+        elementCount: items.length,
+        elements: items.slice(0, 100)
+    });
+})()"#;
+
+        match self.cdp.run_js(js).await {
+            Ok(val) => {
+                let parsed: serde_json::Value = val
+                    .as_str()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or(val);
+                BrowserResponse::ok(parsed)
+            }
+            Err(e) => BrowserResponse::err(format!(
+                "Snapshot failed: {e}. Try browser_read_page as a fallback."
+            )),
         }
     }
 
@@ -689,24 +1093,55 @@ impl BrowserSession {
 
     async fn cmd_wait(&self, selector: &str, timeout_ms: u64) -> BrowserResponse {
         let sel_json = serde_json::to_string(selector).unwrap_or_default();
-        let max_ms = timeout_ms.min(30_000);
+        let max_ms = timeout_ms.min(60_000);
         let polls = (max_ms / PAGE_LOAD_POLL_INTERVAL_MS).max(1);
 
         for _ in 0..polls {
-            let js = format!("document.querySelector({sel_json}) ? 'found' : null");
+            let js = format!(
+                r#"(() => {{
+    const el = document.querySelector({sel_json});
+    if (el) return JSON.stringify({{found: true, tag: el.tagName, visible: el.offsetParent !== null || el.tagName === 'INPUT'}});
+    return null;
+}})()"#
+            );
             if let Ok(val) = self.cdp.run_js(&js).await {
-                if val.as_str() == Some("found") {
-                    return BrowserResponse::ok(
-                        serde_json::json!({"found": true, "selector": selector}),
-                    );
+                if let Some(s) = val.as_str() {
+                    if s.contains("\"found\":true") || s.contains("\"found\": true") {
+                        let parsed: serde_json::Value = serde_json::from_str(s)
+                            .unwrap_or(serde_json::json!({"found": true, "selector": selector}));
+                        return BrowserResponse::ok(parsed);
+                    }
+                }
+                if val.is_object() && val["found"].as_bool() == Some(true) {
+                    return BrowserResponse::ok(val);
                 }
             }
             tokio::time::sleep(Duration::from_millis(PAGE_LOAD_POLL_INTERVAL_MS)).await;
         }
 
-        BrowserResponse::err(format!(
+        // Collect diagnostic info on timeout
+        let diag_js = format!(
+            r#"JSON.stringify({{
+    url: location.href,
+    readyState: document.readyState,
+    title: document.title,
+    selectorMatchCount: document.querySelectorAll({sel_json}).length,
+    totalElements: document.querySelectorAll('*').length,
+    interactiveElements: document.querySelectorAll('input, button, a, select, textarea, [role="button"], [role="tab"]').length
+}})"#
+        );
+        let diag = self.cdp.run_js(&diag_js).await.ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+
+        let mut msg = format!(
             "Timed out waiting for selector: {selector} ({max_ms}ms)"
-        ))
+        );
+        if !diag.is_empty() {
+            msg.push_str(&format!("\nPage state: {diag}"));
+        }
+        msg.push_str("\nTip: use browser_snapshot to see available elements, or try a different selector strategy (name, label, data-testid).");
+        BrowserResponse::err(msg)
     }
 
     async fn cmd_run_js(&self, expression: &str) -> BrowserResponse {
@@ -1255,7 +1690,11 @@ pub async fn tool_browser_read_page(
         .send_command(agent_id, BrowserCommand::ReadPage, None)
         .await?;
     if !resp.success {
-        return Err(resp.error.unwrap_or_else(|| "ReadPage failed".to_string()));
+        let base_err = resp.error.unwrap_or_else(|| "ReadPage failed".to_string());
+        return Err(format!(
+            "{base_err}\nThe page may be mid-navigation or the browser session may have dropped. \
+             Try browser_session_status to check, or browser_navigate to re-open the page."
+        ));
     }
 
     let data = resp.data.unwrap_or_default();
@@ -1265,6 +1704,152 @@ pub async fn tool_browser_read_page(
     let wrapped = crate::web_content::wrap_external_content(url, content);
 
     Ok(format!("Page: {title}\nURL: {url}\n\n{wrapped}"))
+}
+
+/// browser_click_text: Click an element by its visible text content.
+/// More robust than CSS selectors for dynamic SPAs where IDs and classes
+/// are generated or change between renders.
+pub async fn tool_browser_click_text(
+    input: &serde_json::Value,
+    mgr: &BrowserManager,
+    agent_id: &str,
+) -> Result<String, String> {
+    let text = input["text"]
+        .as_str()
+        .ok_or("Missing 'text' parameter")?;
+
+    let resp = mgr
+        .send_command(
+            agent_id,
+            BrowserCommand::ClickText {
+                text: text.to_string(),
+            },
+            None,
+        )
+        .await?;
+    if !resp.success {
+        return Err(resp.error.unwrap_or_else(|| "Click by text failed".to_string()));
+    }
+
+    let data = resp.data.unwrap_or_default();
+    let title = data["title"].as_str().unwrap_or("(no title)");
+    let url = data["url"].as_str().unwrap_or("");
+    Ok(format!("Clicked element with text: {text}\nPage: {title}\nURL: {url}"))
+}
+
+/// browser_fill: Fill a form field by name, label, placeholder, data-testid,
+/// aria-label, or CSS selector. Works reliably with React/SPA forms.
+pub async fn tool_browser_fill(
+    input: &serde_json::Value,
+    mgr: &BrowserManager,
+    agent_id: &str,
+) -> Result<String, String> {
+    let field = input["field"]
+        .as_str()
+        .ok_or("Missing 'field' parameter (name, label, placeholder, testId, or CSS selector)")?;
+    let value = input["value"]
+        .as_str()
+        .ok_or("Missing 'value' parameter")?;
+
+    let resp = mgr
+        .send_command(
+            agent_id,
+            BrowserCommand::Fill {
+                field: field.to_string(),
+                value: value.to_string(),
+            },
+            None,
+        )
+        .await?;
+    if !resp.success {
+        return Err(resp.error.unwrap_or_else(|| "Fill failed".to_string()));
+    }
+
+    let data = resp.data.unwrap_or_default();
+    let strategy = data["strategy"].as_str().unwrap_or("unknown");
+    Ok(format!(
+        "Filled field \"{field}\" (matched by {strategy}): {value}"
+    ))
+}
+
+/// browser_snapshot: Return a structured accessibility snapshot of the page.
+/// Lists every interactive element (inputs, buttons, links, etc.) with its
+/// role, name, selector hint, and value — giving the model a reliable map
+/// of what it can interact with without guessing CSS selectors.
+pub async fn tool_browser_snapshot(
+    _input: &serde_json::Value,
+    mgr: &BrowserManager,
+    agent_id: &str,
+) -> Result<String, String> {
+    let resp = mgr
+        .send_command(agent_id, BrowserCommand::Snapshot, None)
+        .await?;
+    if !resp.success {
+        return Err(resp.error.unwrap_or_else(|| "Snapshot failed".to_string()));
+    }
+
+    let data = resp.data.unwrap_or_default();
+    let title = data["title"].as_str().unwrap_or("(no title)");
+    let url = data["url"].as_str().unwrap_or("");
+    let count = data["elementCount"].as_u64().unwrap_or(0);
+
+    let mut output = format!("Page: {title}\nURL: {url}\nInteractive elements: {count}\n\n");
+
+    if let Some(elements) = data["elements"].as_array() {
+        for el in elements {
+            let tag = el["tag"].as_str().unwrap_or("?");
+            let role = el["role"].as_str().unwrap_or("");
+            let el_type = el["type"].as_str().unwrap_or("");
+            let name = el["name"].as_str().unwrap_or("");
+            let text = el["text"].as_str().unwrap_or("");
+            let value = el["value"].as_str().unwrap_or("");
+            let hint = el["selectorHint"].as_str().unwrap_or("");
+            let aria = el["ariaLabel"].as_str().unwrap_or("");
+            let placeholder = el["placeholder"].as_str().unwrap_or("");
+            let disabled = el["disabled"].as_bool().unwrap_or(false);
+
+            let role_str = if !role.is_empty() {
+                format!(" role={role}")
+            } else {
+                String::new()
+            };
+            let type_str = if !el_type.is_empty() {
+                format!(" type={el_type}")
+            } else {
+                String::new()
+            };
+            let label = if !aria.is_empty() {
+                aria
+            } else if !text.is_empty() {
+                &text[..text.len().min(50)]
+            } else if !placeholder.is_empty() {
+                placeholder
+            } else {
+                ""
+            };
+            let val_str = if !value.is_empty() {
+                format!(" value={value:?}")
+            } else {
+                String::new()
+            };
+            let disabled_str = if disabled { " [disabled]" } else { "" };
+            let name_str = if !name.is_empty() {
+                format!(" name={name:?}")
+            } else {
+                String::new()
+            };
+
+            output.push_str(&format!(
+                "- <{tag}{role_str}{type_str}{name_str}> {label:?}{val_str}{disabled_str}",
+            ));
+            if !hint.is_empty() {
+                output.push_str(&format!("  → {hint}"));
+            }
+            output.push('\n');
+        }
+    }
+
+    Ok(output)
 }
 
 /// browser_close: Close the browser session.
@@ -1300,6 +1885,8 @@ pub async fn tool_browser_scroll(
 }
 
 /// browser_wait: Wait for a CSS selector to appear on the page.
+/// Default timeout is 15 seconds (raised from 5s to better handle SPAs and
+/// dynamic React forms that re-render on tab switches).
 pub async fn tool_browser_wait(
     input: &serde_json::Value,
     mgr: &BrowserManager,
@@ -1308,7 +1895,7 @@ pub async fn tool_browser_wait(
     let selector = input["selector"]
         .as_str()
         .ok_or("Missing 'selector' parameter")?;
-    let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(5000);
+    let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(15_000);
 
     let resp = mgr
         .send_command(
@@ -1778,6 +2365,16 @@ mod tests {
     }
 
     #[test]
+    fn test_browser_command_serialize_click_text() {
+        let cmd = BrowserCommand::ClickText {
+            text: "Sign In".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"action\":\"ClickText\""));
+        assert!(json.contains("\"text\":\"Sign In\""));
+    }
+
+    #[test]
     fn test_browser_command_serialize_type() {
         let cmd = BrowserCommand::Type {
             selector: "input[name='email']".to_string(),
@@ -1785,6 +2382,18 @@ mod tests {
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"action\":\"Type\""));
+        assert!(json.contains("test@example.com"));
+    }
+
+    #[test]
+    fn test_browser_command_serialize_fill() {
+        let cmd = BrowserCommand::Fill {
+            field: "email".to_string(),
+            value: "test@example.com".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"action\":\"Fill\""));
+        assert!(json.contains("\"field\":\"email\""));
         assert!(json.contains("test@example.com"));
     }
 
@@ -1800,6 +2409,13 @@ mod tests {
         let cmd = BrowserCommand::ReadPage;
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("\"action\":\"ReadPage\""));
+    }
+
+    #[test]
+    fn test_browser_command_serialize_snapshot() {
+        let cmd = BrowserCommand::Snapshot;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains("\"action\":\"Snapshot\""));
     }
 
     #[test]
