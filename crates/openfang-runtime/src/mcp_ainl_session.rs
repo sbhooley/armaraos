@@ -20,8 +20,10 @@ use sha2::{Digest, Sha256};
 struct CacheEntry {
     caps_hash: Option<u64>,
     rec_hash: Option<u64>,
+    contract_align_hash: Option<u64>,
     caps_digest: Option<String>,
     rec_next: Option<String>,
+    contract_align_note: Option<String>,
     updated: Instant,
 }
 
@@ -60,25 +62,32 @@ pub fn content_sha16(s: &str) -> String {
     hex_encode(&d[..8])
 }
 
-/// (capabilities digest, `recommended_next_tools` echo) for this session (cache only).
+/// (capabilities digest, `recommended_next_tools` echo, contract-alignment note) for this session (cache only).
 #[must_use]
-pub fn session_prompt_extras(sid: SessionId) -> (Option<String>, Option<String>) {
+pub fn session_prompt_extras(sid: SessionId) -> (Option<String>, Option<String>, Option<String>) {
     let now = Instant::now();
     let Ok(mut m) = map().lock() else {
-        return (None, None);
+        return (None, None, None);
     };
     prune_stale(&mut m, now);
     m.get(&sid.0)
-        .map(|e| (e.caps_digest.clone(), e.rec_next.clone()))
-        .unwrap_or((None, None))
+        .map(|e| {
+            (
+                e.caps_digest.clone(),
+                e.rec_next.clone(),
+                e.contract_align_note.clone(),
+            )
+        })
+        .unwrap_or((None, None, None))
 }
 
 /// Merge order: **graph memory** (persistent) first, then in-process **session cache** for fields still empty.
+/// Contract-alignment text is **session-only** (not persisted in graph memory yet).
 #[must_use]
 pub fn resolve_ainl_mcp_prompt_extras(
     session_id: SessionId,
     agent_id: Option<&str>,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, Option<String>) {
     let (mut cap, mut rec) = (None, None);
     if let Some(aid) = agent_id {
         if let Some(c) = read_capabilities_digest_from_graph(aid) {
@@ -88,8 +97,8 @@ pub fn resolve_ainl_mcp_prompt_extras(
             rec = Some(r);
         }
     }
-    let (s_cap, s_rec) = session_prompt_extras(session_id);
-    (cap.or(s_cap), rec.or(s_rec))
+    let (s_cap, s_rec, s_ca) = session_prompt_extras(session_id);
+    (cap.or(s_cap), rec.or(s_rec), s_ca)
 }
 
 /// Read the latest `mcp:ainl:capabilities` semantic fact for `agent_id`, if the DB exists.
@@ -137,8 +146,10 @@ fn upsert(sid: SessionId, f: impl FnOnce(&mut CacheEntry)) {
     let e = m.entry(sid.0).or_insert_with(|| CacheEntry {
         caps_hash: None,
         rec_hash: None,
+        contract_align_hash: None,
         caps_digest: None,
         rec_next: None,
+        contract_align_note: None,
         updated: now,
     });
     f(e);
@@ -275,6 +286,42 @@ pub fn format_recommended_next_tools_echo(v: &JsonValue) -> Option<String> {
     ))
 }
 
+/// Session note when `ainl_validate` / `ainl_compile` returns `ok: true` but `contract_alignment.items` is non-empty.
+#[must_use]
+pub fn format_contract_alignment_note(v: &JsonValue) -> Option<String> {
+    if v.get("ok").and_then(|ok| ok.as_bool()) != Some(true) {
+        return None;
+    }
+    let items = v
+        .get("contract_alignment")
+        .and_then(|c| c.get("items"))
+        .and_then(|x| x.as_array())?;
+    if items.is_empty() {
+        return None;
+    }
+    const MAX: usize = 1_200;
+    let mut out = String::from(
+        "**AINL contract alignment** (last validate/compile in this session)\n\
+         Some `http` / `fs` verb tokens are not in the `ainl_adapter_contract` bundle — confirm with \
+         `mcp_ainl_ainl_capabilities` + `mcp_ainl_ainl_adapter_contract` (warning only; compiler may still be ok):\n",
+    );
+    for it in items.iter().take(12) {
+        let ad = it.get("adapter").and_then(|x| x.as_str()).unwrap_or("?");
+        let verb = it.get("verb").and_then(|x| x.as_str()).unwrap_or("?");
+        let line = it.get("line").and_then(|x| x.as_u64()).unwrap_or(0);
+        let line = format!("- `{ad}.{verb}` (line {line})\n");
+        if out.len() + line.len() > MAX {
+            out.push('…');
+            return Some(out);
+        }
+        out.push_str(&line);
+    }
+    if items.len() > 12 {
+        out.push_str(&format!("… (+{} more)\n", items.len().saturating_sub(12)));
+    }
+    Some(out)
+}
+
 /// Detect a **soft failure** from an `mcp_ainl_*` tool: the MCP wire call succeeded (HTTP 200,
 /// well-formed JSON) but the JSON body itself reports `ok: false`. Examples include
 /// `ainl_validate` returning `{"ok": false, "errors": [...]}` for invalid AINL syntax,
@@ -391,11 +438,27 @@ pub fn ainl_mcp_soft_failure_message(tool_name: &str, content: &str) -> Option<S
         MAX_REPAIR_STEPS,
     );
 
-    msg.push_str(
-        "\nNext step: edit the AINL source to address the errors above, then re-run \
-         ainl_validate. Only after ainl_validate returns ok: true may you proceed to \
-         ainl_compile / ainl_run.",
-    );
+    if tool_name == "mcp_ainl_ainl_run" {
+        if let Some(s) = run_adapter_registration_supplement(&v) {
+            msg.push_str(&s);
+        }
+    }
+
+    if tool_name == "mcp_ainl_ainl_run"
+        && v.get("error_kind").and_then(|x| x.as_str()) == Some("adapter_registration")
+    {
+        msg.push_str(
+            "\nNext step: retry `mcp_ainl_ainl_run` with the same `code` and pass the `suggested_adapters` \
+             payload (fill absolute paths / allowlists). Do not strip `http`/`fs`/`cache`/`sqlite` lines from \
+             the program to get `ok: true` unless the user explicitly narrows the task.\n",
+        );
+    } else {
+        msg.push_str(
+            "\nNext step: edit the AINL source to address the errors above, then re-run \
+             ainl_validate. Only after ainl_validate returns ok: true may you proceed to \
+             ainl_compile / ainl_run.",
+        );
+    }
 
     if msg.len() > MAX_TOTAL_CHARS {
         msg = msg.chars().take(MAX_TOTAL_CHARS).collect();
@@ -403,6 +466,25 @@ pub fn ainl_mcp_soft_failure_message(tool_name: &str, content: &str) -> Option<S
     }
 
     Some(msg)
+}
+
+fn run_adapter_registration_supplement(v: &JsonValue) -> Option<String> {
+    if v.get("error_kind").and_then(|x| x.as_str()) == Some("adapter_registration") {
+        return Some(
+            "\nSupplement: `error_kind` is `adapter_registration` — this is a **host** MCP `adapters` \
+             configuration gap, not a syntax edit loop. Merge `suggested_adapters` into the next run.\n"
+                .to_string(),
+        );
+    }
+    let err = v.get("error").and_then(|x| x.as_str()).unwrap_or("").to_ascii_lowercase();
+    if err.contains("adapter not registered") {
+        return Some(
+            "\nSupplement: an adapter in the IR is not registered for this `ainl_run` call — add it via \
+             `adapters` (see `suggested_adapters` / `adapter_registration_error` when present).\n"
+                .to_string(),
+        );
+    }
+    None
 }
 
 fn push_string_array(out: &mut String, label: &str, v: Option<&JsonValue>, cap: usize) {
@@ -473,6 +555,23 @@ pub fn on_mcp_ainl_tool_result(
             if changed {
                 out.new_recommended_next_for_graph = true;
             }
+        }
+    }
+    if matches!(
+        tool_name,
+        "mcp_ainl_ainl_validate" | "mcp_ainl_ainl_compile"
+    ) {
+        if let Some(note) = format_contract_alignment_note(&v) {
+            let h = short_hash64(&note);
+            let mut _changed = false;
+            upsert(session_id, |e| {
+                if e.contract_align_hash != Some(h) {
+                    e.contract_align_hash = Some(h);
+                    e.contract_align_note = Some(note.clone());
+                    _changed = true;
+                }
+            });
+            let _ = _changed;
         }
     }
     out
@@ -612,5 +711,16 @@ mod tests {
         let m = ainl_mcp_soft_failure_message("mcp_ainl_ainl_validate", &body).expect("ok:false");
         assert!(m.contains("more)"), "must report truncated tail count");
         assert!(m.len() < 5_000, "must respect MAX_TOTAL_CHARS bound");
+    }
+
+    #[test]
+    fn soft_failure_run_adapter_registration_mentions_host_adapters() {
+        let body = r#"{
+            "ok": false,
+            "error_kind": "adapter_registration",
+            "error": "http adapter not registered"
+        }"#;
+        let m = ainl_mcp_soft_failure_message("mcp_ainl_ainl_run", body).expect("ok:false");
+        assert!(m.contains("suggested_adapters") || m.contains("Supplement:"));
     }
 }

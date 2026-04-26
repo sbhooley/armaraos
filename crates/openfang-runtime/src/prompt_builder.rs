@@ -87,6 +87,8 @@ pub struct PromptContext {
     pub ainl_mcp_capabilities_digest: Option<String>,
     /// Compact echo of the last `recommended_next_tools` from an AINL MCP tool response in this session.
     pub mcp_ainl_recommended_next_echo: Option<String>,
+    /// Note from last successful validate/compile when `contract_alignment.items` is non-empty (MCP 1.1+).
+    pub mcp_ainl_contract_alignment_hint: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -407,6 +409,12 @@ fn build_ainl_mcp_tools_section(ctx: &PromptContext) -> String {
         if !r.trim().is_empty() {
             s.push_str("\n\n");
             s.push_str(r);
+        }
+    }
+    if let Some(ref c) = ctx.mcp_ainl_contract_alignment_hint {
+        if !c.trim().is_empty() {
+            s.push_str("\n\n");
+            s.push_str(c);
         }
     }
     if !have_capabilities_digest {

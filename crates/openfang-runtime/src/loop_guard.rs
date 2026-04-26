@@ -20,6 +20,7 @@
 //! - **Statistics snapshot**: exposes internal state for debugging and API.
 
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -33,6 +34,24 @@ const POLL_TOOLS: &[&str] = &[
 /// as generic tools. Uses the same multiplier as [`POLL_TOOLS`].
 fn is_mcp_ainl_tool(tool_name: &str) -> bool {
     tool_name.starts_with("mcp_ainl_")
+}
+
+/// `mcp_ainl_ainl_run` outcomes that are **host adapter registration** gaps should not use the
+/// relaxed AINL outcome thresholds — retrying the same `code` without changing `adapters` is a
+/// config loop, not a slow syntax repair loop.
+fn ainl_run_body_is_adapter_registration_failure(result: &str) -> bool {
+    if !result.trim_start().starts_with('{') {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<JsonValue>(result) else {
+        return false;
+    };
+    if v.get("error_kind").and_then(|x| x.as_str()) == Some("adapter_registration") {
+        return true;
+    }
+    v.get("error")
+        .and_then(|x| x.as_str())
+        .is_some_and(|s| s.to_ascii_lowercase().contains("adapter not registered"))
 }
 
 /// Maximum recent call history size for ping-pong detection.
@@ -276,7 +295,9 @@ impl LoopGuard {
 
         let mut outcome_warn_th = self.config.outcome_warn_threshold;
         let mut outcome_block_th = self.config.outcome_block_threshold;
-        if is_mcp_ainl_tool(tool_name) {
+        let relatable_ainl_outcome = is_mcp_ainl_tool(tool_name)
+            && !(tool_name == "mcp_ainl_ainl_run" && ainl_run_body_is_adapter_registration_failure(result));
+        if relatable_ainl_outcome {
             outcome_block_th = self
                 .config
                 .outcome_block_threshold
@@ -704,6 +725,20 @@ mod tests {
         assert!(guard
             .record_outcome("mcp_ainl_ainl_run", &params, result)
             .is_some());
+    }
+
+    #[test]
+    fn mcp_ainl_adapter_registration_outcome_escalates_faster() {
+        let mut guard = LoopGuard::new(LoopGuardConfig::default());
+        let params = serde_json::json!({"code": "x"});
+        let result = r#"{"ok":false,"error_kind":"adapter_registration","error":"http not registered"}"#;
+        assert!(guard
+            .record_outcome("mcp_ainl_ainl_run", &params, result)
+            .is_none());
+        let w = guard
+            .record_outcome("mcp_ainl_ainl_run", &params, result)
+            .expect("non-relaxed warn at 2");
+        assert!(w.contains("identical results"));
     }
 
     // ========================================================================

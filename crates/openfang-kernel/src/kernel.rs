@@ -3341,7 +3341,7 @@ impl OpenFangKernel {
                 .collect();
 
             let agent_id_prompt = agent_id.to_string();
-            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo) =
+            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo, mcp_ainl_contract_alignment_hint) =
                 openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
                     entry.session_id,
                     Some(agent_id_prompt.as_str()),
@@ -3432,6 +3432,7 @@ impl OpenFangKernel {
                 sender_name,
                 ainl_mcp_capabilities_digest,
                 mcp_ainl_recommended_next_echo,
+                mcp_ainl_contract_alignment_hint,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -4326,7 +4327,7 @@ impl OpenFangKernel {
                 .collect();
 
             let agent_id_prompt = agent_id.to_string();
-            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo) =
+            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo, mcp_ainl_contract_alignment_hint) =
                 openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
                     entry.session_id,
                     Some(agent_id_prompt.as_str()),
@@ -4417,6 +4418,7 @@ impl OpenFangKernel {
                 sender_name,
                 ainl_mcp_capabilities_digest,
                 mcp_ainl_recommended_next_echo,
+                mcp_ainl_contract_alignment_hint,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
