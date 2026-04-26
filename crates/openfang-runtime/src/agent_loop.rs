@@ -1014,11 +1014,45 @@ struct ToolErrorTracker {
 #[derive(Debug, Clone, Default)]
 struct PendingAinlAuthoringFailure {
     tool_name: String,
+    /// Tool-use id for the failed call (matches [`ToolCall::id`]).
+    tool_use_id: Option<String>,
+    /// If provided, identifies the intended target file.
+    target_path: Option<String>,
+    /// SHA256 of the `code` string passed to the tool (if present).
+    target_code_sha256: Option<String>,
+    /// Whether the failed validate requested strict mode (if present in the tool args).
+    strict: Option<bool>,
     summary: String,
     blocked_final_attempts: u32,
 }
 
 const MAX_AINL_AUTHORING_PREMATURE_FINAL_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AinlProofCategory {
+    /// Strict validation/compile succeeded for a target that includes a `path` (real file).
+    StrictValidRealFile,
+    /// Strict validation/compile succeeded, but only for inline/mock code (no path).
+    StrictValidMockOnly,
+    /// Non-strict validation/compile succeeded for a real file target.
+    NonStrictValidRealFile,
+    /// Non-strict validation/compile succeeded, but only for inline/mock code (no path).
+    MockValidOnly,
+    /// `ainl_run` succeeded for a real file target.
+    RunCompletedRealFile,
+    /// `ainl_run` succeeded but only for inline/mock code (no path).
+    RunCompletedMockOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AinlProof {
+    tool_name: String,
+    tool_use_id: String,
+    target_path: Option<String>,
+    target_code_sha256: Option<String>,
+    strict: Option<bool>,
+    category: AinlProofCategory,
+}
 
 fn is_ainl_authoring_gate_tool(tool_name: &str) -> bool {
     matches!(
@@ -1027,14 +1061,214 @@ fn is_ainl_authoring_gate_tool(tool_name: &str) -> bool {
     )
 }
 
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn tool_result_json_ok_true(content: &str) -> bool {
+    // ToolResult content is usually raw JSON. However, loop-guard annotations may be appended
+    // as extra text, which would break a full parse. Be conservative and only accept `ok:true`
+    // when we can parse a JSON object from a prefix of the string.
+    let trimmed = content.trim();
+    let candidate = trimmed
+        .split("\n\n[LOOP GUARD]")
+        .next()
+        .unwrap_or(trimmed)
+        .trim();
+    serde_json::from_str::<serde_json::Value>(candidate)
+        .ok()
+        .and_then(|v| v.get("ok").and_then(|ok| ok.as_bool()))
+        == Some(true)
+}
+
+fn extract_ainl_target_from_tool_call(tool_call: &ToolCall) -> (Option<String>, Option<String>, Option<bool>) {
+    let path = tool_call
+        .input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let strict = tool_call.input.get("strict").and_then(|v| v.as_bool());
+    let code_sha256 = tool_call
+        .input
+        .get("code")
+        .and_then(|v| v.as_str())
+        .map(sha256_hex);
+    (path, code_sha256, strict)
+}
+
+fn user_explicitly_requested_non_strict(user_message: &str) -> bool {
+    let lc = user_message.to_ascii_lowercase();
+    lc.contains("strict=false")
+        || lc.contains("strict false")
+        || lc.contains("non-strict")
+        || lc.contains("non strict")
+        || lc.contains("not strict")
+        || lc.contains("without strict")
+}
+
+fn update_last_strict_validate_sha256(
+    last: &mut Option<String>,
+    tool_result_blocks: &[ContentBlock],
+    tool_calls_by_id: &std::collections::HashMap<String, ToolCall>,
+) {
+    for b in tool_result_blocks {
+        let ContentBlock::ToolResult {
+            tool_name,
+            content,
+            is_error: false,
+            tool_use_id,
+            ..
+        } = b
+        else {
+            continue;
+        };
+        if tool_name != "mcp_ainl_ainl_validate" {
+            continue;
+        }
+        if !tool_result_json_ok_true(content) {
+            continue;
+        }
+        let Some(tc) = tool_calls_by_id.get(tool_use_id) else {
+            continue;
+        };
+        let (_path, code_sha256, strict) = extract_ainl_target_from_tool_call(tc);
+        if strict == Some(true) {
+            if let Some(h) = code_sha256 {
+                *last = Some(h);
+            }
+        }
+    }
+}
+
+fn ainl_run_requires_strict_validate_first(
+    tool_call: &ToolCall,
+    last_strict_validate_sha256: Option<&str>,
+    allow_non_strict: bool,
+) -> Option<String> {
+    if tool_call.name != "mcp_ainl_ainl_run" {
+        return None;
+    }
+    if allow_non_strict {
+        return None;
+    }
+    let code = tool_call.input.get("code").and_then(|v| v.as_str())?;
+    let h = sha256_hex(code);
+    if Some(h.as_str()) != last_strict_validate_sha256 {
+        return Some(
+            "Blocked: `mcp_ainl_ainl_run` requires a successful strict validate of the same `code` first. \
+Call `mcp_ainl_ainl_validate` with `{code: <full source>, strict: true}` and only then re-run."
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn proof_category_for_success(
+    tool_name: &str,
+    target_path: Option<&str>,
+    strict: Option<bool>,
+) -> AinlProofCategory {
+    let is_real_file = target_path.is_some();
+    let is_strict = strict.unwrap_or(true);
+    match tool_name {
+        "mcp_ainl_ainl_run" => {
+            if is_real_file {
+                AinlProofCategory::RunCompletedRealFile
+            } else {
+                AinlProofCategory::RunCompletedMockOnly
+            }
+        }
+        // validate / compile proofs
+        _ => {
+            if is_strict && is_real_file {
+                AinlProofCategory::StrictValidRealFile
+            } else if is_strict && !is_real_file {
+                AinlProofCategory::StrictValidMockOnly
+            } else if !is_strict && is_real_file {
+                AinlProofCategory::NonStrictValidRealFile
+            } else {
+                AinlProofCategory::MockValidOnly
+            }
+        }
+    }
+}
+
+fn ainl_proof_from_tool_results(
+    tool_result_blocks: &[ContentBlock],
+    tool_calls_by_id: &std::collections::HashMap<String, ToolCall>,
+) -> Option<AinlProof> {
+    // Use the last ok:true tool result for any AINL gate tool in this iteration.
+    tool_result_blocks.iter().rev().find_map(|b| {
+        let ContentBlock::ToolResult {
+            tool_name,
+            content,
+            is_error: false,
+            tool_use_id,
+            ..
+        } = b
+        else {
+            return None;
+        };
+        if !is_ainl_authoring_gate_tool(tool_name) || !tool_result_json_ok_true(content) {
+            return None;
+        }
+        let tc = tool_calls_by_id.get(tool_use_id)?;
+        let (path, code_sha256, strict) = extract_ainl_target_from_tool_call(tc);
+        let category = proof_category_for_success(tool_name, path.as_deref(), strict);
+        Some(AinlProof {
+            tool_name: tool_name.clone(),
+            tool_use_id: tool_use_id.to_string(),
+            target_path: path,
+            target_code_sha256: code_sha256,
+            strict,
+            category,
+        })
+    })
+}
+
+fn format_ainl_proof_provenance(proof: &AinlProof) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("tool={}", proof.tool_name));
+    parts.push(format!(
+        "tool_use_id={}",
+        proof.tool_use_id.chars().take(12).collect::<String>()
+    ));
+    if let Some(ref p) = proof.target_path {
+        parts.push(format!("path={p}"));
+    } else {
+        parts.push("path=<none>".to_string());
+    }
+    if let Some(ref h) = proof.target_code_sha256 {
+        parts.push(format!("code_sha256={}", h.chars().take(12).collect::<String>()));
+    }
+    if let Some(s) = proof.strict {
+        parts.push(format!("strict={s}"));
+    }
+    let cat = match proof.category {
+        AinlProofCategory::StrictValidRealFile => "strict_valid_real_file",
+        AinlProofCategory::StrictValidMockOnly => "mock_valid_only_strict",
+        AinlProofCategory::NonStrictValidRealFile => "non_strict_valid_real_file",
+        AinlProofCategory::MockValidOnly => "mock_valid_only",
+        AinlProofCategory::RunCompletedRealFile => "run_completed_real_file",
+        AinlProofCategory::RunCompletedMockOnly => "run_completed_mock_only",
+    };
+    parts.push(format!("category={cat}"));
+    parts.join(", ")
+}
+
 fn ainl_authoring_failure_from_tool_results(
     tool_result_blocks: &[ContentBlock],
+    tool_calls_by_id: &std::collections::HashMap<String, ToolCall>,
 ) -> Option<PendingAinlAuthoringFailure> {
     tool_result_blocks.iter().find_map(|b| {
         let ContentBlock::ToolResult {
             tool_name,
             content,
             is_error: true,
+            tool_use_id,
             ..
         } = b
         else {
@@ -1043,8 +1277,16 @@ fn ainl_authoring_failure_from_tool_results(
         if !is_ainl_authoring_gate_tool(tool_name) {
             return None;
         }
+        let (target_path, target_code_sha256, strict) = tool_calls_by_id
+            .get(tool_use_id)
+            .map(extract_ainl_target_from_tool_call)
+            .unwrap_or((None, None, None));
         Some(PendingAinlAuthoringFailure {
             tool_name: tool_name.clone(),
+            tool_use_id: Some(tool_use_id.to_string()),
+            target_path,
+            target_code_sha256,
+            strict,
             summary: content.chars().take(1_200).collect(),
             blocked_final_attempts: 0,
         })
@@ -1054,6 +1296,8 @@ fn ainl_authoring_failure_from_tool_results(
 fn ainl_authoring_success_in_tool_results(
     tool_result_blocks: &[ContentBlock],
     pending: Option<&PendingAinlAuthoringFailure>,
+    tool_calls_by_id: &std::collections::HashMap<String, ToolCall>,
+    allow_non_strict_override: bool,
 ) -> bool {
     tool_result_blocks.iter().any(|b| {
         matches!(
@@ -1062,15 +1306,41 @@ fn ainl_authoring_success_in_tool_results(
                 tool_name,
                 content,
                 is_error: false,
+                tool_use_id,
                 ..
             } if is_ainl_authoring_gate_tool(tool_name)
-                && pending
-                    .map(|p| p.tool_name.as_str() == tool_name.as_str())
-                    .unwrap_or(true)
-                && serde_json::from_str::<serde_json::Value>(content)
-                    .ok()
-                    .and_then(|v| v.get("ok").and_then(|ok| ok.as_bool()))
-                    == Some(true)
+                && tool_result_json_ok_true(content)
+                && pending.map(|p| {
+                    if p.tool_name.as_str() != tool_name.as_str() {
+                        return false;
+                    }
+                    // If we captured a target on the failing call, only clear when the success
+                    // applies to the same target (same path and/or code hash).
+                    if p.target_path.is_none() && p.target_code_sha256.is_none() && p.strict.is_none() {
+                        return true;
+                    }
+                    let tc = tool_calls_by_id.get(tool_use_id);
+                    let Some(tc) = tc else {
+                        return false;
+                    };
+                    let (path, code_sha256, strict) = extract_ainl_target_from_tool_call(tc);
+                    if let Some(ref expected) = p.target_path {
+                        if path.as_deref() != Some(expected.as_str()) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref expected) = p.target_code_sha256 {
+                        if code_sha256.as_deref() != Some(expected.as_str()) {
+                            return false;
+                        }
+                    }
+                    if let Some(expected) = p.strict {
+                        if !allow_non_strict_override && strict != Some(expected) {
+                            return false;
+                        }
+                    }
+                    true
+                }).unwrap_or(true)
         )
     })
 }
@@ -1088,8 +1358,28 @@ fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) 
     let label = ainl_authoring_tool_label(&pending.tool_name);
     let tool = &pending.tool_name;
     let summary = &pending.summary;
+    let target_bits = {
+        let mut bits = Vec::new();
+        if let Some(ref id) = pending.tool_use_id {
+            bits.push(format!("tool_use_id={}", id.chars().take(12).collect::<String>()));
+        }
+        if let Some(ref p) = pending.target_path {
+            bits.push(format!("path={p}"));
+        }
+        if let Some(ref h) = pending.target_code_sha256 {
+            bits.push(format!("code_sha256={}", &h.chars().take(12).collect::<String>()));
+        }
+        if let Some(s) = pending.strict {
+            bits.push(format!("strict={s}"));
+        }
+        if bits.is_empty() {
+            "".to_string()
+        } else {
+            format!(" (target: {})", bits.join(", "))
+        }
+    };
     format!(
-        "[System: `{tool}` reported an AINL {label} failure. \
+        "[System: `{tool}` reported an AINL {label} failure{target_bits}. \
          You may not claim the workflow is fixed, ready, executed, scheduled, or successful yet. \
          Do not downgrade to strict=false or call the strict failure \"non-blocking\". \
          You must use file_read/file_write/apply_patch as needed to fix the diagnostic, then call \
@@ -1098,12 +1388,18 @@ fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) 
     )
 }
 
-fn ainl_authoring_unresolved_summary(pending: &PendingAinlAuthoringFailure) -> String {
+fn ainl_authoring_unresolved_summary(
+    pending: &PendingAinlAuthoringFailure,
+    last_proof: Option<&AinlProof>,
+) -> String {
     let label = ainl_authoring_tool_label(&pending.tool_name);
+    let proof_line = last_proof
+        .map(|p| format!("\n\nLast proven AINL status (provenance):\n{}", format_ainl_proof_provenance(p)))
+        .unwrap_or_default();
     format!(
         "I could not complete the task because `{}` still reports an AINL {label} failure. \
          I will not claim it ran successfully until that tool returns `ok: true`.\n\n\
-         Last AINL {label} failure:\n{}",
+         Last AINL {label} failure:\n{}{proof_line}",
         pending.tool_name, pending.summary
     )
 }
@@ -2272,6 +2568,9 @@ pub async fn run_agent_loop(
     // If strict AINL validation fails, do not let the next model turn end with a success narrative.
     // The model must edit and re-run `mcp_ainl_ainl_validate` until it returns `ok: true`.
     let mut pending_ainl_authoring_failure: Option<PendingAinlAuthoringFailure> = None;
+    let mut last_ainl_proof: Option<AinlProof> = None;
+    let mut last_strict_validate_code_sha256: Option<String> = None;
+    let allow_non_strict = user_explicitly_requested_non_strict(session_user_message);
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -3046,7 +3345,10 @@ pub async fn run_agent_loop(
                         );
                         pending_ainl_authoring_failure = None;
                         final_outcome = AgentLoopOutcome::AinlAuthoringUnresolved;
-                        ainl_authoring_unresolved_summary(&pending_snapshot)
+                        ainl_authoring_unresolved_summary(
+                            &pending_snapshot,
+                            last_ainl_proof.as_ref(),
+                        )
                     } else {
                         warn!(
                             agent = %manifest.name,
@@ -3462,6 +3764,19 @@ pub async fn run_agent_loop(
                 let mut dispatches: Vec<ToolDispatch<'_>> = Vec::with_capacity(deduped.len());
 
                 for tool_call in &deduped {
+                    if let Some(msg) = ainl_run_requires_strict_validate_first(
+                        tool_call,
+                        last_strict_validate_code_sha256.as_deref(),
+                        allow_non_strict,
+                    ) {
+                        dispatches.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            tool_name: tool_call.name.clone(),
+                            content: msg,
+                            is_error: true,
+                        }));
+                        continue;
+                    }
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
@@ -3816,13 +4131,33 @@ pub async fn run_agent_loop(
                     }
                 }
 
+                let tool_calls_by_id: std::collections::HashMap<String, ToolCall> = dispatches
+                    .iter()
+                    .filter_map(|d| match d {
+                        ToolDispatch::Pending { tool_call, .. } => Some((*tool_call).clone()),
+                        ToolDispatch::Resolved(_) => None,
+                    })
+                    .map(|tc| (tc.id.clone(), tc))
+                    .collect();
                 if ainl_authoring_success_in_tool_results(
                     &tool_result_blocks,
                     pending_ainl_authoring_failure.as_ref(),
+                    &tool_calls_by_id,
+                    allow_non_strict,
                 ) {
                     pending_ainl_authoring_failure = None;
                 }
-                if let Some(pending) = ainl_authoring_failure_from_tool_results(&tool_result_blocks)
+                update_last_strict_validate_sha256(
+                    &mut last_strict_validate_code_sha256,
+                    &tool_result_blocks,
+                    &tool_calls_by_id,
+                );
+                if let Some(p) = ainl_proof_from_tool_results(&tool_result_blocks, &tool_calls_by_id)
+                {
+                    last_ainl_proof = Some(p);
+                }
+                if let Some(pending) =
+                    ainl_authoring_failure_from_tool_results(&tool_result_blocks, &tool_calls_by_id)
                 {
                     pending_ainl_authoring_failure = Some(pending);
                 }
@@ -3909,7 +4244,10 @@ pub async fn run_agent_loop(
                     let (text, outcome) =
                         if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
                             (
-                                ainl_authoring_unresolved_summary(pending),
+                                ainl_authoring_unresolved_summary(
+                                    pending,
+                                    last_ainl_proof.as_ref(),
+                                ),
                                 AgentLoopOutcome::AinlAuthoringUnresolved,
                             )
                         } else {
@@ -3998,7 +4336,7 @@ pub async fn run_agent_loop(
     let (fallback, fallback_outcome) =
         if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
             (
-                ainl_authoring_unresolved_summary(pending),
+                ainl_authoring_unresolved_summary(pending, last_ainl_proof.as_ref()),
                 AgentLoopOutcome::AinlAuthoringUnresolved,
             )
         } else {
@@ -5214,6 +5552,9 @@ pub async fn run_agent_loop_streaming(
     // Streaming path mirrors the non-streaming loop: strict AINL validate failure is a pending
     // repair obligation until a later `mcp_ainl_ainl_validate` returns `ok: true`.
     let mut pending_ainl_authoring_failure: Option<PendingAinlAuthoringFailure> = None;
+    let mut last_ainl_proof: Option<AinlProof> = None;
+    let mut last_strict_validate_code_sha256: Option<String> = None;
+    let allow_non_strict = user_explicitly_requested_non_strict(session_user_message_s);
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -5671,7 +6012,10 @@ pub async fn run_agent_loop_streaming(
                         );
                         pending_ainl_authoring_failure = None;
                         final_outcome = AgentLoopOutcome::AinlAuthoringUnresolved;
-                        ainl_authoring_unresolved_summary(&pending_snapshot)
+                        ainl_authoring_unresolved_summary(
+                            &pending_snapshot,
+                            last_ainl_proof.as_ref(),
+                        )
                     } else {
                         warn!(
                             agent = %manifest.name,
@@ -6074,6 +6418,19 @@ pub async fn run_agent_loop_streaming(
                 let mut dispatches_s: Vec<ToolDispatch<'_>> = Vec::with_capacity(deduped_s.len());
 
                 for tool_call in &deduped_s {
+                    if let Some(msg) = ainl_run_requires_strict_validate_first(
+                        tool_call,
+                        last_strict_validate_code_sha256.as_deref(),
+                        allow_non_strict,
+                    ) {
+                        dispatches_s.push(ToolDispatch::Resolved(ContentBlock::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            tool_name: tool_call.name.clone(),
+                            content: msg,
+                            is_error: true,
+                        }));
+                        continue;
+                    }
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
@@ -6468,13 +6825,33 @@ pub async fn run_agent_loop_streaming(
                     }
                 }
 
+                let tool_calls_by_id: std::collections::HashMap<String, ToolCall> = dispatches_s
+                    .iter()
+                    .filter_map(|d| match d {
+                        ToolDispatch::Pending { tool_call, .. } => Some((*tool_call).clone()),
+                        ToolDispatch::Resolved(_) => None,
+                    })
+                    .map(|tc| (tc.id.clone(), tc))
+                    .collect();
                 if ainl_authoring_success_in_tool_results(
                     &tool_result_blocks,
                     pending_ainl_authoring_failure.as_ref(),
+                    &tool_calls_by_id,
+                    allow_non_strict,
                 ) {
                     pending_ainl_authoring_failure = None;
                 }
-                if let Some(pending) = ainl_authoring_failure_from_tool_results(&tool_result_blocks)
+                update_last_strict_validate_sha256(
+                    &mut last_strict_validate_code_sha256,
+                    &tool_result_blocks,
+                    &tool_calls_by_id,
+                );
+                if let Some(p) = ainl_proof_from_tool_results(&tool_result_blocks, &tool_calls_by_id)
+                {
+                    last_ainl_proof = Some(p);
+                }
+                if let Some(pending) =
+                    ainl_authoring_failure_from_tool_results(&tool_result_blocks, &tool_calls_by_id)
                 {
                     pending_ainl_authoring_failure = Some(pending);
                 }
@@ -6557,7 +6934,10 @@ pub async fn run_agent_loop_streaming(
                     let (text, outcome) =
                         if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
                             (
-                                ainl_authoring_unresolved_summary(pending),
+                                ainl_authoring_unresolved_summary(
+                                    pending,
+                                    last_ainl_proof.as_ref(),
+                                ),
                                 AgentLoopOutcome::AinlAuthoringUnresolved,
                             )
                         } else {
@@ -6644,7 +7024,7 @@ pub async fn run_agent_loop_streaming(
     let (fallback, fallback_outcome) =
         if let Some(pending) = pending_ainl_authoring_failure.as_ref() {
             (
-                ainl_authoring_unresolved_summary(pending),
+                ainl_authoring_unresolved_summary(pending, last_ainl_proof.as_ref()),
                 AgentLoopOutcome::AinlAuthoringUnresolved,
             )
         } else {
@@ -7726,6 +8106,8 @@ mod tests {
 
     #[test]
     fn ainl_validate_failure_sets_pending_repair_obligation() {
+        let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
         let blocks = vec![ContentBlock::ToolResult {
             tool_use_id: "t1".to_string(),
             tool_name: "mcp_ainl_ainl_validate".to_string(),
@@ -7733,7 +8115,8 @@ mod tests {
             is_error: true,
         }];
 
-        let pending = ainl_authoring_failure_from_tool_results(&blocks).expect("pending failure");
+        let pending =
+            ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id).expect("pending");
         assert!(pending.summary.contains("INVALID"));
         assert!(pending.summary.contains("Line 10"));
         assert_eq!(pending.blocked_final_attempts, 0);
@@ -7742,6 +8125,8 @@ mod tests {
     #[test]
     fn ainl_compile_and_run_failures_set_pending_repair_obligation() {
         for tool_name in ["mcp_ainl_ainl_compile", "mcp_ainl_ainl_run"] {
+            let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+                std::collections::HashMap::new();
             let blocks = vec![ContentBlock::ToolResult {
                 tool_use_id: "t1".to_string(),
                 tool_name: tool_name.to_string(),
@@ -7750,7 +8135,8 @@ mod tests {
             }];
 
             let pending =
-                ainl_authoring_failure_from_tool_results(&blocks).expect("pending failure");
+                ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id)
+                    .expect("pending failure");
             assert_eq!(pending.tool_name, tool_name);
             assert!(pending.summary.contains("ok:false"));
         }
@@ -7758,6 +8144,8 @@ mod tests {
 
     #[test]
     fn ainl_validate_success_clears_pending_repair_obligation() {
+        let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
         let blocks = vec![ContentBlock::ToolResult {
             tool_use_id: "t1".to_string(),
             tool_name: "mcp_ainl_ainl_validate".to_string(),
@@ -7765,17 +8153,28 @@ mod tests {
             is_error: false,
         }];
 
-        assert!(ainl_authoring_success_in_tool_results(&blocks, None));
-        assert!(ainl_authoring_failure_from_tool_results(&blocks).is_none());
+        assert!(ainl_authoring_success_in_tool_results(
+            &blocks,
+            None,
+            &tool_calls_by_id,
+            false
+        ));
+        assert!(ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id).is_none());
     }
 
     #[test]
     fn ainl_authoring_success_only_clears_matching_pending_tool() {
         let compile_pending = PendingAinlAuthoringFailure {
             tool_name: "mcp_ainl_ainl_compile".to_string(),
+            tool_use_id: None,
+            target_path: None,
+            target_code_sha256: None,
+            strict: None,
             summary: "compile failed".to_string(),
             blocked_final_attempts: 0,
         };
+        let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
         let validate_ok = vec![ContentBlock::ToolResult {
             tool_use_id: "t1".to_string(),
             tool_name: "mcp_ainl_ainl_validate".to_string(),
@@ -7791,16 +8190,22 @@ mod tests {
 
         assert!(!ainl_authoring_success_in_tool_results(
             &validate_ok,
-            Some(&compile_pending)
+            Some(&compile_pending),
+            &tool_calls_by_id,
+            false
         ));
         assert!(ainl_authoring_success_in_tool_results(
             &compile_ok,
-            Some(&compile_pending)
+            Some(&compile_pending),
+            &tool_calls_by_id,
+            false
         ));
     }
 
     #[test]
     fn ainl_validate_success_requires_ok_true_body() {
+        let tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
         let blocks = vec![ContentBlock::ToolResult {
             tool_use_id: "t1".to_string(),
             tool_name: "mcp_ainl_ainl_validate".to_string(),
@@ -7808,13 +8213,94 @@ mod tests {
             is_error: false,
         }];
 
-        assert!(!ainl_authoring_success_in_tool_results(&blocks, None));
+        assert!(!ainl_authoring_success_in_tool_results(
+            &blocks,
+            None,
+            &tool_calls_by_id,
+            false
+        ));
+    }
+
+    #[test]
+    fn ainl_authoring_success_does_not_clear_pending_for_different_target_code() {
+        let mut tool_calls_by_id: std::collections::HashMap<String, ToolCall> =
+            std::collections::HashMap::new();
+        tool_calls_by_id.insert(
+            "t_fail".to_string(),
+            ToolCall {
+                id: "t_fail".to_string(),
+                name: "mcp_ainl_ainl_validate".to_string(),
+                input: serde_json::json!({"code":"hello:\n  out 1\n","strict":true}),
+            },
+        );
+        tool_calls_by_id.insert(
+            "t_ok".to_string(),
+            ToolCall {
+                id: "t_ok".to_string(),
+                name: "mcp_ainl_ainl_validate".to_string(),
+                input: serde_json::json!({"code":"hello:\n  out 2\n","strict":true}),
+            },
+        );
+
+        let fail_blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t_fail".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: "ok:false".to_string(),
+            is_error: true,
+        }];
+        let pending =
+            ainl_authoring_failure_from_tool_results(&fail_blocks, &tool_calls_by_id).expect("p");
+
+        let ok_blocks = vec![ContentBlock::ToolResult {
+            tool_use_id: "t_ok".to_string(),
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            content: r#"{"ok":true}"#.to_string(),
+            is_error: false,
+        }];
+        assert!(!ainl_authoring_success_in_tool_results(
+            &ok_blocks,
+            Some(&pending),
+            &tool_calls_by_id,
+            false
+        ));
+    }
+
+    #[test]
+    fn ainl_run_is_blocked_without_prior_strict_validate_of_same_code() {
+        let run_code = "hello:\n  out 1\n";
+        let tc_run = ToolCall {
+            id: "t_run".to_string(),
+            name: "mcp_ainl_ainl_run".to_string(),
+            input: serde_json::json!({"code": run_code}),
+        };
+
+        // No strict validate yet → blocked.
+        let msg = ainl_run_requires_strict_validate_first(&tc_run, None, false)
+            .expect("expected strict-validate gate message");
+        assert!(msg.contains("requires a successful strict validate"));
+
+        // Strict validate exists, but for a different code → still blocked.
+        let other = sha256_hex("hello:\n  out 2\n");
+        assert!(ainl_run_requires_strict_validate_first(&tc_run, Some(other.as_str()), false)
+            .is_some());
+
+        // Strict validate exists for the same code → allowed.
+        let same = sha256_hex(run_code);
+        assert!(ainl_run_requires_strict_validate_first(&tc_run, Some(same.as_str()), false)
+            .is_none());
+
+        // User explicitly requested non-strict → bypass gate even without strict validate.
+        assert!(ainl_run_requires_strict_validate_first(&tc_run, None, true).is_none());
     }
 
     #[test]
     fn ainl_validate_repair_prompt_rejects_strict_false_downgrade() {
         let prompt = ainl_authoring_repair_required_prompt(&PendingAinlAuthoringFailure {
             tool_name: "mcp_ainl_ainl_validate".to_string(),
+            tool_use_id: None,
+            target_path: None,
+            target_code_sha256: None,
+            strict: None,
             summary: "Line 13: unknown adapter.verb".to_string(),
             blocked_final_attempts: 0,
         });
@@ -7826,15 +8312,50 @@ mod tests {
 
     #[test]
     fn ainl_validate_unresolved_summary_never_claims_success() {
-        let summary = ainl_authoring_unresolved_summary(&PendingAinlAuthoringFailure {
+        let summary = ainl_authoring_unresolved_summary(
+            &PendingAinlAuthoringFailure {
             tool_name: "mcp_ainl_ainl_validate".to_string(),
+            tool_use_id: None,
+            target_path: None,
+            target_code_sha256: None,
+            strict: None,
             summary: "Line 10: invalid syntax".to_string(),
             blocked_final_attempts: 0,
-        });
+        },
+            None,
+        );
         assert!(summary.contains("could not complete"));
         assert!(summary.contains("invalid"));
         assert!(summary.contains("ok: true"));
         assert!(!summary.to_lowercase().contains("executed successfully"));
+    }
+
+    #[test]
+    fn ainl_unresolved_summary_includes_last_proof_provenance_when_available() {
+        let proof = AinlProof {
+            tool_name: "mcp_ainl_ainl_validate".to_string(),
+            tool_use_id: "t_ok".to_string(),
+            target_path: Some("workflow.ainl".to_string()),
+            target_code_sha256: Some("a".repeat(64)),
+            strict: Some(true),
+            category: AinlProofCategory::StrictValidRealFile,
+        };
+        let summary = ainl_authoring_unresolved_summary(
+            &PendingAinlAuthoringFailure {
+                tool_name: "mcp_ainl_ainl_run".to_string(),
+                tool_use_id: Some("t_fail".to_string()),
+                target_path: Some("workflow.ainl".to_string()),
+                target_code_sha256: Some("b".repeat(64)),
+                strict: None,
+                summary: "adapter not registered".to_string(),
+                blocked_final_attempts: 0,
+            },
+            Some(&proof),
+        );
+        assert!(summary.contains("Last proven AINL status"));
+        assert!(summary.contains("category=strict_valid_real_file"));
+        assert!(summary.contains("tool=mcp_ainl_ainl_validate"));
+        assert!(summary.contains("path=workflow.ainl"));
     }
 
     #[test]
