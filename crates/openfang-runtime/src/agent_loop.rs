@@ -713,9 +713,7 @@ fn ainl_mcp_batch_is_adapter_registration_loop(errors: &[(&str, &str)]) -> bool 
     if errors.is_empty() {
         return false;
     }
-    errors
-        .iter()
-        .all(|(name, _)| name.starts_with("mcp_ainl_"))
+    errors.iter().all(|(name, _)| name.starts_with("mcp_ainl_"))
         && errors
             .iter()
             .any(|(_, c)| looks_like_ainl_adapter_registration_failure(c))
@@ -1142,7 +1140,9 @@ fn tool_result_json_ok_true(content: &str) -> bool {
         == Some(true)
 }
 
-fn extract_ainl_target_from_tool_call(tool_call: &ToolCall) -> (Option<String>, Option<String>, Option<bool>) {
+fn extract_ainl_target_from_tool_call(
+    tool_call: &ToolCall,
+) -> (Option<String>, Option<String>, Option<bool>) {
     let path = tool_call
         .input
         .get("path")
@@ -1300,7 +1300,10 @@ fn format_ainl_proof_provenance(proof: &AinlProof) -> String {
         parts.push("path=<none>".to_string());
     }
     if let Some(ref h) = proof.target_code_sha256 {
-        parts.push(format!("code_sha256={}", h.chars().take(12).collect::<String>()));
+        parts.push(format!(
+            "code_sha256={}",
+            h.chars().take(12).collect::<String>()
+        ));
     }
     if let Some(s) = proof.strict {
         parts.push(format!("strict={s}"));
@@ -1434,13 +1437,19 @@ fn ainl_authoring_repair_required_prompt(pending: &PendingAinlAuthoringFailure) 
     let target_bits = {
         let mut bits = Vec::new();
         if let Some(ref id) = pending.tool_use_id {
-            bits.push(format!("tool_use_id={}", id.chars().take(12).collect::<String>()));
+            bits.push(format!(
+                "tool_use_id={}",
+                id.chars().take(12).collect::<String>()
+            ));
         }
         if let Some(ref p) = pending.target_path {
             bits.push(format!("path={p}"));
         }
         if let Some(ref h) = pending.target_code_sha256 {
-            bits.push(format!("code_sha256={}", &h.chars().take(12).collect::<String>()));
+            bits.push(format!(
+                "code_sha256={}",
+                &h.chars().take(12).collect::<String>()
+            ));
         }
         if let Some(s) = pending.strict {
             bits.push(format!("strict={s}"));
@@ -1472,7 +1481,12 @@ fn ainl_authoring_unresolved_summary(
         ""
     };
     let proof_line = last_proof
-        .map(|p| format!("\n\nLast proven AINL status (provenance):\n{}", format_ainl_proof_provenance(p)))
+        .map(|p| {
+            format!(
+                "\n\nLast proven AINL status (provenance):\n{}",
+                format_ainl_proof_provenance(p)
+            )
+        })
         .unwrap_or_default();
     let category_note = last_proof
         .and_then(|p| {
@@ -1627,7 +1641,7 @@ impl ToolErrorTracker {
                          You are not making progress. Stop using the failing tool(s), \
                          recall your original goal, and switch to a completely different method \
                          to accomplish it.]"
-                        .to_string(),
+                            .to_string(),
                     )
                 }
             }
@@ -2051,7 +2065,10 @@ fn synthesize_plan_summary(
         }
     }
     if !planner_follow_ups.is_empty() {
-        let _ = write!(out, "\n\nHost follow-ups (from inference `structured.follow_ups`):\n");
+        let _ = write!(
+            out,
+            "\n\nHost follow-ups (from inference `structured.follow_ups`):\n"
+        );
         for line in planner_follow_ups {
             let _ = writeln!(out, "- {line}");
         }
@@ -8262,9 +8279,7 @@ mod tests {
         assert!(tool_result_is_ainl_tool_wiring_error(
             r#"{"ok":false,"tool_call_error":true}"#
         ));
-        assert!(
-            ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id).is_none()
-        );
+        assert!(ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id).is_none());
     }
 
     #[test]
@@ -8275,7 +8290,9 @@ mod tests {
         assert!(looks_like_ainl_adapter_registration_failure(
             "adapter not registered: fs\nsuggested_adapters: {}\nruntime_readiness"
         ));
-        assert!(!looks_like_ainl_adapter_registration_failure("Line 2: expected label"));
+        assert!(!looks_like_ainl_adapter_registration_failure(
+            "Line 2: expected label"
+        ));
     }
 
     #[test]
@@ -8344,9 +8361,8 @@ mod tests {
                 is_error: true,
             }];
 
-            let pending =
-                ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id)
-                    .expect("pending failure");
+            let pending = ainl_authoring_failure_from_tool_results(&blocks, &tool_calls_by_id)
+                .expect("pending failure");
             assert_eq!(pending.tool_name, tool_name);
             assert!(pending.summary.contains("ok:false"));
         }
@@ -8571,13 +8587,15 @@ mod tests {
 
         // Strict validate exists, but for a different code → still blocked.
         let other = sha256_hex("hello:\n  out 2\n");
-        assert!(ainl_run_requires_strict_validate_first(&tc_run, Some(other.as_str()), false)
-            .is_some());
+        assert!(
+            ainl_run_requires_strict_validate_first(&tc_run, Some(other.as_str()), false).is_some()
+        );
 
         // Strict validate exists for the same code → allowed.
         let same = sha256_hex(run_code);
-        assert!(ainl_run_requires_strict_validate_first(&tc_run, Some(same.as_str()), false)
-            .is_none());
+        assert!(
+            ainl_run_requires_strict_validate_first(&tc_run, Some(same.as_str()), false).is_none()
+        );
 
         // User explicitly requested non-strict → bypass gate even without strict validate.
         assert!(ainl_run_requires_strict_validate_first(&tc_run, None, true).is_none());
@@ -8604,14 +8622,14 @@ mod tests {
     fn ainl_validate_unresolved_summary_never_claims_success() {
         let summary = ainl_authoring_unresolved_summary(
             &PendingAinlAuthoringFailure {
-            tool_name: "mcp_ainl_ainl_validate".to_string(),
-            tool_use_id: None,
-            target_path: None,
-            target_code_sha256: None,
-            strict: None,
-            summary: "Line 10: invalid syntax".to_string(),
-            blocked_final_attempts: 0,
-        },
+                tool_name: "mcp_ainl_ainl_validate".to_string(),
+                tool_use_id: None,
+                target_path: None,
+                target_code_sha256: None,
+                strict: None,
+                summary: "Line 10: invalid syntax".to_string(),
+                blocked_final_attempts: 0,
+            },
             None,
         );
         assert!(summary.contains("could not complete"));

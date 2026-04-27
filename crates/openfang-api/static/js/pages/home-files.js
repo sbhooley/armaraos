@@ -21,8 +21,21 @@ function homeFilesPage() {
     fileContent: '',
     fileSize: 0,
     fileEditable: false,
+    fileEditMode: false,
     saveBusy: false,
     downloadBusy: false,
+    agents: [],
+    moveModal: false,
+    moveFromRel: '',
+    moveToRel: '',
+    moveBusy: false,
+    runModal: false,
+    runTargetPath: '',
+    runAgentId: '',
+    /** Set when navigating from agent chat → workspace (Home folder). */
+    _prefillRunAgentId: '',
+    runBusy: false,
+    runOutput: '',
 
     get isDesktopShell() {
       var w = typeof window !== 'undefined' ? window : null;
@@ -38,13 +51,78 @@ function homeFilesPage() {
           this.currentPath = pre;
         }
       } catch (e) { /* ignore */ }
+      try {
+        var aid = sessionStorage.getItem('armaraos-home-prefill-agent-id');
+        if (aid) {
+          sessionStorage.removeItem('armaraos-home-prefill-agent-id');
+          this._prefillRunAgentId = String(aid).trim();
+        }
+      } catch (e2) { /* ignore */ }
       this.refresh();
+      this.loadAgentsBestEffort();
+    },
+
+    /** Normalize home-relative path for prefix checks (forward slashes, no leading slash). */
+    _normHomeRel(p) {
+      return String(p || '')
+        .trim()
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '');
+    },
+
+    /**
+     * Pick an agent whose workspace_rel_home is a prefix of fileRel (under ArmaraOS home).
+     * Longest matching prefix wins so nested layouts resolve to the tightest agent.
+     */
+    pickAgentForHomePath(fileRel) {
+      var pathNorm = this._normHomeRel(fileRel);
+      if (!pathNorm) return '';
+      var list = Array.isArray(this.agents) ? this.agents : [];
+      var bestId = '';
+      var bestLen = -1;
+      for (var i = 0; i < list.length; i++) {
+        var ag = list[i];
+        var ws = this._normHomeRel(ag && ag.workspace_rel_home);
+        if (!ws) continue;
+        if (pathNorm === ws || pathNorm.startsWith(ws + '/')) {
+          if (ws.length > bestLen) {
+            bestLen = ws.length;
+            bestId = String((ag && ag.id) || '').trim();
+          }
+        }
+      }
+      return bestId;
+    },
+
+    isAinlFileName(name) {
+      if (!name) return false;
+      var n = String(name).toLowerCase();
+      return n.endsWith('.ainl') || n.endsWith('.lang');
+    },
+
+    canEditFileText() {
+      return this.fileEncoding === 'utf8' && this.fileEditable && this.fileEditMode;
+    },
+
+    toggleFileEditMode() {
+      if (this.fileEncoding !== 'utf8') return;
+      this.fileEditMode = !this.fileEditMode;
     },
 
     breadcrumbParts() {
       var p = (this.currentPath || '').trim();
       if (!p) return [];
       return p.split('/').filter(Boolean);
+    },
+
+    async loadAgentsBestEffort() {
+      try {
+        var data = await OpenFangAPI.get('/api/agents');
+        var list = Array.isArray(data) ? data : data.agents;
+        this.agents = Array.isArray(list) ? list : [];
+      } catch (e) {
+        this.agents = [];
+      }
     },
 
     async refresh() {
@@ -131,6 +209,78 @@ function homeFilesPage() {
       return this.downloadFileByRelativePath(this.filePath);
     },
 
+    openMoveModal(name) {
+      this.moveFromRel = this.pathToChild(name);
+      this.moveToRel = this.moveFromRel;
+      this.moveModal = true;
+    },
+
+    closeMoveModal() {
+      this.moveModal = false;
+      this.moveBusy = false;
+    },
+
+    async submitMove() {
+      var from = (this.moveFromRel || '').trim();
+      var to = (this.moveToRel || '').trim();
+      if (!from || !to) {
+        OpenFangToast.warn('Enter both source and destination paths.');
+        return;
+      }
+      if (from === to) {
+        OpenFangToast.warn('Destination must differ from source.');
+        return;
+      }
+      this.moveBusy = true;
+      try {
+        await OpenFangAPI.post('/api/armaraos-home/move', { from: from, to: to });
+        OpenFangToast.success('Moved');
+        this.closeMoveModal();
+        await this.refresh();
+      } catch (e) {
+        OpenFangToast.error(openFangErrText(e) || String(e));
+      }
+      this.moveBusy = false;
+    },
+
+    openRunForPath(relPath) {
+      this.runTargetPath = (relPath || '').trim();
+      var fromWs = this.pickAgentForHomePath(this.runTargetPath);
+      this.runAgentId =
+        fromWs || (this._prefillRunAgentId || '') || '';
+      this.runOutput = '';
+      this.runModal = true;
+    },
+
+    closeRunModal() {
+      this.runModal = false;
+      this.runBusy = false;
+    },
+
+    async runAinlAtPath() {
+      var p = (this.runTargetPath || '').trim();
+      if (!p) return;
+      this.runBusy = true;
+      this.runOutput = '';
+      try {
+        var body = { path: p, timeout_secs: 300 };
+        if (this.runAgentId) body.agent_id = this.runAgentId;
+        var data = await OpenFangAPI.post('/api/armaraos-home/run-ainl', body);
+        var ok = !!data.ok;
+        var out = typeof data.output === 'string' ? data.output : JSON.stringify(data.output || '');
+        this.runOutput = out || (ok ? '(no output)' : '(failed)');
+        if (ok) {
+          OpenFangToast.success('AINL finished');
+        } else {
+          OpenFangToast.warn('AINL exited with an error — see output below.');
+        }
+        await this.refresh();
+      } catch (e) {
+        OpenFangToast.error(openFangErrText(e) || String(e));
+      }
+      this.runBusy = false;
+    },
+
     async openFile(name) {
       var rel = this.pathToChild(name);
       this.fileModal = true;
@@ -141,6 +291,7 @@ function homeFilesPage() {
       this.fileContent = '';
       this.fileSize = 0;
       this.fileEditable = false;
+      this.fileEditMode = false;
       try {
         var data = await OpenFangAPI.get(
           '/api/armaraos-home/read?path=' + encodeURIComponent(rel)
@@ -161,6 +312,7 @@ function homeFilesPage() {
 
     closeFileModal() {
       this.fileModal = false;
+      this.fileEditMode = false;
     },
 
     async saveFile() {

@@ -27,7 +27,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/version-0.7.7-green?style=flat-square" alt="v0.7.7" />
+  <img src="https://img.shields.io/badge/version-0.7.8-green?style=flat-square" alt="v0.7.8" />
   <img src="https://img.shields.io/badge/tests-2%2C996%20passing-brightgreen?style=flat-square" 
 </p>
 
@@ -39,9 +39,11 @@
 
 ---
 
-## What's new in v0.7.7
+## What's new in v0.7.8
 
-A focused drop bringing a refreshed UI, premium agents, swarm orchestration, a self-learning brain, and on-device voice into one install. **[Download installers →](https://github.com/sbhooley/armaraos/releases/tag/v0.7.7)**
+Patch release on top of **v0.7.7**: scheduled **AINL** bundle export now respects the kernel **`home_dir`** (plus **`ARMARAOS_EXPORT_HOME`** for the Python merge), **`claude` / `qwen` PATH** version probes are **time-bounded** so a broken shim cannot wedge boot, **AINL MCP** treats **`ok: false`** as a real tool error with repair forcing + graph-memory failure recall, **Vault** + **`CredentialChange`** audit, and broader agent-loop / self-learning hardening. Full notes: **[CHANGELOG.md](CHANGELOG.md)** (section **0.7.8**). **[Download installers →](https://github.com/sbhooley/armaraos/releases/tag/v0.7.8)**
+
+The bullets below remain a **cumulative** picture of the **0.7.x** line (including the **v0.7.7** feature drop).
 
 ### Look & feel
 

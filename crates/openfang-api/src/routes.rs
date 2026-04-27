@@ -9100,6 +9100,401 @@ pub async fn armaraos_home_write(
     .into_response()
 }
 
+/// Allowed roots for dashboard-triggered `ainl run` (paths relative to home).
+///
+/// Covers synced library, shared workspaces, and per-agent trees (`agents/<id>/…` including
+/// `workspace/`). Does **not** use `home_editable_globs` — only this prefix allowlist + the
+/// dashboard write blocklist ([`armaraos_home_edit_path_blocked`]).
+fn armaraos_home_ainl_run_allowed_rel(rel: &str) -> bool {
+    let n = rel.replace('\\', "/");
+    if armaraos_home_edit_path_blocked(&n) {
+        return false;
+    }
+    n.starts_with("workspaces/") || n.starts_with("ainl-library/") || n.starts_with("agents/")
+}
+
+fn armaraos_home_path_looks_like_ainl(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    lower.ends_with(".ainl") || lower.ends_with(".lang")
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArmaraosHomeMoveBody {
+    pub from: String,
+    pub to: String,
+}
+
+/// POST /api/armaraos-home/move — Rename/move a file or directory within the home tree when both
+/// ends match `home_editable_globs` (same rules as write).
+pub async fn armaraos_home_move(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(body): Json<ArmaraosHomeMoveBody>,
+) -> axum::response::Response {
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let from_rel = normalize_armaraos_home_rel(&body.from);
+    let to_rel = normalize_armaraos_home_rel(&body.to);
+
+    if from_rel.is_empty() || to_rel.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/move",
+            "Missing path",
+            "Fields `from` and `to` must be non-empty paths relative to the ArmaraOS home directory."
+                .to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if from_rel == to_rel {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/move",
+            "Same path",
+            "`from` and `to` must differ.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if armaraos_home_edit_path_blocked(&from_rel) || armaraos_home_edit_path_blocked(&to_rel) {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            "/api/armaraos-home/move",
+            "Path blocked",
+            "One of the paths is blocked from dashboard moves (secrets, config, or data directory)."
+                .to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    let dash = &state.kernel.config.dashboard;
+    let gs = match armaraos_home_build_edit_globset(dash) {
+        Ok(Some(gs)) => gs,
+        Ok(None) => {
+            return api_json_error(
+                StatusCode::FORBIDDEN,
+                &rid,
+                "/api/armaraos-home/move",
+                "Moving disabled",
+                "dashboard.home_editable_globs is empty — add glob patterns in config.toml to allow moves."
+                    .to_string(),
+                Some(r#"Example: home_editable_globs = ["workspaces/**"]"#),
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return api_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &rid,
+                "/api/armaraos-home/move",
+                "Invalid allowlist",
+                e,
+                Some("Fix dashboard.home_editable_globs in config.toml (glob syntax error)."),
+            )
+            .into_response();
+        }
+    };
+
+    if !armaraos_home_rel_matches_edit_globs(&from_rel, &gs)
+        || !armaraos_home_rel_matches_edit_globs(&to_rel, &gs)
+    {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            "/api/armaraos-home/move",
+            "Path not allowed",
+            "Both `from` and `to` must match an entry in dashboard.home_editable_globs."
+                .to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    let resolved_from = match resolve_sandbox_path(&from_rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/move",
+                "Invalid from path",
+                e,
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    let resolved_to = match resolve_sandbox_path(&to_rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/move",
+                "Invalid to path",
+                e,
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if !resolved_from.exists() {
+        return api_json_error(
+            StatusCode::NOT_FOUND,
+            &rid,
+            "/api/armaraos-home/move",
+            "Source missing",
+            format!("Source does not exist: {from_rel}"),
+            None,
+        )
+        .into_response();
+    }
+
+    if resolved_to.exists() {
+        return api_json_error(
+            StatusCode::CONFLICT,
+            &rid,
+            "/api/armaraos-home/move",
+            "Destination exists",
+            format!("Target already exists: {to_rel}. Remove it or pick a different path."),
+            None,
+        )
+        .into_response();
+    }
+
+    let Some(parent_to) = resolved_to.parent() else {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/move",
+            "Invalid destination",
+            "Destination has no parent directory.".to_string(),
+            None,
+        )
+        .into_response();
+    };
+
+    if !parent_to.is_dir() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/move",
+            "Parent missing",
+            format!(
+                "Parent folder for destination does not exist: {}",
+                parent_to.display()
+            ),
+            Some("Create the destination folder first, then move the item into it."),
+        )
+        .into_response();
+    }
+
+    if dash.home_edit_backup && resolved_from.is_file() {
+        let bak = format!("{}.bak", resolved_from.display());
+        if let Err(e) = std::fs::copy(&resolved_from, &bak) {
+            tracing::warn!(
+                path = %resolved_from.display(),
+                error = %e,
+                "armaraos-home move: source backup copy failed"
+            );
+        }
+    }
+
+    if let Err(e) = std::fs::rename(&resolved_from, &resolved_to) {
+        return api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            "/api/armaraos-home/move",
+            "Rename failed",
+            e.to_string(),
+            Some("If this is a cross-device move, try copying via Download then uploading elsewhere."),
+        )
+        .into_response();
+    }
+
+    Json(serde_json::json!({
+        "ok": true,
+        "from": from_rel,
+        "to": to_rel,
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArmaraosHomeRunAinlBody {
+    pub path: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+/// POST /api/armaraos-home/run-ainl — Run `ainl run` on a `.ainl` / `.lang` file under `workspaces/` or `ainl-library/`.
+///
+/// Unlike write/move, this does **not** require `[dashboard] home_editable_globs` — only the
+/// `workspaces/` / `ainl-library/` / `agents/` prefix rules and the usual dashboard write blocklist
+/// (e.g. `data/`, secrets).
+pub async fn armaraos_home_run_ainl(
+    State(state): State<Arc<AppState>>,
+    ext: Option<Extension<RequestId>>,
+    Json(body): Json<ArmaraosHomeRunAinlBody>,
+) -> axum::response::Response {
+    let rid = resolve_request_id(ext);
+    let home_dir = &state.kernel.config.home_dir;
+    let rel = normalize_armaraos_home_rel(&body.path);
+
+    if rel.is_empty() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/run-ainl",
+            "Missing path",
+            "Field `path` must name a file relative to the ArmaraOS home directory.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if !armaraos_home_path_looks_like_ainl(&rel) {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/run-ainl",
+            "Not AINL",
+            "Only `.ainl` and `.lang` files can be run from the home browser.".to_string(),
+            None,
+        )
+        .into_response();
+    }
+
+    if !armaraos_home_ainl_run_allowed_rel(&rel) {
+        return api_json_error(
+            StatusCode::FORBIDDEN,
+            &rid,
+            "/api/armaraos-home/run-ainl",
+            "Path not allowed",
+            "AINL runs from the dashboard are limited to paths under `workspaces/`, `ainl-library/`, or `agents/` (relative to your ArmaraOS home), excluding blocked paths such as `data/` and secrets files."
+                .to_string(),
+            Some(
+                "Upgrade to the latest ArmaraOS if you still see errors mentioning home_editable_globs for Run — that gate was removed; Save/Move still require [dashboard] home_editable_globs.",
+            ),
+        )
+        .into_response();
+    }
+
+    let resolved = match resolve_sandbox_path(&rel, home_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/run-ainl",
+                "Invalid path",
+                e,
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    if !resolved.is_file() {
+        return api_json_error(
+            StatusCode::BAD_REQUEST,
+            &rid,
+            "/api/armaraos-home/run-ainl",
+            "Not a file",
+            format!("{rel} is not a regular file."),
+            None,
+        )
+        .into_response();
+    }
+
+    let parent = match resolved.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/run-ainl",
+                "Invalid path",
+                "Missing parent directory.".to_string(),
+                None,
+            )
+            .into_response();
+        }
+    };
+
+    let agent_id_opt = match body
+        .agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => match s.parse::<AgentId>() {
+            Ok(id) => Some(id),
+            Err(e) => {
+                return api_json_error(
+                    StatusCode::BAD_REQUEST,
+                    &rid,
+                    "/api/armaraos-home/run-ainl",
+                    "Invalid agent_id",
+                    e.to_string(),
+                    Some("Pass a valid agent UUID, or omit agent_id for a default permissive AINL policy."),
+                )
+                .into_response();
+            }
+        },
+        None => None,
+    };
+
+    if let Some(id) = agent_id_opt {
+        if state.kernel.registry.get(id).is_none() {
+            return api_json_error(
+                StatusCode::BAD_REQUEST,
+                &rid,
+                "/api/armaraos-home/run-ainl",
+                "Unknown agent",
+                format!("No agent registered for id {id}."),
+                None,
+            )
+            .into_response();
+        }
+    }
+
+    let timeout_secs = body.timeout_secs.unwrap_or(300);
+    match state
+        .kernel
+        .run_ainl_home_file_dashboard(&resolved, parent, agent_id_opt, timeout_secs)
+        .await
+    {
+        Ok((ok, output)) => Json(serde_json::json!({
+            "ok": ok,
+            "path": rel,
+            "output": output,
+            "requires_home_editable_globs": false,
+        }))
+        .into_response(),
+        Err(e) => api_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &rid,
+            "/api/armaraos-home/run-ainl",
+            "Run failed",
+            e,
+            None,
+        )
+        .into_response(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Config endpoint
 // ---------------------------------------------------------------------------

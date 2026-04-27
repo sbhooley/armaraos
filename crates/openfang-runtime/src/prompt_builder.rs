@@ -89,6 +89,8 @@ pub struct PromptContext {
     pub mcp_ainl_recommended_next_echo: Option<String>,
     /// Note from last successful validate/compile when `contract_alignment.items` is non-empty (MCP 1.1+).
     pub mcp_ainl_contract_alignment_hint: Option<String>,
+    /// Wizard state hint from the last `mcp_ainl_ainl_get_started` in this session.
+    pub mcp_ainl_wizard_state_hint: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -391,7 +393,7 @@ fn granted_ainl_mcp_tools(granted: &[String]) -> bool {
     })
 }
 
-/// AINL MCP granted section + optional session-warmed digest / `recommended_next_tools` echo.
+/// AINL MCP granted section + optional session-warmed digest / `recommended_next_tools` echo / wizard hint.
 fn build_ainl_mcp_tools_section(ctx: &PromptContext) -> String {
     let mut s = AINL_MCP_TOOLS_GRANTED_NOTE.to_string();
     let have_capabilities_digest = ctx
@@ -415,6 +417,12 @@ fn build_ainl_mcp_tools_section(ctx: &PromptContext) -> String {
         if !c.trim().is_empty() {
             s.push_str("\n\n");
             s.push_str(c);
+        }
+    }
+    if let Some(ref w) = ctx.mcp_ainl_wizard_state_hint {
+        if !w.trim().is_empty() {
+            s.push_str("\n\n");
+            s.push_str(w);
         }
     }
     if !have_capabilities_digest {

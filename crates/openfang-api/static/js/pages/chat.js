@@ -2529,6 +2529,12 @@ function chatPage() {
         return;
       }
       if (rel === '.') rel = '';
+      try {
+        sessionStorage.setItem(
+          'armaraos-home-prefill-agent-id',
+          String(this.currentAgent.id || '')
+        );
+      } catch (eWs) { /* ignore */ }
       window.location.hash = rel
         ? ('home-files?path=' + encodeURIComponent(rel))
         : 'home-files';

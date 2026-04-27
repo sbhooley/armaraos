@@ -640,6 +640,99 @@ async fn armaraos_home_write_disabled_without_globs() {
 }
 
 #[tokio::test]
+async fn armaraos_home_move_under_allowlist() {
+    let server =
+        start_test_server_with_provider_patch("ollama", "test-model", "OLLAMA_API_KEY", |c| {
+            c.dashboard.home_editable_globs = vec!["z_mv/**".to_string()];
+        })
+        .await;
+    let home = server.state.kernel.config.home_dir.clone();
+    std::fs::create_dir_all(home.join("z_mv/sub")).unwrap();
+    std::fs::write(home.join("z_mv").join("a.txt"), b"a").unwrap();
+
+    let client = reqwest::Client::new();
+    let mv = client
+        .post(format!("{}/api/armaraos-home/move", server.base_url))
+        .json(&serde_json::json!({
+            "from": "z_mv/a.txt",
+            "to": "z_mv/sub/b.txt",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mv.status(), 200, "move should succeed");
+    assert!(home.join("z_mv/sub/b.txt").is_file());
+    assert!(!home.join("z_mv/a.txt").exists());
+}
+
+#[tokio::test]
+async fn armaraos_home_run_ainl_works_without_edit_globs() {
+    let server = start_test_server().await;
+    let home = server.state.kernel.config.home_dir.clone();
+    std::fs::create_dir_all(home.join("workspaces/z_run")).unwrap();
+    std::fs::write(
+        home.join("workspaces/z_run/hello.ainl"),
+        b"S app core noop\n\nL1:\n J 0\n",
+    )
+    .unwrap();
+
+    let client = reqwest::Client::new();
+    let run = client
+        .post(format!("{}/api/armaraos-home/run-ainl", server.base_url))
+        .json(&serde_json::json!({
+            "path": "workspaces/z_run/hello.ainl",
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = run.status();
+    let body = run.text().await.unwrap();
+    assert_ne!(
+        status.as_u16(),
+        403u16,
+        "run-ainl must not require home_editable_globs for workspaces/** paths: {body}"
+    );
+    assert!(
+        !body.contains("home_editable_globs is empty"),
+        "unexpected edit-glob gate: {body}"
+    );
+}
+
+#[tokio::test]
+async fn armaraos_home_run_ainl_allowed_under_agents_prefix() {
+    let server = start_test_server().await;
+    let home = server.state.kernel.config.home_dir.clone();
+    std::fs::create_dir_all(home.join("agents/z_ainl_agent/workspace")).unwrap();
+    std::fs::write(
+        home.join("agents/z_ainl_agent/workspace/hello.ainl"),
+        b"S app core noop\n\nL1:\n J 0\n",
+    )
+    .unwrap();
+
+    let client = reqwest::Client::new();
+    let run = client
+        .post(format!("{}/api/armaraos-home/run-ainl", server.base_url))
+        .json(&serde_json::json!({
+            "path": "agents/z_ainl_agent/workspace/hello.ainl",
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = run.status().as_u16();
+    let bytes = run.bytes().await.expect("body");
+    assert_ne!(status, 403u16);
+    if status == 200 {
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("json body on 200 run-ainl");
+        assert_eq!(
+            body.get("requires_home_editable_globs"),
+            Some(&serde_json::Value::Bool(false)),
+            "new run-ainl responses flag that Save/Move globs are not required: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_status_endpoint() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();

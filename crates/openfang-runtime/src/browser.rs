@@ -94,16 +94,28 @@ impl BrowserMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action")]
 pub enum BrowserCommand {
-    Navigate { url: String },
-    Click { selector: String },
+    Navigate {
+        url: String,
+    },
+    Click {
+        selector: String,
+    },
     /// Click an element by its visible text content (case-insensitive partial
     /// match on buttons, links, and other clickable elements).
-    ClickText { text: String },
-    Type { selector: String, text: String },
+    ClickText {
+        text: String,
+    },
+    Type {
+        selector: String,
+        text: String,
+    },
     /// Fill an input by name, label, placeholder, testId, or CSS selector.
     /// More resilient than `Type` for React/SPA forms: tries multiple
     /// strategies and dispatches React-compatible synthetic events.
-    Fill { field: String, value: String },
+    Fill {
+        field: String,
+        value: String,
+    },
     Screenshot,
     ReadPage,
     /// Return a simplified accessibility tree of the current page: every
@@ -111,9 +123,17 @@ pub enum BrowserCommand {
     /// name/label, selector hint, and current value.
     Snapshot,
     Close,
-    Scroll { direction: String, amount: i32 },
-    Wait { selector: String, timeout_ms: u64 },
-    RunJs { expression: String },
+    Scroll {
+        direction: String,
+        amount: i32,
+    },
+    Wait {
+        selector: String,
+        timeout_ms: u64,
+    },
+    RunJs {
+        expression: String,
+    },
     Back,
 }
 
@@ -701,9 +721,11 @@ impl BrowserSession {
                         .unwrap_or("Click by text failed")
                         .to_string();
                     if let Some(arr) = parsed["availableClickable"].as_array() {
-                        let items: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).take(10).collect();
+                        let items: Vec<&str> =
+                            arr.iter().filter_map(|v| v.as_str()).take(10).collect();
                         if !items.is_empty() {
-                            err_msg.push_str(&format!("\nAvailable clickable elements: {:?}", items));
+                            err_msg
+                                .push_str(&format!("\nAvailable clickable elements: {:?}", items));
                         }
                     }
                     return BrowserResponse::err(err_msg);
@@ -715,7 +737,9 @@ impl BrowserSession {
                     Err(_) => BrowserResponse::ok(parsed),
                 }
             }
-            Err(e) => BrowserResponse::err(format!("Click by text failed (CDP error): {e}. Try browser_read_page to check page state.")),
+            Err(e) => BrowserResponse::err(format!(
+                "Click by text failed (CDP error): {e}. Try browser_read_page to check page state."
+            )),
         }
     }
 
@@ -946,13 +970,19 @@ impl BrowserSession {
                         err_msg.push_str(hint);
                     }
                     if let Some(fields) = parsed["availableFields"].as_array() {
-                        let summary: Vec<String> = fields.iter().take(8).map(|f| {
-                            format!("{}[name={:?} id={:?} placeholder={:?}]",
-                                f["tag"].as_str().unwrap_or("?"),
-                                f["name"].as_str().unwrap_or(""),
-                                f["id"].as_str().unwrap_or(""),
-                                f["placeholder"].as_str().unwrap_or(""))
-                        }).collect();
+                        let summary: Vec<String> = fields
+                            .iter()
+                            .take(8)
+                            .map(|f| {
+                                format!(
+                                    "{}[name={:?} id={:?} placeholder={:?}]",
+                                    f["tag"].as_str().unwrap_or("?"),
+                                    f["name"].as_str().unwrap_or(""),
+                                    f["id"].as_str().unwrap_or(""),
+                                    f["placeholder"].as_str().unwrap_or("")
+                                )
+                            })
+                            .collect();
                         err_msg.push_str(&format!("\nFields on page: {}", summary.join(", ")));
                     }
                     BrowserResponse::err(err_msg)
@@ -960,7 +990,9 @@ impl BrowserSession {
                     BrowserResponse::ok(parsed)
                 }
             }
-            Err(e) => BrowserResponse::err(format!("Fill failed (CDP error): {e}. Try browser_snapshot to see available fields.")),
+            Err(e) => BrowserResponse::err(format!(
+                "Fill failed (CDP error): {e}. Try browser_snapshot to see available fields."
+            )),
         }
     }
 
@@ -1130,13 +1162,15 @@ impl BrowserSession {
     interactiveElements: document.querySelectorAll('input, button, a, select, textarea, [role="button"], [role="tab"]').length
 }})"#
         );
-        let diag = self.cdp.run_js(&diag_js).await.ok()
+        let diag = self
+            .cdp
+            .run_js(&diag_js)
+            .await
+            .ok()
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default();
 
-        let mut msg = format!(
-            "Timed out waiting for selector: {selector} ({max_ms}ms)"
-        );
+        let mut msg = format!("Timed out waiting for selector: {selector} ({max_ms}ms)");
         if !diag.is_empty() {
             msg.push_str(&format!("\nPage state: {diag}"));
         }
@@ -1714,9 +1748,7 @@ pub async fn tool_browser_click_text(
     mgr: &BrowserManager,
     agent_id: &str,
 ) -> Result<String, String> {
-    let text = input["text"]
-        .as_str()
-        .ok_or("Missing 'text' parameter")?;
+    let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
 
     let resp = mgr
         .send_command(
@@ -1728,13 +1760,17 @@ pub async fn tool_browser_click_text(
         )
         .await?;
     if !resp.success {
-        return Err(resp.error.unwrap_or_else(|| "Click by text failed".to_string()));
+        return Err(resp
+            .error
+            .unwrap_or_else(|| "Click by text failed".to_string()));
     }
 
     let data = resp.data.unwrap_or_default();
     let title = data["title"].as_str().unwrap_or("(no title)");
     let url = data["url"].as_str().unwrap_or("");
-    Ok(format!("Clicked element with text: {text}\nPage: {title}\nURL: {url}"))
+    Ok(format!(
+        "Clicked element with text: {text}\nPage: {title}\nURL: {url}"
+    ))
 }
 
 /// browser_fill: Fill a form field by name, label, placeholder, data-testid,
@@ -1747,9 +1783,7 @@ pub async fn tool_browser_fill(
     let field = input["field"]
         .as_str()
         .ok_or("Missing 'field' parameter (name, label, placeholder, testId, or CSS selector)")?;
-    let value = input["value"]
-        .as_str()
-        .ok_or("Missing 'value' parameter")?;
+    let value = input["value"].as_str().ok_or("Missing 'value' parameter")?;
 
     let resp = mgr
         .send_command(

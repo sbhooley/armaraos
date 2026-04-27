@@ -116,18 +116,7 @@ impl ClaudeCodeDriver {
 
     /// Detect if the Claude Code CLI is available on PATH.
     pub fn detect() -> Option<String> {
-        let output = std::process::Command::new("claude")
-            .arg("--version")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            None
-        }
+        crate::cli_version_probe::probe_stdout("claude", &["--version"])
     }
 
     /// Build a text prompt from the completion request messages.

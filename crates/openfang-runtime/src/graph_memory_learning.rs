@@ -254,7 +254,10 @@ impl LearningRecorder {
         content: &str,
         apply: crate::mcp_ainl_session::McpAinlApplyResult,
     ) {
-        if !apply.new_capabilities_for_graph && !apply.new_recommended_next_for_graph {
+        if !apply.new_capabilities_for_graph
+            && !apply.new_recommended_next_for_graph
+            && !apply.new_wizard_state_for_graph
+        {
             return;
         }
         let Some(gm) = self.mcp_ainl_graph_snapshot_gate() else {
@@ -278,6 +281,15 @@ impl LearningRecorder {
             if let Some(fact) = crate::mcp_ainl_session::format_recommended_next_tools_echo(&v) {
                 let h = crate::mcp_ainl_session::content_sha16(&fact);
                 let tags = vec!["mcp:ainl:recommended_next".to_string(), format!("v:{h}")];
+                gm.record_fact_with_tags(fact, 0.9, Uuid::new_v4(), &tags, pid)
+                    .await;
+            }
+        }
+
+        if apply.new_wizard_state_for_graph && tool_name == "mcp_ainl_ainl_get_started" {
+            if let Some(fact) = crate::mcp_ainl_session::format_wizard_hint(&v) {
+                let h = crate::mcp_ainl_session::content_sha16(&fact);
+                let tags = vec!["mcp:ainl:wizard_state".to_string(), format!("v:{h}")];
                 gm.record_fact_with_tags(fact, 0.9, Uuid::new_v4(), &tags, pid)
                     .await;
             }

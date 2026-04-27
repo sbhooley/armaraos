@@ -114,6 +114,7 @@ mod assistant_output_compress;
 pub mod audit;
 pub mod auth_cooldown;
 pub mod browser;
+mod cli_version_probe;
 pub mod command_lane;
 pub mod compactor;
 pub mod compose_telemetry;

@@ -74,18 +74,7 @@ impl QwenCodeDriver {
 
     /// Detect if the Qwen Code CLI is available on PATH.
     pub fn detect() -> Option<String> {
-        let output = std::process::Command::new("qwen")
-            .arg("--version")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        if output.status.success() {
-            Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        } else {
-            None
-        }
+        crate::cli_version_probe::probe_stdout("qwen", &["--version"])
     }
 
     /// Build the CLI arguments for a given request.

@@ -21,9 +21,11 @@ struct CacheEntry {
     caps_hash: Option<u64>,
     rec_hash: Option<u64>,
     contract_align_hash: Option<u64>,
+    wizard_hash: Option<u64>,
     caps_digest: Option<String>,
     rec_next: Option<String>,
     contract_align_note: Option<String>,
+    wizard_hint: Option<String>,
     updated: Instant,
 }
 
@@ -31,12 +33,14 @@ const STALE: Duration = Duration::from_secs(86_400);
 
 const TAG_MCP_AINL_CAPABILITIES: &str = "mcp:ainl:capabilities";
 const TAG_MCP_AINL_RECOMMENDED: &str = "mcp:ainl:recommended_next";
+const TAG_MCP_AINL_WIZARD: &str = "mcp:ainl:wizard_state";
 
 /// Flags set when in-memory cache **changed** (hash moved), so graph-memory can persist a new row.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct McpAinlApplyResult {
     pub new_capabilities_for_graph: bool,
     pub new_recommended_next_for_graph: bool,
+    pub new_wizard_state_for_graph: bool,
 }
 
 static CACHE: OnceLock<Mutex<HashMap<uuid::Uuid, CacheEntry>>> = OnceLock::new();
@@ -62,12 +66,19 @@ pub fn content_sha16(s: &str) -> String {
     hex_encode(&d[..8])
 }
 
-/// (capabilities digest, `recommended_next_tools` echo, contract-alignment note) for this session (cache only).
+/// (capabilities digest, `recommended_next_tools` echo, contract-alignment note, wizard hint) for this session (cache only).
 #[must_use]
-pub fn session_prompt_extras(sid: SessionId) -> (Option<String>, Option<String>, Option<String>) {
+pub fn session_prompt_extras(
+    sid: SessionId,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let now = Instant::now();
     let Ok(mut m) = map().lock() else {
-        return (None, None, None);
+        return (None, None, None, None);
     };
     prune_stale(&mut m, now);
     m.get(&sid.0)
@@ -76,19 +87,25 @@ pub fn session_prompt_extras(sid: SessionId) -> (Option<String>, Option<String>,
                 e.caps_digest.clone(),
                 e.rec_next.clone(),
                 e.contract_align_note.clone(),
+                e.wizard_hint.clone(),
             )
         })
-        .unwrap_or((None, None, None))
+        .unwrap_or((None, None, None, None))
 }
 
 /// Merge order: **graph memory** (persistent) first, then in-process **session cache** for fields still empty.
-/// Contract-alignment text is **session-only** (not persisted in graph memory yet).
+/// Contract-alignment text and wizard hints are **session-only** (not persisted in graph memory yet).
 #[must_use]
 pub fn resolve_ainl_mcp_prompt_extras(
     session_id: SessionId,
     agent_id: Option<&str>,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let (mut cap, mut rec) = (None, None);
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let (mut cap, mut rec, mut wizard) = (None, None, None);
     if let Some(aid) = agent_id {
         if let Some(c) = read_capabilities_digest_from_graph(aid) {
             cap = Some(c);
@@ -96,9 +113,12 @@ pub fn resolve_ainl_mcp_prompt_extras(
         if let Some(r) = read_recommended_next_from_graph(aid) {
             rec = Some(r);
         }
+        if let Some(w) = read_wizard_state_from_graph(aid) {
+            wizard = Some(w);
+        }
     }
-    let (s_cap, s_rec, s_ca) = session_prompt_extras(session_id);
-    (cap.or(s_cap), rec.or(s_rec), s_ca)
+    let (s_cap, s_rec, s_ca, s_wiz) = session_prompt_extras(session_id);
+    (cap.or(s_cap), rec.or(s_rec), s_ca, wizard.or(s_wiz))
 }
 
 /// Read the latest `mcp:ainl:capabilities` semantic fact for `agent_id`, if the DB exists.
@@ -137,6 +157,24 @@ pub fn read_recommended_next_from_graph(agent_id: &str) -> Option<String> {
     n.semantic().map(|s| s.fact.clone())
 }
 
+/// Read the latest `mcp:ainl:wizard_state` semantic fact for persisted wizard hints.
+#[must_use]
+pub fn read_wizard_state_from_graph(agent_id: &str) -> Option<String> {
+    let path =
+        crate::graph_memory_writer::GraphMemoryWriter::sqlite_database_path_for_agent(agent_id)
+            .ok()?;
+    if !path.is_file() {
+        return None;
+    }
+    let mem = GraphMemory::new(&path).ok()?;
+    let n = mem
+        .sqlite_store()
+        .query(agent_id)
+        .latest_semantic_with_tag(TAG_MCP_AINL_WIZARD)
+        .ok()??;
+    n.semantic().map(|s| s.fact.clone())
+}
+
 fn upsert(sid: SessionId, f: impl FnOnce(&mut CacheEntry)) {
     let now = Instant::now();
     let Ok(mut m) = map().lock() else {
@@ -147,9 +185,11 @@ fn upsert(sid: SessionId, f: impl FnOnce(&mut CacheEntry)) {
         caps_hash: None,
         rec_hash: None,
         contract_align_hash: None,
+        wizard_hash: None,
         caps_digest: None,
         rec_next: None,
         contract_align_note: None,
+        wizard_hint: None,
         updated: now,
     });
     f(e);
@@ -286,6 +326,69 @@ pub fn format_recommended_next_tools_echo(v: &JsonValue) -> Option<String> {
     ))
 }
 
+/// Format wizard state hint from `ainl_get_started` result for system prompt injection.
+#[must_use]
+pub fn format_wizard_hint(v: &JsonValue) -> Option<String> {
+    let stage = v.get("wizard_stage")?.as_str()?;
+    let wizard_state = v.get("wizard_state")?;
+
+    const MAX: usize = 1_500;
+    let mut out = String::from("**AINL wizard state** (from last `mcp_ainl_ainl_get_started`)\n");
+    out.push_str(&format!("Stage: `{stage}`\n"));
+
+    if let Some(can_author) = wizard_state.get("can_author_now").and_then(|x| x.as_bool()) {
+        out.push_str(&format!(
+            "Can author now: {}\n",
+            if can_author {
+                "yes"
+            } else {
+                "no — complete blocking checkpoints first"
+            }
+        ));
+    }
+
+    if let Some(blocking) = wizard_state
+        .get("blocking_checkpoints")
+        .and_then(|x| x.as_array())
+    {
+        if !blocking.is_empty() {
+            out.push_str("Blocking checkpoints:\n");
+            for cp in blocking.iter().take(5) {
+                if let Some(name) = cp.as_str() {
+                    let line = format!("- `{name}`\n");
+                    if out.len() + line.len() > MAX {
+                        out.push_str("…\n");
+                        return Some(out);
+                    }
+                    out.push_str(&line);
+                }
+            }
+            if blocking.len() > 5 {
+                out.push_str(&format!("… (+{} more)\n", blocking.len() - 5));
+            }
+        }
+    }
+
+    if let Some(action) = v.get("next_wizard_action") {
+        if let Some(tool) = action.get("tool").and_then(|t| t.as_str()) {
+            let reason = action
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or("continue wizard");
+            out.push_str(&format!("Next action: `{tool}` — {reason}\n"));
+        }
+    }
+
+    if let Some(session_id) = v.get("session_id").and_then(|s| s.as_str()) {
+        out.push_str(&format!("Session: `{session_id}`\n"));
+    }
+
+    if out.len() < 80 {
+        return None;
+    }
+    Some(out)
+}
+
 /// Session note when `ainl_validate` / `ainl_compile` returns `ok: true` but `contract_alignment.items` is non-empty.
 #[must_use]
 pub fn format_contract_alignment_note(v: &JsonValue) -> Option<String> {
@@ -294,7 +397,7 @@ pub fn format_contract_alignment_note(v: &JsonValue) -> Option<String> {
     }
     let items = v
         .get("contract_alignment")
-        .and_then(|c| c.get("items"))
+        .and_then(|c| c.get("mismatched_calls").or_else(|| c.get("items")))
         .and_then(|x| x.as_array())?;
     if items.is_empty() {
         return None;
@@ -476,7 +579,11 @@ fn run_adapter_registration_supplement(v: &JsonValue) -> Option<String> {
                 .to_string(),
         );
     }
-    let err = v.get("error").and_then(|x| x.as_str()).unwrap_or("").to_ascii_lowercase();
+    let err = v
+        .get("error")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if err.contains("adapter not registered") {
         return Some(
             "\nSupplement: an adapter in the IR is not registered for this `ainl_run` call — add it via \
@@ -574,6 +681,24 @@ pub fn on_mcp_ainl_tool_result(
             let _ = _changed;
         }
     }
+
+    if tool_name == "mcp_ainl_ainl_get_started" {
+        if let Some(hint) = format_wizard_hint(&v) {
+            let h = short_hash64(&hint);
+            let mut changed = false;
+            upsert(session_id, |e| {
+                if e.wizard_hash != Some(h) {
+                    e.wizard_hash = Some(h);
+                    e.wizard_hint = Some(hint);
+                    changed = true;
+                }
+            });
+            if changed {
+                out.new_wizard_state_for_graph = true;
+            }
+        }
+    }
+
     out
 }
 
@@ -722,5 +847,52 @@ mod tests {
         }"#;
         let m = ainl_mcp_soft_failure_message("mcp_ainl_ainl_run", body).expect("ok:false");
         assert!(m.contains("suggested_adapters") || m.contains("Supplement:"));
+    }
+
+    #[test]
+    fn contract_alignment_note_reads_mismatched_calls() {
+        let v = serde_json::json!({
+            "ok": true,
+            "contract_alignment": {
+                "mismatched_calls": [
+                    {"adapter": "http", "verb": "PATCH", "line": 12}
+                ]
+            }
+        });
+        let note = format_contract_alignment_note(&v).expect("note");
+        assert!(note.contains("http.PATCH"));
+        assert!(note.contains("line 12"));
+    }
+
+    #[test]
+    fn contract_alignment_note_fallback_to_items_key() {
+        let v = serde_json::json!({
+            "ok": true,
+            "contract_alignment": {
+                "items": [
+                    {"adapter": "fs", "verb": "WRITE", "line": 3}
+                ]
+            }
+        });
+        let note = format_contract_alignment_note(&v).expect("note");
+        assert!(note.contains("fs.WRITE"));
+    }
+
+    #[test]
+    fn format_wizard_hint_parses_get_started_envelope() {
+        let v = serde_json::json!({
+            "ok": true,
+            "wizard_stage": "capability_discovery",
+            "session_id": "s-1",
+            "next_wizard_action": {"tool": "ainl_capabilities", "reason": "discover verbs"},
+            "wizard_state": {
+                "can_author_now": false,
+                "blocking_checkpoints": ["capabilities_inspected"]
+            }
+        });
+        let h = format_wizard_hint(&v).expect("hint");
+        assert!(h.contains("capability_discovery"));
+        assert!(h.contains("capabilities_inspected"));
+        assert!(h.contains("ainl_capabilities"));
     }
 }

@@ -296,7 +296,8 @@ impl LoopGuard {
         let mut outcome_warn_th = self.config.outcome_warn_threshold;
         let mut outcome_block_th = self.config.outcome_block_threshold;
         let relatable_ainl_outcome = is_mcp_ainl_tool(tool_name)
-            && !(tool_name == "mcp_ainl_ainl_run" && ainl_run_body_is_adapter_registration_failure(result));
+            && !(tool_name == "mcp_ainl_ainl_run"
+                && ainl_run_body_is_adapter_registration_failure(result));
         if relatable_ainl_outcome {
             outcome_block_th = self
                 .config
@@ -731,7 +732,8 @@ mod tests {
     fn mcp_ainl_adapter_registration_outcome_escalates_faster() {
         let mut guard = LoopGuard::new(LoopGuardConfig::default());
         let params = serde_json::json!({"code": "x"});
-        let result = r#"{"ok":false,"error_kind":"adapter_registration","error":"http not registered"}"#;
+        let result =
+            r#"{"ok":false,"error_kind":"adapter_registration","error":"http not registered"}"#;
         assert!(guard
             .record_outcome("mcp_ainl_ainl_run", &params, result)
             .is_none());

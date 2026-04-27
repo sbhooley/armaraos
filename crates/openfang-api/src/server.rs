@@ -757,6 +757,14 @@ pub async fn build_router(
             "/api/armaraos-home/write",
             axum::routing::post(routes::armaraos_home_write),
         )
+        .route(
+            "/api/armaraos-home/move",
+            axum::routing::post(routes::armaraos_home_move),
+        )
+        .route(
+            "/api/armaraos-home/run-ainl",
+            axum::routing::post(routes::armaraos_home_run_ainl),
+        )
         .route("/api/config", axum::routing::get(routes::get_config))
         .route(
             "/api/config/schema",

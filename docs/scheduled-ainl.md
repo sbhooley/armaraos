@@ -80,14 +80,14 @@ Scheduled jobs with action **`ainl_run`** are executed by **`OpenFangKernel::cro
 |------|------|
 | **`~/.armaraos/agents/<agent_id>/bundle.ainlbundle`** | Optional **`AINLBundle`** JSON (workflow IR + memory snapshot + persona list + tools). Not required for every graph; created or updated by the host export path. |
 
-**Pre-run (bundle → Python):** If **`~/.armaraos/agents/<agent_id>/bundle.ainlbundle`** exists, the kernel sets on the child process:
+**Pre-run (bundle → Python):** If **`{home_dir}/agents/<agent_id>/bundle.ainlbundle`** exists (kernel **`home_dir`**, usually **`~/.armaraos`**), the kernel sets on the child process:
 
 - **`AINL_BUNDLE_PATH`** — absolute path to that file  
 - **`AINL_AGENT_ID`** — the cron job’s target agent id (string)
 
 The AINL subprocess should have **`~/.armaraos/ainl-library`** on **`PYTHONPATH`** (normal ArmaraOS layout). **`AINLGraphMemoryBridge.boot()`** in the **ainativelang** repo (`armaraos/bridge/ainl_graph_memory.py`) reads **`AINL_BUNDLE_PATH`**, loads **`AINLBundle`**, and best-effort replays **`bundle.persona`** via **`persona.update`**, then **`bundle.memory`** (serialized non-persona **`MemoryNode`** dicts from the last export — episodic, semantic, procedural, patch) into the JSON graph store **only for ids not already present** so scheduled runs restore semantic / episodic / procedural state as well as traits. Malformed bundle rows are skipped; the live store wins on id collisions.
 
-**Post-run (Python → bundle):** After **`ainl` exits successfully**, the kernel schedules a **non-blocking** export (`tokio::task::spawn_blocking` → **`openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort`** in `crates/openfang-runtime/src/ainl_bundle_cron.rs`). That spawns **`python3`** with **`AINL_EXPORT_AGENT_ID`**, re-boots the bridge for that agent, merges the live graph with the previous bundle source (or a tiny default **`.ainl`** stub if no bundle existed yet), and **`AINLBundleBuilder.save`** over **`bundle.ainlbundle`**. Failures are logged only; they do not fail the cron job.
+**Post-run (Python → bundle):** After **`ainl` exits successfully**, the kernel schedules a **non-blocking** export (`tokio::task::spawn_blocking` → **`openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort`** in `crates/openfang-runtime/src/ainl_bundle_cron.rs`). That spawns **`python3`** with **`AINL_EXPORT_AGENT_ID`** and **`ARMARAOS_EXPORT_HOME`** set to the kernel’s **`home_dir`** (so non-default homes and tests do not write **`~/.armaraos`** by mistake), re-boots the bridge for that agent, merges the live graph with the previous bundle source (or a tiny default **`.ainl`** stub if no bundle existed yet), and **`AINLBundleBuilder.save`** over **`bundle.ainlbundle`**. Failures are logged only; they do not fail the cron job.
 
 ## Session transcript, notifications, and routine monitors
 

@@ -3341,11 +3341,15 @@ impl OpenFangKernel {
                 .collect();
 
             let agent_id_prompt = agent_id.to_string();
-            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo, mcp_ainl_contract_alignment_hint) =
-                openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
-                    entry.session_id,
-                    Some(agent_id_prompt.as_str()),
-                );
+            let (
+                ainl_mcp_capabilities_digest,
+                mcp_ainl_recommended_next_echo,
+                mcp_ainl_contract_alignment_hint,
+                mcp_ainl_wizard_state_hint,
+            ) = openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
+                entry.session_id,
+                Some(agent_id_prompt.as_str()),
+            );
 
             let prompt_ctx = openfang_runtime::prompt_builder::PromptContext {
                 agent_name: manifest.name.clone(),
@@ -3433,6 +3437,7 @@ impl OpenFangKernel {
                 ainl_mcp_capabilities_digest,
                 mcp_ainl_recommended_next_echo,
                 mcp_ainl_contract_alignment_hint,
+                mcp_ainl_wizard_state_hint,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -4327,11 +4332,15 @@ impl OpenFangKernel {
                 .collect();
 
             let agent_id_prompt = agent_id.to_string();
-            let (ainl_mcp_capabilities_digest, mcp_ainl_recommended_next_echo, mcp_ainl_contract_alignment_hint) =
-                openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
-                    entry.session_id,
-                    Some(agent_id_prompt.as_str()),
-                );
+            let (
+                ainl_mcp_capabilities_digest,
+                mcp_ainl_recommended_next_echo,
+                mcp_ainl_contract_alignment_hint,
+                mcp_ainl_wizard_state_hint,
+            ) = openfang_runtime::mcp_ainl_session::resolve_ainl_mcp_prompt_extras(
+                entry.session_id,
+                Some(agent_id_prompt.as_str()),
+            );
 
             let prompt_ctx = openfang_runtime::prompt_builder::PromptContext {
                 agent_name: manifest.name.clone(),
@@ -4419,6 +4428,7 @@ impl OpenFangKernel {
                 ainl_mcp_capabilities_digest,
                 mcp_ainl_recommended_next_echo,
                 mcp_ainl_contract_alignment_hint,
+                mcp_ainl_wizard_state_hint,
             };
             manifest.model.system_prompt =
                 openfang_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
@@ -7529,11 +7539,7 @@ impl OpenFangKernel {
     ///
     /// Sets `AINL_ALLOW_IR_DECLARED_ADAPTERS` to `1` by default so desktop/daemon users are not
     /// required to export host-adapter env; opt out via manifest `ainl_allow_ir_declared_adapters`.
-    fn apply_resolved_env_to_ainl_command(
-        &self,
-        cmd: &mut tokio::process::Command,
-        agent_id: AgentId,
-    ) {
+    fn inject_ainl_cron_credential_env(&self, cmd: &mut tokio::process::Command, log_agent: &str) {
         let mut resolved_keys: Vec<&'static str> = Vec::new();
         let mut extension_resolved: Vec<&'static str> = Vec::new();
         for key in AINL_CRON_RESOLVE_ENV_KEYS {
@@ -7549,42 +7555,127 @@ impl OpenFangKernel {
                 extension_resolved.push(key);
                 trace!(
                     target: "openfang_kernel::ainl_cron_env",
-                    agent = %agent_id,
+                    agent = %log_agent,
                     %key,
                     "scheduled ainl: extension-tier env key resolved (values not logged)"
                 );
             }
         }
         debug!(
-            agent = %agent_id,
+            agent = %log_agent,
             injected_env_key_count = resolved_keys.len(),
             keys = ?resolved_keys,
             extension_resolved_keys = ?extension_resolved,
             "ainl cron: injected credential env keys for subprocess (values not logged)"
         );
+    }
+
+    /// Same credential + host-adapter policy as scheduled `ainl run`, with an optional agent for
+    /// dashboard-triggered runs (no agent → permissive IR-declared adapters, no host allowlist).
+    fn apply_resolved_env_to_ainl_command_optional_agent(
+        &self,
+        cmd: &mut tokio::process::Command,
+        agent_id: Option<AgentId>,
+    ) {
+        let log_agent = agent_id
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| "dashboard".to_string());
+        self.inject_ainl_cron_credential_env(cmd, &log_agent);
         // Always clear any inherited value first. The daemon process may have been started with a
         // narrow `AINL_HOST_ADAPTER_ALLOWLIST` (or a stale shell export); without removal, offline
         // agents (kernel omits the var) would still see the parent's list and `ainl` would
         // intersect IR adapters against that — e.g. blocking `web` for intelligence graphs.
         cmd.env_remove("AINL_HOST_ADAPTER_ALLOWLIST");
-        if let Some(list) = self.ainl_host_adapter_allowlist_for_agent(agent_id) {
-            cmd.env("AINL_HOST_ADAPTER_ALLOWLIST", &list);
-            debug!(agent = %agent_id, "ainl cron: set AINL_HOST_ADAPTER_ALLOWLIST for subprocess");
+        if let Some(id) = agent_id {
+            if let Some(list) = self.ainl_host_adapter_allowlist_for_agent(id) {
+                cmd.env("AINL_HOST_ADAPTER_ALLOWLIST", &list);
+                debug!(agent = %id, "ainl cron: set AINL_HOST_ADAPTER_ALLOWLIST for subprocess");
+            }
+            let relax = self
+                .registry
+                .get(id)
+                .map(|e| ainl_allow_ir_declared_adapters_from_manifest(&e.manifest))
+                .unwrap_or(true);
+            cmd.env(
+                "AINL_ALLOW_IR_DECLARED_ADAPTERS",
+                if relax { "1" } else { "0" },
+            );
+        } else {
+            cmd.env("AINL_ALLOW_IR_DECLARED_ADAPTERS", "1");
         }
-        let relax = self
-            .registry
-            .get(agent_id)
-            .map(|e| ainl_allow_ir_declared_adapters_from_manifest(&e.manifest))
-            .unwrap_or(true);
-        cmd.env(
-            "AINL_ALLOW_IR_DECLARED_ADAPTERS",
-            if relax { "1" } else { "0" },
-        );
         // Give curated/embedded graphs a stable way to call the daemon API
         // without hardcoding port 4200.
         let daemon_base = scheduled_ainl_api_base_url(&self.config.api_listen);
         cmd.env("ARMARAOS_DAEMON_BASE_URL", &daemon_base);
         cmd.env("OPENFANG_DAEMON_BASE_URL", &daemon_base);
+    }
+
+    fn apply_resolved_env_to_ainl_command(
+        &self,
+        cmd: &mut tokio::process::Command,
+        agent_id: AgentId,
+    ) {
+        self.apply_resolved_env_to_ainl_command_optional_agent(cmd, Some(agent_id));
+    }
+
+    /// Run `ainl run` for a program under the home tree (dashboard). Caller must sandbox paths.
+    pub async fn run_ainl_home_file_dashboard(
+        &self,
+        program_abs: &std::path::Path,
+        cwd: &std::path::Path,
+        agent_id: Option<AgentId>,
+        timeout_secs: u64,
+    ) -> Result<(bool, String), String> {
+        use std::io::ErrorKind;
+        use std::process::Stdio;
+
+        let home = &self.config.home_dir;
+        let bin = crate::ainl_library::resolve_ainl_binary(home, &None);
+        let timeout_s = timeout_secs.clamp(10, 3600);
+        let timeout = std::time::Duration::from_secs(timeout_s);
+
+        let mut cmd = tokio::process::Command::new(&bin);
+        cmd.arg("run");
+        cmd.arg("--enable-adapter");
+        cmd.arg("http");
+        cmd.arg(program_abs.as_os_str());
+        cmd.current_dir(cwd);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd.kill_on_drop(true);
+
+        if let Some(id) = agent_id {
+            openfang_runtime::ainl_bundle_cron::apply_ainl_bundle_env(
+                &mut cmd,
+                &self.config.home_dir,
+                &format!("{id}"),
+            );
+        }
+        self.apply_resolved_env_to_ainl_command_optional_agent(&mut cmd, agent_id);
+
+        match tokio::time::timeout(timeout, cmd.output()).await {
+            Ok(Ok(output)) => {
+                let ok = output.status.success();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = if stderr.trim().is_empty() {
+                    stdout.to_string()
+                } else {
+                    format!("{stdout}\n--- stderr ---\n{stderr}")
+                };
+                Ok((ok, combined))
+            }
+            Ok(Err(e)) => {
+                let mut msg = format!("failed to spawn ainl ({bin}): {e}");
+                if e.kind() == ErrorKind::NotFound {
+                    msg.push_str(
+                        " — Install AINL or set ARMARAOS_AINL_BIN to the full path to the `ainl` executable.",
+                    );
+                }
+                Err(msg)
+            }
+            Err(_) => Err(format!("ainl run timed out after {timeout_s}s")),
+        }
     }
 
     /// JSON for API/dashboard: how scheduled `ainl run` sets `AINL_HOST_ADAPTER_ALLOWLIST`
@@ -9077,6 +9168,7 @@ impl OpenFangKernel {
                 // stale daemon export when the target agent is offline-style.
                 openfang_runtime::ainl_bundle_cron::apply_ainl_bundle_env(
                     &mut cmd,
+                    home,
                     &format!("{agent_id}"),
                 );
                 self.apply_resolved_env_to_ainl_command(&mut cmd, agent_id);
@@ -9130,9 +9222,11 @@ impl OpenFangKernel {
                             return Err(err_msg);
                         }
 
+                        let export_home = home.to_path_buf();
                         let export_agent_id = format!("{agent_id}");
                         tokio::task::spawn_blocking(move || {
                             openfang_runtime::ainl_bundle_cron::export_ainl_bundle_after_ainl_run_best_effort(
+                                &export_home,
                                 &export_agent_id,
                             );
                         });

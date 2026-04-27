@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Reserve for **0.7.8+** after the **`v0.7.7`** Git tag is published.
+Reserve for **0.7.9+** after the **`v0.7.8`** Git tag is published.
+
+## [0.7.8] - 2026-04-27
+
+Ships everything on `main` after **`v0.7.7`** through the **0.7.8** version bump (workspace **`Cargo.toml`**, desktop **`tauri.conf.json`**, docs samples).
 
 ### Fixed
+
+- **Scheduled AINL bundle export respects kernel `home_dir`:** `apply_ainl_bundle_env` / `export_ainl_bundle_after_ainl_run_best_effort` no longer hard-code `~/.armaraos`; they use the configured home (and `ARMARAOS_EXPORT_HOME` for the Python merge). Fixes post-run Python touching the real agent tree during temp-home integration tests and any non-default `ARMARAOS_HOME` / `[paths]` layout. Files: `crates/openfang-runtime/src/ainl_bundle_cron.rs`, `crates/openfang-kernel/src/kernel.rs`.
+- **Kernel boot — bounded `claude` / `qwen` CLI probes:** `ClaudeCodeDriver::detect` / `QwenCodeDriver::detect` no longer call blocking `Command::output()` on the async caller thread without a cap; `cli_version_probe` uses a ~1.5s wall-clock deadline so a broken `PATH` shim cannot wedge `OpenFangKernel::boot_with_config` or cron tests. File: `crates/openfang-runtime/src/cli_version_probe.rs` (+ driver call sites).
 
 - **AINL cron test hardening — stable stub runner and quiet-success assertions:** The `openfang-kernel` `CronAction::AinlRun` integration test `cron_run_job_ainl_run_executes_stub_binary` now clears `ARMARAOS_AINL_BIN` up front (avoids cross-test env leakage under workspace-parallel runs) and asserts the agent session message count is unchanged on success, preventing flakey “scheduler output appended” failures. Test: `crates/openfang-kernel/tests/ainl_cron_run_test.rs`.
 
@@ -635,6 +642,7 @@ This minor follows the **0.6.6 → 0.6.9** patch line; see those sections below 
 - Config hot-reload without restart
 
 [0.1.0]: https://github.com/sbhooley/armaraos/releases/tag/v0.1.0
+[0.7.8]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.8
 [0.7.7]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.7
 [0.7.5]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.5
 [0.7.4]: https://github.com/sbhooley/armaraos/releases/tag/v0.7.4

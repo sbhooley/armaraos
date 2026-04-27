@@ -8507,7 +8507,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               Paths are validated server-side; <code style="font-size:11px">..</code> and symlinks that escape this tree are blocked. <strong>View</strong> previews are capped at 512&nbsp;KiB; use <strong>Download</strong> for the full file (up to 256&nbsp;MiB), or on desktop use <strong>Copy to Downloads</strong>.
             </p>
             <p class="text-sm text-dim mt-2 mb-0" style="line-height:1.6">
-              <strong>Editing</strong> is off by default. Add <code style="font-size:11px">[dashboard]</code> with <code style="font-size:11px">home_editable_globs</code> in <code style="font-size:11px">config.toml</code> (globset syntax, e.g. <code style="font-size:11px">notes/**</code>), then reload config. Secrets and core files (<code style="font-size:11px">.env</code>, <code style="font-size:11px">config.toml</code>, <code style="font-size:11px">data/</code>, …) stay blocked regardless.
+              <strong>Editing</strong> is off by default. Add <code style="font-size:11px">[dashboard]</code> with <code style="font-size:11px">home_editable_globs</code> in <code style="font-size:11px">config.toml</code> (globset syntax, e.g. <code style="font-size:11px">workspaces/**</code> or <code style="font-size:11px">ainl-library/**</code>), then reload config. That allowlist gates <strong>Save</strong> and <strong>Move</strong>. <strong>Run AINL</strong> works under <code style="font-size:11px">workspaces/**</code>, <code style="font-size:11px">ainl-library/**</code>, or <code style="font-size:11px">agents/**</code> without those globs (still blocked under <code style="font-size:11px">data/</code>, secrets, etc.). If Run still mentions <code style="font-size:11px">home_editable_globs</code>, restart the daemon so it loads the current build. Secrets and core files (<code style="font-size:11px">.env</code>, <code style="font-size:11px">config.toml</code>, <code style="font-size:11px">data/</code>, …) stay blocked regardless.
             </p>
             <p class="text-xs text-dim mt-2 mb-0" x-show="homeEditError" style="color:var(--warn,#c9a227)">Allowlist error: <span x-text="homeEditError"></span></p>
             <p class="text-xs text-dim mt-2 mb-0" x-show="rootDisplay">
@@ -8542,9 +8542,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       <td class="text-xs text-dim" x-text="row.kind"></td>
                       <td class="text-xs text-dim" x-text="row.size != null ? row.size : '—'"></td>
                       <td style="vertical-align:middle">
-                        <div class="flex flex-wrap gap-1" style="min-width:9rem">
+                        <div class="flex flex-wrap gap-1" style="min-width:10rem">
                         <button type="button" class="btn btn-ghost btn-sm" x-show="row.kind === 'dir' || row.kind === 'symlink'" @click="enterDir(row.name)">Open</button>
                         <button type="button" class="btn btn-primary btn-sm" x-show="row.kind === 'file' || row.kind === 'symlink'" @click="openFile(row.name)">View</button>
+                        <button type="button" class="btn btn-ghost btn-sm" x-show="homeEditAllowlist && !homeEditError" @click="openMoveModal(row.name)" title="Move or rename under home_editable_globs">Move</button>
+                        <button type="button" class="btn btn-ghost btn-sm" x-show="(row.kind === 'file' || row.kind === 'symlink') && isAinlFileName(row.name)" @click="openRunForPath(pathToChild(row.name))" title="Run with ainl under workspaces/, ainl-library/, or agents/ (needs ainl CLI on host)">Run AINL</button>
                         <button type="button" class="btn btn-success btn-sm" x-show="row.kind === 'file' || row.kind === 'symlink'" @click="downloadFile(row.name)" :disabled="downloadBusy" title="Save full file (works for large zips)">Download</button>
                         </div>
                       </td>
@@ -8556,14 +8558,16 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <p class="text-xs text-dim mt-3" x-show="!entries.length">This folder is empty.</p>
           </div>
         </div>
-        <div x-show="fileModal" style="position:fixed;inset:0;z-index:8000;display:flex;align-items:stretch;justify-content:stretch;padding:12px;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px)" @click.self="closeFileModal()">
-          <div class="card" style="width:100%;height:100%;max-width:none;max-height:none;overflow:hidden;display:flex;flex-direction:column;gap:12px" @click.stop>
+        <div x-show="fileModal" class="home-files-modal-overlay" @click.self="closeFileModal()">
+          <div class="card home-files-modal-card" @click.stop>
             <div class="flex justify-between items-start gap-2 flex-wrap">
               <div class="min-w-0 flex-1">
                 <div class="font-bold" style="font-size:15px">File preview</div>
                 <code class="text-xs text-dim" style="word-break:break-all" x-text="filePath"></code>
               </div>
               <div class="flex flex-wrap gap-1 items-center shrink-0">
+                <button type="button" class="btn btn-ghost btn-sm" x-show="fileEncoding === 'utf8' && !fileLoading" @click="toggleFileEditMode()" x-text="fileEditMode ? 'Done' : 'Edit'"></button>
+                <button type="button" class="btn btn-ghost btn-sm" x-show="filePath && isAinlFileName(filePath)" @click="openRunForPath(filePath)" :disabled="runBusy" title="Run with ainl (workspaces/, ainl-library/, or agents/; needs ainl CLI)">Run AINL</button>
                 <button type="button" class="btn btn-success btn-sm" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy || fileLoading" title="Works even when preview fails (large .zip, etc.)">Download</button>
                 <button type="button" class="btn btn-ghost btn-sm" @click="closeFileModal()">Close</button>
               </div>
@@ -8577,20 +8581,55 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <button type="button" class="btn btn-success btn-sm self-start" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy">Download file</button>
               </div>
             </div>
-            <div x-show="!fileLoading && !fileError" style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px">
+            <div x-show="!fileLoading && !fileError" class="home-files-modal-scroll">
               <div class="text-xs text-dim mb-1">
                 <span x-text="fileEncoding"></span>
                 <span x-show="fileSize"> · </span>
                 <span x-text="fileSize + ' bytes'" x-show="fileSize"></span>
                 <span x-show="fileEditable" class="badge badge-warn" style="margin-left:8px">Editable</span>
               </div>
-              <textarea class="input font-mono text-xs" style="width:100%;flex:1;min-height:0;resize:none" :readonly="!fileEditable || fileEncoding !== 'utf8'" x-model="fileContent" x-show="fileEncoding === 'utf8'"></textarea>
-              <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;flex:1;min-height:0;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
+              <p class="text-xs text-dim m-0" x-show="fileEditMode && !fileEditable && fileEncoding === 'utf8'" style="color:var(--warn,#c9a227)">Read-only preview — add this path to <code class="text-xs">[dashboard] home_editable_globs</code> to save from the browser.</p>
+              <textarea class="input font-mono home-files-editor" :class="{ 'opacity-90': !fileEditable && fileEditMode }" :readonly="!canEditFileText()" x-model="fileContent" x-show="fileEncoding === 'utf8'"></textarea>
+              <pre class="input font-mono text-xs" style="white-space:pre-wrap;word-break:break-all;flex:1;min-height:12rem;overflow:auto;margin:0;padding:10px" x-show="fileEncoding === 'base64'" x-text="fileContent"></pre>
               <div class="flex gap-2 flex-wrap items-center" style="flex-shrink:0">
-                <button type="button" class="btn btn-primary btn-sm" x-show="fileEditable && fileEncoding === 'utf8'" @click="saveFile()" :disabled="saveBusy" x-text="saveBusy ? 'Saving…' : 'Save'"></button>
+                <button type="button" class="btn btn-primary btn-sm" x-show="fileEditable && fileEncoding === 'utf8' && fileEditMode" @click="saveFile()" :disabled="saveBusy" x-text="saveBusy ? 'Saving…' : 'Save'"></button>
                 <button type="button" class="btn btn-success btn-sm" x-show="filePath" @click="downloadOpenFile()" :disabled="downloadBusy" title="Save full file (not limited to preview size)">Download full file</button>
                 <button type="button" class="btn btn-ghost btn-sm" x-show="fileEncoding === 'utf8' && fileContent" @click="copyFileContent()">Copy contents</button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="runModal" class="home-files-modal-overlay" @click.self="closeRunModal()">
+          <div class="card home-files-move-modal-card" @click.stop>
+            <div class="font-bold" style="font-size:15px">Run AINL</div>
+            <code class="text-xs text-dim font-mono" style="word-break:break-all;display:block" x-text="runTargetPath"></code>
+            <p class="text-xs text-dim m-0" style="line-height:1.55">Path must be under <code class="text-xs">workspaces/</code>, <code class="text-xs">ainl-library/</code>, or <code class="text-xs">agents/</code> (blocklist still applies). The daemon host needs the <code class="text-xs">ainl</code> CLI. A successful response includes <code class="text-xs">requires_home_editable_globs: false</code>.</p>
+            <label class="text-xs text-dim">Optional agent (host adapter policy + bundle)</label>
+            <select class="input text-xs" x-model="runAgentId">
+              <option value="">Default (no per-agent allowlist)</option>
+              <template x-for="ag in agents" :key="ag.id">
+                <option :value="ag.id" x-text="(ag.name || 'Agent') + ' — ' + ag.id"></option>
+              </template>
+            </select>
+            <pre class="home-files-run-output font-mono" x-show="runOutput" x-text="runOutput"></pre>
+            <div class="flex flex-wrap gap-2 justify-end">
+              <button type="button" class="btn btn-ghost btn-sm" @click="closeRunModal()">Close</button>
+              <button type="button" class="btn btn-primary btn-sm" @click="runAinlAtPath()" :disabled="runBusy" x-text="runBusy ? 'Running…' : 'Run'"></button>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="moveModal" class="home-files-modal-overlay" @click.self="closeMoveModal()">
+          <div class="card home-files-move-modal-card" @click.stop>
+            <div class="font-bold" style="font-size:15px">Move or rename</div>
+            <p class="text-xs text-dim m-0" style="line-height:1.55">Both source and destination must match <code class="text-xs">home_editable_globs</code>. Create the destination folder first if needed.</p>
+            <div class="text-xs"><span class="text-dim">From:</span> <code class="font-mono" style="word-break:break-all" x-text="moveFromRel"></code></div>
+            <label class="text-xs text-dim">To (path under home)</label>
+            <input class="input font-mono text-xs" type="text" x-model="moveToRel" placeholder="workspaces/MyAgent/sub/file.txt" autocomplete="off" />
+            <div class="flex flex-wrap gap-2 justify-end">
+              <button type="button" class="btn btn-ghost btn-sm" @click="closeMoveModal()">Cancel</button>
+              <button type="button" class="btn btn-primary btn-sm" @click="submitMove()" :disabled="moveBusy" x-text="moveBusy ? 'Moving…' : 'Move'"></button>
             </div>
           </div>
         </div>
