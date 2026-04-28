@@ -11,7 +11,7 @@ documentation = "https://docs.rs/ainl-context-compiler"
 rust-version.workspace = true
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }
 ainl-compression = { path = "../ainl-compression", version = "0.1.2-alpha" }
 serde = { workspace = true }
 serde_json = { workspace = true }

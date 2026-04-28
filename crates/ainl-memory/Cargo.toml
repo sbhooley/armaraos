@@ -14,7 +14,7 @@ keywords = ["ai", "agent", "memory", "graph", "ainl"]
 categories = ["development-tools", "database"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }
 ainl-trajectory = { path = "../ainl-trajectory", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }

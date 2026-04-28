@@ -61,7 +61,7 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 scopeguard = { workspace = true }
 chrono = { workspace = true }
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
 ainl-persona = { path = "../ainl-persona", version = "0.1.8" }
 ainl-graph-extractor = { path = "../ainl-graph-extractor", version = "0.1.8" }

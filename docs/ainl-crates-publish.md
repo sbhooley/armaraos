@@ -4,7 +4,7 @@ Crates under `crates/ainl-*` that participate in the self-learning stack are int
 
 | Crate | crates.io | `openfang` in deps? | Notes |
 |-------|------------|----------------------|--------|
-| `ainl-contracts` | yes (workspace version) | **no** | Shared `CognitiveVitals`, `ContextFreshness`, `TrajectoryStep`, `ProposalEnvelope`, telemetry keys. |
+| `ainl-contracts` | yes (workspace version; **0.1.2+** includes procedure contracts) | **no** | Shared `CognitiveVitals`, `ContextFreshness`, `TrajectoryStep`, `ProposalEnvelope`, `ExperienceBundle` / procedure types, telemetry keys. |
 | `ainl-memory` | yes | **no** | Graph store; depends on `ainl-contracts` for shared vocabulary where applicable. |
 | `ainl-compression` | yes | **no** | Eco-mode compression + profiles / adaptive / cache. |
 | `ainl-trajectory` | workspace / future publish | **no** | JSONL replay helpers; optional `in-memory` feature for slim hosts. |
@@ -12,6 +12,7 @@ Crates under `crates/ainl-*` that participate in the self-learning stack are int
 | `ainl-improvement-proposals` | workspace / future publish | **no** | SQLite ledger; validation calls into `ainl-runtime` where used. |
 | `ainl-context-compiler` | workspace / future publish | **no** | Segment + budget scoring; default features documented in `Cargo.toml` and `scripts/verify-ainl-context-compiler-feature-matrix.sh`. |
 | `ainl-runtime` | yes | **no** | Graph execution; not an “openfang” crate. |
+| `ainl-procedure-learning` | yes (**0.1.0**; depends on `ainl-contracts` **^0.1.2**) | **no** | Experience → procedure artifacts, reuse scoring, patches, host-neutral renderers. |
 
 **Slim consumer build** (from [SELF_LEARNING_INTEGRATION_MAP.md](SELF_LEARNING_INTEGRATION_MAP.md) §15, `ainl-inference-server` docs):
 

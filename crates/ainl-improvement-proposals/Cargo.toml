@@ -14,7 +14,7 @@ keywords = ["ainl", "agent", "learning", "proposals"]
 categories = ["development-tools"]
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }
 chrono = { workspace = true }
 hex = "0.4"
 rusqlite = { workspace = true }

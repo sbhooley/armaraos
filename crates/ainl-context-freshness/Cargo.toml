@@ -11,4 +11,4 @@ documentation = "https://docs.rs/ainl-context-freshness"
 rust-version.workspace = true
 
 [dependencies]
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }

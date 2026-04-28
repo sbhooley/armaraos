@@ -19,7 +19,7 @@ openfang-skills = { path = "../openfang-skills" }
 ainl-compression = { path = "../ainl-compression", version = "0.1.2-alpha" }
 ainl-memory = { path = "../ainl-memory", version = "0.1.11-alpha" }
 ainl-agent-snapshot = { path = "../ainl-agent-snapshot", version = "0.1.2" }
-ainl-contracts = { path = "../ainl-contracts", version = "0.1.1" }
+ainl-contracts = { path = "../ainl-contracts", version = "0.1.2" }
 ainl-improvement-proposals = { path = "../ainl-improvement-proposals", version = "0.1.1" }
 ainl-failure-learning = { path = "../ainl-failure-learning", version = "0.1.1" }
 ainl-procedure-learning = { path = "../ainl-procedure-learning", version = "0.1.0" }
